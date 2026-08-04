@@ -324,7 +324,16 @@ class Qwen3OmniPreprocessor:
         encoder_inputs: dict[str, dict[str, Any]],
     ) -> StagePayload:
         """Assemble the thinker-ready pipeline state (single source of shape)."""
+        request_inputs = payload.request.inputs
+        raw_inputs = None
+        if isinstance(request_inputs, dict):
+            raw_inputs = {
+                key: request_inputs[key]
+                for key in ("audios", "audio", "images", "videos", "video", "audio_target_sr")
+                if key in request_inputs
+            }
         state = Qwen3OmniPipelineState(
+            raw_inputs=raw_inputs,
             mm_inputs=build_lightweight_mm_inputs(full_mm_inputs),
             prompt={
                 "prompt_text": prompt_text,
