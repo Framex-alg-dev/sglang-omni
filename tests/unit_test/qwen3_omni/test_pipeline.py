@@ -83,9 +83,10 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
         "audio_encoder",
         "mm_aggregate",
         "thinker",
+        "action_score",
         "decode",
     ]
-    assert speech_config.terminal_stages == ["decode", "code2wav"]
+    assert speech_config.terminal_stages == ["action_score", "decode", "code2wav"]
     assert (
         speech_config.terminal_stages_fn
         == "sglang_omni.models.qwen3_omni.request_builders.resolve_terminal_stages"
@@ -483,6 +484,19 @@ def test_qwen_speech_config_wires_request_granular_active_subgraph() -> None:
     assert route_fn("default", default_payload) == "decode"
     assert stream_done_to_fn("default", default_payload) == ["talker_ar", "decode"]
     assert terminal_stages_fn(default_payload.request) == ["decode", "code2wav"]
+
+    action_payload = StagePayload(
+        request_id="action",
+        request=OmniRequest(
+            inputs=[],
+            metadata={"task": "action_suffix_scoring", "output_modalities": ["text"]},
+        ),
+        data={},
+    )
+    assert aggregate_route_fn("action", action_payload) == "thinker"
+    assert route_fn("action", action_payload) == "action_score"
+    assert stream_done_to_fn("action", action_payload) == []
+    assert terminal_stages_fn(action_payload.request) == ["action_score"]
 
 
 def test_qwen_preprocessing_routes_only_active_encoder_branches() -> None:

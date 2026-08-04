@@ -14,6 +14,7 @@ inheriting from ``SGLangScheduler``.
 from __future__ import annotations
 
 import logging
+import dataclasses
 import queue as _queue_mod
 import threading
 import time
@@ -39,6 +40,10 @@ from sglang.srt.managers.scheduler import validate_input_length
 from sglang.srt.mem_cache.common import release_kv_cache
 from sglang.srt.utils import broadcast_pyobj
 
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    aggregate_candidate_score,
+    score_candidate_from_runtime,
+)
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.profiler.event_recorder import (
     emit_model_path_end as _emit_model_path_end,
@@ -489,6 +494,7 @@ class OmniScheduler:
         self._dirty_deferred_request_ids: set[str] = set()
         self._first_emit_done: set[str] = set()
         self._prefill_start_done: set[str] = set()
+        self._action_scoring_requests: dict[str, Any] = {}
 
     def bind_model_runner(self, model_runner: Any) -> None:
         """Attach a custom runner and its SGLang execution-contract bridge.
@@ -997,6 +1003,18 @@ class OmniScheduler:
         req = req_data.req
         self._normalize_req_token_arrays(req)
         req_id = req.rid
+        if getattr(req_data, "action_scoring_role", None) == "prefix":
+            plan = getattr(req_data, "action_scoring_plan", None) or {}
+            plan.setdefault("started_at", time.perf_counter())
+            plan["queue_wait_ms"] = max(
+                (time.perf_counter() - plan["started_at"]) * 1000.0,
+                float(plan.get("queue_wait_ms", 0.0)),
+            )
+            plan.setdefault("preprocessing_ms", 0.0)
+            plan.setdefault("image_encoder_ms", 0.0)
+            plan.setdefault("audio_encoder_ms", 0.0)
+            req_data.action_scoring_plan = plan
+            self._action_scoring_requests[req_id] = req_data
         if req_data.enforce_request_limits:
             error_msg = self._prepare_request_limits(req_data)
             if error_msg:
@@ -1036,7 +1054,164 @@ class OmniScheduler:
             with self._request_admission_lock:
                 enqueue_if_live()
 
-    @staticmethod
+    def _enqueue_action_candidate_batch(self, parent: Any, batch: list[Any]) -> None:
+        plan = parent.action_scoring_plan
+        plan.setdefault("batch_started_at", time.perf_counter())
+        for candidate_data in batch:
+            req = candidate_data.req
+            self._normalize_req_token_arrays(req)
+            if req.rid in self._aborted_request_ids:
+                continue
+            req._omni_data = candidate_data
+            req._omni_terminal_claimed = False
+            req._coalesce_enqueue_t = time.perf_counter()
+            self.waiting_queue.append(req)
+        _emit_event(
+            request_id=parent.req.rid,
+            stage="thinker",
+            event_name="action_suffix_batch_queued",
+            metadata={"size": len(batch)},
+        )
+
+    def _handle_action_prefix_terminal(self, req: Any, data: Any) -> None:
+        parent = data.action_scoring_parent
+        plan = data.action_scoring_plan
+        logits = data.extra_model_outputs.get("action_prefix_token_logprobs")
+        if logits is None:
+            raise RuntimeError("action scoring prefix logits were not captured")
+        plan["prefix_next_token_logits"] = logits
+        plan["prefix_physical_prefill_chunk_count"] = max(
+            int(plan.get("prefix_physical_prefill_chunk_count", 0)),
+            int(getattr(data, "generation_steps", 0)),
+            1,
+        )
+        plan["candidate_batches"] = [
+            plan["candidate_data"][start : start + plan["micro_batch_size"]]
+            for start in range(0, len(plan["candidate_data"]), plan["micro_batch_size"])
+        ]
+        plan["candidate_results"] = {}
+        plan["candidate_cached_tokens"] = {}
+        plan["candidate_prefix_recompute_tokens"] = {}
+        plan["completed_candidate_ids"] = set()
+        plan["suffix_batch_ms"] = []
+        plan["suffix_batch_sizes"] = []
+        plan["next_batch_index"] = 0
+        self._close_completed_request(req)
+        if plan["candidate_batches"]:
+            plan["current_batch_ids"] = {
+                item.action_scoring_candidate_id
+                for item in plan["candidate_batches"][0]
+            }
+            self._enqueue_action_candidate_batch(parent, plan["candidate_batches"][0])
+
+    def _finish_action_scoring(self, parent: Any, plan: dict[str, Any]) -> None:
+        prefix_logits = plan.get("prefix_next_token_logits")
+        if prefix_logits is None:
+            raise RuntimeError("action scoring has no shared prefix logits")
+        scores = []
+        for candidate_id in plan["candidate_ids"]:
+            suffix_ids = plan["candidate_suffix_ids"][candidate_id]
+            raw = plan["candidate_results"].get(candidate_id)
+            if raw is None:
+                raise RuntimeError(f"missing action suffix result: {candidate_id}")
+            scores.append(
+                score_candidate_from_runtime(
+                    candidate_id, suffix_ids, prefix_logits, raw
+                )
+            )
+        prefix_len = int(plan["prefix_token_count"])
+        prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
+            int(value) >= prefix_len
+            for value in plan["candidate_cached_tokens"].values()
+        )
+        plan["prefix_cached"] = prefix_cached
+        recompute_tokens = sum(plan.get("candidate_prefix_recompute_tokens", {}).values())
+        aggregation_started = time.perf_counter()
+        suffix_batch_ms = list(plan.get("suffix_batch_ms", []))
+        stats = {
+            "queue_wait_ms": float(plan.get("queue_wait_ms", 0.0)),
+            "preprocessing_ms": float(plan.get("preprocessing_ms", 0.0)),
+            "image_encoder_ms": float(plan.get("image_encoder_ms", 0.0)),
+            "audio_encoder_ms": float(plan.get("audio_encoder_ms", 0.0)),
+            "logical_prefix_request_count": 1,
+            "physical_prefix_chunk_count": int(plan.get("prefix_physical_prefill_chunk_count", 0)),
+            "prefix_token_count": prefix_len,
+            "cached_prefix_token_count": min(plan["candidate_cached_tokens"].values()),
+            "candidate_prefix_recompute_tokens": recompute_tokens,
+            "suffix_batch_count": len(plan["candidate_batches"]),
+            "suffix_batch_sizes": list(plan.get("suffix_batch_sizes", [])),
+            "suffix_batch_ms": suffix_batch_ms,
+            "aggregation_ms": (time.perf_counter() - aggregation_started) * 1000.0,
+            "total_ms": (time.perf_counter() - plan.get("started_at", aggregation_started)) * 1000.0,
+        }
+        result = {
+            "request_id": parent.req.rid,
+            "model": (
+                parent.stage_payload.request.metadata.get("model", "")
+                if parent.stage_payload is not None
+                else ""
+            ),
+            "prefix_cached": prefix_cached,
+            "scores": [dataclasses.asdict(score) for score in scores],
+            "stats": stats,
+        }
+        parent.extra_model_outputs["action_scoring_result"] = result
+        _emit_event(
+            request_id=parent.req.rid,
+            stage="thinker",
+            event_name="action_scoring_complete",
+            metadata={
+                "candidate_count": len(plan["candidate_ids"]),
+                "micro_batch_size": plan["micro_batch_size"],
+                "stats": stats,
+                "cache_digest": plan.get("cache_digest"),
+            },
+        )
+        logger.info(
+            "action scoring complete request_id=%s candidates=%d top_ppl=%s stats=%s",
+            parent.req.rid,
+            len(scores),
+            [(score.candidate_id, round(score.ppl, 6)) for score in sorted(scores, key=lambda item: item.ppl)[:3]],
+            stats,
+        )
+        payload = self._result_adapter(parent)
+        self._action_scoring_requests.pop(parent.req.rid, None)
+        self._emit_model_path_end_once(parent.req.rid, status="success")
+        self._first_emit_done.discard(parent.req.rid)
+        self.outbox.put(OutgoingMessage(request_id=parent.req.rid, type="result", data=payload))
+
+    def _handle_action_candidate_terminal(self, req: Any, data: Any) -> None:
+        parent = data.action_scoring_parent
+        plan = parent.action_scoring_plan
+        candidate_id = data.action_scoring_candidate_id
+        raw = data.extra_model_outputs.get("action_candidate_input_token_logprobs")
+        if raw is None:
+            raise RuntimeError(f"action scoring candidate {candidate_id} has no input logprobs")
+        plan["candidate_results"][candidate_id] = list(raw)
+        plan["candidate_cached_tokens"][candidate_id] = len(req.prefix_indices)
+        suffix_len = len(plan["candidate_suffix_ids"][candidate_id])
+        plan["candidate_prefix_recompute_tokens"][candidate_id] = max(
+            len(req.origin_input_ids) - len(req.prefix_indices) - suffix_len, 0
+        )
+        plan["completed_candidate_ids"].add(candidate_id)
+        self._close_completed_request(req)
+        if plan["completed_candidate_ids"] >= plan["current_batch_ids"]:
+            batch_started = plan.pop("batch_started_at", time.perf_counter())
+            plan.setdefault("suffix_batch_ms", []).append(
+                (time.perf_counter() - batch_started) * 1000.0
+            )
+            plan.setdefault("suffix_batch_sizes", []).append(len(plan["current_batch_ids"]))
+            plan["next_batch_index"] += 1
+            if plan["next_batch_index"] < len(plan["candidate_batches"]):
+                next_batch = plan["candidate_batches"][plan["next_batch_index"]]
+                plan["current_batch_ids"] = {
+                    item.action_scoring_candidate_id for item in next_batch
+                }
+                self._enqueue_action_candidate_batch(parent, next_batch)
+            elif len(plan["completed_candidate_ids"]) == len(plan["candidate_ids"]):
+                self._finish_action_scoring(parent, plan)
+
+
     def _normalize_req_token_arrays(req: Any) -> None:
         """Normalize builder-produced token containers to the 0.5.16 Req shape."""
         origin_input_ids = req.origin_input_ids
@@ -1263,7 +1438,7 @@ class OmniScheduler:
         if mr_output.host_token_ids is not None:
             next_token_ids = mr_output.host_token_ids
         return GenerationBatchResult(
-            logits_output=None,
+            logits_output=mr_output.logits_output,
             next_token_ids=next_token_ids,
             can_run_cuda_graph=mr_output.can_run_cuda_graph,
         )
@@ -1298,7 +1473,7 @@ class OmniScheduler:
             return _FAILED_BATCH_RESULT
         self._emit_stream_output(sched_output, mr_output, skip_rids=skip_rids)
         return GenerationBatchResult(
-            logits_output=None,
+            logits_output=mr_output.logits_output,
             next_token_ids=mr_output.next_token_ids,
             can_run_cuda_graph=mr_output.can_run_cuda_graph,
         )
@@ -1320,6 +1495,13 @@ class OmniScheduler:
         }
         for req in batch.reqs:
             rid = req.rid
+            req_data = getattr(req, "_omni_data", None)
+            if getattr(req_data, "action_scoring_role", None) == "prefix":
+                plan = getattr(req_data, "action_scoring_plan", None)
+                if isinstance(plan, dict):
+                    plan["prefix_physical_prefill_chunk_count"] = (
+                        int(plan.get("prefix_physical_prefill_chunk_count", 0)) + 1
+                    )
             if rid in self._prefill_start_done:
                 continue
             self._prefill_start_done.add(rid)
@@ -1386,6 +1568,21 @@ class OmniScheduler:
                 self._first_emit_done.discard(rid)
                 self._emit_model_path_end_once(rid, status="aborted")
                 _detach_request_data(req)
+                continue
+
+            action_role = getattr(data, "action_scoring_role", None)
+            if action_role in ("prefix", "candidate"):
+                try:
+                    if action_role == "prefix":
+                        self._handle_action_prefix_terminal(req, data)
+                    else:
+                        self._handle_action_candidate_terminal(req, data)
+                except Exception as exc:
+                    parent = getattr(data, "action_scoring_parent", data)
+                    logical_id = getattr(getattr(parent, "req", None), "rid", rid)
+                    logger.exception("Action scoring terminal failed for %s", logical_id)
+                    self._emit_request_error(logical_id, exc)
+                    self.abort(logical_id)
                 continue
 
             result = None
@@ -1524,7 +1721,18 @@ class OmniScheduler:
         executor.shutdown(wait=False, cancel_futures=True)
         self._request_build_executor = None
 
-    def abort(self, request_id: str, *, defer_running_cleanup: bool = True) -> None:
+    def abort(
+        self, request_id: str, *, defer_running_cleanup: bool = True, _internal: bool = False
+    ) -> None:
+        action_parent = self._action_scoring_requests.get(request_id)
+        action_internal_ids = []
+        if action_parent is not None:
+            plan = action_parent.action_scoring_plan or {}
+            action_internal_ids = [
+                item.req.rid
+                for item in plan.get("candidate_data", [])
+                if getattr(item, "req", None) is not None
+            ]
         with self._request_admission_lock:
             if request_id not in self._aborted_request_ids:
                 if len(self._aborted_request_ids) >= _ABORTED_REQUEST_ID_LIMIT:
@@ -1561,7 +1769,7 @@ class OmniScheduler:
                 else:
                     waiting_queue.append(req)
             self.waiting_queue = waiting_queue
-        if not running_abort:
+        if not running_abort and not _internal:
             self._run_abort_callback(request_id)
         self._pending_stream_ingress.pop(request_id, None)
         self._deferred_request_payloads.pop(request_id, None)
@@ -1581,6 +1789,14 @@ class OmniScheduler:
             _remove_from_batch(self.last_batch, request_id)
             _remove_from_batch(self._async_pending_batch(), request_id)
         self._drain_inbox_for_request(request_id)
+        self._action_scoring_requests.pop(request_id, None)
+        for internal_id in action_internal_ids:
+            if internal_id != request_id:
+                self.abort(
+                    internal_id,
+                    defer_running_cleanup=defer_running_cleanup,
+                    _internal=True,
+                )
 
     def admin(
         self, action: str, payload: dict[str, Any] | None = None

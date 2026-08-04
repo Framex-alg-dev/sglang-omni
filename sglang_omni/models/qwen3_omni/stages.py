@@ -783,6 +783,17 @@ def create_aggregate_executor():
     return SimpleScheduler(_identity)
 
 
+def create_action_score_executor():
+    """Terminal pass-through for the Thinker-produced action score result."""
+    from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
+
+    def _identity(payload: StagePayload) -> StagePayload:
+        return payload
+
+    return SimpleScheduler(_identity)
+
+
+
 def create_image_encoder_executor(
     model_path: str,
     *,

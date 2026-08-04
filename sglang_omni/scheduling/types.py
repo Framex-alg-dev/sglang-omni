@@ -53,6 +53,8 @@ class ModelRunnerOutput:
     req_ids: list[str] = field(default_factory=list)
     req_id_to_index: dict[str, int] = field(default_factory=dict)
     can_run_cuda_graph: bool = False
+    # Raw SGLang logits output is retained for prefill-only action scoring.
+    logits_output: Any = None
     # Reporting tokens for this completed step. These are deliberately separate
     # from the GPU FutureMap relay used as the next forward's input.
     next_token_ids: "torch.Tensor | None" = None

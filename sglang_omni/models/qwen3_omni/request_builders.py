@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import copy
 import logging
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +13,13 @@ from typing import Any
 import torch
 import xxhash
 
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+    build_multimodal_cache_identity,
+    tokenize_suffixes,
+    validate_action_suffix_request,
+)
 from sglang_omni.models.qwen3_omni.components.talker_prefill import TalkerPrefillBuilder
 from sglang_omni.models.qwen3_omni.payload_types import (
     Qwen3OmniPipelineState,
@@ -34,6 +43,8 @@ DECODE_STAGE = "decode"
 TALKER_STAGE = "talker_ar"
 CODE2WAV_STAGE = "code2wav"
 MM_AGGREGATE_STAGE = "mm_aggregate"
+ACTION_SCORE_STAGE = "action_score"
+ACTION_SCORE_TASK = "action_suffix_scoring"
 
 # Note(Chenchen Hong): PyTorch sampling_seed must fit a positive int32.
 MAX_INT32_POSITIVE = 0x7FFFFFFF
@@ -46,6 +57,19 @@ def _resolve_seed(params: dict[str, Any]) -> int | None:
         if value is not None:
             return int(value)
     return None
+
+
+def is_action_scoring_request(request_or_payload: OmniRequest | StagePayload | None) -> bool:
+    request = (
+        request_or_payload.request
+        if isinstance(request_or_payload, StagePayload)
+        else request_or_payload
+    )
+    return bool(
+        request is not None
+        and isinstance(request.metadata, dict)
+        and request.metadata.get("task") == ACTION_SCORE_TASK
+    )
 
 
 def output_modalities(request: OmniRequest | None) -> set[str] | None:
@@ -81,6 +105,8 @@ def should_generate_audio_output(
 def resolve_thinker_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
+    if is_action_scoring_request(output):
+        return ACTION_SCORE_STAGE
     del request_id, output
     return DECODE_STAGE
 
@@ -89,6 +115,8 @@ def resolve_mm_aggregate_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
     del request_id
+    if is_action_scoring_request(output):
+        return THINKER_STAGE
     if should_generate_audio_output(output):
         return [THINKER_STAGE, TALKER_STAGE]
     return THINKER_STAGE
@@ -98,12 +126,16 @@ def resolve_thinker_stream_done_targets(
     request_id: str, output: StagePayload
 ) -> list[str]:
     del request_id
+    if is_action_scoring_request(output):
+        return []
     if should_generate_audio_output(output):
         return [TALKER_STAGE, DECODE_STAGE]
     return [DECODE_STAGE]
 
 
 def resolve_terminal_stages(request: OmniRequest) -> list[str]:
+    if is_action_scoring_request(request):
+        return [ACTION_SCORE_STAGE]
     if should_generate_audio_output(request):
         return [DECODE_STAGE, CODE2WAV_STAGE]
     return [DECODE_STAGE]
@@ -130,6 +162,29 @@ def resolve_mm_aggregate_wait_sources(
         return None
     state = Qwen3OmniPipelineState.from_dict(payload.data)
     return ["preprocessing", *_active_encoder_stages(state.encoder_inputs)]
+
+
+def project_thinker_to_action_score(payload: StagePayload) -> StagePayload:
+    """Project the scheduler-produced score as the terminal response payload."""
+    # The action-aware Thinker result adapter already converts the scheduler
+    # data into the public score dictionary.  Keep this branch explicit so the
+    # terminal stage never attempts to decode or run speech generation.
+    if isinstance(payload.data, dict) and "scores" in payload.data:
+        return payload
+
+    # Keep a compatibility path for payloads produced by older adapters that
+    # stored the result in the regular pipeline state.
+    state = Qwen3OmniPipelineState.from_dict(payload.data)
+    thinker_out = state.thinker_out if isinstance(state.thinker_out, dict) else {}
+    extra = thinker_out.get("extra_model_outputs", {})
+    result = extra.get("action_scoring_result") if isinstance(extra, dict) else None
+    if not isinstance(result, dict):
+        raise RuntimeError("Thinker did not produce an action scoring result")
+    return StagePayload(
+        request_id=payload.request_id,
+        request=payload.request,
+        data=result,
+    )
 
 
 def project_thinker_to_decode(payload: StagePayload) -> StagePayload:
@@ -641,7 +696,206 @@ def build_sglang_thinker_request(
         req=req,
     )
     data.return_logprob = bool(params.get("return_logprob"))
+    action_spec = params.get("action_scoring")
+    if isinstance(action_spec, dict):
+        return _prepare_action_scoring_request(
+            data,
+            state=state,
+            action_spec=action_spec,
+            tokenizer=tokenizer,
+            vocab_size=vocab_size,
+            thinker_config=thinker_config,
+            request_id=rid,
+        )
     return data
+
+
+def _extend_action_mrope_positions(positions: Any, suffix_len: int) -> Any:
+    """Extend text-only M-RoPE positions for a candidate suffix.
+
+    The shared multimodal prefix keeps its three rotary axes.  Candidate
+    tokens are ordinary text, so each axis advances from the last prefix
+    position.  Keeping this explicit prevents candidate requests from
+    silently reusing a shorter position tensor than their input IDs.
+    """
+    if positions is None or suffix_len <= 0:
+        return positions
+    if not isinstance(positions, torch.Tensor) or positions.shape[-1] == 0:
+        return positions
+    steps = torch.arange(1, suffix_len + 1, dtype=positions.dtype, device=positions.device)
+    shape = [1] * (positions.ndim - 1) + [suffix_len]
+    increments = steps.reshape(shape)
+    return torch.cat([positions, positions[..., -1:] + increments], dim=-1)
+
+
+def _prepare_action_scoring_request(
+    prefix_data: SGLangARRequestData,
+    *,
+    state: Qwen3OmniPipelineState,
+    action_spec: dict[str, Any],
+    tokenizer: Any,
+    vocab_size: int,
+    thinker_config: Any,
+    request_id: str,
+) -> SGLangARRequestData:
+    """Expand one logical action request into a prefix Req and candidate Reqs."""
+    from sglang.srt.managers.schedule_batch import Req
+
+    raw_candidates = action_spec.get("candidates")
+    if not isinstance(raw_candidates, list) or not raw_candidates:
+        raise ValueError("action_scoring.candidates must be a non-empty list")
+    candidates = [
+        item if isinstance(item, ActionScoreCandidate) else ActionScoreCandidate(
+            candidate_id=str(item["candidate_id"]),
+            suffix=str(item["suffix"]),
+            action_id=item.get("action_id"),
+            execution_binding=dict(item.get("execution_binding") or {}),
+        )
+        for item in raw_candidates
+    ]
+    prefix_ids = tuple(int(x) for x in prefix_data.input_ids.tolist())
+    prompt_text = str((state.prompt or {}).get("prompt_text") or "")
+    raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
+    audios = raw_inputs.get("audios") or raw_inputs.get("audio") or []
+    images = raw_inputs.get("images") or []
+    validate_action_suffix_request(
+        ActionSuffixScoreRequest(
+            request_id=request_id,
+            model=request_id,
+            prefix=prompt_text or "action scoring prefix",
+            language=str(action_spec.get("language", "zh")),
+            candidates=candidates,
+            audios=list(audios) if isinstance(audios, list) else [str(audios)],
+            images=list(images) if isinstance(images, list) else [str(images)],
+            sample_rate=int(action_spec.get("sample_rate", 16000)),
+            micro_batch_size=int(action_spec.get("micro_batch_size", 64)),
+        )
+    )
+    prompt_text = str((state.prompt or {}).get("prompt_text") or "")
+    special_token_ids = tuple(
+        int(value)
+        for value in (
+            getattr(tokenizer, "bos_token_id", None),
+            getattr(tokenizer, "eos_token_id", None),
+            getattr(tokenizer, "pad_token_id", None),
+        )
+        if value is not None
+    )
+    if prompt_text:
+        tokenizations = tokenize_suffixes(
+            tokenizer,
+            prompt_text,
+            candidates,
+            prefix_token_ids=prefix_ids,
+            special_token_ids=special_token_ids,
+        )
+        suffix_ids = [item.suffix_token_ids for item in tokenizations]
+    else:
+        suffix_ids = [
+            tuple(int(x) for x in tokenizer.encode(item.suffix, add_special_tokens=False))
+            for item in candidates
+        ]
+    if any(not item for item in suffix_ids):
+        raise ValueError("all action suffixes must contain at least one token")
+
+    raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
+    audios = raw_inputs.get("audios") or raw_inputs.get("audio") or []
+    images = raw_inputs.get("images") or []
+    cache_key, cache_digest = build_multimodal_cache_identity(
+        prefix_token_ids=prefix_ids,
+        audios=list(audios) if isinstance(audios, list) else [str(audios)],
+        images=list(images) if isinstance(images, list) else [str(images)],
+        request_scope=request_id,
+    )
+    prefix_req = prefix_data.req
+    prefix_req.extra_key = cache_key
+    prefix_positions = None
+    if prefix_req.multimodal_inputs is not None:
+        prefix_positions = getattr(prefix_req.multimodal_inputs, "mrope_positions", None)
+    dummy_id = getattr(tokenizer, "pad_token_id", None)
+    if dummy_id is None:
+        dummy_id = getattr(tokenizer, "eos_token_id", None)
+    dummy_id = int(dummy_id if dummy_id is not None else 0)
+    prefix_req.origin_input_ids = list(prefix_ids) + [dummy_id]
+    prefix_req.origin_input_ids_unpadded = prefix_req.origin_input_ids
+    prefix_data.input_ids = torch.tensor(prefix_req.origin_input_ids, dtype=torch.long)
+    prefix_data.attention_mask = torch.ones_like(prefix_data.input_ids)
+    if prefix_positions is not None:
+        prefix_req.multimodal_inputs.mrope_positions = torch.cat(
+            [prefix_positions, prefix_positions[..., -1:] + 1], dim=-1
+        )
+    first_token_ids = sorted({int(ids[0]) for ids in suffix_ids})
+    prefix_req.token_ids_logprob = first_token_ids
+    prefix_req.return_logprob = True
+    prefix_req.logprob_start_len = len(prefix_ids)
+    prefix_data.action_scoring_role = "prefix"
+    prefix_data.action_scoring_parent = prefix_data
+    prefix_data.action_scoring_candidate_id = None
+    prefix_data.action_scoring_plan = {
+        "candidate_ids": [item.candidate_id for item in candidates],
+        "candidate_suffix_ids": {
+            item.candidate_id: tuple(ids)
+            for item, ids in zip(candidates, suffix_ids, strict=True)
+        },
+        "candidate_data": [],
+        "prefix_token_count": len(prefix_ids),
+        "cache_key": cache_key,
+        "cache_digest": cache_digest,
+        "micro_batch_size": int(action_spec.get("micro_batch_size", 64)),
+        "prefix_cached": False,
+        "prefix_physical_prefill_chunk_count": 0,
+        "started_at": float(action_spec.get("client_started_at", time.perf_counter())),
+        "candidate_prefix_recompute_tokens": {},
+    }
+
+    for item, suffix in zip(candidates, suffix_ids, strict=True):
+        full_ids = torch.tensor(prefix_ids + tuple(suffix), dtype=torch.long)
+        sampling_params = copy.copy(prefix_req.sampling_params)
+        candidate_req = Req(
+            rid=f"{request_id}::candidate::{item.candidate_id}",
+            origin_input_text="",
+            origin_input_ids=full_ids.tolist(),
+            sampling_params=sampling_params,
+            vocab_size=vocab_size,
+        )
+        candidate_req.tokenizer = tokenizer
+        candidate_req.extra_key = cache_key
+        candidate_req.return_logprob = True
+        candidate_req.logprob_start_len = len(prefix_ids)
+        candidate_req.omni_model_inputs = (
+            dict(prefix_req.omni_model_inputs)
+            if prefix_req.omni_model_inputs is not None
+            else None
+        )
+        candidate_req._omni_consumed = None
+        candidate_req._action_scoring_role = "candidate"
+        if prefix_positions is not None:
+            from sglang.srt.managers.schedule_batch import MultimodalInputs
+            candidate_req.multimodal_inputs = MultimodalInputs(mm_items=[])
+            candidate_req.multimodal_inputs.mrope_positions = _extend_action_mrope_positions(
+                prefix_positions, len(suffix)
+            )
+            candidate_req.multimodal_inputs.mrope_position_delta = getattr(
+                prefix_req.multimodal_inputs, "mrope_position_delta", None
+            )
+        else:
+            candidate_req.multimodal_inputs = None
+        candidate_data = SGLangARRequestData(
+            input_ids=full_ids,
+            model_inputs=dict(prefix_data.model_inputs),
+            max_new_tokens=0,
+            temperature=0.0,
+            output_ids=candidate_req.output_ids,
+            req=candidate_req,
+            stage_payload=prefix_data.stage_payload,
+            action_scoring_role="candidate",
+            action_scoring_parent=prefix_data,
+            action_scoring_candidate_id=item.candidate_id,
+        )
+        candidate_data.return_logprob = True
+        prefix_data.action_scoring_plan["candidate_data"].append(candidate_data)
+    prefix_data.return_logprob = True
+    return prefix_data
 
 
 def build_sglang_talker_request(
@@ -955,6 +1209,15 @@ def make_thinker_scheduler_adapters(
 
     def result_adapter(data: SGLangARRequestData) -> StagePayload:
         payload = data.stage_payload
+        if is_action_scoring_request(payload):
+            result = data.extra_model_outputs.get("action_scoring_result")
+            if not isinstance(result, dict):
+                raise RuntimeError("action scoring result is missing")
+            return StagePayload(
+                request_id=payload.request_id,
+                request=payload.request,
+                data=result,
+            )
         state = Qwen3OmniPipelineState.from_dict(payload.data)
         apply_thinker_result(state, stage_name=stage_name, result=data)
         return StagePayload(

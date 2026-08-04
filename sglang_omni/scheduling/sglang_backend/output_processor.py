@@ -11,6 +11,18 @@ import torch
 from sglang_omni.scheduling.types import RequestOutput, SchedulerOutput
 
 
+def _to_cpu_python(value: Any) -> Any:
+    if hasattr(value, "detach"):
+        return value.detach().float().cpu().tolist()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    if isinstance(value, list):
+        return [_to_cpu_python(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_cpu_python(item) for item in value]
+    return value
+
+
 class SGLangOutputProcessor:
     """Converts GenerationBatchResult to per-request RequestOutputs."""
 
@@ -52,7 +64,10 @@ class SGLangOutputProcessor:
         outputs = {}
         for i, sched_req in enumerate(scheduler_output.requests):
             token_id = token_list[i] if i < len(token_list) else None
-            extra = hidden_extras_by_request.get(i)
+            extra = dict(hidden_extras_by_request.get(i) or {})
+            extra.update(self._action_scoring_extra(
+                model_output, scheduler_output, i, sched_req.data
+            ))
             outputs[sched_req.request_id] = RequestOutput(
                 request_id=sched_req.request_id,
                 data=token_id,
@@ -60,6 +75,54 @@ class SGLangOutputProcessor:
                 extra=extra,
             )
         return outputs
+
+    def _action_scoring_extra(
+        self, model_output: Any, scheduler_output: SchedulerOutput, index: int, data: Any
+    ) -> dict[str, Any]:
+        role = getattr(data, "action_scoring_role", None)
+        if role is None or model_output.logits_output is None:
+            return {}
+        logits_output = model_output.logits_output
+        if role == "prefix":
+            values = getattr(logits_output, "input_token_ids_logprobs_val", None)
+            token_ids = getattr(logits_output, "input_token_ids_logprobs_idx", None)
+            if values is None or token_ids is None:
+                raise RuntimeError("action scoring prefix selected-token logprobs are missing")
+            values = _to_cpu_python(values)
+            token_ids = _to_cpu_python(token_ids)
+            if values and isinstance(values[0], list):
+                values = values[index]
+            if token_ids and isinstance(token_ids[0], list):
+                token_ids = token_ids[index]
+            # SGLang returns one row per prefill position; a fully cached
+            # prefix has exactly one requested position (the dummy token).
+            # Keep the final row so chunked-prefill bookkeeping cannot mix
+            # earlier prefix positions into the first suffix distribution.
+            if values and isinstance(values[0], list):
+                values = values[-1]
+            if token_ids and isinstance(token_ids[0], list):
+                token_ids = token_ids[-1]
+            return {
+                "action_prefix_token_logprobs": {
+                    int(token_id): float(value)
+                    for token_id, value in zip(token_ids, values, strict=True)
+                }
+            }
+        if role != "candidate":
+            return {}
+        values = getattr(logits_output, "input_token_logprobs", None)
+        if values is None:
+            raise RuntimeError("action scoring candidate forward returned no input token logprobs")
+        values = list(_to_cpu_python(values))
+        batch = scheduler_output.batch_data
+        lengths = list(getattr(batch, "extend_lens", []) or [])
+        starts = list(getattr(batch, "extend_logprob_start_lens", []) or [])
+        if len(lengths) != len(scheduler_output.requests):
+            lengths = [len(getattr(req, "origin_input_ids", [])) for req in batch.reqs]
+            starts = [0] * len(lengths)
+        offset = sum(max(length - start, 0) for length, start in zip(lengths[:index], starts[:index], strict=True))
+        count = max(lengths[index] - starts[index] - 1, 0)
+        return {"action_candidate_input_token_logprobs": values[offset : offset + count]}
 
     def _should_emit_hidden_for_request(self, request: Any) -> bool:
         if self._should_emit_hidden is None:

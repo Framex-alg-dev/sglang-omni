@@ -547,6 +547,7 @@ class ModelRunner:
             req_ids=req_ids,
             req_id_to_index=req_id_to_index,
             can_run_cuda_graph=bool(batch_result.can_run_cuda_graph),
+            logits_output=batch_result.logits_output,
             next_token_ids=batch_result.next_token_ids,
             host_token_ids=host_token_ids,
         )

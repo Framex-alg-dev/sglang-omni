@@ -31,6 +31,11 @@ class SGLangARRequestData(ARRequestData):
     tts_pad_embed: Any = None
     tts_eos_embed: Any = None
     thinker_chunks_done: bool = True
+    # Action suffix scoring uses one prefix Req followed by candidate Reqs.
+    action_scoring_role: str | None = None
+    action_scoring_parent: Any = None
+    action_scoring_plan: Any = None
+    action_scoring_candidate_id: str | None = None
 
 
 @dataclass

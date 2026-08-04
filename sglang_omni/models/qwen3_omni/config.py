@@ -126,6 +126,7 @@ def _aggregate_stage(
         wait_for_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_wait_sources",
         merge_fn=f"{_PKG}.merge.merge_for_thinker",
         next="thinker",
+        route_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_next_stages",
         disable_direct_cuda_ipc_payload=True,
     )
 
@@ -142,13 +143,9 @@ def _thinker_stage(*, gpu: int, speech_enabled: bool, process: str) -> StageConf
         factory_args=factory_args,
         gpu=gpu,
         runtime_arg_map={"max_seq_len": "thinker_max_seq_len"},
-        next="decode",
+        next=["decode", "action_score"],
         stream_to=["talker_ar", "decode"] if speech_enabled else ["decode"],
-        route_fn=(
-            f"{_PKG}.request_builders.resolve_thinker_next_stages"
-            if speech_enabled
-            else None
-        ),
+        route_fn=f"{_PKG}.request_builders.resolve_thinker_next_stages",
         stream_done_to_fn=(
             f"{_PKG}.request_builders.resolve_thinker_stream_done_targets"
             if speech_enabled
@@ -156,7 +153,17 @@ def _thinker_stage(*, gpu: int, speech_enabled: bool, process: str) -> StageConf
         ),
         project_payload={
             "decode": f"{_PKG}.request_builders.project_thinker_to_decode",
+            "action_score": f"{_PKG}.request_builders.project_thinker_to_action_score",
         },
+    )
+
+
+def _action_score_stage(*, process: str) -> StageConfig:
+    return StageConfig(
+        name="action_score",
+        process=process,
+        factory=f"{_PKG}.stages.create_action_score_executor",
+        terminal=True,
     )
 
 
@@ -220,6 +227,7 @@ def _code2wav_stage(*, gpu: int, process: str) -> StageConfig:
     )
 
 
+
 def _text_stages() -> list[StageConfig]:
     return [
         _preprocessing_stage(process="pipeline"),
@@ -227,6 +235,7 @@ def _text_stages() -> list[StageConfig]:
         _audio_encoder_stage(gpu=0, process="pipeline"),
         _aggregate_stage(process="pipeline", gpu=0, speech_enabled=False),
         _thinker_stage(gpu=0, speech_enabled=False, process="pipeline"),
+        _action_score_stage(process="pipeline"),
         _decode_stage(process="pipeline"),
     ]
 
@@ -258,6 +267,7 @@ def _speech_stages(
             speech_enabled=True,
             process=process_by_stage["thinker"],
         ),
+        _action_score_stage(process=process_by_stage["thinker"]),
         _decode_stage(process=process_by_stage["decode"]),
         _talker_stage(
             gpu=talker_gpu,
