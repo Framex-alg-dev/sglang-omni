@@ -196,4 +196,3 @@ def test_runtime_scoring_keeps_first_suffix_logprob_from_prefill():
     )
     assert [item.logprob for item in score.token_scores] == [-0.2, -0.3, -0.4]
     assert score.token_count == 3
-
