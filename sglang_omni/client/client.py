@@ -104,7 +104,7 @@ class Client:
             _submit(), name=f"action-score-{request.request_id}"
         )
         try:
-            raw_result = await asyncio.wait_for(task, timeout=0.600)
+            raw_result = await asyncio.wait_for(task, timeout=120.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             if not task.done():
                 task.cancel()

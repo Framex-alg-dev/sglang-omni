@@ -453,6 +453,21 @@ class ModelRunner:
             if batch_result is None:
                 batch_result = self.tp_worker.forward_batch_generation(forward_batch)
 
+            # Action-score prefix requests are prefill-only: there is no
+            # sampling step to populate token-id probes. Ask SGLang native
+            # logprob-only path to materialize them immediately after the
+            # forward so the output processor can publish selected-token
+            # prefix logprobs.
+            if is_prefill and forward_batch.token_ids_logprobs:
+                compute_logprobs_only = getattr(
+                    self.tp_worker.model_runner, "compute_logprobs_only", None
+                )
+                if compute_logprobs_only is not None:
+                    compute_logprobs_only(
+                        batch_result.logits_output,
+                        forward_batch,
+                    )
+
             if (
                 not schedule_batch.is_prefill_only
                 and batch_result.next_token_ids is None
@@ -550,6 +565,10 @@ class ModelRunner:
             logits_output=batch_result.logits_output,
             next_token_ids=batch_result.next_token_ids,
             host_token_ids=host_token_ids,
+            extend_input_len_per_req=getattr(forward_batch, "extend_seq_lens_cpu", None),
+            extend_logprob_start_len_per_req=getattr(
+                forward_batch, "extend_logprob_start_lens_cpu", None
+            ),
         )
 
     def _ensure_next_token_ids(

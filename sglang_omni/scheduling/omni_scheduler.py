@@ -1212,6 +1212,7 @@ class OmniScheduler:
                 self._finish_action_scoring(parent, plan)
 
 
+    @staticmethod
     def _normalize_req_token_arrays(req: Any) -> None:
         """Normalize builder-produced token containers to the 0.5.16 Req shape."""
         origin_input_ids = req.origin_input_ids
@@ -1441,6 +1442,8 @@ class OmniScheduler:
             logits_output=mr_output.logits_output,
             next_token_ids=next_token_ids,
             can_run_cuda_graph=mr_output.can_run_cuda_graph,
+            extend_input_len_per_req=mr_output.extend_input_len_per_req,
+            extend_logprob_start_len_per_req=mr_output.extend_logprob_start_len_per_req,
         )
 
     def _run_batch_launch(self, batch):
@@ -1476,6 +1479,8 @@ class OmniScheduler:
             logits_output=mr_output.logits_output,
             next_token_ids=mr_output.next_token_ids,
             can_run_cuda_graph=mr_output.can_run_cuda_graph,
+            extend_input_len_per_req=mr_output.extend_input_len_per_req,
+            extend_logprob_start_len_per_req=mr_output.extend_logprob_start_len_per_req,
         )
 
     def _handle_batch_failure(self, batch: Any, error: Exception) -> None:

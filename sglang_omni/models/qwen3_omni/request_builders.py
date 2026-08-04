@@ -662,6 +662,9 @@ def build_sglang_thinker_request(
         origin_input_text="",
         origin_input_ids=input_ids_list,
         sampling_params=sampling_params,
+        return_logprob=bool(
+            params.get("return_logprob") or isinstance(params.get("action_scoring"), dict)
+        ),
         vocab_size=vocab_size,
     )
     req.tokenizer = tokenizer
@@ -825,7 +828,10 @@ def _prepare_action_scoring_request(
             [prefix_positions, prefix_positions[..., -1:] + 1], dim=-1
         )
     first_token_ids = sorted({int(ids[0]) for ids in suffix_ids})
-    prefix_req.token_ids_logprob = first_token_ids
+    # SGLang stores token-id probes under Req.logprob. Keeping this on the
+    # request logprob object lets ForwardBatch.init_new carry the probes into
+    # the prefill-only logits path.
+    prefix_req.logprob.token_ids_logprob = first_token_ids
     prefix_req.return_logprob = True
     prefix_req.logprob_start_len = len(prefix_ids)
     prefix_data.action_scoring_role = "prefix"
@@ -856,6 +862,7 @@ def _prepare_action_scoring_request(
             origin_input_text="",
             origin_input_ids=full_ids.tolist(),
             sampling_params=sampling_params,
+            return_logprob=True,
             vocab_size=vocab_size,
         )
         candidate_req.tokenizer = tokenizer

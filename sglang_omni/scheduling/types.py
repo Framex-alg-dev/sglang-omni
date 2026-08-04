@@ -61,6 +61,9 @@ class ModelRunnerOutput:
     # Optional pinned-host copy used for CPU-side result processing without a
     # pageable device-to-host synchronization.
     host_token_ids: "torch.Tensor | None" = None
+    # Prefill logprob bookkeeping consumed by SGLang batch result processor.
+    extend_input_len_per_req: list[int] | None = None
+    extend_logprob_start_len_per_req: list[int] | None = None
 
 
 @dataclass
