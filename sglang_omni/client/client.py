@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from contextlib import aclosing
 from dataclasses import replace
@@ -19,6 +20,8 @@ from sglang_omni.client.audio import (
     to_numpy,
 )
 from sglang_omni.client.types import (
+    ActionSuffixScoreRequest,
+    ActionSuffixScoreResult,
     AbortLevel,
     AbortResult,
     ClientError,
@@ -29,6 +32,12 @@ from sglang_omni.client.types import (
     GenerateRequest,
     SpeechResult,
     UsageInfo,
+)
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    CandidateScore,
+    TokenScore,
+    validate_action_suffix_request,
+    validate_score_result,
 )
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import OmniRequest, RequestState, StreamMessage
@@ -46,6 +55,68 @@ class Client:
         self._coordinator = coordinator
         self._result_builder = result_builder or self._default_result_builder
         self._stream_builder = stream_builder or self._default_stream_builder
+        self._action_scoring_semaphore = asyncio.Semaphore(1)
+
+    async def score_action_suffixes(
+        self, request: ActionSuffixScoreRequest
+    ) -> ActionSuffixScoreResult:
+        """Score all suffixes as one logical multimodal pipeline request."""
+        validate_action_suffix_request(request)
+        candidates = [
+            {
+                "candidate_id": item.candidate_id,
+                "suffix": item.suffix,
+                "action_id": item.action_id,
+                "execution_binding": dict(item.execution_binding),
+            }
+            for item in request.candidates
+        ]
+        omni_request = OmniRequest(
+            inputs={
+                "messages": [{"role": "user", "content": request.prefix}],
+                "audios": list(request.audios),
+                "images": list(request.images),
+                "audio_target_sr": request.sample_rate,
+            },
+            params={
+                "max_new_tokens": 0,
+                "action_scoring": {
+                    "prefix": request.prefix,
+                    "language": request.language,
+                    "candidates": candidates,
+                    "micro_batch_size": request.micro_batch_size,
+                    "sample_rate": request.sample_rate,
+                    "client_started_at": time.perf_counter(),
+                },
+            },
+            metadata={
+                "task": "action_suffix_scoring",
+                "model": request.model,
+                "language": request.language,
+            },
+        )
+
+        async def _submit() -> Any:
+            async with self._action_scoring_semaphore:
+                return await self._coordinator.submit(request.request_id, omni_request)
+
+        task = asyncio.create_task(
+            _submit(), name=f"action-score-{request.request_id}"
+        )
+        try:
+            raw_result = await asyncio.wait_for(task, timeout=0.600)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await self._coordinator.abort(request.request_id)
+            raise
+        result = _coerce_action_score_result(raw_result, request)
+        try:
+            validate_score_result(request, result)
+        except RuntimeError as exc:
+            raise ClientError(str(exc)) from exc
+        return result
 
     # ------------------------------------------------------------------
     # Low-level generate (backward compatible)
@@ -598,6 +669,41 @@ class Client:
             return chunk
         chunk.text = str(data)
         return chunk
+
+
+def _coerce_action_score_result(raw_result: Any, request: ActionSuffixScoreRequest) -> ActionSuffixScoreResult:
+    if isinstance(raw_result, ActionSuffixScoreResult):
+        return raw_result
+    if not isinstance(raw_result, dict):
+        raise ClientError("action scoring returned an invalid result")
+    raw_scores = raw_result.get("scores")
+    if not isinstance(raw_scores, list):
+        raise ClientError("action scoring result is missing scores")
+    scores = []
+    for item in raw_scores:
+        if not isinstance(item, dict):
+            raise ClientError("action scoring returned an invalid candidate score")
+        token_scores = [
+            TokenScore(int(token["token_id"]), float(token["logprob"]))
+            for token in item.get("token_scores", [])
+        ]
+        scores.append(
+            CandidateScore(
+                candidate_id=str(item["candidate_id"]),
+                token_count=int(item["token_count"]),
+                mean_logprob=float(item["mean_logprob"]),
+                mean_nll=float(item["mean_nll"]),
+                ppl=float(item["ppl"]),
+                token_scores=token_scores,
+            )
+        )
+    return ActionSuffixScoreResult(
+        request_id=str(raw_result.get("request_id", request.request_id)),
+        model=str(raw_result.get("model", request.model)),
+        prefix_cached=bool(raw_result.get("prefix_cached", False)),
+        scores=scores,
+        stats=dict(raw_result.get("stats") or {}),
+    )
 
 
 def _extract_inputs(request: GenerateRequest) -> Any:

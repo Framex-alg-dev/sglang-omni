@@ -3,6 +3,11 @@
 
 from sglang_omni.client.client import Client
 from sglang_omni.client.types import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+    ActionSuffixScoreResult,
+    CandidateScore,
+    TokenScore,
     AbortLevel,
     AbortResult,
     ClientError,
@@ -19,6 +24,11 @@ from sglang_omni.client.types import (
 
 __all__ = [
     "Client",
+    "ActionScoreCandidate",
+    "ActionSuffixScoreRequest",
+    "ActionSuffixScoreResult",
+    "CandidateScore",
+    "TokenScore",
     "AbortLevel",
     "AbortResult",
     "ClientError",

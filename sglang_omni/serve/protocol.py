@@ -103,6 +103,34 @@ class ChatCompletionRequest(BaseModel):
         return self.max_completion_tokens or self.max_tokens
 
 
+class ActionScoreCandidateRequest(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=128)
+    suffix: str = Field(min_length=1, max_length=512)
+    action_id: str | None = Field(default=None, max_length=128)
+    execution_binding: dict[str, str] = Field(default_factory=dict)
+
+
+class ActionScoreRequest(BaseModel):
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    model: str = Field(min_length=1, max_length=256)
+    prefix: str = Field(min_length=1, max_length=4096)
+    language: Literal["zh", "en"]
+    audios: list[str] = Field(default_factory=list)
+    images: list[str] = Field(default_factory=list)
+    sample_rate: int = Field(gt=0, le=384000)
+    micro_batch_size: int = Field(default=64, ge=1, le=256)
+    candidates: list[ActionScoreCandidateRequest] = Field(min_length=1, max_length=512)
+
+
+class ActionScoreResponse(BaseModel):
+    request_id: str
+    model: str
+    prefix_cached: bool
+    scores: list[dict[str, Any]]
+    stats: dict[str, Any] = Field(default_factory=dict)
+
+
+
 class ChatCompletionChoice(BaseModel):
     """A single choice in a chat completion response."""
 
