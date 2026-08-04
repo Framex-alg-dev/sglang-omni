@@ -30,7 +30,6 @@ from sglang_omni.preprocessing import (
     ensure_chat_template,
     ensure_image_list_async,
     ensure_video_list_async,
-    normalize_messages,
 )
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.proto import StagePayload
@@ -258,6 +257,21 @@ class Qwen3OmniPreprocessor:
         num_videos: int,
     ) -> list[dict[str, Any]]:
         """Convert simple messages to HF's structured multimodal format."""
+        explicit = _count_explicit_mm(messages)
+        if any(explicit.values()):
+            expected = {
+                "audio": num_audios,
+                "image": num_images,
+                "video": num_videos,
+            }
+            if explicit != expected:
+                raise ValueError(
+                    "Structured multimodal placeholders do not match the "
+                    f"top-level media lists: placeholders={explicit}, "
+                    f"media={expected}. Put media payloads in audios/images/"
+                    "videos and keep one matching part in messages.content."
+                )
+            return messages
         if num_images == 0 and num_audios == 0 and num_videos == 0:
             return messages
 
@@ -575,7 +589,7 @@ class Qwen3OmniPreprocessor:
             resolved_video_seconds_per_chunk = None
             resolved_video_position_id_per_seconds = None
 
-        messages_norm = normalize_messages(messages)
+        messages_norm = _official_normalize_messages(messages)
         # Insert placeholders:
         # - Explicit audio files get independent audio placeholders
         # - Video audio (when use_audio_in_video=True) is handled by video token, no separate placeholder
@@ -726,3 +740,72 @@ class Qwen3OmniPreprocessor:
             full_mm_inputs=full_mm_inputs,
             encoder_inputs=encoder_inputs,
         )
+# Official OpenAI/Qwen messages may carry multimodal parts in each content list.
+
+
+_MM_TYPE_ALIASES = {
+    "audio": "audio",
+    "input_audio": "audio",
+    "audio_url": "audio",
+    "image": "image",
+    "image_url": "image",
+    "video": "video",
+    "video_url": "video",
+}
+_MM_PART_TYPES = ("audio", "image", "video")
+
+
+def _normalize_content_parts(content: Any) -> list[dict[str, Any]] | None:
+    """Normalize recognized structured multimodal content to HF parts."""
+    if not isinstance(content, list) or not content:
+        return None
+
+    parts: list[dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            return None
+        item_type = item.get("type")
+        if item_type == "text":
+            parts.append({"type": "text", "text": item.get("text", "")})
+        elif isinstance(item_type, str) and item_type in _MM_TYPE_ALIASES:
+            parts.append({"type": _MM_TYPE_ALIASES[item_type]})
+        else:
+            return None
+    return parts
+
+
+def _official_normalize_messages(messages: Any) -> list[dict[str, Any]]:
+    """Normalize messages without flattening recognized structured content."""
+    if not isinstance(messages, list):
+        raise ValueError("Preprocessing expects a list of chat messages")
+
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            raise ValueError("Each message must be a dict with role/content")
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        parts = _normalize_content_parts(content)
+        if parts is not None:
+            normalized.append({"role": role, "content": parts})
+        elif isinstance(content, str):
+            normalized.append({"role": role, "content": content})
+        else:
+            normalized.append(
+                {"role": role, "content": json.dumps(content, ensure_ascii=True)}
+            )
+    return normalized
+
+
+def _count_explicit_mm(messages: list[dict[str, Any]]) -> dict[str, int]:
+    """Count multimodal parts already positioned by the caller."""
+    counts = {part_type: 0 for part_type in _MM_PART_TYPES}
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            item_type = item.get("type") if isinstance(item, dict) else None
+            if isinstance(item_type, str) and item_type in counts:
+                counts[item_type] += 1
+    return counts

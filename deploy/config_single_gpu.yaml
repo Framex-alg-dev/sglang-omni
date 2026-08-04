@@ -1,0 +1,45 @@
+# Qwen3-Omni-30B-A3B-Instruct single-GPU colocated profile.
+#
+# Select the physical card outside this file:
+#   CUDA_VISIBLE_DEVICES=<physical_gpu> python -m sglang_omni.cli serve \
+#     --colocate --config deploy/config_single_gpu.yaml --talker-partial-start on
+#
+# The global model is the FP8 checkpoint for the large thinker stage. The
+# talker is overridden to the BF16 Instruct checkpoint because it is small
+# enough to keep BF16 quality/performance in the colocated budget.
+config_cls: Qwen3OmniSpeechColocatedPipelineConfig
+name: qwen3-omni-single-gpu
+model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
+
+runtime_overrides:
+  talker_ar:
+    model_path: /data/models/Qwen3-Omni-30B-A3B-Instruct
+    partial_start_min_chunks: 1
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+  code2wav:
+    stream_chunk_size: 1
+
+stage_overrides:
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.66
+  talker_ar:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.16
+  code2wav:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.02

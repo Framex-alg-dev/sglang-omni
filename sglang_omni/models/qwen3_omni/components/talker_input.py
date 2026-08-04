@@ -86,6 +86,11 @@ def build_assistant_part(
     dtype = assistant_embed.dtype
 
     projected = text_projection(assistant_embed)  # [N, hidden]
+    prefix = projected[:3]
+    if prefix.shape[0] < 3:
+        prefix = torch.cat(
+            [prefix, tts_pad_embed.expand(3 - prefix.shape[0], -1)], dim=0
+        )
 
     # Text side: [first 3] + [4x pad] + [bos] + [4th token]
     # The initial talker request can be built before the thinker has emitted
@@ -98,7 +103,7 @@ def build_assistant_part(
     )
     text_hidden = torch.cat(
         [
-            projected[:3],
+            prefix,
             tts_pad_embed.expand(4, -1),
             tts_bos_embed,
             fourth_token,
