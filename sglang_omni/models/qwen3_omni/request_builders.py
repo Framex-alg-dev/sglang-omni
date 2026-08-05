@@ -731,6 +731,21 @@ def _extend_action_mrope_positions(positions: Any, suffix_len: int) -> Any:
     return torch.cat([positions, positions[..., -1:] + increments], dim=-1)
 
 
+def _resolve_action_terminal_token_id(tokenizer: Any) -> int:
+    """Resolve the ChatML assistant-turn terminator used by Qwen3-Omni."""
+    token_id = None
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert):
+        token_id = convert("<|im_end|>")
+        if token_id == getattr(tokenizer, "unk_token_id", None):
+            token_id = None
+    if token_id is None:
+        token_id = getattr(tokenizer, "eos_token_id", None)
+    if token_id is None or int(token_id) < 0:
+        raise ValueError("tokenizer does not define an <|im_end|>/EOS token")
+    return int(token_id)
+
+
 def _prepare_action_scoring_request(
     prefix_data: SGLangARRequestData,
     *,
@@ -784,6 +799,7 @@ def _prepare_action_scoring_request(
         )
         if value is not None
     )
+    terminal_token_id = _resolve_action_terminal_token_id(tokenizer)
     if prompt_text:
         tokenizations = tokenize_suffixes(
             tokenizer,
@@ -791,11 +807,15 @@ def _prepare_action_scoring_request(
             candidates,
             prefix_token_ids=prefix_ids,
             special_token_ids=special_token_ids,
+            terminal_token_id=terminal_token_id,
         )
         suffix_ids = [item.suffix_token_ids for item in tokenizations]
     else:
         suffix_ids = [
-            tuple(int(x) for x in tokenizer.encode(item.suffix, add_special_tokens=False))
+            (
+                *tuple(int(x) for x in tokenizer.encode(item.suffix, add_special_tokens=False)),
+                terminal_token_id,
+            )
             for item in candidates
         ]
     if any(not item for item in suffix_ids):
@@ -843,6 +863,7 @@ def _prepare_action_scoring_request(
             item.candidate_id: tuple(ids)
             for item, ids in zip(candidates, suffix_ids, strict=True)
         },
+        "terminal_token_id": terminal_token_id,
         "candidate_data": [],
         "prefix_token_count": len(prefix_ids),
         "cache_key": cache_key,

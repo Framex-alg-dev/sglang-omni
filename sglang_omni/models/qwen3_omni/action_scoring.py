@@ -281,6 +281,7 @@ def tokenize_suffixes(
     *,
     prefix_token_ids: Sequence[int] | None = None,
     special_token_ids: Iterable[int] = (),
+    terminal_token_id: int | None = None,
 ) -> list[CandidateTokenization]:
     """Tokenize full prefix+suffix strings and derive an explicit suffix mask.
 
@@ -288,6 +289,8 @@ def tokenize_suffixes(
     compositional at a text boundary.  For multimodal chat templates whose
     special tokens cannot be reconstructed from plain text, a non-whitespace
     action suffix is composed onto the authoritative prefix token IDs.
+    ``terminal_token_id`` is appended explicitly and remains in the score mask
+    even when it is also a tokenizer special token.
     """
     if not prefix:
         raise ValueError("prefix must be non-empty")
@@ -312,6 +315,10 @@ def tokenize_suffixes(
                 token_id for token_id, include in zip(full_ids_list, mask, strict=True) if include
             )
             suffix_start = next((i for i, include in enumerate(mask) if include), len(full_ids_list))
+            if terminal_token_id is not None:
+                full_ids_list.append(int(terminal_token_id))
+                mask = (*mask, True)
+                suffix_ids = (*suffix_ids, int(terminal_token_id))
             result.append(
                 CandidateTokenization(
                     candidate_id=candidate.candidate_id,
@@ -343,15 +350,20 @@ def tokenize_suffixes(
             i >= suffix_start and token_id not in special
             for i, token_id in enumerate(full_ids)
         )
+        suffix_ids = tuple(
+            token_id for token_id, include in zip(full_ids, mask, strict=True) if include
+        )
+        if terminal_token_id is not None:
+            full_ids = (*full_ids, int(terminal_token_id))
+            mask = (*mask, True)
+            suffix_ids = (*suffix_ids, int(terminal_token_id))
         result.append(
             CandidateTokenization(
                 candidate_id=candidate.candidate_id,
                 full_input_ids=full_ids,
                 suffix_start_index=suffix_start,
                 suffix_token_mask=mask,
-                suffix_token_ids=tuple(
-                    token_id for token_id, include in zip(full_ids, mask, strict=True) if include
-                ),
+                suffix_token_ids=suffix_ids,
             )
         )
     return result

@@ -89,10 +89,13 @@ def test_tokenization_handles_suffix_boundary_and_special_tokens():
         "当下",
         [candidate("left", " 使用左手")],
         special_token_ids=[999],
+        terminal_token_id=999,
     )[0]
     assert tokenized.suffix_start_index == 2
-    assert tokenized.suffix_token_ids == tuple(tokenized.full_input_ids[2:])
-    assert sum(tokenized.suffix_token_mask) == len(" 使用左手")
+    assert tokenized.suffix_token_ids == (*tuple(tokenized.full_input_ids[2:-1]), 999)
+    assert tokenized.full_input_ids[-1] == 999
+    assert tokenized.suffix_token_mask[-1] is True
+    assert sum(tokenized.suffix_token_mask) == len(" 使用左手") + 1
 
 
 def test_tokenization_does_not_assume_prefix_suffix_bpe_composition():
@@ -158,6 +161,17 @@ def test_math_counts_only_finite_suffix_tokens():
     assert scores.ppl == pytest.approx(math.exp(0.2))
     with pytest.raises(ValueError, match="empty"):
         aggregate_candidate_score("empty", [])
+
+
+def test_math_includes_action_terminal_token_in_ppl():
+    scores = aggregate_candidate_score(
+        "left",
+        [TokenScore(1, -0.1), TokenScore(2, -0.3), TokenScore(151645, -0.2)],
+    )
+    assert scores.token_count == 3
+    assert scores.mean_logprob == pytest.approx(-0.2)
+    assert scores.ppl == pytest.approx(math.exp(0.2))
+    assert scores.token_scores[-1].token_id == 151645
 
 
 def test_alignment_rejects_nan_and_preserves_first_suffix_token():
@@ -239,15 +253,26 @@ def test_multiturn_session_context_preserves_history_media_and_avatar_state():
     omni = Client._build_action_scoring_request(score_request)
 
     assert [message["role"] for message in omni.inputs["messages"]] == [
-        "user", "assistant", "user", "system", "user"
+        "system", "user", "assistant", "user"
     ]
-    assert omni.inputs["messages"][0]["content"][0]["type"] == "audio"
-    assert omni.inputs["messages"][2]["content"][0]["type"] == "image"
-    assert omni.inputs["messages"][-1]["content"][-1]["text"] == score_request.prefix
+    assert omni.inputs["messages"][0]["content"].startswith("当前数字人状态：")
+    assert "left_hand" in omni.inputs["messages"][0]["content"]
+    assert omni.inputs["messages"][1]["content"][0]["type"] == "audio"
+    assert omni.inputs["messages"][3]["content"][0]["type"] == "image"
+    assert omni.inputs["messages"][3]["content"][-1]["text"] == score_request.prefix
+    assert sum(
+        part.get("type") == "audio"
+        for message in omni.inputs["messages"]
+        for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+    ) == len(omni.inputs["audios"])
+    assert sum(
+        part.get("type") == "image"
+        for message in omni.inputs["messages"]
+        for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+    ) == len(omni.inputs["images"])
     assert omni.inputs["audios"] == ["/session/turn-1.wav", "/session/turn-2.wav"]
     assert omni.inputs["images"] == ["/session/turn-1.png", "/session/turn-2.png"]
     assert omni.metadata["session_id"] == "sess-42"
-    assert "left_hand" in omni.inputs["messages"][-2]["content"]
     assert omni.metadata["avatar_state"] == score_request.avatar_state
 
 

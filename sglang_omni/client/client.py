@@ -98,30 +98,129 @@ class Client:
 
 
     @staticmethod
+    def _action_instruction_content(
+        content: Any,
+        instruction: str,
+        *,
+        audios: list[str],
+        images: list[str],
+    ) -> Any:
+        """Append the action instruction to a user message.
+
+        Media placeholders must be kept in the message list when the
+        corresponding top-level media payload is present. Otherwise the
+        multimodal preprocessor cannot distinguish historical media from the
+        current turn.
+        """
+        if isinstance(content, list):
+            parts = [dict(part) if isinstance(part, dict) else part for part in content]
+            parts.extend({"type": "audio"} for _ in audios)
+            parts.extend({"type": "image"} for _ in images)
+            parts.append({"type": "text", "text": instruction})
+            return parts
+
+        if not audios and not images and isinstance(content, str):
+            return f"{content}\n{instruction}"
+
+        parts = []
+        if content is not None:
+            parts.append({"type": "text", "text": str(content)})
+        parts.extend({"type": "audio"} for _ in audios)
+        parts.extend({"type": "image"} for _ in images)
+        parts.append({"type": "text", "text": instruction})
+        return parts
+
+    @staticmethod
+    def _build_action_context_messages(
+        history: list[dict[str, Any]],
+        instruction: str,
+        *,
+        avatar_state: dict[str, Any] | None,
+        audios: list[str],
+        images: list[str],
+    ) -> list[dict[str, Any]]:
+        """Build action context with state first and current user intent last.
+
+        The caller controls whether a just-generated assistant response is
+        included in ``history``. If history already ends in a user message,
+        the instruction is merged into that message; if it ends in an
+        assistant message, a new user message is appended.
+        """
+        messages: list[dict[str, Any]] = []
+        if avatar_state:
+            state_text = json.dumps(
+                avatar_state,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            messages.append({"role": "system", "content": f"当前数字人状态：{state_text}"})
+
+        messages.extend(dict(message) for message in history)
+
+        # ``audios``/``images`` contain the complete media payload for the
+        # action-scoring request, including media from earlier turns. A
+        # history message may already carry placeholders for some of those
+        # files. Add only missing placeholders to the latest user turn;
+        # otherwise the multimodal preprocessor rejects the request because
+        # placeholder counts do not match the top-level media arrays.
+        existing_audio_placeholders = sum(
+            1
+            for message in messages
+            for part in (
+                message.get("content")
+                if isinstance(message.get("content"), list)
+                else []
+            )
+            if isinstance(part, dict) and part.get("type") == "audio"
+        )
+        existing_image_placeholders = sum(
+            1
+            for message in messages
+            for part in (
+                message.get("content")
+                if isinstance(message.get("content"), list)
+                else []
+            )
+            if isinstance(part, dict) and part.get("type") == "image"
+        )
+        missing_audios = [""] * max(len(audios) - existing_audio_placeholders, 0)
+        missing_images = [""] * max(len(images) - existing_image_placeholders, 0)
+        if messages and messages[-1].get("role") == "user":
+            latest_user = messages.pop()
+            latest_user["content"] = Client._action_instruction_content(
+                latest_user.get("content"),
+                instruction,
+                audios=missing_audios,
+                images=missing_images,
+            )
+            messages.append(latest_user)
+        else:
+            current_content: Any
+            if missing_audios or missing_images:
+                current_content = [
+                    *({"type": "audio"} for _ in missing_audios),
+                    *({"type": "image"} for _ in missing_images),
+                    {"type": "text", "text": instruction},
+                ]
+            else:
+                current_content = instruction
+            messages.append({"role": "user", "content": current_content})
+        return messages
+
+    @staticmethod
     def _build_action_scoring_request(
         request: ActionSuffixScoreRequest,
         candidates: list[dict[str, Any]] | None = None,
     ) -> OmniRequest:
         """Build one multimodal request from the complete session turn."""
-        messages = [dict(message) for message in request.history]
-        if request.avatar_state:
-            state_text = json.dumps(
-                request.avatar_state,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            messages.append(
-                {"role": "system", "content": f"当前数字人状态：{state_text}"}
-            )
-        current_content: str | list[dict[str, Any]] = request.prefix
-        if request.audios or request.images:
-            current_content = [
-                *({"type": "audio"} for _ in request.audios),
-                *({"type": "image"} for _ in request.images),
-                {"type": "text", "text": request.prefix},
-            ]
-        messages.append({"role": "user", "content": current_content})
+        messages = Client._build_action_context_messages(
+            request.history,
+            request.prefix,
+            avatar_state=request.avatar_state,
+            audios=[*request.history_audios, *request.audios],
+            images=[*request.history_images, *request.images],
+        )
         if candidates is None:
             candidates = [
                 {
