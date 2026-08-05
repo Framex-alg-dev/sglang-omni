@@ -473,7 +473,11 @@ def main() -> int:
                     "images": [args.image],
                 }
             ],
-            "score_media": {"audios": [args.audio], "images": [args.image]},
+            # The media already belongs to the preceding multimodal chat turn
+            # and is carried through history_audios/history_images. Sending it
+            # again as current media duplicates the encoder input and can hang
+            # the single-GPU service.
+            "score_media": {"audios": [], "images": []},
             "avatar_state": {"pose": "seated", "gaze": "camera", "hands": "resting"},
         }
     )
