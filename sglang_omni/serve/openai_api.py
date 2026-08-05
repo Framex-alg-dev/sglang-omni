@@ -1902,6 +1902,11 @@ def _register_action_scores(app: FastAPI) -> None:
             images=list(req.images),
             sample_rate=req.sample_rate,
             micro_batch_size=req.micro_batch_size,
+            session_id=req.session_id,
+            history=[message.model_dump(exclude_none=True) for message in req.history],
+            history_audios=list(req.history_audios),
+            history_images=list(req.history_images),
+            avatar_state=dict(req.avatar_state),
         )
         try:
             result = await client.score_action_suffixes(scoring_request)

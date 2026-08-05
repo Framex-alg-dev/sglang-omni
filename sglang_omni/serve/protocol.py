@@ -120,6 +120,11 @@ class ActionScoreRequest(BaseModel):
     sample_rate: int = Field(gt=0, le=384000)
     micro_batch_size: int = Field(default=64, ge=1, le=256)
     candidates: list[ActionScoreCandidateRequest] = Field(min_length=1, max_length=512)
+    session_id: str | None = Field(default=None, max_length=128)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=256)
+    history_audios: list[str] = Field(default_factory=list)
+    history_images: list[str] = Field(default_factory=list)
+    avatar_state: dict[str, Any] = Field(default_factory=dict)
 
 
 class ActionScoreResponse(BaseModel):

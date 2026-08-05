@@ -4,6 +4,8 @@ import math
 
 import pytest
 
+from sglang_omni.client.client import Client
+
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
@@ -107,6 +109,26 @@ def test_tokenization_does_not_assume_prefix_suffix_bpe_composition():
     assert item.suffix_token_ids == (10, 11)
 
 
+def test_tokenization_composes_suffix_after_multimodal_template_prefix():
+    class OpaqueTokenizer:
+        def encode(self, text, add_special_tokens=False):
+            del add_special_tokens
+            if text == "prefix":
+                return [101, 102]
+            if text == "左手":
+                return [201, 202]
+            return [999]
+
+    item = tokenize_suffixes(
+        OpaqueTokenizer(),
+        "prefix",
+        [candidate("x", "左手")],
+        prefix_token_ids=[101, 102],
+    )[0]
+    assert item.full_input_ids == (101, 102, 201, 202)
+    assert item.suffix_token_ids == (201, 202)
+
+
 def test_batches_cover_386_candidates_without_reordering():
     items = [
         type(
@@ -196,3 +218,68 @@ def test_runtime_scoring_keeps_first_suffix_logprob_from_prefill():
     )
     assert [item.logprob for item in score.token_scores] == [-0.2, -0.3, -0.4]
     assert score.token_count == 3
+
+
+def test_multiturn_session_context_preserves_history_media_and_avatar_state():
+    score_request = request(
+        request_id="turn-2",
+        session_id="sess-42",
+        history=[
+            {"role": "user", "content": [{"type": "audio"}, {"type": "text", "text": "我刚才抬起左手"}]},
+            {"role": "assistant", "content": "我看到你抬起了左手。"},
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "请看我现在的姿势"}]},
+        ],
+        history_audios=["/session/turn-1.wav"],
+        history_images=["/session/turn-1.png"],
+        audios=["/session/turn-2.wav"],
+        images=["/session/turn-2.png"],
+        avatar_state={"pose": "seated", "gaze": "camera", "left_hand": "raised"},
+    )
+    validate_action_suffix_request(score_request)
+    omni = Client._build_action_scoring_request(score_request)
+
+    assert [message["role"] for message in omni.inputs["messages"]] == [
+        "user", "assistant", "user", "system", "user"
+    ]
+    assert omni.inputs["messages"][0]["content"][0]["type"] == "audio"
+    assert omni.inputs["messages"][2]["content"][0]["type"] == "image"
+    assert omni.inputs["messages"][-1]["content"][-1]["text"] == score_request.prefix
+    assert omni.inputs["audios"] == ["/session/turn-1.wav", "/session/turn-2.wav"]
+    assert omni.inputs["images"] == ["/session/turn-1.png", "/session/turn-2.png"]
+    assert omni.metadata["session_id"] == "sess-42"
+    assert "left_hand" in omni.inputs["messages"][-2]["content"]
+    assert omni.metadata["avatar_state"] == score_request.avatar_state
+
+
+def test_multiturn_context_requires_history_media_placeholders():
+    with pytest.raises(ValueError, match="history audio placeholders"):
+        validate_action_suffix_request(
+            request(
+                history=[{"role": "user", "content": "old turn"}],
+                history_audios=["old.wav"],
+            )
+        )
+
+
+def test_second_turn_keeps_first_turn_in_context():
+    first_turn = request(
+        request_id="turn-1",
+        session_id="sess-42",
+        prefix="用户刚刚说：你好。现在请判断动作：",
+    )
+    second_turn = request(
+        request_id="turn-2",
+        session_id="sess-42",
+        history=[
+            {"role": "user", "content": "你好。"},
+            {"role": "assistant", "content": "你好，我在这里。"},
+        ],
+        prefix="用户现在说：请挥手。现在请判断动作：",
+    )
+    first_request = Client._build_action_scoring_request(first_turn)
+    second_request = Client._build_action_scoring_request(second_turn)
+
+    assert first_request.inputs["messages"][-1]["content"][-1]["text"] == first_turn.prefix
+    assert second_request.inputs["messages"][:2] == second_turn.history
+    assert second_request.inputs["messages"][-1]["content"][-1]["text"] == second_turn.prefix
+    assert second_request.metadata["session_id"] == first_request.metadata["session_id"]

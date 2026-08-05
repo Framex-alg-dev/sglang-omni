@@ -23,6 +23,7 @@ Language = Literal["zh", "en"]
 
 MAX_ACTION_CANDIDATES = 512
 MAX_ACTION_SUFFIX_CHARS = 512
+MAX_ACTION_HISTORY_MESSAGES = 256
 MIN_MICRO_BATCH_SIZE = 1
 MAX_MICRO_BATCH_SIZE = 256
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -50,6 +51,11 @@ class ActionSuffixScoreRequest:
     images: list[str]
     sample_rate: int
     micro_batch_size: int = 64
+    session_id: str | None = None
+    history: list[dict[str, Any]] = field(default_factory=list)
+    history_audios: list[str] = field(default_factory=list)
+    history_images: list[str] = field(default_factory=list)
+    avatar_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -189,6 +195,43 @@ def validate_action_suffix_request(
     for name, media in (("audios", request.audios), ("images", request.images)):
         if not isinstance(media, list) or not all(isinstance(item, str) for item in media):
             raise ValueError(f"{name} must be a list of strings")
+    if request.session_id is not None and not SAFE_REQUEST_ID.fullmatch(
+        request.session_id
+    ):
+        raise ValueError("session_id must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+    if not isinstance(request.history, list) or len(request.history) > MAX_ACTION_HISTORY_MESSAGES:
+        raise ValueError(
+            f"history must contain at most {MAX_ACTION_HISTORY_MESSAGES} messages"
+        )
+    history_audio_placeholders = 0
+    history_image_placeholders = 0
+    for message in request.history:
+        if not isinstance(message, dict):
+            raise ValueError("history messages must be objects")
+        if not isinstance(message.get("role"), str) or not message["role"].strip():
+            raise ValueError("history message role must be a non-empty string")
+        content = message.get("content")
+        if isinstance(content, str) or content is None:
+            continue
+        if not isinstance(content, list):
+            raise ValueError("history message content must be a string or list")
+        for part in content:
+            if not isinstance(part, dict):
+                raise ValueError("history content parts must be objects")
+            part_type = part.get("type")
+            if part_type in ("audio", "input_audio"):
+                history_audio_placeholders += 1
+            elif part_type in ("image", "input_image", "image_url"):
+                history_image_placeholders += 1
+    for name, media in (("history_audios", request.history_audios), ("history_images", request.history_images)):
+        if not isinstance(media, list) or not all(isinstance(item, str) for item in media):
+            raise ValueError(f"{name} must be a list of strings")
+    if history_audio_placeholders != len(request.history_audios):
+        raise ValueError("history audio placeholders must match history_audios length")
+    if history_image_placeholders != len(request.history_images):
+        raise ValueError("history image placeholders must match history_images length")
+    if not isinstance(request.avatar_state, dict):
+        raise ValueError("avatar_state must be an object")
     return request
 
 
@@ -242,9 +285,9 @@ def tokenize_suffixes(
     """Tokenize full prefix+suffix strings and derive an explicit suffix mask.
 
     Offset mappings are preferred because BPE tokenization is not generally
-    compositional at a text boundary.  The fallback only accepts an exact
-    prefix-token match and fails closed when the tokenizer cannot expose a
-    reliable boundary.
+    compositional at a text boundary.  For multimodal chat templates whose
+    special tokens cannot be reconstructed from plain text, a non-whitespace
+    action suffix is composed onto the authoritative prefix token IDs.
     """
     if not prefix:
         raise ValueError("prefix must be non-empty")
@@ -282,10 +325,19 @@ def tokenize_suffixes(
 
         full_ids = tuple(_encode(tokenizer, full_text, add_special_tokens=False))
         if tuple(full_ids[: len(prefix_ids)]) != prefix_ids:
-            raise ValueError(
-                "tokenizer does not expose offsets and prefix/suffix BPE boundary "
-                f"cannot be aligned for {candidate.candidate_id!r}"
-            )
+            # Multimodal chat templates can contain special tokens that the
+            # plain tokenizer cannot reproduce from prompt text. For a CJK
+            # action suffix, compose independently encoded suffix tokens onto
+            # the authoritative model prefix IDs.
+            if not candidate.suffix or candidate.suffix[0].isspace():
+                raise ValueError(
+                    "tokenizer does not expose offsets and prefix/suffix BPE boundary "
+                    f"cannot be aligned for {candidate.candidate_id!r}"
+                )
+            suffix_only = tuple(_encode(tokenizer, candidate.suffix, add_special_tokens=False))
+            if not suffix_only:
+                raise ValueError(f"suffix tokenization is empty: {candidate.candidate_id!r}")
+            full_ids = prefix_ids + suffix_only
         suffix_start = len(prefix_ids)
         mask = tuple(
             i >= suffix_start and token_id not in special

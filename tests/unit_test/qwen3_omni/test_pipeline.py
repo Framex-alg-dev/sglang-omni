@@ -150,11 +150,11 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
     assert speech_aggregate.next == ["thinker", "talker_ar"]
     assert speech_aggregate.project_payload is not None
     assert "talker_ar" in speech_aggregate.project_payload
-    assert _stage(speech_config, "thinker").next == "decode"
+    assert _stage(speech_config, "thinker").next == ["decode", "action_score"]
 
     text_aggregate = _stage(text_config, "mm_aggregate")
     assert text_aggregate.next == "thinker"
-    assert _stage(text_config, "thinker").next == "decode"
+    assert _stage(text_config, "thinker").next == ["decode", "action_score"]
 
     state = Qwen3OmniPipelineState.from_dict(
         {

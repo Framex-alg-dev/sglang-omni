@@ -16,9 +16,30 @@ rejected because punctuation is excluded from the action score denominator.
 
 `sample_rate` must be positive. `micro_batch_size` defaults to 64 and is
 limited to 256. The service serializes scoring requests with a global
-concurrency limit of one and applies a 600 ms end-to-end timeout. A timeout or
+concurrency limit of one and applies a 120 second end-to-end timeout. A timeout or
 client cancellation aborts the logical request and all physical candidate
 requests.
+
+## Session and multi-turn context
+
+Each turn may include `session_id`, the ordered `history` messages, `history_audios`, `history_images`, and an `avatar_state` object. The caller sends the complete context on every request; `session_id` is a correlation key and does not store conversation state inside the server. Historical audio/image entries must have explicit structured parts in `history`, for example `{"type":"audio"}` or `{"type":"image"}`, with matching entries in `history_audios`/`history_images`. The current turn remains in `prefix`, `audios`, and `images`. The service combines historical and current media in message order, so the action decision can use prior audio, text, images, and the current digital-human state.
+
+Example shape:
+
+```json
+{
+  "session_id": "session-42",
+  "history": [
+    {"role": "user", "content": [{"type": "audio"}, {"type": "text", "text": "我刚才抬起左手"}]},
+    {"role": "assistant", "content": "我看到你抬起了左手。"}
+  ],
+  "history_audios": ["/data/session/turn-1.wav"],
+  "avatar_state": {"pose": "seated", "gaze": "camera", "left_hand": "raised"},
+  "prefix": "请基于当前对话判断下一步动作：",
+  "audios": ["/data/session/turn-2.wav"],
+  "images": []
+}
+```
 
 ## Scoring semantics
 

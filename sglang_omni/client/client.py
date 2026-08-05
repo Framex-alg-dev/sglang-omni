@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from contextlib import aclosing
@@ -71,30 +72,7 @@ class Client:
             }
             for item in request.candidates
         ]
-        omni_request = OmniRequest(
-            inputs={
-                "messages": [{"role": "user", "content": request.prefix}],
-                "audios": list(request.audios),
-                "images": list(request.images),
-                "audio_target_sr": request.sample_rate,
-            },
-            params={
-                "max_new_tokens": 0,
-                "action_scoring": {
-                    "prefix": request.prefix,
-                    "language": request.language,
-                    "candidates": candidates,
-                    "micro_batch_size": request.micro_batch_size,
-                    "sample_rate": request.sample_rate,
-                    "client_started_at": time.perf_counter(),
-                },
-            },
-            metadata={
-                "task": "action_suffix_scoring",
-                "model": request.model,
-                "language": request.language,
-            },
-        )
+        omni_request = self._build_action_scoring_request(request, candidates)
 
         async def _submit() -> Any:
             async with self._action_scoring_semaphore:
@@ -117,6 +95,72 @@ class Client:
         except RuntimeError as exc:
             raise ClientError(str(exc)) from exc
         return result
+
+
+    @staticmethod
+    def _build_action_scoring_request(
+        request: ActionSuffixScoreRequest,
+        candidates: list[dict[str, Any]] | None = None,
+    ) -> OmniRequest:
+        """Build one multimodal request from the complete session turn."""
+        messages = [dict(message) for message in request.history]
+        if request.avatar_state:
+            state_text = json.dumps(
+                request.avatar_state,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            messages.append(
+                {"role": "system", "content": f"当前数字人状态：{state_text}"}
+            )
+        current_content: str | list[dict[str, Any]] = request.prefix
+        if request.audios or request.images:
+            current_content = [
+                *({"type": "audio"} for _ in request.audios),
+                *({"type": "image"} for _ in request.images),
+                {"type": "text", "text": request.prefix},
+            ]
+        messages.append({"role": "user", "content": current_content})
+        if candidates is None:
+            candidates = [
+                {
+                    "candidate_id": item.candidate_id,
+                    "suffix": item.suffix,
+                    "action_id": item.action_id,
+                    "execution_binding": dict(item.execution_binding),
+                }
+                for item in request.candidates
+            ]
+        metadata: dict[str, Any] = {
+            "task": "action_suffix_scoring",
+            "model": request.model,
+            "language": request.language,
+        }
+        if request.session_id is not None:
+            metadata["session_id"] = request.session_id
+        if request.avatar_state:
+            metadata["avatar_state"] = dict(request.avatar_state)
+        return OmniRequest(
+            inputs={
+                "messages": messages,
+                "audios": [*request.history_audios, *request.audios],
+                "images": [*request.history_images, *request.images],
+                "audio_target_sr": request.sample_rate,
+            },
+            params={
+                "max_new_tokens": 0,
+                "action_scoring": {
+                    "prefix": request.prefix,
+                    "language": request.language,
+                    "candidates": candidates,
+                    "micro_batch_size": request.micro_batch_size,
+                    "sample_rate": request.sample_rate,
+                    "client_started_at": time.perf_counter(),
+                },
+            },
+            metadata=metadata,
+        )
 
     # ------------------------------------------------------------------
     # Low-level generate (backward compatible)
