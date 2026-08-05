@@ -25,7 +25,11 @@ DEFAULT_MODEL = os.environ.get(
 )
 DEFAULT_AUDIO = "/data/models/hehy/D_human_train/examples/test/bench20_examples/none_4.wav"
 DEFAULT_IMAGE = "/data/models/xingmt/wan_export_step651_speedtest/ref.png"
-ACTION_PREFIX = "请根据以上对话，决定数字人下一步最合适的原子动作"
+ACTION_PREFIX = (
+    "请根据以上对话和当前数字人状态，选择唯一一个最合适的原子动作。"
+    "只输出动作本身，不要解释；如果没有明确动作指令，就选择不做任何动作。"
+    "下一步动作是："
+)
 
 
 def candidate(
@@ -47,9 +51,9 @@ def build_candidates() -> list[dict[str, Any]]:
     return [
         candidate("wave_left", "使用左手挥手", execution_binding={"body_side": "left"}),
         candidate("wave_right", "使用右手挥手", execution_binding={"body_side": "right"}),
-        candidate("wave_both", "双手挥手", execution_binding={"body_side": "both"}),
+        candidate("wave_both", "使用双手挥手", execution_binding={"body_side": "both"}),
         candidate("laugh", "大笑"),
-        candidate("heart_both", "双手比心", execution_binding={"body_side": "both"}),
+        candidate("heart_both", "使用双手比心", execution_binding={"body_side": "both"}),
         candidate("thumbs_up_left", "使用左手点赞", execution_binding={"body_side": "left"}),
         candidate("thumbs_up_right", "使用右手点赞", execution_binding={"body_side": "right"}),
         candidate("number_1", "用右手比数字一", execution_binding={"body_side": "right", "number": "1"}),
@@ -57,7 +61,7 @@ def build_candidates() -> list[dict[str, Any]]:
         candidate("number_3", "用右手比数字三", execution_binding={"body_side": "right", "number": "3"}),
         candidate("number_4", "用右手比数字四", execution_binding={"body_side": "right", "number": "4"}),
         candidate("number_5", "用右手比数字五", execution_binding={"body_side": "right", "number": "5"}),
-        candidate("no_action", "保持当前姿态", action_id="no_action"),
+        candidate("no_action", "不需要做任何动作", action_id="no_action"),
     ]
 
 
