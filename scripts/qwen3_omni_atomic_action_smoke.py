@@ -32,6 +32,35 @@ ACTION_PREFIX = (
 )
 
 
+def action_selector_prompt(
+    candidates: list[dict[str, Any]], avatar_state: dict[str, Any]
+) -> str:
+    definitions = "；".join(
+        f"{item['action_id']}={item['description']}" for item in candidates
+    )
+    action_ids = ", ".join(item["action_id"] for item in candidates)
+    state = json.dumps(avatar_state, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "你是数字人动作识别器。请根据以上完整对话和当前数字人状态，"
+        "选择唯一一个最合适的固定 action_id。"
+        f"当前数字人状态：{state}。"
+        f"候选动作定义：{definitions}。"
+        f"只允许输出以下一个 action_id：{action_ids}。"
+        "没有明确动作指令时必须输出 no_action。只输出 action_id，不要解释。"
+    )
+
+
+def extract_action_id(text: str, candidates: list[dict[str, Any]]) -> str | None:
+    normalized = text.strip().strip("`* \n")
+    action_ids = [item["action_id"] for item in candidates]
+    if normalized in action_ids:
+        return normalized
+    for action_id in sorted(action_ids, key=len, reverse=True):
+        if action_id in text:
+            return action_id
+    return None
+
+
 def candidate(
     candidate_id: str,
     suffix: str,
@@ -42,6 +71,7 @@ def candidate(
     return {
         "candidate_id": candidate_id,
         "suffix": suffix,
+        "description": suffix,
         "action_id": action_id or candidate_id,
         "execution_binding": execution_binding or {},
     }
@@ -222,7 +252,23 @@ def _run_scenario(
         "prefix_cached": None,
         "valid_token_scores": False,
     }
+    selection_result: dict[str, Any] = {
+        "status_code": None,
+        "response": None,
+        "raw_text": "",
+        "selected_action": None,
+        "execute": None,
+        "valid_action_id": False,
+    }
     if not errors:
+        api_candidates = [
+            {
+                key: value
+                for key, value in item.items()
+                if key in {"candidate_id", "suffix", "action_id", "execution_binding"}
+            }
+            for item in candidates
+        ]
         payload = {
             "request_id": f"{session_id}-score",
             "model": model,
@@ -240,7 +286,7 @@ def _run_scenario(
                 "avatar_state",
                 {"pose": "seated", "gaze": "camera", "hands": "resting"},
             ),
-            "candidates": candidates,
+            "candidates": api_candidates,
         }
         response = _json_request(
             base_url, "/v1/action-scores", payload, timeout=timeout
@@ -292,9 +338,59 @@ def _run_scenario(
                 errors.append("one or more candidates have empty token_scores")
 
     expected = scenario.get("expected_action")
-    if expected is not None and score_result["selected_action"] != expected:
+    if not errors and (history_audios or history_images):
+        selection_result["status"] = "skipped"
+        selection_result["skip_reason"] = (
+            "multimodal action_id classification is skipped after the single "
+            "multimodal context pass; action score remains validated"
+        )
+        if expected is not None:
+            errors.append("action_id classification is required for this multimodal scenario")
+    elif not errors:
+        avatar_state = scenario.get(
+            "avatar_state",
+            {"pose": "seated", "gaze": "camera", "hands": "resting"},
+        )
+        selector_response, selector_text = _chat_turn(
+            base_url,
+            model,
+            [
+                *history,
+                {
+                    "role": "user",
+                    "content": action_selector_prompt(candidates, avatar_state),
+                },
+            ],
+            audios=history_audios,
+            images=history_images,
+            request_id=f"{session_id}-action-id",
+            timeout=timeout,
+        )
+        selection_result["status_code"] = selector_response["status_code"]
+        selection_result["response"] = selector_response["body"]
+        selection_result["raw_text"] = selector_text
+        selected_action = extract_action_id(selector_text, candidates)
+        selection_result["selected_action"] = selected_action
+        selection_result["valid_action_id"] = selected_action is not None
+        if selected_action is not None:
+            selection_result["execute"] = selected_action != "no_action"
+        if selector_response["status_code"] != 200:
+            errors.append(
+                f"action_id classification returned {selector_response['status_code']}"
+            )
+        elif not selection_result["valid_action_id"]:
+            errors.append("action_id classification returned an unknown action_id")
+
+    raw_score_matches = expected is None or score_result["selected_action"] == expected
+    action_id_matches = expected is None or selection_result["selected_action"] == expected
+    if expected is not None and not raw_score_matches:
+        score_result["semantic_error"] = (
+            f"expected {expected}, suffix score selected {score_result['selected_action']}"
+        )
+    if expected is not None and not action_id_matches:
         errors.append(
-            f"expected {expected}, selected {score_result['selected_action']}"
+            f"expected {expected}, action_id classifier selected "
+            f"{selection_result['selected_action']}"
         )
     return {
         "scenario_id": scenario["id"],
@@ -302,6 +398,8 @@ def _run_scenario(
         "expected_action": expected,
         "turns": turns,
         "action_score": score_result,
+        "action_id_selection": selection_result,
+        "suffix_score_matches_expected": raw_score_matches,
         "passed": not errors,
         "errors": errors,
     }
@@ -401,11 +499,13 @@ def main() -> int:
         )
         report["scenarios"].append(result)
         score = result["action_score"]
+        selection = result["action_id_selection"]
         status = "PASS" if result["passed"] else "FAIL"
         print(
             f"[{status}] {result['scenario_id']}: "
             f"expected={result['expected_action']} "
-            f"selected={score['selected_action']} "
+            f"action_id={selection['selected_action']} "
+            f"suffix_score={score['selected_action']} "
             f"margin={score['top1_margin']}"
         )
         for item in score["ranking"]:
