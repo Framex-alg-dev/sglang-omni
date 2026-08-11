@@ -100,6 +100,9 @@ python3 -m py_compile \
   "request_id": "turn-123",
   "model": "Qwen3-Omni-30B-A3B-Instruct",
   "prefix_cached": true,
+  "timing": {
+    "server_action_compute_ms": 842.317
+  },
   "stats": {
     "logical_prefix_request_count": 1,
     "prefix_physical_prefill_chunk_count": 1,
@@ -121,6 +124,17 @@ python3 -m py_compile \
   ]
 }
 ```
+
+The timing.server_action_compute_ms field is measured inside the
+/v1/action-scores handler around the server-side action scoring call. It includes
+server-side queueing, media preprocessing, prefix handling, and candidate
+scoring, but does not include the client's upload/download time. The client can
+measure the full HTTP round trip using client_round_trip_ms, from immediately
+before sending the request until the response body is received. The difference
+client_round_trip_ms - server_action_compute_ms is only an estimated
+non-compute overhead: it may also include client JSON serialization,
+server/request handling, and response serialization, so it should not be
+interpreted as pure network latency.
 
 `prefix_cached` is a correctness gate, not an advisory metric. A cache miss or partial match is returned as a failed request because recomputing the multimodal prefix would violate the latency and cost contract.
 

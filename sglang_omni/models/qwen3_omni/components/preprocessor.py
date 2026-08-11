@@ -7,6 +7,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +103,52 @@ def _extra_special_tokens_compat(model_dir: str) -> dict[str, str]:
         for key in _QWEN3_OMNI_SPECIAL_TOKEN_KEYS
         if isinstance(config.get(key), str)
     }
+
+
+def _summarize_prompt_media(values: Any) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    if not isinstance(values, list):
+        return summary
+    for index, value in enumerate(values):
+        if not isinstance(value, str):
+            summary.append(
+                {"index": index, "type": type(value).__name__, "repr": repr(value)}
+            )
+            continue
+        digest = xxhash.xxh3_64_hexdigest(value.encode("utf-8"))
+        if value.startswith("data:") and "," in value:
+            header, encoded = value.split(",", 1)
+            summary.append(
+                {
+                    "index": index,
+                    "type": "data_uri",
+                    "header": header,
+                    "encoded_chars": len(encoded),
+                    "xxhash": digest,
+                }
+            )
+        else:
+            summary.append(
+                {
+                    "index": index,
+                    "type": "reference",
+                    "value": value,
+                    "chars": len(value),
+                    "xxhash": digest,
+                }
+            )
+    return summary
+
+
+def _write_action_prompt_debug_record(record: dict[str, Any]) -> None:
+    """Persist the actual rendered action prompt for postmortem analysis."""
+    path = Path(os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/tmp/sglang-omni-action-debug.jsonl"))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        logger.exception("failed to write action prompt debug log file=%s", path)
 
 
 def _contextualize_cache_key(base_key: str | None, **context: Any) -> str | None:
@@ -658,20 +706,64 @@ class Qwen3OmniPreprocessor:
         )
 
         input_ids = hf_inputs["input_ids"][0]
+        if payload.request.metadata.get("task") == "action_suffix_scoring":
+            prompt_diagnostics = {
+                "event": "action_scoring_prompt_rendered",
+                "timestamp_unix_ms": round(time.time() * 1000.0),
+                "request_id": payload.request_id,
+                "session_id": payload.request.metadata.get("session_id"),
+                "prompt_tokens": int(input_ids.numel()),
+                "full_prompt": prompt_text,
+                "messages": (payload.request.inputs or {}).get("messages", []) if isinstance(payload.request.inputs, dict) else [],
+                "audios": _summarize_prompt_media((payload.request.inputs or {}).get("audios", []) if isinstance(payload.request.inputs, dict) else []),
+                "images": _summarize_prompt_media((payload.request.inputs or {}).get("images", []) if isinstance(payload.request.inputs, dict) else []),
+                "params": payload.request.params,
+                "metadata": payload.request.metadata,
+            }
+            logger.info(
+                "Qwen3-Omni action scoring prompt rendered=%s",
+                json.dumps(prompt_diagnostics, ensure_ascii=False, default=str),
+            )
+            _write_action_prompt_debug_record(prompt_diagnostics)
         attention_mask = hf_inputs.get("attention_mask")
         if isinstance(attention_mask, torch.Tensor):
             attention_mask = attention_mask[0]
         else:
             attention_mask = torch.ones_like(input_ids)
 
-        validate_prompt_seq_len(
-            input_ids,
-            max_seq_len=self.max_seq_len,
-            max_new_tokens=payload.request.params.get(
-                "max_new_tokens", DEFAULT_THINKER_MAX_NEW_TOKENS
-            ),
-            request_id=payload.request_id,
-        )
+        try:
+            validate_prompt_seq_len(
+                input_ids,
+                max_seq_len=self.max_seq_len,
+                max_new_tokens=payload.request.params.get(
+                    "max_new_tokens", DEFAULT_THINKER_MAX_NEW_TOKENS
+                ),
+                request_id=payload.request_id,
+            )
+        except ValueError:
+            request_inputs = payload.request.inputs
+            request_inputs = request_inputs if isinstance(request_inputs, dict) else {}
+            diagnostics = {
+                "request_id": payload.request_id,
+                "prompt_tokens": int(input_ids.numel()),
+                "max_seq_len": self.max_seq_len,
+                "max_new_tokens": payload.request.params.get(
+                    "max_new_tokens", DEFAULT_THINKER_MAX_NEW_TOKENS
+                ),
+                "full_prompt": prompt_text,
+                "messages": request_inputs.get("messages", []),
+                "audios": _summarize_prompt_media(request_inputs.get("audios", [])),
+                "images": _summarize_prompt_media(request_inputs.get("images", [])),
+                "videos": _summarize_prompt_media(request_inputs.get("videos", [])),
+                "params": payload.request.params,
+                "metadata": payload.request.metadata,
+            }
+            logger.error(
+                "Qwen3-Omni prompt validation failed; full prompt diagnostics=%s",
+                json.dumps(diagnostics, ensure_ascii=False, default=str),
+                exc_info=True,
+            )
+            raise
 
         full_mm_inputs: dict[str, Any] = {
             "image": build_image_mm_inputs(hf_inputs),

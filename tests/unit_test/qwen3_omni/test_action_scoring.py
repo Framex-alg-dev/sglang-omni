@@ -223,6 +223,65 @@ def test_result_contract_requires_verified_cache_and_input_order():
         )
 
 
+@pytest.mark.asyncio
+async def test_action_score_warmup_is_sessionless_and_runs_both_stages() -> None:
+    client = Client.__new__(Client)
+    requests = []
+
+    async def fake_score(request):
+        requests.append(request)
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=request.candidates[0].candidate_id,
+                    token_count=1,
+                    mean_logprob=-0.1,
+                    mean_nll=0.1,
+                    ppl=1.105170,
+                    token_scores=[TokenScore(token_id=1, logprob=-0.1)],
+                )
+            ],
+        )
+
+    client.score_action_suffixes = fake_score
+    result = await client.warmup_action_score(
+        model="qwen3-omni",
+        category_count=3,
+        child_count=2,
+        timeout_s=1.0,
+    )
+
+    assert result["ready"] is True
+    assert len(requests) == 2
+    assert [request.stage for request in requests] == ["category", "child"]
+    assert all(request.session_id is None for request in requests)
+    assert all(request.history == [] for request in requests)
+    assert all(request.audios == [] and request.images == [] for request in requests)
+    assert [len(request.candidates) for request in requests] == [3, 2]
+
+
+@pytest.mark.asyncio
+async def test_action_score_warmup_failure_is_non_fatal() -> None:
+    client = Client.__new__(Client)
+
+    async def fake_score(request):
+        raise RuntimeError("warmup unavailable")
+
+    client.score_action_suffixes = fake_score
+    result = await client.warmup_action_score(
+        model="qwen3-omni",
+        category_count=1,
+        child_count=1,
+        timeout_s=1.0,
+    )
+
+    assert result["ready"] is False
+    assert "warmup unavailable" in result["error"]
+
+
 def test_runtime_scoring_keeps_first_suffix_logprob_from_prefill():
     score = score_candidate_from_runtime(
         "left",

@@ -378,6 +378,25 @@ async def _run_server(
     try:
         cl_kwargs = client_kwargs or {}
         client = Client(coordinator, **cl_kwargs)
+        warmup_enabled = os.environ.get(
+            "SGLANG_OMNI_ACTION_WARMUP", "1"
+        ).strip().lower() not in {"0", "false", "off", "no"}
+        if warmup_enabled:
+            warmup_result = await client.warmup_action_score(
+                model=model_name or pipeline_config.name,
+                category_count=int(
+                    os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60")
+                ),
+                child_count=int(
+                    os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8")
+                ),
+                timeout_s=float(
+                    os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
+                ),
+            )
+            logger.info("[ACTION_WARMUP] readiness=%s", warmup_result)
+        else:
+            logger.info("[ACTION_WARMUP] disabled by SGLANG_OMNI_ACTION_WARMUP")
         app = create_app(
             client,
             model_name=model_name or pipeline_config.name,

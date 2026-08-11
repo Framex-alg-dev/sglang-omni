@@ -221,13 +221,17 @@ def build_action_context_messages(
     instruction: str,
     avatar_state: dict[str, Any],
     *,
+    system_prompt: str | None = None,
     audio_count: int = 0,
     image_count: int = 0,
 ) -> list[dict[str, Any]]:
     """Mirror the server/client action-context ordering for reportability."""
     state = json.dumps(avatar_state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    system_content = f"当前数字人状态：{state}"
+    if system_prompt:
+        system_content = f"{system_content}\n{system_prompt}"
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": f"当前数字人状态：{state}"},
+        {"role": "system", "content": system_content},
         *(dict(message) for message in history),
     ]
     if messages and messages[-1].get("role") == "user":
@@ -295,19 +299,38 @@ def _json_request(
         headers={"Content-Type": "application/json"} if body is not None else {},
         method="POST" if body is not None else "GET",
     )
+    started = time.perf_counter()
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
-            return {"status_code": response.status, "body": json.loads(raw)}
+            return {
+                "status_code": response.status,
+                "body": json.loads(raw),
+                "client_round_trip_ms": round(
+                    (time.perf_counter() - started) * 1000.0, 3
+                ),
+            }
     except HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         try:
             parsed: Any = json.loads(raw)
         except json.JSONDecodeError:
             parsed = raw
-        return {"status_code": exc.code, "body": parsed}
+        return {
+            "status_code": exc.code,
+            "body": parsed,
+            "client_round_trip_ms": round(
+                (time.perf_counter() - started) * 1000.0, 3
+            ),
+        }
     except (URLError, TimeoutError, OSError) as exc:
-        return {"status_code": None, "body": {"error": str(exc)}}
+        return {
+            "status_code": None,
+            "body": {"error": str(exc)},
+            "client_round_trip_ms": round(
+                (time.perf_counter() - started) * 1000.0, 3
+            ),
+        }
 
 
 def _history_turn_content(

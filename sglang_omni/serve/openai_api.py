@@ -14,6 +14,7 @@ Provides the following endpoints:
 - GET  /v1/fs/file           — Download a file
 - GET  /health               — Health check
 - WS   /v1/realtime          — OpenAI-compatible Realtime API (when enabled)
+- WS   /v1/session/realtime  — manual-turn multimodal session API
 """
 
 from __future__ import annotations
@@ -307,6 +308,9 @@ def create_app(
     _register_transcriptions(app)
     if enable_realtime:
         _register_realtime(app)
+    # The manual-turn multimodal session API is part of the service contract
+    # and must not depend on the legacy OpenAI Realtime switch.
+    _register_multimodal_realtime(app)
 
     return app
 
@@ -1227,6 +1231,22 @@ def _register_realtime(app: FastAPI) -> None:
             await manager.close(session.session_id)
 
 
+def _register_multimodal_realtime(app: FastAPI) -> None:
+    """Mount the manual-turn multimodal session WebSocket."""
+    from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
+
+    client: Client = app.state.client
+    model_name: str = app.state.model_name
+    manager = MultimodalSessionManager(client=client, model_name=model_name)
+    app.state.multimodal_realtime_manager = manager
+
+    @app.websocket("/v1/session/realtime")
+    async def multimodal_realtime(websocket: WebSocket) -> None:
+        await websocket.accept()
+        session = manager.create(websocket)
+        await session.run()
+
+
 def _register_speech(app: FastAPI) -> None:
     @app.post("/v1/audio/speech")
     async def create_speech(request: Request) -> Response:
@@ -1888,6 +1908,7 @@ def _register_action_scores(app: FastAPI) -> None:
             request_id=req.request_id,
             model=req.model,
             prefix=req.prefix,
+            system_prompt=req.system_prompt,
             language=req.language,
             candidates=[
                 ActionScoreCandidate(
@@ -1908,6 +1929,7 @@ def _register_action_scores(app: FastAPI) -> None:
             history_images=list(req.history_images),
             avatar_state=dict(req.avatar_state),
         )
+        action_compute_started = time.perf_counter()
         try:
             result = await client.score_action_suffixes(scoring_request)
         except asyncio.TimeoutError as exc:
@@ -1916,12 +1938,16 @@ def _register_action_scores(app: FastAPI) -> None:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        action_compute_ms = (time.perf_counter() - action_compute_started) * 1000.0
         return JSONResponse(
             content=ActionScoreResponse(
                 request_id=result.request_id,
                 model=result.model,
                 prefix_cached=result.prefix_cached,
                 stats=dict(result.stats),
+                timing={
+                    "server_action_compute_ms": round(action_compute_ms, 3),
+                },
                 scores=[dataclasses.asdict(score) for score in result.scores],
             ).model_dump()
         )

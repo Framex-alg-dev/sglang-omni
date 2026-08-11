@@ -114,6 +114,7 @@ class ActionScoreRequest(BaseModel):
     request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
     model: str = Field(min_length=1, max_length=256)
     prefix: str = Field(min_length=1, max_length=4096)
+    system_prompt: str | None = Field(default=None, max_length=4096)
     language: Literal["zh", "en"]
     audios: list[str] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
@@ -133,6 +134,7 @@ class ActionScoreResponse(BaseModel):
     prefix_cached: bool
     scores: list[dict[str, Any]]
     stats: dict[str, Any] = Field(default_factory=dict)
+    timing: dict[str, float] = Field(default_factory=dict)
 
 
 

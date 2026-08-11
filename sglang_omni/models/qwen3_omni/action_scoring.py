@@ -50,12 +50,15 @@ class ActionSuffixScoreRequest:
     audios: list[str]
     images: list[str]
     sample_rate: int
+    system_prompt: str | None = None
     micro_batch_size: int = 64
     session_id: str | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
     history_audios: list[str] = field(default_factory=list)
     history_images: list[str] = field(default_factory=list)
     avatar_state: dict[str, Any] = field(default_factory=dict)
+    stage: str = "single"
+    logical_request_id: str | None = None
 
 
 @dataclass(slots=True)

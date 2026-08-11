@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
+import os
 import time
+import traceback
 import uuid
 from contextlib import aclosing
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 import numpy as np
@@ -21,6 +26,7 @@ from sglang_omni.client.audio import (
     to_numpy,
 )
 from sglang_omni.client.types import (
+    ActionScoreCandidate,
     ActionSuffixScoreRequest,
     ActionSuffixScoreResult,
     AbortLevel,
@@ -42,6 +48,88 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
 )
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import OmniRequest, RequestState, StreamMessage
+
+
+logger = logging.getLogger(__name__)
+
+_ACTION_SCORE_TIMEOUT_S = float(os.environ.get("SGLANG_OMNI_ACTION_SCORE_TIMEOUT_S", "120"))
+_ACTION_DEBUG_LOG_FILE = os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/tmp/sglang-omni-action-debug.jsonl")
+
+
+def _summarize_debug_media(values: Any) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for index, value in enumerate(values if isinstance(values, list) else []):
+        if not isinstance(value, str):
+            summary.append(
+                {"index": index, "type": type(value).__name__, "repr": repr(value)}
+            )
+            continue
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+        if value.startswith("data:") and "," in value:
+            header, encoded = value.split(",", 1)
+            summary.append(
+                {
+                    "index": index,
+                    "type": "data_uri",
+                    "header": header,
+                    "encoded_chars": len(encoded),
+                    "sha256": digest,
+                }
+            )
+        else:
+            summary.append(
+                {
+                    "index": index,
+                    "type": "reference",
+                    "value": value,
+                    "chars": len(value),
+                    "sha256": digest,
+                }
+            )
+    return summary
+
+
+def _action_request_debug_payload(
+    request: ActionSuffixScoreRequest,
+    omni_request: OmniRequest,
+) -> dict[str, Any]:
+    inputs = getattr(omni_request, "inputs", {}) or {}
+    return {
+        "request_id": request.request_id,
+        "session_id": request.session_id,
+        "stage": request.stage,
+        "logical_request_id": request.logical_request_id,
+        "prefix": request.prefix,
+        "system_prompt": request.system_prompt,
+        "messages": inputs.get("messages", []),
+        "candidates": [
+            {
+                "candidate_id": item.candidate_id,
+                "suffix": item.suffix,
+                "action_id": item.action_id,
+                "execution_binding": dict(item.execution_binding),
+            }
+            for item in request.candidates
+        ],
+        "audios": _summarize_debug_media(request.audios),
+        "images": _summarize_debug_media(request.images),
+        "history_audios": _summarize_debug_media(request.history_audios),
+        "history_images": _summarize_debug_media(request.history_images),
+        "avatar_state": dict(request.avatar_state),
+        "params": getattr(omni_request, "params", {}),
+        "metadata": getattr(omni_request, "metadata", {}),
+    }
+
+
+def _write_action_debug_record(record: dict[str, Any]) -> None:
+    """Append one replayable action-scoring diagnostic record to JSONL."""
+    try:
+        path = Path(_ACTION_DEBUG_LOG_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        logger.exception("failed to write action debug log file=%s", _ACTION_DEBUG_LOG_FILE)
 
 
 class Client:
@@ -73,27 +161,267 @@ class Client:
             for item in request.candidates
         ]
         omni_request = self._build_action_scoring_request(request, candidates)
+        phase: dict[str, Any] = {
+            "name": "waiting_for_action_score_slot",
+            "slot_wait_ms": None,
+            "pipeline_ms": None,
+        }
+        request_started = time.perf_counter()
+        _write_action_debug_record({
+            "event": "action_scoring_started",
+            "timestamp_unix_ms": round(time.time() * 1000.0),
+            "full_logical_input": _action_request_debug_payload(request, omni_request),
+        })
 
         async def _submit() -> Any:
+            slot_started = time.perf_counter()
             async with self._action_scoring_semaphore:
-                return await self._coordinator.submit(request.request_id, omni_request)
+                phase["slot_wait_ms"] = round((time.perf_counter() - slot_started) * 1000.0, 3)
+                phase["name"] = "coordinator_pipeline"
+                pipeline_started = time.perf_counter()
+                try:
+                    return await self._coordinator.submit(request.request_id, omni_request)
+                finally:
+                    phase["pipeline_ms"] = round((time.perf_counter() - pipeline_started) * 1000.0, 3)
 
         task = asyncio.create_task(
             _submit(), name=f"action-score-{request.request_id}"
         )
         try:
-            raw_result = await asyncio.wait_for(task, timeout=120.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+            raw_result = await asyncio.wait_for(task, timeout=_ACTION_SCORE_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            diagnostic = {
+                "event": "action_scoring_timeout",
+                "timestamp_unix_ms": round(time.time() * 1000.0),
+                "timeout_s": _ACTION_SCORE_TIMEOUT_S,
+                "phase": dict(phase),
+                "full_logical_input": _action_request_debug_payload(request, omni_request),
+            }
+            logger.error(
+                "action scoring timed out; full logical input=%s",
+                json.dumps(diagnostic, ensure_ascii=False, default=str),
+                exc_info=True,
+            )
+            _write_action_debug_record(diagnostic)
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             await self._coordinator.abort(request.request_id)
+            raise
+        except asyncio.CancelledError:
+            diagnostic = {
+                "event": "action_scoring_cancelled",
+                "timestamp_unix_ms": round(time.time() * 1000.0),
+                "phase": dict(phase),
+                "full_logical_input": _action_request_debug_payload(request, omni_request),
+            }
+            logger.warning(
+                "action scoring cancelled; full logical input=%s",
+                json.dumps(diagnostic, ensure_ascii=False, default=str),
+            )
+            _write_action_debug_record(diagnostic)
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await self._coordinator.abort(request.request_id)
+            raise
+        except Exception as exc:
+            diagnostic = {
+                "event": "action_scoring_failed",
+                "request_id": request.request_id,
+                "session_id": request.session_id,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "traceback": traceback.format_exc(),
+                "timestamp_unix_ms": round(time.time() * 1000.0),
+                "phase": dict(phase),
+                "full_logical_input": _action_request_debug_payload(request, omni_request),
+            }
+            logger.error(
+                "action scoring request failed; full logical input=%s",
+                json.dumps(diagnostic, ensure_ascii=False, default=str),
+                exc_info=True,
+            )
+            _write_action_debug_record(diagnostic)
             raise
         result = _coerce_action_score_result(raw_result, request)
         try:
             validate_score_result(request, result)
         except RuntimeError as exc:
             raise ClientError(str(exc)) from exc
+        _write_action_debug_record({
+            "event": "action_scoring_completed",
+            "timestamp_unix_ms": round(time.time() * 1000.0),
+            "request_id": request.request_id,
+            "session_id": request.session_id,
+            "elapsed_ms": round((time.perf_counter() - request_started) * 1000.0, 3),
+            "phase": dict(phase),
+            "prefix_cached": result.prefix_cached,
+            "stats": result.stats,
+            "scores": [
+                {
+                    "candidate_id": score.candidate_id,
+                    "token_count": score.token_count,
+                    "mean_logprob": score.mean_logprob,
+                    "mean_nll": score.mean_nll,
+                    "ppl": score.ppl,
+                    "token_scores": [
+                        {"token_id": token.token_id, "logprob": token.logprob}
+                        for token in score.token_scores
+                    ],
+                }
+                for score in result.scores
+            ],
+        })
+        return result
+
+
+    @staticmethod
+    def _build_action_warmup_request(
+        *,
+        request_id: str,
+        model: str,
+        stage: str,
+        candidate_prefix: str,
+        candidate_count: int,
+    ) -> ActionSuffixScoreRequest:
+        candidates = [
+            ActionScoreCandidate(
+                candidate_id=f"{candidate_prefix}{index:03d}",
+                suffix=f"{candidate_prefix}{index:03d}",
+                action_id=f"{candidate_prefix}{index:03d}",
+            )
+            for index in range(candidate_count)
+        ]
+        definitions = "; ".join(
+            f"{item.candidate_id}=warmup candidate" for item in candidates
+        )
+        if stage == "category":
+            system_prompt = (
+                "你是数字人动作类别识别器。只能输出一个 category_id。"
+                f"固定类别集合：{definitions}"
+            )
+            prefix = "请根据当前输入选择一个动作类别。下一步 category_id 是："
+        else:
+            system_prompt = (
+                "你是数字人动作识别器。只能输出一个 action_id。"
+                f"固定子动作集合：{definitions}"
+            )
+            prefix = "请根据当前输入选择一个子动作。下一步 action_id 是："
+        return ActionSuffixScoreRequest(
+            request_id=request_id,
+            model=model,
+            prefix=prefix,
+            language="zh",
+            candidates=candidates,
+            audios=[],
+            images=[],
+            sample_rate=16000,
+            system_prompt=system_prompt,
+            micro_batch_size=64,
+            stage=stage,
+            logical_request_id="warmup-process",
+        )
+
+    async def warmup_action_score(
+        self,
+        *,
+        model: str,
+        category_count: int = 60,
+        child_count: int = 8,
+        timeout_s: float = 30.0,
+    ) -> dict[str, Any]:
+        # Warm the action-score request path before accepting user turns.
+        # The requests have no session, media, or history; results are discarded.
+        if category_count <= 0 or child_count <= 0:
+            raise ValueError("warmup candidate counts must be positive")
+        started = time.perf_counter()
+        logger.info(
+            "[ACTION_WARMUP] started model=%s category_candidates=%d child_candidates=%d",
+            model,
+            category_count,
+            child_count,
+        )
+        _write_action_debug_record({
+            "event": "action_score_warmup_started",
+            "timestamp_unix_ms": round(time.time() * 1000.0),
+            "model": model,
+            "category_candidates": category_count,
+            "child_candidates": child_count,
+        })
+
+        async def run_warmup() -> tuple[float, float]:
+            category_started = time.perf_counter()
+            await self.score_action_suffixes(
+                self._build_action_warmup_request(
+                    request_id="warmup-process-category",
+                    model=model,
+                    stage="category",
+                    candidate_prefix="C",
+                    candidate_count=category_count,
+                )
+            )
+            category_ms = (time.perf_counter() - category_started) * 1000.0
+
+            child_started = time.perf_counter()
+            await self.score_action_suffixes(
+                self._build_action_warmup_request(
+                    request_id="warmup-process-child",
+                    model=model,
+                    stage="child",
+                    candidate_prefix="D",
+                    candidate_count=child_count,
+                )
+            )
+            child_ms = (time.perf_counter() - child_started) * 1000.0
+            return category_ms, child_ms
+
+        try:
+            category_ms, child_ms = await asyncio.wait_for(
+                run_warmup(), timeout=timeout_s
+            )
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            diagnostic = {
+                "event": "action_score_warmup_failed",
+                "timestamp_unix_ms": round(time.time() * 1000.0),
+                "model": model,
+                "elapsed_ms": round(elapsed_ms, 3),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+            logger.warning(
+                "[ACTION_WARMUP] failed elapsed_ms=%.3f error=%s",
+                elapsed_ms,
+                exc,
+                exc_info=True,
+            )
+            _write_action_debug_record(diagnostic)
+            return {
+                "ready": False,
+                "elapsed_ms": round(elapsed_ms, 3),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        result = {
+            "ready": True,
+            "elapsed_ms": round(elapsed_ms, 3),
+            "category_ms": round(category_ms, 3),
+            "child_ms": round(child_ms, 3),
+        }
+        logger.info(
+            "[ACTION_WARMUP] completed elapsed_ms=%.3f category_ms=%.3f child_ms=%.3f",
+            elapsed_ms,
+            category_ms,
+            child_ms,
+        )
+        _write_action_debug_record({
+            "event": "action_score_warmup_completed",
+            "timestamp_unix_ms": round(time.time() * 1000.0),
+            "model": model,
+            **result,
+        })
         return result
 
 
@@ -136,6 +464,7 @@ class Client:
         instruction: str,
         *,
         avatar_state: dict[str, Any] | None,
+        system_prompt: str | None,
         audios: list[str],
         images: list[str],
     ) -> list[dict[str, Any]]:
@@ -147,6 +476,7 @@ class Client:
         assistant message, a new user message is appended.
         """
         messages: list[dict[str, Any]] = []
+        system_parts: list[str] = []
         if avatar_state:
             state_text = json.dumps(
                 avatar_state,
@@ -154,7 +484,11 @@ class Client:
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            messages.append({"role": "system", "content": f"当前数字人状态：{state_text}"})
+            system_parts.append(f"当前数字人状态：{state_text}")
+        if system_prompt:
+            system_parts.append(system_prompt)
+        if system_parts:
+            messages.append({"role": "system", "content": "\n".join(system_parts)})
 
         messages.extend(dict(message) for message in history)
 
@@ -218,6 +552,7 @@ class Client:
             request.history,
             request.prefix,
             avatar_state=request.avatar_state,
+            system_prompt=request.system_prompt,
             audios=[*request.history_audios, *request.audios],
             images=[*request.history_images, *request.images],
         )
@@ -240,6 +575,9 @@ class Client:
             metadata["session_id"] = request.session_id
         if request.avatar_state:
             metadata["avatar_state"] = dict(request.avatar_state)
+        metadata["action_stage"] = request.stage
+        if request.logical_request_id is not None:
+            metadata["logical_request_id"] = request.logical_request_id
         return OmniRequest(
             inputs={
                 "messages": messages,

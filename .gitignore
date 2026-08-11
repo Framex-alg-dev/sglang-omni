@@ -49,3 +49,5 @@ asr_seedtts_results.json
 !.claude/skills/
 
 tests/data/actions/
+
+logs

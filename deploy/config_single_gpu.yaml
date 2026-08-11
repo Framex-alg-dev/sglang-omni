@@ -23,6 +23,9 @@ runtime_overrides:
     stream_chunk_size: 1
 
 stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 20000
   image_encoder:
     runtime:
       resources:
@@ -33,6 +36,7 @@ stage_overrides:
         total_gpu_memory_fraction: 0.035
   thinker:
     runtime:
+      max_seq_len: 20000
       resources:
         total_gpu_memory_fraction: 0.66
   talker_ar:
