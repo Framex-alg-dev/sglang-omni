@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from sglang_omni.client import Client
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
+    MAX_MICRO_BATCH_SIZE,
 )
 from sglang_omni.serve.realtime.audio_buffer import (
     BufferOverflow,
@@ -31,13 +33,97 @@ MAX_ACTION_CHILDREN_PER_CATEGORY = 128
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGES_PER_TURN = 64
 MAX_AUDIO_CHUNKS_PER_TURN = 4096
-# Action scoring runs on the thinker stage, whose current deployment has an
-# 8192-token context. Keep the action context bounded while retaining recent
-# session history, including the assistant-side action state records.
+# Action scoring runs on the thinker stage. Keep the action context bounded
+# while retaining recent session history, including action state records.
 MAX_ACTION_HISTORY_TURNS = 4
 MAX_ACTION_HISTORY_AUDIOS = 4
 MAX_ACTION_HISTORY_IMAGES = 8
 MAX_ACTION_CURRENT_IMAGES = 8
+ACTION_SELECTION_MODE_ENV = "SGLANG_OMNI_ACTION_SELECTION_MODE"
+ACTION_SELECTION_MODE_HIERARCHICAL = "hierarchical"
+ACTION_SELECTION_MODE_FLAT_CHILDREN = "flat_children"
+ACTION_MICRO_BATCH_SIZE_ENV = "SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE"
+DEFAULT_ACTION_MICRO_BATCH_SIZE = 64
+ACTION_CATEGORY_TOP_K_ENV = "SGLANG_OMNI_ACTION_CATEGORY_TOP_K"
+DEFAULT_ACTION_CATEGORY_TOP_K = 1
+MAX_ACTION_CATEGORY_TOP_K = 3
+
+
+def normalize_action_micro_batch_size(value: int | str | None = None) -> int:
+    raw = value if value is not None else os.environ.get(ACTION_MICRO_BATCH_SIZE_ENV)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return DEFAULT_ACTION_MICRO_BATCH_SIZE
+    try:
+        batch_size = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{ACTION_MICRO_BATCH_SIZE_ENV} must be an integer between 1 and "
+            f"{MAX_MICRO_BATCH_SIZE}; got {raw!r}"
+        ) from exc
+    if not 1 <= batch_size <= MAX_MICRO_BATCH_SIZE:
+        raise ValueError(
+            f"{ACTION_MICRO_BATCH_SIZE_ENV} must be between 1 and "
+            f"{MAX_MICRO_BATCH_SIZE}; got {batch_size}"
+        )
+    return batch_size
+
+
+def normalize_action_category_top_k(value: int | str | None = None) -> int:
+    """Normalize optional hierarchical category fallback width.
+
+    The default remains Top-1, preserving the existing hierarchical prompt and
+    latency.  Values greater than one deliberately score the children of the
+    best categories together, which is an accuracy/latency trade-off for
+    ambiguous category boundaries.
+    """
+    raw = value if value is not None else os.environ.get(ACTION_CATEGORY_TOP_K_ENV)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return DEFAULT_ACTION_CATEGORY_TOP_K
+    try:
+        top_k = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{ACTION_CATEGORY_TOP_K_ENV} must be an integer between 1 and "
+            f"{MAX_ACTION_CATEGORY_TOP_K}; got {raw!r}"
+        ) from exc
+    if not 1 <= top_k <= MAX_ACTION_CATEGORY_TOP_K:
+        raise ValueError(
+            f"{ACTION_CATEGORY_TOP_K_ENV} must be between 1 and "
+            f"{MAX_ACTION_CATEGORY_TOP_K}; got {top_k}"
+        )
+    return top_k
+
+
+def normalize_action_selection_mode(value: str | None) -> str:
+    mode = (
+        value
+        or os.environ.get(ACTION_SELECTION_MODE_ENV)
+        or ACTION_SELECTION_MODE_HIERARCHICAL
+    ).strip().lower()
+    if mode not in {
+        ACTION_SELECTION_MODE_HIERARCHICAL,
+        ACTION_SELECTION_MODE_FLAT_CHILDREN,
+    }:
+        raise ValueError(
+            f"{ACTION_SELECTION_MODE_ENV} must be one of "
+            f"{ACTION_SELECTION_MODE_HIERARCHICAL!r}, "
+            f"{ACTION_SELECTION_MODE_FLAT_CHILDREN!r}; got {mode!r}"
+        )
+    return mode
+
+
+def try_normalize_action_selection_mode(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    mode = value.strip().lower()
+    if mode in {
+        ACTION_SELECTION_MODE_HIERARCHICAL,
+        ACTION_SELECTION_MODE_FLAT_CHILDREN,
+    }:
+        return mode
+    return None
+
+
 def _summarize_media(values: list[str]) -> list[dict[str, Any]]:
     return [
         {
@@ -186,12 +272,22 @@ class MultimodalSession:
         *,
         client: Client,
         model_name: str,
+        action_selection_mode: str | None = None,
+        action_micro_batch_size: int | None = None,
+        action_category_top_k: int | None = None,
         claim_session: Callable[[str, "MultimodalSession"], None],
         release_session: Callable[[str, "MultimodalSession"], None],
     ) -> None:
         self.websocket = websocket
         self.client = client
         self.model_name = model_name
+        self.action_selection_mode = normalize_action_selection_mode(action_selection_mode)
+        self.action_micro_batch_size = normalize_action_micro_batch_size(
+            action_micro_batch_size
+        )
+        self.action_category_top_k = normalize_action_category_top_k(
+            action_category_top_k
+        )
         self.claim_session = claim_session
         self.release_session = release_session
 
@@ -210,7 +306,13 @@ class MultimodalSession:
         self.candidate_by_id: dict[str, SessionActionCandidate] = {}
         self.action_system_prompt = ""
         self.action_catalog_hash = ""
+        self.action_prefix_cache_namespace = ""
+        self.action_prefix_prefilled = False
         self.last_avatar_state: dict[str, Any] = {}
+        # Detailed candidate scores are useful for diagnostics, but are not
+        # needed by the action executor. Keep the production response small
+        # unless the caller opts in at session.start.
+        self.include_scores = False
 
     async def run(self) -> None:
         try:
@@ -364,6 +466,9 @@ class MultimodalSession:
         instructions = event.get("instructions")
         if instructions is not None and not isinstance(instructions, str):
             raise ValueError("instructions must be a string")
+        include_scores = event.get("include_scores", False)
+        if not isinstance(include_scores, bool):
+            raise ValueError("include_scores must be a boolean")
         if event.get("input_audio_format", "pcm16") != "pcm16":
             raise ValueError("only pcm16 audio is supported")
         try:
@@ -376,15 +481,33 @@ class MultimodalSession:
         if channels != 1:
             raise ValueError("only mono audio is supported")
 
+        if "selection_mode" in event:
+            requested_mode = event.get("selection_mode")
+            selected_mode = try_normalize_action_selection_mode(requested_mode)
+            if selected_mode is None:
+                logger.warning(
+                    "[SESSION_ACTION_REALTIME] invalid session.start selection_mode=%r "
+                    "session_id=%s; using %s",
+                    requested_mode,
+                    session_id,
+                    self.action_selection_mode,
+                )
+            else:
+                self.action_selection_mode = selected_mode
+
         self.claim_session(session_id, self)
         self.session_id = session_id
         self.language = language
         if instructions is not None:
             self.instructions = instructions
+        self.include_scores = include_scores
         self.candidates = candidates
         self.categories = categories
         self.candidate_by_id = {x.candidate_id: x for x in candidates}
-        self.action_system_prompt = (self._build_category_system_prompt() if categories else self._build_action_system_prompt())
+        if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL:
+            self.action_system_prompt = self._build_category_system_prompt()
+        else:
+            self.action_system_prompt = self._build_action_system_prompt()
         canonical = json.dumps(
             ([category.as_dict() for category in categories] if categories else [x.as_dict() for x in candidates]),
             ensure_ascii=False,
@@ -392,6 +515,44 @@ class MultimodalSession:
             separators=(",", ":"),
         ).encode("utf-8")
         self.action_catalog_hash = "sha256:" + hashlib.sha256(canonical).hexdigest()
+        mode_namespace = (
+            "hierarchical"
+            if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
+            else "flat_children"
+        )
+        self.action_prefix_cache_namespace = (
+            f"{mode_namespace}:{self.action_catalog_hash}"
+        )
+        prefill = getattr(self.client, "prefill_action_catalog", None)
+        if callable(prefill):
+            if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL:
+                prefill_candidates = [
+                    ActionScoreCandidate(
+                        candidate_id=item.category_id,
+                        suffix=item.category_id,
+                        action_id=item.category_id,
+                    )
+                    for item in categories
+                ]
+                prefill_stage = "category"
+            else:
+                prefill_candidates = [
+                    ActionScoreCandidate(
+                        candidate_id=item.candidate_id,
+                        suffix=item.candidate_id,
+                        action_id=item.action_id,
+                        execution_binding=dict(item.execution_binding),
+                    )
+                    for item in candidates
+                ]
+                prefill_stage = "single"
+            self.action_prefix_prefilled = await prefill(
+                model=self.model_name,
+                system_prompt=self.action_system_prompt,
+                candidates=prefill_candidates,
+                prefix_cache_namespace=self.action_prefix_cache_namespace,
+                stage=prefill_stage,
+            )
         self.started = True
 
         await self.send(
@@ -402,7 +563,11 @@ class MultimodalSession:
                 "action_catalog_hash": self.action_catalog_hash,
                 "action_candidate_count": len(candidates),
                 "action_category_count": len(categories),
-                "action_selection_stages": 2 if categories else 1,
+                "action_selection_mode": self.action_selection_mode,
+                "action_selection_stages": (
+                    2 if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL else 1
+                ),
+                "action_prefix_prefilled": self.action_prefix_prefilled,
             }
         )
 
@@ -610,42 +775,52 @@ class MultimodalSession:
                 action=action,
             )
             self.active_turn = None
-            await self.send(
-                {
-                    "type": "turn.result",
-                    "session_id": self.session_id,
-                    "turn_id": turn_id,
-                    "reply": None,
-                    "action_catalog_hash": self.action_catalog_hash,
-                    "action": action,
-                    "scores": scores,
-                    "media_summary": {
-                        "audio_chunk_count": turn.audio_chunk_count,
-                        "image_frame_count": len(current_images),
-                        "received_image_count": len(turn.images),
-                        "scored_image_count": action_context["scored_current_image_count"],
-                        "text_present": bool(turn.text),
-                        "duplicate_audio_chunks": turn.duplicate_audio_chunks,
-                        "duplicate_image_frames": turn.duplicate_image_frames,
-                        "action_context": action_context,
-                    },
-                    "timing": {
-                        "server_turn_ingest_ms": round(ingest_ms, 3),
-                        "server_action_compute_ms": action_timing,
-                        "server_total_after_commit_ms": round(
-                            total_after_commit_ms, 3
-                        ),
-                    },
+            result = {
+                "type": "turn.result",
+                "session_id": self.session_id,
+                "turn_id": turn_id,
+                "action_catalog_hash": self.action_catalog_hash,
+                "action": self._compact_action(action),
+                "timing": {
+                    "server_turn_ingest_ms": round(ingest_ms, 3),
+                    "server_action_compute_ms": action_timing,
+                    "server_total_after_commit_ms": round(
+                        total_after_commit_ms, 3
+                    ),
+                },
+            }
+            if self.include_scores:
+                result["scores"] = scores
+                result["media_summary"] = {
+                    "audio_chunk_count": turn.audio_chunk_count,
+                    "image_frame_count": len(current_images),
+                    "received_image_count": len(turn.images),
+                    "scored_image_count": action_context["scored_current_image_count"],
+                    "text_present": bool(turn.text),
+                    "duplicate_audio_chunks": turn.duplicate_audio_chunks,
+                    "duplicate_image_frames": turn.duplicate_image_frames,
+                    "action_context": action_context,
                 }
-            )
-        except Exception:
+            await self.send(result)
+        except Exception as exc:
             logger.exception(
                 "[SESSION_ACTION_REALTIME] turn failed session_id=%s turn_id=%s",
                 self.session_id,
                 turn_id,
             )
             self.active_turn = None
-            raise
+            message = str(exc)
+            if "prefix selected-token logprobs are missing" in message:
+                code = "action_score_logprob_unavailable"
+            else:
+                code = "action_score_failed"
+            await self.send_error(
+                "action_score_error",
+                code,
+                message,
+                session_id=self.session_id,
+                turn_id=turn_id,
+            )
 
     def _build_bounded_action_context(
         self,
@@ -769,9 +944,13 @@ class MultimodalSession:
         *,
         turn_id: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
-        if not self.categories:
-            return await self._score_action_flat(audios, images, text, avatar_state, turn_id=turn_id)
-        return await self._score_action_hierarchical(audios, images, text, avatar_state, turn_id=turn_id)
+        if self.categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL:
+            return await self._score_action_hierarchical(
+                audios, images, text, avatar_state, turn_id=turn_id
+            )
+        return await self._score_action_flat(
+            audios, images, text, avatar_state, turn_id=turn_id
+        )
 
     async def _score_action_hierarchical(
         self,
@@ -797,9 +976,10 @@ class MultimodalSession:
         request_base = f"session-{self.session_id}-turn-{turn_id or 'unknown'}-action-{uuid.uuid4().hex}"
         common = dict(
             model=self.model_name, language=self.language, audios=audios,
-            images=action_images, sample_rate=16000, micro_batch_size=64,
+            images=action_images, sample_rate=16000,
             session_id=self.session_id, history=action_history,
             stage="category", logical_request_id=request_base,
+            prefix_cache_namespace=self.action_prefix_cache_namespace,
             history_audios=action_history_audios, history_images=action_history_images,
             avatar_state=dict(avatar_state or self.last_avatar_state),
         )
@@ -810,6 +990,8 @@ class MultimodalSession:
             candidates=[ActionScoreCandidate(
                 candidate_id=item.category_id, suffix=item.category_id, action_id=item.category_id
             ) for item in self.categories],
+            suffix_tokenization_mode="short_id",
+            micro_batch_size=self.action_micro_batch_size,
             **common,
         )
         started = time.perf_counter()
@@ -820,23 +1002,55 @@ class MultimodalSession:
         category_ranked = sorted(category_result.scores, key=lambda item: item.mean_logprob, reverse=True)
         if not category_ranked or category_ranked[0].candidate_id not in category_by_id:
             raise ValueError("category action score did not return a valid category")
-        selected_category = category_by_id[category_ranked[0].candidate_id]
-        action_common = {**common, "stage": "child"}
+        selected_categories = [
+            category_by_id[item.candidate_id]
+            for item in category_ranked[: self.action_category_top_k]
+            if item.candidate_id in category_by_id
+        ]
+        if not selected_categories:
+            raise ValueError("category action score did not select a valid category")
+        selected_category = selected_categories[0]
+        selected_category_ids = [item.category_id for item in selected_categories]
+        child_candidates = [
+            child
+            for category in selected_categories
+            for child in category.children
+        ]
+        child_namespace = ",".join(selected_category_ids)
+        action_common = {
+            **common,
+            "stage": "child",
+            "micro_batch_size": self.action_micro_batch_size,
+            "prefix_cache_namespace": (
+                f"{self.action_prefix_cache_namespace}:child:{child_namespace}"
+            ),
+        }
+        if len(selected_categories) == 1:
+            child_prefix = (
+                f"已选择动作类别 {selected_category.category_id}。请只在该类别的子动作中选择一个。"
+            )
+            child_system_prompt = self._build_child_system_prompt(selected_category)
+        else:
+            child_prefix = (
+                f"已选择动作类别候选 {', '.join(selected_category_ids)}。"
+                "请只在这些类别的子动作中选择一个。"
+            )
+            child_system_prompt = self._build_child_system_prompt(selected_categories)
         action_request = ActionSuffixScoreRequest(
-            request_id=request_base + "-child", prefix=base +
-            f"已选择动作类别 {selected_category.category_id}。请只在该类别的子动作中选择一个。"
-            "只输出 action_id，不要解释。没有明确动作指令时必须选择 no_action。下一步 action_id 是：",
-            system_prompt=self._build_child_system_prompt(selected_category),
+            request_id=request_base + "-child", prefix=base + child_prefix
+            + "只输出 action_id，不要解释。没有明确动作指令时必须选择 no_action。下一步 action_id 是：",
+            system_prompt=child_system_prompt,
             candidates=[ActionScoreCandidate(
                 candidate_id=item.candidate_id, suffix=item.candidate_id,
                 action_id=item.action_id, execution_binding=dict(item.execution_binding)
-            ) for item in selected_category.children],
+            ) for item in child_candidates],
+            suffix_tokenization_mode="short_id",
             **action_common,
         )
         child_started = time.perf_counter()
         child_result = await self.client.score_action_suffixes(action_request)
         child_ms = round((time.perf_counter() - child_started) * 1000.0, 3)
-        child_by_id = {item.candidate_id: item for item in selected_category.children}
+        child_by_id = {item.candidate_id: item for item in child_candidates}
         ranked = sorted(child_result.scores, key=lambda item: item.mean_logprob, reverse=True)
         if not ranked or ranked[0].candidate_id not in child_by_id:
             raise ValueError("child action score did not return a valid candidate")
@@ -845,7 +1059,9 @@ class MultimodalSession:
             return {
                 "candidate_id": score.candidate_id, "action_id": candidate.action_id,
                 "category_id": candidate.category_id, "source_label": candidate.source_label,
-                "short_definition": candidate.short_definition, "token_count": score.token_count,
+                "short_definition": candidate.short_definition,
+                "execution_binding": dict(candidate.execution_binding),
+                "token_count": score.token_count,
                 "mean_logprob": score.mean_logprob, "mean_nll": score.mean_nll, "ppl": score.ppl,
                 "token_scores": [{"token_id": item.token_id, "logprob": item.logprob} for item in score.token_scores],
             }
@@ -855,6 +1071,7 @@ class MultimodalSession:
         action = {
             "candidate_id": top["candidate_id"], "action_id": top["action_id"],
             "category_id": selected_category.category_id,
+            "execution_binding": dict(top.get("execution_binding") or {}),
             "execute": top["action_id"] != "no_action",
             "mean_logprob": top["mean_logprob"], "ppl": top["ppl"], "token_count": top["token_count"],
         }
@@ -864,12 +1081,14 @@ class MultimodalSession:
                     "token_scores": [{"token_id": item.token_id, "logprob": item.logprob} for item in score.token_scores]}
         action_context.update({
             "selection_stages": 2,
+            "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
             "logical_request_id": request_base,
             "selected_category_id": selected_category.category_id,
+            "selected_category_ids": selected_category_ids,
+            "category_top_k": self.action_category_top_k,
             "category_scores": [compact_stage_score(score) for score in category_ranked],
             "category_compute_ms": category_ms,
             "child_compute_ms": child_ms,
-            "media_input_reused_across_stages": True,
         })
         return action, scores, round((time.perf_counter() - started) * 1000.0, 3), action_context
 
@@ -917,10 +1136,12 @@ class MultimodalSession:
             system_prompt=self.action_system_prompt,
             language=self.language,
             candidates=candidates,
+            suffix_tokenization_mode="short_id",
             audios=audios,
             images=action_images,
             sample_rate=16000,
-            micro_batch_size=64,
+            micro_batch_size=self.action_micro_batch_size,
+            prefix_cache_namespace=self.action_prefix_cache_namespace,
             session_id=self.session_id,
             history=action_history,
             history_audios=action_history_audios,
@@ -938,8 +1159,10 @@ class MultimodalSession:
                 {
                     "candidate_id": score.candidate_id,
                     "action_id": candidate.action_id,
+                    **({"category_id": candidate.category_id} if candidate.category_id else {}),
                     "source_label": candidate.source_label,
                     "short_definition": candidate.short_definition,
+                    "execution_binding": dict(candidate.execution_binding),
                     "token_count": score.token_count,
                     "mean_logprob": score.mean_logprob,
                     "mean_nll": score.mean_nll,
@@ -954,12 +1177,41 @@ class MultimodalSession:
         action = {
             "candidate_id": top["candidate_id"],
             "action_id": top["action_id"],
+            **({"category_id": top["category_id"]} if top.get("category_id") else {}),
+            "execution_binding": dict(top.get("execution_binding") or {}),
             "execute": top["action_id"] != "no_action",
             "mean_logprob": top["mean_logprob"],
             "ppl": top["ppl"],
             "token_count": top["token_count"],
         }
+        action_context.update(
+            {
+                "selection_stages": 1,
+                "selection_mode": (
+                    self.action_selection_mode if self.categories else "flat"
+                ),
+                "flattened_child_count": (
+                    len(self.candidates) if self.categories else None
+                ),
+                "compute_ms": compute_ms,
+            }
+        )
         return action, scores, compute_ms, action_context
+
+    @staticmethod
+    def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
+        """Return only fields required by the external action executor."""
+        compact = {
+            "action_id": action["action_id"],
+            "candidate_id": action["candidate_id"],
+        }
+        if action.get("category_id"):
+            compact["category_id"] = action["category_id"]
+        compact["execute"] = action["execute"]
+        execution_binding = action.get("execution_binding")
+        if execution_binding:
+            compact["execution_binding"] = dict(execution_binding)
+        return compact
 
     def _append_action_history(
         self,
@@ -1028,6 +1280,10 @@ class MultimodalSession:
             "以下类别集合在整个 session 内固定。只能输出一个 category_id。",
             ACTION_HISTORY_INSTRUCTION,
         ]
+        # Category descriptions are opaque external metadata. Do not compress,
+        # deduplicate, or rewrite them here; callers may optimize their wording
+        # before session.start and the exact rendered catalog participates in
+        # the catalog hash/prefix-cache identity.
         for item in self.categories:
             lines.append(f"{item.category_id}={item.source_label}；{item.short_definition}")
         no_action_categories = [item.category_id for item in self.categories if any(child.action_id == "no_action" for child in item.children)]
@@ -1036,15 +1292,35 @@ class MultimodalSession:
         lines.append("只输出 category_id，不要解释。")
         return "\n".join(lines)
 
-    def _build_child_system_prompt(self, category: SessionActionCategory) -> str:
-        lines = [
-            "你是数字人动作识别器。",
-            f"当前已选动作类别：{category.category_id}={category.source_label}；{category.short_definition}",
-            "以下是该类别内固定的子动作集合，只能输出一个 action_id。",
-            ACTION_HISTORY_INSTRUCTION,
-        ]
-        for item in category.children:
-            lines.append(f"{item.candidate_id}={item.action_id}：{item.source_label}；{item.short_definition}")
+    def _build_child_system_prompt(
+        self, category: SessionActionCategory | list[SessionActionCategory]
+    ) -> str:
+        categories = category if isinstance(category, list) else [category]
+        if len(categories) == 1:
+            selected = categories[0]
+            lines = [
+                "你是数字人动作识别器。",
+                f"当前已选动作类别：{selected.category_id}={selected.source_label}；{selected.short_definition}",
+                "以下是该类别内固定的子动作集合，只能输出一个 action_id。",
+                ACTION_HISTORY_INSTRUCTION,
+            ]
+        else:
+            lines = [
+                "你是数字人动作识别器。",
+                "以下是候选动作类别及其固定子动作集合，只能输出一个 action_id。",
+                ACTION_HISTORY_INSTRUCTION,
+            ]
+            for selected in categories:
+                lines.append(
+                    f"候选动作类别：{selected.category_id}={selected.source_label}；"
+                    f"{selected.short_definition}"
+                )
+        for selected in categories:
+            for item in selected.children:
+                lines.append(
+                    f"{item.candidate_id}={item.action_id}："
+                    f"{item.source_label}；{item.short_definition}"
+                )
         lines.extend(["没有明确动作指令时必须选择 no_action。", "只输出 action_id，不要解释。"])
         return "\n".join(lines)
 
@@ -1193,9 +1469,30 @@ class MultimodalSession:
 
 
 class MultimodalSessionManager:
-    def __init__(self, *, client: Client, model_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: Client,
+        model_name: str,
+        action_selection_mode: str | None = None,
+    ) -> None:
         self.client = client
         self.model_name = model_name
+        self.action_selection_mode = normalize_action_selection_mode(action_selection_mode)
+        self.action_micro_batch_size = normalize_action_micro_batch_size()
+        self.action_category_top_k = normalize_action_category_top_k()
+        logger.info(
+            "[SESSION_ACTION_REALTIME] action_selection_mode=%s",
+            self.action_selection_mode,
+        )
+        logger.info(
+            "[SESSION_ACTION_REALTIME] action_micro_batch_size=%s",
+            self.action_micro_batch_size,
+        )
+        logger.info(
+            "[SESSION_ACTION_REALTIME] action_category_top_k=%s",
+            self.action_category_top_k,
+        )
         self.sessions: dict[str, MultimodalSession] = {}
 
     def create(self, websocket: WebSocket) -> MultimodalSession:
@@ -1203,6 +1500,9 @@ class MultimodalSessionManager:
             websocket,
             client=self.client,
             model_name=self.model_name,
+            action_selection_mode=self.action_selection_mode,
+            action_micro_batch_size=self.action_micro_batch_size,
+            action_category_top_k=self.action_category_top_k,
             claim_session=self.claim,
             release_session=self.release,
         )

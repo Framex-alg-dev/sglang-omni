@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import time
 from collections.abc import Callable, Iterable
@@ -759,6 +760,7 @@ def _prepare_action_scoring_request(
     """Expand one logical action request into a prefix Req and candidate Reqs."""
     from sglang.srt.managers.schedule_batch import Req
 
+    server_build_started = time.perf_counter()
     raw_candidates = action_spec.get("candidates")
     if not isinstance(raw_candidates, list) or not raw_candidates:
         raise ValueError("action_scoring.candidates must be a non-empty list")
@@ -808,6 +810,9 @@ def _prepare_action_scoring_request(
             prefix_token_ids=prefix_ids,
             special_token_ids=special_token_ids,
             terminal_token_id=terminal_token_id,
+            suffix_only=(
+                action_spec.get("suffix_tokenization_mode") == "short_id"
+            ),
         )
         suffix_ids = [item.suffix_token_ids for item in tokenizations]
     else:
@@ -830,6 +835,38 @@ def _prepare_action_scoring_request(
         images=list(images) if isinstance(images, list) else [str(images)],
         request_scope=request_id,
     )
+    cache_namespace = action_spec.get("prefix_cache_namespace")
+    if isinstance(cache_namespace, str) and cache_namespace.strip():
+        cache_key = f"qwen3-omni-action-catalog:{cache_namespace.strip()}"
+        cache_digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:16]
+    cache_prefix_token_count = action_spec.get("cache_prefix_token_count")
+    prompt_cache = (state.prompt or {}).get("action_scoring_cache")
+    if (
+        (not isinstance(cache_prefix_token_count, int) or cache_prefix_token_count <= 0)
+        and isinstance(prompt_cache, dict)
+    ):
+        cache_prefix_token_count = prompt_cache.get("cache_prefix_token_count")
+    if not isinstance(cache_prefix_token_count, int) or cache_prefix_token_count <= 0:
+        cache_prefix_token_count = None
+    if cache_prefix_token_count is None:
+        static_prompt = action_spec.get("static_system_prompt")
+        if isinstance(static_prompt, str) and static_prompt.strip():
+            static_ids = tokenizer.apply_chat_template(
+                [{"role": "system", "content": static_prompt}],
+                add_generation_prompt=False,
+                tokenize=True,
+            )
+            if hasattr(static_ids, "tolist"):
+                static_ids = static_ids.tolist()
+            if static_ids and isinstance(static_ids[0], list):
+                static_ids = static_ids[0]
+            static_ids = tuple(int(value) for value in (static_ids or []))
+            if static_ids and tuple(prefix_ids[: len(static_ids)]) == static_ids:
+                cache_prefix_token_count = len(static_ids)
+    if cache_prefix_token_count is not None:
+        cache_prefix_token_count = min(cache_prefix_token_count, len(prefix_ids))
+    else:
+        cache_prefix_token_count = len(prefix_ids)
     prefix_req = prefix_data.req
     prefix_req.extra_key = cache_key
     prefix_positions = None
@@ -853,7 +890,8 @@ def _prepare_action_scoring_request(
     # the prefill-only logits path.
     prefix_req.logprob.token_ids_logprob = first_token_ids
     prefix_req.return_logprob = True
-    prefix_req.logprob_start_len = len(prefix_ids)
+    # Bound the parent radix-cache match at the reusable prefix boundary.
+    prefix_req.logprob_start_len = cache_prefix_token_count
     prefix_data.action_scoring_role = "prefix"
     prefix_data.action_scoring_parent = prefix_data
     prefix_data.action_scoring_candidate_id = None
@@ -864,66 +902,113 @@ def _prepare_action_scoring_request(
             for item, ids in zip(candidates, suffix_ids, strict=True)
         },
         "terminal_token_id": terminal_token_id,
+        # Candidate Req objects are built lazily after the shared prefix
+        # terminalizes. Keeping only suffix ids here avoids materializing
+        # N full prefix+suffix token arrays before the prefix can enter the
+        # scheduler.
         "candidate_data": [],
+        "candidate_tokenizer": tokenizer,
+        "candidate_vocab_size": vocab_size,
+        "candidate_prefix_positions": prefix_positions,
         "prefix_token_count": len(prefix_ids),
+        "cache_prefix_token_count": cache_prefix_token_count,
         "cache_key": cache_key,
         "cache_digest": cache_digest,
         "micro_batch_size": int(action_spec.get("micro_batch_size", 64)),
         "prefix_cached": False,
         "prefix_physical_prefill_chunk_count": 0,
         "started_at": float(action_spec.get("client_started_at", time.perf_counter())),
+        "client_request_build_ms": float(action_spec.get("client_build_ms", 0.0)),
+        "server_build_started_at": server_build_started,
+        "server_request_build_ms": 0.0,
+        "scheduler_queue_entered_at": None,
+        "scheduler_wait_ms": 0.0,
+        "prefix_scheduler_started_at": None,
+        "prefix_prefill_ms": 0.0,
+        "suffix_batch_queue_wait_ms": [],
+        "suffix_batch_scheduler_started_at": None,
         "candidate_prefix_recompute_tokens": {},
     }
 
-    for item, suffix in zip(candidates, suffix_ids, strict=True):
-        full_ids = torch.tensor(prefix_ids + tuple(suffix), dtype=torch.long)
-        sampling_params = copy.copy(prefix_req.sampling_params)
-        candidate_req = Req(
-            rid=f"{request_id}::candidate::{item.candidate_id}",
-            origin_input_text="",
-            origin_input_ids=full_ids.tolist(),
-            sampling_params=sampling_params,
-            return_logprob=True,
-            vocab_size=vocab_size,
-        )
-        candidate_req.tokenizer = tokenizer
-        candidate_req.extra_key = cache_key
-        candidate_req.return_logprob = True
-        candidate_req.logprob_start_len = len(prefix_ids)
-        candidate_req.omni_model_inputs = (
-            dict(prefix_req.omni_model_inputs)
-            if prefix_req.omni_model_inputs is not None
-            else None
-        )
-        candidate_req._omni_consumed = None
-        candidate_req._action_scoring_role = "candidate"
-        if prefix_positions is not None:
-            from sglang.srt.managers.schedule_batch import MultimodalInputs
-            candidate_req.multimodal_inputs = MultimodalInputs(mm_items=[])
-            candidate_req.multimodal_inputs.mrope_positions = _extend_action_mrope_positions(
-                prefix_positions, len(suffix)
-            )
-            candidate_req.multimodal_inputs.mrope_position_delta = getattr(
-                prefix_req.multimodal_inputs, "mrope_position_delta", None
-            )
-        else:
-            candidate_req.multimodal_inputs = None
-        candidate_data = SGLangARRequestData(
-            input_ids=full_ids,
-            model_inputs=dict(prefix_data.model_inputs),
-            max_new_tokens=0,
-            temperature=0.0,
-            output_ids=candidate_req.output_ids,
-            req=candidate_req,
-            stage_payload=prefix_data.stage_payload,
-            action_scoring_role="candidate",
-            action_scoring_parent=prefix_data,
-            action_scoring_candidate_id=item.candidate_id,
-        )
-        candidate_data.return_logprob = True
-        prefix_data.action_scoring_plan["candidate_data"].append(candidate_data)
     prefix_data.return_logprob = True
+    prefix_data.action_scoring_plan["server_request_build_ms"] = (
+        time.perf_counter() - server_build_started
+    ) * 1000.0
+    prefix_data.action_scoring_plan["server_build_finished_at"] = time.perf_counter()
     return prefix_data
+
+
+def build_action_scoring_candidate_data(
+    prefix_data: SGLangARRequestData,
+    candidate_id: str,
+) -> SGLangARRequestData:
+    """Materialize one candidate Req from an already-built shared prefix.
+
+    The prefix request is intentionally admitted before this function is
+    called. This keeps large flat candidate catalogs from blocking the shared
+    prefix request on CPU-side construction.
+    """
+    from sglang.srt.managers.schedule_batch import MultimodalInputs, Req
+
+    plan = prefix_data.action_scoring_plan
+    if not isinstance(plan, dict):
+        raise RuntimeError("action scoring prefix has no execution plan")
+    suffix_map = plan.get("candidate_suffix_ids")
+    if not isinstance(suffix_map, dict) or candidate_id not in suffix_map:
+        raise KeyError(f"unknown action scoring candidate: {candidate_id}")
+    suffix = tuple(int(value) for value in suffix_map[candidate_id])
+    prefix_token_count = int(plan["prefix_token_count"])
+    prefix_req = prefix_data.req
+    origin_ids = list(prefix_req.origin_input_ids)
+    if len(origin_ids) < prefix_token_count:
+        raise RuntimeError("action scoring prefix request is shorter than its token count")
+    prefix_ids = tuple(int(value) for value in origin_ids[:prefix_token_count])
+    full_ids = torch.tensor(prefix_ids + suffix, dtype=torch.long)
+    sampling_params = copy.copy(prefix_req.sampling_params)
+    candidate_req = Req(
+        rid=f"{prefix_req.rid}::candidate::{candidate_id}",
+        origin_input_text="",
+        origin_input_ids=full_ids.tolist(),
+        sampling_params=sampling_params,
+        return_logprob=True,
+        vocab_size=int(plan["candidate_vocab_size"]),
+    )
+    candidate_req.tokenizer = plan["candidate_tokenizer"]
+    candidate_req.extra_key = plan["cache_key"]
+    candidate_req.return_logprob = True
+    candidate_req.logprob_start_len = len(prefix_ids)
+    candidate_req.omni_model_inputs = (
+        dict(prefix_req.omni_model_inputs)
+        if prefix_req.omni_model_inputs is not None
+        else None
+    )
+    candidate_req._omni_consumed = None
+    candidate_req._action_scoring_role = "candidate"
+    prefix_positions = plan.get("candidate_prefix_positions")
+    if prefix_positions is not None:
+        candidate_req.multimodal_inputs = MultimodalInputs(mm_items=[])
+        candidate_req.multimodal_inputs.mrope_positions = _extend_action_mrope_positions(
+            prefix_positions, len(suffix)
+        )
+        candidate_req.multimodal_inputs.mrope_position_delta = getattr(
+            prefix_req.multimodal_inputs, "mrope_position_delta", None
+        )
+    else:
+        candidate_req.multimodal_inputs = None
+    candidate_data = SGLangARRequestData(
+        input_ids=full_ids,
+        model_inputs=dict(prefix_data.model_inputs),
+        max_new_tokens=0,
+        temperature=0.0,
+        output_ids=candidate_req.output_ids,
+        req=candidate_req,
+        stage_payload=prefix_data.stage_payload,
+        action_scoring_role="candidate",
+        action_scoring_parent=prefix_data,
+        action_scoring_candidate_id=candidate_id,
+    )
+    candidate_data.return_logprob = True
+    return candidate_data
 
 
 def build_sglang_talker_request(

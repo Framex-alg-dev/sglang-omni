@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import dataclasses
+import os
 import queue as _queue_mod
 import threading
 import time
@@ -44,6 +45,9 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     aggregate_candidate_score,
     score_candidate_from_runtime,
 )
+from sglang_omni.models.qwen3_omni.request_builders import (
+    build_action_scoring_candidate_data,
+)
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.profiler.event_recorder import (
     emit_model_path_end as _emit_model_path_end,
@@ -67,6 +71,86 @@ from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 from sglang_omni.vendor.sglang.server_args import override_server_args
 
 logger = logging.getLogger(__name__)
+
+_NVML_INITIALIZED = False
+_NVML_MODULE: Any | None = None
+
+def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
+    """Return process-local CUDA memory and best-effort device telemetry."""
+    snapshot: dict[str, Any] = {
+        "device_id": int(device_id),
+        "cuda_available": bool(torch.cuda.is_available()),
+    }
+    if not snapshot["cuda_available"]:
+        return snapshot
+
+    try:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device_id)
+        snapshot.update(
+            {
+                "device_name": torch.cuda.get_device_name(device_id),
+                "total_memory_bytes": int(total_bytes),
+                "free_memory_bytes": int(free_bytes),
+                "used_memory_bytes": int(total_bytes - free_bytes),
+                "process_memory_allocated_bytes": int(
+                    torch.cuda.memory_allocated(device_id)
+                ),
+                "process_memory_reserved_bytes": int(
+                    torch.cuda.memory_reserved(device_id)
+                ),
+                "process_max_memory_allocated_bytes": int(
+                    torch.cuda.max_memory_allocated(device_id)
+                ),
+                "process_max_memory_reserved_bytes": int(
+                    torch.cuda.max_memory_reserved(device_id)
+                ),
+            }
+        )
+    except Exception as exc:
+        snapshot["cuda_memory_error"] = f"{type(exc).__name__}: {exc}"
+
+    global _NVML_INITIALIZED, _NVML_MODULE
+    try:
+        if _NVML_MODULE is None:
+            import pynvml as nvml
+
+            _NVML_MODULE = nvml
+        nvml = _NVML_MODULE
+        if not _NVML_INITIALIZED:
+            nvml.nvmlInit()
+            _NVML_INITIALIZED = True
+        handle = nvml.nvmlDeviceGetHandleByIndex(int(device_id))
+        utilization = nvml.nvmlDeviceGetUtilizationRates(handle)
+        memory = nvml.nvmlDeviceGetMemoryInfo(handle)
+        snapshot.update(
+            {
+                "gpu_utilization_percent": int(utilization.gpu),
+                "nvml_memory_utilization_percent": int(utilization.memory),
+                "nvml_used_memory_bytes": int(memory.used),
+                "power_usage_watts": round(
+                    nvml.nvmlDeviceGetPowerUsage(handle) / 1000.0, 3
+                ),
+                "temperature_c": int(
+                    nvml.nvmlDeviceGetTemperature(
+                        handle, nvml.NVML_TEMPERATURE_GPU
+                    )
+                ),
+            }
+        )
+    except Exception as exc:
+        snapshot["nvml_error"] = f"{type(exc).__name__}: {exc}"
+    return snapshot
+
+
+def _reset_gpu_peak_stats(device_id: int) -> bool:
+    try:
+        if not torch.cuda.is_available():
+            return False
+        torch.cuda.reset_peak_memory_stats(device_id)
+        return True
+    except Exception:
+        return False
+
 
 _FAILED_BATCH_RESULT = object()
 
@@ -1005,14 +1089,22 @@ class OmniScheduler:
         req_id = req.rid
         if getattr(req_data, "action_scoring_role", None) == "prefix":
             plan = getattr(req_data, "action_scoring_plan", None) or {}
-            plan.setdefault("started_at", time.perf_counter())
-            plan["queue_wait_ms"] = max(
-                (time.perf_counter() - plan["started_at"]) * 1000.0,
-                float(plan.get("queue_wait_ms", 0.0)),
-            )
+            admitted_at = time.perf_counter()
+            plan.setdefault("started_at", admitted_at)
+            server_build_finished = plan.get("server_build_finished_at")
+            if isinstance(server_build_finished, (int, float)):
+                plan["scheduler_admission_ms"] = max(
+                    (admitted_at - float(server_build_finished)) * 1000.0, 0.0
+                )
+            plan["scheduler_queue_entered_at"] = admitted_at
+            plan.setdefault("scheduler_wait_ms", 0.0)
+            plan.setdefault("prefix_prefill_ms", 0.0)
+            plan.setdefault("suffix_batch_queue_wait_ms", [])
             plan.setdefault("preprocessing_ms", 0.0)
             plan.setdefault("image_encoder_ms", 0.0)
             plan.setdefault("audio_encoder_ms", 0.0)
+            plan["gpu_peak_stats_reset"] = _reset_gpu_peak_stats(self.gpu_id)
+            plan["gpu_stats_start"] = _gpu_resource_snapshot(self.gpu_id)
             req_data.action_scoring_plan = plan
             self._action_scoring_requests[req_id] = req_data
         if req_data.enforce_request_limits:
@@ -1054,9 +1146,27 @@ class OmniScheduler:
             with self._request_admission_lock:
                 enqueue_if_live()
 
+    def _build_and_enqueue_action_candidate_batch(
+        self,
+        parent: Any,
+        candidate_ids: list[str] | tuple[str, ...],
+    ) -> None:
+        """Build only the next suffix batch after the shared prefix completes."""
+        plan = parent.action_scoring_plan
+        batch = [
+            build_action_scoring_candidate_data(parent, candidate_id)
+            for candidate_id in candidate_ids
+        ]
+        plan["candidate_data"] = batch
+        plan["current_batch_ids"] = set(candidate_ids)
+        self._enqueue_action_candidate_batch(parent, batch)
+
     def _enqueue_action_candidate_batch(self, parent: Any, batch: list[Any]) -> None:
         plan = parent.action_scoring_plan
-        plan.setdefault("batch_started_at", time.perf_counter())
+        batch_entered_at = time.perf_counter()
+        plan["batch_started_at"] = batch_entered_at
+        plan["suffix_batch_queue_entered_at"] = batch_entered_at
+        plan["suffix_batch_scheduler_started_at"] = None
         for candidate_data in batch:
             req = candidate_data.req
             self._normalize_req_token_arrays(req)
@@ -1080,15 +1190,22 @@ class OmniScheduler:
         if logits is None:
             raise RuntimeError("action scoring prefix logits were not captured")
         plan["prefix_next_token_logits"] = logits
+        prefix_started = plan.get("prefix_scheduler_started_at")
+        if isinstance(prefix_started, (int, float)):
+            plan["prefix_prefill_ms"] = max(
+                (time.perf_counter() - float(prefix_started)) * 1000.0, 0.0
+            )
         plan["prefix_physical_prefill_chunk_count"] = max(
             int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             int(getattr(data, "generation_steps", 0)),
             1,
         )
+        candidate_ids = list(plan["candidate_ids"])
         plan["candidate_batches"] = [
-            plan["candidate_data"][start : start + plan["micro_batch_size"]]
-            for start in range(0, len(plan["candidate_data"]), plan["micro_batch_size"])
+            tuple(candidate_ids[start : start + plan["micro_batch_size"]])
+            for start in range(0, len(candidate_ids), plan["micro_batch_size"])
         ]
+        plan["candidate_data"] = []
         plan["candidate_results"] = {}
         plan["candidate_cached_tokens"] = {}
         plan["candidate_prefix_recompute_tokens"] = {}
@@ -1098,11 +1215,10 @@ class OmniScheduler:
         plan["next_batch_index"] = 0
         self._close_completed_request(req)
         if plan["candidate_batches"]:
-            plan["current_batch_ids"] = {
-                item.action_scoring_candidate_id
-                for item in plan["candidate_batches"][0]
-            }
-            self._enqueue_action_candidate_batch(parent, plan["candidate_batches"][0])
+            self._build_and_enqueue_action_candidate_batch(
+                parent,
+                plan["candidate_batches"][0],
+            )
 
     def _finish_action_scoring(self, parent: Any, plan: dict[str, Any]) -> None:
         prefix_logits = plan.get("prefix_next_token_logits")
@@ -1128,8 +1244,31 @@ class OmniScheduler:
         recompute_tokens = sum(plan.get("candidate_prefix_recompute_tokens", {}).values())
         aggregation_started = time.perf_counter()
         suffix_batch_ms = list(plan.get("suffix_batch_ms", []))
+        gpu_start = plan.get("gpu_stats_start")
+        gpu_end = _gpu_resource_snapshot(self.gpu_id)
+        gpu_stats = {
+            "device_id": int(self.gpu_id),
+            "tp_rank": int(self.tp_rank),
+            "tp_size": int(self.tp_size),
+            "peak_stats_reset": bool(plan.get("gpu_peak_stats_reset", False)),
+            "start": gpu_start,
+            "end": gpu_end,
+        }
+        if isinstance(gpu_start, dict):
+            start_allocated = gpu_start.get("process_memory_allocated_bytes")
+            end_allocated = gpu_end.get("process_memory_allocated_bytes")
+            if isinstance(start_allocated, int) and isinstance(end_allocated, int):
+                gpu_stats["process_allocated_delta_bytes"] = (
+                    end_allocated - start_allocated
+                )
         stats = {
-            "queue_wait_ms": float(plan.get("queue_wait_ms", 0.0)),
+            "queue_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
+            "client_request_build_ms": float(plan.get("client_request_build_ms", 0.0)),
+            "server_request_build_ms": float(plan.get("server_request_build_ms", 0.0)),
+            "scheduler_admission_ms": float(plan.get("scheduler_admission_ms", 0.0)),
+            "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
+            "prefix_prefill_ms": float(plan.get("prefix_prefill_ms", 0.0)),
+            "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
             "preprocessing_ms": float(plan.get("preprocessing_ms", 0.0)),
             "image_encoder_ms": float(plan.get("image_encoder_ms", 0.0)),
             "audio_encoder_ms": float(plan.get("audio_encoder_ms", 0.0)),
@@ -1143,6 +1282,7 @@ class OmniScheduler:
             "suffix_batch_ms": suffix_batch_ms,
             "aggregation_ms": (time.perf_counter() - aggregation_started) * 1000.0,
             "total_ms": (time.perf_counter() - plan.get("started_at", aggregation_started)) * 1000.0,
+            "gpu": gpu_stats,
         }
         result = {
             "request_id": parent.req.rid,
@@ -1164,15 +1304,17 @@ class OmniScheduler:
                 "candidate_count": len(plan["candidate_ids"]),
                 "micro_batch_size": plan["micro_batch_size"],
                 "stats": stats,
+                "gpu": gpu_stats,
                 "cache_digest": plan.get("cache_digest"),
             },
         )
         logger.info(
-            "action scoring complete request_id=%s candidates=%d top_ppl=%s stats=%s",
+            "action scoring complete request_id=%s candidates=%d top_ppl=%s stats=%s gpu=%s",
             parent.req.rid,
             len(scores),
             [(score.candidate_id, round(score.ppl, 6)) for score in sorted(scores, key=lambda item: item.ppl)[:3]],
             stats,
+            gpu_stats,
         )
         payload = self._result_adapter(parent)
         self._action_scoring_requests.pop(parent.req.rid, None)
@@ -1200,14 +1342,12 @@ class OmniScheduler:
             plan.setdefault("suffix_batch_ms", []).append(
                 (time.perf_counter() - batch_started) * 1000.0
             )
+            plan["suffix_batch_scheduler_started_at"] = None
             plan.setdefault("suffix_batch_sizes", []).append(len(plan["current_batch_ids"]))
             plan["next_batch_index"] += 1
             if plan["next_batch_index"] < len(plan["candidate_batches"]):
                 next_batch = plan["candidate_batches"][plan["next_batch_index"]]
-                plan["current_batch_ids"] = {
-                    item.action_scoring_candidate_id for item in next_batch
-                }
-                self._enqueue_action_candidate_batch(parent, next_batch)
+                self._build_and_enqueue_action_candidate_batch(parent, next_batch)
             elif len(plan["completed_candidate_ids"]) == len(plan["candidate_ids"]):
                 self._finish_action_scoring(parent, plan)
 
@@ -1501,12 +1641,31 @@ class OmniScheduler:
         for req in batch.reqs:
             rid = req.rid
             req_data = getattr(req, "_omni_data", None)
-            if getattr(req_data, "action_scoring_role", None) == "prefix":
+            action_role = getattr(req_data, "action_scoring_role", None)
+            if action_role == "prefix":
                 plan = getattr(req_data, "action_scoring_plan", None)
                 if isinstance(plan, dict):
+                    now = time.perf_counter()
+                    if plan.get("prefix_scheduler_started_at") is None:
+                        plan["prefix_scheduler_started_at"] = now
+                        entered = plan.get("scheduler_queue_entered_at")
+                        if isinstance(entered, (int, float)):
+                            wait_ms = max((now - float(entered)) * 1000.0, 0.0)
+                            plan["scheduler_wait_ms"] = float(plan.get("scheduler_wait_ms", 0.0)) + wait_ms
                     plan["prefix_physical_prefill_chunk_count"] = (
                         int(plan.get("prefix_physical_prefill_chunk_count", 0)) + 1
                     )
+            elif action_role == "candidate":
+                parent = getattr(req_data, "action_scoring_parent", None)
+                plan = getattr(parent, "action_scoring_plan", None)
+                if isinstance(plan, dict) and plan.get("suffix_batch_scheduler_started_at") is None:
+                    now = time.perf_counter()
+                    plan["suffix_batch_scheduler_started_at"] = now
+                    entered = plan.get("suffix_batch_queue_entered_at")
+                    if isinstance(entered, (int, float)):
+                        wait_ms = max((now - float(entered)) * 1000.0, 0.0)
+                        plan["suffix_batch_queue_wait_ms"].append(wait_ms)
+                        plan["scheduler_wait_ms"] = float(plan.get("scheduler_wait_ms", 0.0)) + wait_ms
             if rid in self._prefill_start_done:
                 continue
             self._prefill_start_done.add(rid)

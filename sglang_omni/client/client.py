@@ -160,8 +160,14 @@ class Client:
             }
             for item in request.candidates
         ]
+        build_started = time.perf_counter()
         omni_request = self._build_action_scoring_request(request, candidates)
+        client_build_ms = (time.perf_counter() - build_started) * 1000.0
+        action_params = omni_request.params.get("action_scoring")
+        if isinstance(action_params, dict):
+            action_params["client_build_ms"] = round(client_build_ms, 3)
         phase: dict[str, Any] = {
+            "client_build_ms": round(client_build_ms, 3),
             "name": "waiting_for_action_score_slot",
             "slot_wait_ms": None,
             "pipeline_ms": None,
@@ -302,12 +308,20 @@ class Client:
                 f"固定类别集合：{definitions}"
             )
             prefix = "请根据当前输入选择一个动作类别。下一步 category_id 是："
-        else:
+        elif stage == "child":
             system_prompt = (
                 "你是数字人动作识别器。只能输出一个 action_id。"
                 f"固定子动作集合：{definitions}"
             )
             prefix = "请根据当前输入选择一个子动作。下一步 action_id 是："
+        elif stage == "single":
+            system_prompt = (
+                "你是数字人动作识别器。只能输出一个 action_id。"
+                f"固定具体动作集合：{definitions}"
+            )
+            prefix = "请根据当前输入选择一个具体动作。下一步 action_id 是："
+        else:
+            raise ValueError(f"unsupported action warmup stage: {stage!r}")
         return ActionSuffixScoreRequest(
             request_id=request_id,
             model=model,
@@ -321,6 +335,7 @@ class Client:
             micro_batch_size=64,
             stage=stage,
             logical_request_id="warmup-process",
+            suffix_tokenization_mode="short_id",
         )
 
     async def warmup_action_score(
@@ -329,16 +344,20 @@ class Client:
         model: str,
         category_count: int = 60,
         child_count: int = 8,
+        selection_mode: str = "hierarchical",
         timeout_s: float = 30.0,
     ) -> dict[str, Any]:
         # Warm the action-score request path before accepting user turns.
         # The requests have no session, media, or history; results are discarded.
         if category_count <= 0 or child_count <= 0:
             raise ValueError("warmup candidate counts must be positive")
+        if selection_mode not in {"hierarchical", "flat_children"}:
+            raise ValueError(f"unsupported action selection mode: {selection_mode!r}")
         started = time.perf_counter()
         logger.info(
-            "[ACTION_WARMUP] started model=%s category_candidates=%d child_candidates=%d",
+            "[ACTION_WARMUP] started model=%s mode=%s category_candidates=%d child_candidates=%d",
             model,
+            selection_mode,
             category_count,
             child_count,
         )
@@ -346,11 +365,25 @@ class Client:
             "event": "action_score_warmup_started",
             "timestamp_unix_ms": round(time.time() * 1000.0),
             "model": model,
+            "selection_mode": selection_mode,
             "category_candidates": category_count,
             "child_candidates": child_count,
         })
 
-        async def run_warmup() -> tuple[float, float]:
+        async def run_warmup() -> tuple[float | None, float | None, float | None]:
+            if selection_mode == "flat_children":
+                single_started = time.perf_counter()
+                await self.score_action_suffixes(
+                    self._build_action_warmup_request(
+                        request_id="warmup-process-single",
+                        model=model,
+                        stage="single",
+                        candidate_prefix="D",
+                        candidate_count=child_count,
+                    )
+                )
+                return None, None, (time.perf_counter() - single_started) * 1000.0
+
             category_started = time.perf_counter()
             await self.score_action_suffixes(
                 self._build_action_warmup_request(
@@ -374,10 +407,10 @@ class Client:
                 )
             )
             child_ms = (time.perf_counter() - child_started) * 1000.0
-            return category_ms, child_ms
+            return category_ms, child_ms, None
 
         try:
-            category_ms, child_ms = await asyncio.wait_for(
+            category_ms, child_ms, single_ms = await asyncio.wait_for(
                 run_warmup(), timeout=timeout_s
             )
         except Exception as exc:
@@ -386,6 +419,7 @@ class Client:
                 "event": "action_score_warmup_failed",
                 "timestamp_unix_ms": round(time.time() * 1000.0),
                 "model": model,
+                "selection_mode": selection_mode,
                 "elapsed_ms": round(elapsed_ms, 3),
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
@@ -399,6 +433,7 @@ class Client:
             _write_action_debug_record(diagnostic)
             return {
                 "ready": False,
+                "selection_mode": selection_mode,
                 "elapsed_ms": round(elapsed_ms, 3),
                 "error": f"{type(exc).__name__}: {exc}",
             }
@@ -406,15 +441,19 @@ class Client:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         result = {
             "ready": True,
+            "selection_mode": selection_mode,
             "elapsed_ms": round(elapsed_ms, 3),
-            "category_ms": round(category_ms, 3),
-            "child_ms": round(child_ms, 3),
+            "category_ms": round(category_ms, 3) if category_ms is not None else None,
+            "child_ms": round(child_ms, 3) if child_ms is not None else None,
+            "single_ms": round(single_ms, 3) if single_ms is not None else None,
         }
         logger.info(
-            "[ACTION_WARMUP] completed elapsed_ms=%.3f category_ms=%.3f child_ms=%.3f",
+            "[ACTION_WARMUP] completed elapsed_ms=%.3f mode=%s category_ms=%s child_ms=%s single_ms=%s",
             elapsed_ms,
+            selection_mode,
             category_ms,
             child_ms,
+            single_ms,
         )
         _write_action_debug_record({
             "event": "action_score_warmup_completed",
@@ -423,6 +462,51 @@ class Client:
             **result,
         })
         return result
+
+    async def prefill_action_catalog(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        candidates: list[ActionScoreCandidate],
+        prefix_cache_namespace: str,
+        stage: str,
+    ) -> bool:
+        """Prefill one immutable action catalog prefix."""
+        if not candidates:
+            return False
+        probe = candidates[0]
+        request = ActionSuffixScoreRequest(
+            request_id=f"catalog-prefill-{stage}-{uuid.uuid4().hex}",
+            model=model,
+            prefix="请根据当前输入选择动作。下一步 action_id 是：",
+            language="zh",
+            candidates=[probe],
+            audios=[],
+            images=[],
+            sample_rate=16000,
+            system_prompt=system_prompt,
+            stage=stage,
+            logical_request_id=f"catalog-prefill-{prefix_cache_namespace}",
+            prefix_cache_namespace=prefix_cache_namespace,
+            suffix_tokenization_mode="short_id",
+        )
+        try:
+            await self.score_action_suffixes(request)
+        except Exception:
+            logger.warning(
+                "[ACTION_CATALOG_PREFILL] failed namespace=%s stage=%s",
+                prefix_cache_namespace,
+                stage,
+                exc_info=True,
+            )
+            return False
+        logger.info(
+            "[ACTION_CATALOG_PREFILL] ready namespace=%s stage=%s",
+            prefix_cache_namespace,
+            stage,
+        )
+        return True
 
 
     @staticmethod
@@ -468,7 +552,7 @@ class Client:
         audios: list[str],
         images: list[str],
     ) -> list[dict[str, Any]]:
-        """Build action context with state first and current user intent last.
+        """Build action context with static catalog first and current turn last.
 
         The caller controls whether a just-generated assistant response is
         included in ``history``. If history already ends in a user message,
@@ -476,7 +560,12 @@ class Client:
         assistant message, a new user message is appended.
         """
         messages: list[dict[str, Any]] = []
-        system_parts: list[str] = []
+        # Keep the catalog at the beginning so its KV can be prefetched at
+        # session.start. State is turn-local and must not precede the cache.
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        current_instruction = instruction
         if avatar_state:
             state_text = json.dumps(
                 avatar_state,
@@ -484,11 +573,7 @@ class Client:
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            system_parts.append(f"当前数字人状态：{state_text}")
-        if system_prompt:
-            system_parts.append(system_prompt)
-        if system_parts:
-            messages.append({"role": "system", "content": "\n".join(system_parts)})
+            current_instruction = f"当前数字人状态：{state_text}\n{instruction}"
 
         messages.extend(dict(message) for message in history)
 
@@ -524,7 +609,7 @@ class Client:
             latest_user = messages.pop()
             latest_user["content"] = Client._action_instruction_content(
                 latest_user.get("content"),
-                instruction,
+                current_instruction,
                 audios=missing_audios,
                 images=missing_images,
             )
@@ -535,10 +620,10 @@ class Client:
                 current_content = [
                     *({"type": "audio"} for _ in missing_audios),
                     *({"type": "image"} for _ in missing_images),
-                    {"type": "text", "text": instruction},
+                    {"type": "text", "text": current_instruction},
                 ]
             else:
-                current_content = instruction
+                current_content = current_instruction
             messages.append({"role": "user", "content": current_content})
         return messages
 
@@ -566,6 +651,29 @@ class Client:
                 }
                 for item in request.candidates
             ]
+        # If the supplied history ends with a user message, the builder
+        # merges the current instruction/media into that message.  Exclude
+        # that message from the reusable boundary; otherwise the current turn
+        # would be marked as cacheable history.
+        history_message_count = len(request.history)
+        history_audio_count = len(request.history_audios)
+        history_image_count = len(request.history_images)
+        if request.history and request.history[-1].get("role") == "user":
+            last_content = request.history[-1].get("content")
+            last_parts = last_content if isinstance(last_content, list) else []
+            history_message_count -= 1
+            history_audio_count -= sum(
+                1
+                for part in last_parts
+                if isinstance(part, dict) and part.get("type") == "audio"
+            )
+            history_image_count -= sum(
+                1
+                for part in last_parts
+                if isinstance(part, dict) and part.get("type") == "image"
+            )
+        history_audio_count = max(history_audio_count, 0)
+        history_image_count = max(history_image_count, 0)
         metadata: dict[str, Any] = {
             "task": "action_suffix_scoring",
             "model": request.model,
@@ -594,6 +702,12 @@ class Client:
                     "micro_batch_size": request.micro_batch_size,
                     "sample_rate": request.sample_rate,
                     "client_started_at": time.perf_counter(),
+                    "static_system_prompt": request.system_prompt,
+                    "prefix_cache_namespace": request.prefix_cache_namespace,
+                    "history_message_count": history_message_count,
+                    "history_audio_count": history_audio_count,
+                    "history_image_count": history_image_count,
+                    "suffix_tokenization_mode": request.suffix_tokenization_mode,
                 },
             },
             metadata=metadata,

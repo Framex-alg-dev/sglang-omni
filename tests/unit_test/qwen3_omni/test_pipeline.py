@@ -38,6 +38,7 @@ from sglang_omni.models.qwen3_omni.merge import decode_events, merge_for_thinker
 from sglang_omni.models.qwen3_omni.payload_types import Qwen3OmniPipelineState
 from sglang_omni.models.qwen3_omni.request_builders import (
     apply_thinker_result,
+    build_action_scoring_candidate_data,
     build_sglang_thinker_request,
     project_preprocessing_to_mm_aggregate,
     project_talker_to_code2wav,
@@ -1415,6 +1416,60 @@ def test_qwen_sglang_request_hashes_media_tokens_without_changing_mrope_ids(
     assert pad_values["audio"] >= 256
     assert int(req_data.input_ids[1]) == pad_values["audio"]
     assert captured["input_ids"].tolist() == input_ids.tolist()
+
+
+def test_action_scoring_candidate_requests_are_materialized_lazily():
+    class ShortIdTokenizer:
+        eos_token_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            del add_special_tokens
+            return [int(text.removeprefix("A")) + 1000]
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(
+            "sglang.srt.sampling.sampling_params.SamplingParams.normalize",
+            lambda self, tokenizer: None,
+        )
+        monkeypatch.setattr(
+            "sglang.srt.sampling.sampling_params.SamplingParams.verify",
+            lambda self, vocab_size: None,
+        )
+        state = make_qwen_state(
+            prompt={
+                "prompt_text": "long shared prefix",
+                "input_ids": torch.tensor([11, 12, 13], dtype=torch.long),
+                "attention_mask": torch.ones(3, dtype=torch.long),
+            }
+        )
+        req_data = build_sglang_thinker_request(
+            state,
+            params={
+                "max_new_tokens": 0,
+                "action_scoring": {
+                    "language": "zh",
+                    "suffix_tokenization_mode": "short_id",
+                    "candidates": [
+                        {"candidate_id": "A1", "suffix": "A1"},
+                        {"candidate_id": "A2", "suffix": "A2"},
+                    ],
+                },
+            },
+            tokenizer=ShortIdTokenizer(),
+            vocab_size=4096,
+            request_id="lazy-plan",
+        )
+
+        plan = req_data.action_scoring_plan
+        assert plan["candidate_data"] == []
+        assert plan["candidate_ids"] == ["A1", "A2"]
+
+        candidate_data = build_action_scoring_candidate_data(req_data, "A1")
+        assert candidate_data.req.origin_input_ids == [11, 12, 13, 1001, 99]
+        assert candidate_data.action_scoring_candidate_id == "A1"
+    finally:
+        monkeypatch.undo()
 
 
 def _encode_processed_tensor(tensor: torch.Tensor) -> dict[str, object]:

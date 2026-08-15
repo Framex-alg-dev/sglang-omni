@@ -15,7 +15,10 @@ unique `candidate_id`, a suffix of at most 512 characters, and optional
 rejected because punctuation is excluded from the action score denominator.
 
 `sample_rate` must be positive. `micro_batch_size` defaults to 64 and is
-limited to 256. The service serializes scoring requests with a global
+limited to 256. The realtime session route uses the startup environment
+variable `SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE` to set this value for both
+flat_children and hierarchical action stages; an omitted variable keeps 64.
+The service serializes scoring requests with a global
 concurrency limit of one and applies a 120 second end-to-end timeout. A timeout or
 client cancellation aborts the logical request and all physical candidate
 requests.
@@ -56,6 +59,23 @@ For candidate tokens with log probabilities `l_1 ... l_n`, the response returns
 are emitted in the original candidate order. A result is accepted only when
 the shared prefix was verified in the KV cache; otherwise the request fails
 with `prefix_cached=false`.
+
+### Flat-children latency path
+
+Scheme B uses short identifier suffixes such as `A328` and sets
+`action_scoring.suffix_tokenization_mode` to `short_id`. The service encodes each short
+suffix independently and appends it to the already authoritative prefix token IDs. This
+avoids re-tokenizing the long multimodal prompt once per candidate. Descriptive suffixes
+must keep the default `exact` mode because a BPE token can cross the prefix/suffix text
+boundary.
+
+The scheduler also constructs candidate `Req` objects lazily. It first admits one shared
+prefix request, waits for its prefix logprob/KV state, and then creates only the next
+micro-batch of candidate requests. After that batch completes, its objects are released
+and the next batch is built. Therefore a catalog with 330 candidates still uses batches
+of `64, 64, 64, 64, 64, 10`, but it does not allocate 330 full prefix-plus-suffix
+requests before the shared prefix enters the scheduler. This changes CPU-side request
+construction and queueing, not the scoring formula or the prompt semantics.
 
 ## Cache and media safety
 

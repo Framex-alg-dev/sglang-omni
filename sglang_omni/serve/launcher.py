@@ -390,6 +390,9 @@ async def _run_server(
                 child_count=int(
                     os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8")
                 ),
+                selection_mode=os.environ.get(
+                    "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
+                ).strip().lower(),
                 timeout_s=float(
                     os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
                 ),

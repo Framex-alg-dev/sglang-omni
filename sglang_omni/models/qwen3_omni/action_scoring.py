@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import re
 import string
 import time
@@ -59,6 +58,12 @@ class ActionSuffixScoreRequest:
     avatar_state: dict[str, Any] = field(default_factory=dict)
     stage: str = "single"
     logical_request_id: str | None = None
+    # Stable namespace for the immutable catalog prefix. The parent request
+    # limits cache matching to the static-catalog/history boundary.
+    prefix_cache_namespace: str | None = None
+    # Scheme B uses identifier-only suffixes (for example A328, A329, ...).
+    # These can be tokenized independently of the long multimodal prefix.
+    suffix_tokenization_mode: Literal["exact", "short_id"] = "exact"
 
 
 @dataclass(slots=True)
@@ -118,6 +123,14 @@ class ActionScoringStats:
     """Execution counters shared by scheduler, tracing, and benchmarks."""
 
     queue_wait_ms: float = 0.0
+    # Detailed timing for action-score diagnosis. ``queue_wait_ms`` remains
+    # the compatibility aggregate; the fields below identify where it went.
+    client_request_build_ms: float = 0.0
+    server_request_build_ms: float = 0.0
+    scheduler_admission_ms: float = 0.0
+    scheduler_wait_ms: float = 0.0
+    prefix_prefill_ms: float = 0.0
+    suffix_batch_queue_wait_ms: list[float] = field(default_factory=list)
     preprocessing_ms: float = 0.0
     image_encoder_ms: float = 0.0
     audio_encoder_ms: float = 0.0
@@ -135,6 +148,12 @@ class ActionScoringStats:
     def as_dict(self) -> dict[str, Any]:
         return {
             "queue_wait_ms": self.queue_wait_ms,
+            "client_request_build_ms": self.client_request_build_ms,
+            "server_request_build_ms": self.server_request_build_ms,
+            "scheduler_admission_ms": self.scheduler_admission_ms,
+            "scheduler_wait_ms": self.scheduler_wait_ms,
+            "prefix_prefill_ms": self.prefix_prefill_ms,
+            "suffix_batch_queue_wait_ms": list(self.suffix_batch_queue_wait_ms),
             "preprocessing_ms": self.preprocessing_ms,
             "image_encoder_ms": self.image_encoder_ms,
             "audio_encoder_ms": self.audio_encoder_ms,
@@ -163,6 +182,8 @@ def validate_action_suffix_request(
         raise ValueError("model must be non-empty")
     if request.language not in ("zh", "en"):
         raise ValueError("language must be 'zh' or 'en'")
+    if request.suffix_tokenization_mode not in ("exact", "short_id"):
+        raise ValueError("suffix_tokenization_mode must be 'exact' or 'short_id'")
     if not request.prefix or not request.prefix.strip():
         raise ValueError("prefix must be non-empty")
     if not request.candidates:
@@ -285,6 +306,7 @@ def tokenize_suffixes(
     prefix_token_ids: Sequence[int] | None = None,
     special_token_ids: Iterable[int] = (),
     terminal_token_id: int | None = None,
+    suffix_only: bool = False,
 ) -> list[CandidateTokenization]:
     """Tokenize full prefix+suffix strings and derive an explicit suffix mask.
 
@@ -304,6 +326,32 @@ def tokenize_suffixes(
         else tuple(_encode(tokenizer, prefix, add_special_tokens=False))
     )
     result: list[CandidateTokenization] = []
+    if suffix_only:
+        # This is intentionally opt-in. It is used by scheme B where suffixes
+        # are identifier-only, not by descriptive suffix schemes whose first
+        # BPE token can span the text boundary.
+        for candidate in candidates:
+            suffix_ids = tuple(
+                _encode(tokenizer, candidate.suffix, add_special_tokens=False)
+            )
+            if not suffix_ids:
+                raise ValueError(f"suffix tokenization is empty: {candidate.candidate_id!r}")
+            if terminal_token_id is not None:
+                suffix_ids = (*suffix_ids, int(terminal_token_id))
+            full_ids = (*prefix_ids, *suffix_ids)
+            result.append(
+                CandidateTokenization(
+                    candidate_id=candidate.candidate_id,
+                    full_input_ids=full_ids,
+                    suffix_start_index=len(prefix_ids),
+                    suffix_token_mask=(
+                        (False,) * len(prefix_ids)
+                        + (True,) * len(suffix_ids)
+                    ),
+                    suffix_token_ids=suffix_ids,
+                )
+            )
+        return result
     for candidate in candidates:
         full_text = prefix + candidate.suffix
         encoded = _offset_encoded(tokenizer, full_text)

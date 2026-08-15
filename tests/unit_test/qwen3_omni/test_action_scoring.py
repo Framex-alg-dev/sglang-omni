@@ -132,6 +132,33 @@ def test_tokenization_composes_suffix_after_multimodal_template_prefix():
     assert item.suffix_token_ids == (201, 202)
 
 
+def test_short_id_tokenization_composes_suffix_without_retokenizing_prefix():
+    class ShortIdTokenizer:
+        def encode(self, text, add_special_tokens=False):
+            del add_special_tokens
+            if text == "A328":
+                return [328]
+            if text == "A329":
+                return [329]
+            raise AssertionError(f"unexpected text encoded: {text!r}")
+
+    items = tokenize_suffixes(
+        ShortIdTokenizer(),
+        "ignored long multimodal prompt",
+        [candidate("A328", "A328"), candidate("A329", "A329")],
+        prefix_token_ids=[101, 102, 103],
+        terminal_token_id=999,
+        suffix_only=True,
+    )
+
+    assert [item.full_input_ids for item in items] == [
+        (101, 102, 103, 328, 999),
+        (101, 102, 103, 329, 999),
+    ]
+    assert all(item.suffix_start_index == 3 for item in items)
+    assert all(item.suffix_token_ids[-1] == 999 for item in items)
+
+
 def test_batches_cover_386_candidates_without_reordering():
     items = [
         type(
@@ -257,10 +284,55 @@ async def test_action_score_warmup_is_sessionless_and_runs_both_stages() -> None
     assert result["ready"] is True
     assert len(requests) == 2
     assert [request.stage for request in requests] == ["category", "child"]
+    assert all(request.suffix_tokenization_mode == "short_id" for request in requests)
     assert all(request.session_id is None for request in requests)
     assert all(request.history == [] for request in requests)
     assert all(request.audios == [] and request.images == [] for request in requests)
     assert [len(request.candidates) for request in requests] == [3, 2]
+
+
+@pytest.mark.asyncio
+async def test_action_score_flat_warmup_runs_one_single_stage() -> None:
+    client = Client.__new__(Client)
+    requests = []
+
+    async def fake_score(request):
+        requests.append(request)
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=request.candidates[0].candidate_id,
+                    token_count=1,
+                    mean_logprob=-0.1,
+                    mean_nll=0.1,
+                    ppl=1.105170,
+                    token_scores=[TokenScore(token_id=1, logprob=-0.1)],
+                )
+            ],
+        )
+
+    client.score_action_suffixes = fake_score
+    result = await client.warmup_action_score(
+        model="qwen3-omni",
+        category_count=3,
+        child_count=5,
+        selection_mode="flat_children",
+        timeout_s=1.0,
+    )
+
+    assert result["ready"] is True
+    assert result["selection_mode"] == "flat_children"
+    assert len(requests) == 1
+    assert requests[0].stage == "single"
+    assert len(requests[0].candidates) == 5
+    assert requests[0].prefix.endswith("action_id 是：")
+    assert "固定具体动作集合" in requests[0].system_prompt
+    assert requests[0].session_id is None
+    assert requests[0].history == []
+    assert requests[0].audios == [] and requests[0].images == []
 
 
 @pytest.mark.asyncio
@@ -307,6 +379,7 @@ def test_multiturn_session_context_preserves_history_media_and_avatar_state():
         audios=["/session/turn-2.wav"],
         images=["/session/turn-2.png"],
         avatar_state={"pose": "seated", "gaze": "camera", "left_hand": "raised"},
+        system_prompt="固定动作候选集合：left=左手动作；right=右手动作。",
     )
     validate_action_suffix_request(score_request)
     omni = Client._build_action_scoring_request(score_request)
@@ -314,11 +387,13 @@ def test_multiturn_session_context_preserves_history_media_and_avatar_state():
     assert [message["role"] for message in omni.inputs["messages"]] == [
         "system", "user", "assistant", "user"
     ]
-    assert omni.inputs["messages"][0]["content"].startswith("当前数字人状态：")
-    assert "left_hand" in omni.inputs["messages"][0]["content"]
+    assert omni.inputs["messages"][0]["content"] == score_request.system_prompt
+    assert "left_hand" not in omni.inputs["messages"][0]["content"]
+    assert "当前数字人状态：" in omni.inputs["messages"][3]["content"][-1]["text"]
+    assert "left_hand" in omni.inputs["messages"][3]["content"][-1]["text"]
     assert omni.inputs["messages"][1]["content"][0]["type"] == "audio"
     assert omni.inputs["messages"][3]["content"][0]["type"] == "image"
-    assert omni.inputs["messages"][3]["content"][-1]["text"] == score_request.prefix
+    assert omni.inputs["messages"][3]["content"][-1]["text"].endswith(score_request.prefix)
     assert sum(
         part.get("type") == "audio"
         for message in omni.inputs["messages"]
@@ -333,6 +408,10 @@ def test_multiturn_session_context_preserves_history_media_and_avatar_state():
     assert omni.inputs["images"] == ["/session/turn-1.png", "/session/turn-2.png"]
     assert omni.metadata["session_id"] == "sess-42"
     assert omni.metadata["avatar_state"] == score_request.avatar_state
+    action_spec = omni.params["action_scoring"]
+    assert action_spec["history_message_count"] == 2
+    assert action_spec["history_audio_count"] == 1
+    assert action_spec["history_image_count"] == 0
 
 
 def test_multiturn_context_requires_history_media_placeholders():

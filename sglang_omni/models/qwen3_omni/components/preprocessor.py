@@ -361,6 +361,91 @@ class Qwen3OmniPreprocessor:
             )
         return result
 
+    @staticmethod
+    def _message_media_count(message: dict[str, Any], media_type: str) -> int:
+        content = message.get("content")
+        if not isinstance(content, list):
+            return 0
+        return sum(
+            1
+            for part in content
+            if isinstance(part, dict) and part.get("type") == media_type
+        )
+
+    def _action_cache_metadata(
+        self,
+        payload: StagePayload,
+        *,
+        messages_mm: list[dict[str, Any]] | None,
+        audios: list[Any],
+        images: list[Any],
+        input_ids: "torch.Tensor",
+    ) -> dict[str, Any] | None:
+        """Find the safe reusable boundary for an action-scoring prompt.
+
+        The catalog system message and completed history precede the current
+        turn.  Only that prefix is safe to reuse across turns; current media
+        and the current avatar state must remain outside the reusable range.
+        The boundary is measured from the exact processor output rather than
+        reconstructed from text, because audio/image placeholders expand to
+        model-specific token spans.
+        """
+        if not messages_mm:
+            return None
+        if payload.request.metadata.get("task") != "action_suffix_scoring":
+            return None
+        action_spec = payload.request.params.get("action_scoring")
+        if not isinstance(action_spec, dict):
+            return None
+        history_count = action_spec.get("history_message_count")
+        if not isinstance(history_count, int) or history_count < 0:
+            return None
+
+        system_count = int(messages_mm[0].get("role") == "system")
+        boundary_end = system_count + history_count
+        if boundary_end > len(messages_mm) or boundary_end == len(messages_mm):
+            return None
+        boundary_messages = messages_mm[:boundary_end]
+        boundary_audio_count = sum(
+            self._message_media_count(message, "audio")
+            for message in boundary_messages
+        )
+        boundary_image_count = sum(
+            self._message_media_count(message, "image")
+            for message in boundary_messages
+        )
+        boundary_prompt = self.processor.apply_chat_template(
+            boundary_messages,
+            add_generation_prompt=False,
+            tokenize=False,
+        )
+        boundary_inputs = self.processor(
+            text=boundary_prompt,
+            images=images[:boundary_image_count] or None,
+            audio=audios[:boundary_audio_count] or None,
+            add_special_tokens=False,
+            return_tensors="pt",
+        )
+        boundary_ids = boundary_inputs["input_ids"][0]
+        boundary_len = int(boundary_ids.numel())
+        if boundary_len <= 0 or boundary_len > int(input_ids.numel()):
+            return None
+        if not torch.equal(input_ids[:boundary_len].cpu(), boundary_ids.cpu()):
+            logger.warning(
+                "action cache boundary does not match full prompt; falling back "
+                "to static catalog boundary request_id=%s boundary_tokens=%s full_tokens=%s",
+                payload.request_id,
+                boundary_len,
+                int(input_ids.numel()),
+            )
+            return None
+        return {
+            "cache_prefix_token_count": boundary_len,
+            "history_message_count": history_count,
+            "history_audio_count": boundary_audio_count,
+            "history_image_count": boundary_image_count,
+        }
+
     def _finalize_state(
         self,
         payload: StagePayload,
@@ -370,6 +455,7 @@ class Qwen3OmniPreprocessor:
         prompt_text: str,
         full_mm_inputs: dict[str, Any],
         encoder_inputs: dict[str, dict[str, Any]],
+        action_cache_metadata: dict[str, Any] | None = None,
     ) -> StagePayload:
         """Assemble the thinker-ready pipeline state (single source of shape)."""
         request_inputs = payload.request.inputs
@@ -387,6 +473,11 @@ class Qwen3OmniPreprocessor:
                 "prompt_text": prompt_text,
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
+                **(
+                    {"action_scoring_cache": action_cache_metadata}
+                    if action_cache_metadata is not None
+                    else {}
+                ),
             },
             encoder_inputs=encoder_inputs,
             stream_state={"token_ids": [], "text": ""},
@@ -833,6 +924,13 @@ class Qwen3OmniPreprocessor:
         else:
             encoder_inputs["audio_encoder"] = {"_skip": True, "_result": {}}
 
+        action_cache_metadata = self._action_cache_metadata(
+            payload,
+            messages_mm=messages_mm,
+            audios=audios,
+            images=images,
+            input_ids=input_ids,
+        )
         return self._finalize_state(
             payload,
             input_ids=input_ids,
@@ -840,6 +938,7 @@ class Qwen3OmniPreprocessor:
             prompt_text=prompt_text,
             full_mm_inputs=full_mm_inputs,
             encoder_inputs=encoder_inputs,
+            action_cache_metadata=action_cache_metadata,
         )
 # Official OpenAI/Qwen messages may carry multimodal parts in each content list.
 

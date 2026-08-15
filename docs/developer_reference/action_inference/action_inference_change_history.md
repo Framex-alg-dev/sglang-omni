@@ -166,8 +166,12 @@ session 状态保存在进程内，不做持久化。一个 session 同时只有
 - action-score prompt rendered 日志，记录实际 full_prompt、messages、prompt token
   数、媒体数量/hash、候选和 metadata；
 - prompt 超限日志，记录 full prompt 和媒体诊断后再抛出校验错误；
-- 进程级 action-score 预热：启动时分别用约 60 个 category 和约 8 个 child 候选
-  执行一次真实评分路径，不带 session、历史和媒体，不写入业务 session；
+- 进程级 action-score 预热：hierarchical 模式启动时分别用约 60 个 category 和
+  约 8 个 child 候选执行两阶段真实评分路径；flat_children 模式只执行一次
+  single 具体动作评分；预热不带 session、历史和媒体，不写入业务 session；
+- prefix 首 token logprob 增加 SGLang next-token selected logprob / logits fallback，
+  仍只使用真实模型概率；两类数据都不可用时返回结构化的当前 turn 错误；
+- 动作评分异常按 turn 隔离，清理 active turn 并保留 session，后续 turn 可以继续提交；
 - 预热环境变量：
   SGLANG_OMNI_ACTION_WARMUP、
   SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT、
@@ -201,16 +205,16 @@ session 状态保存在进程内，不做持久化。一个 session 同时只有
 ## 配置和部署
 
 [config_single_gpu.yaml](/home/ubuntu/fanshide/sglang-omni/deploy/config_single_gpu.yaml)
-本次实现将 preprocessing 和 thinker 的 max_seq_len 固定为 20000：
+本次实现将 preprocessing 和 thinker 的 max_seq_len 固定为 60000：
 
 ~~~yaml
 stage_overrides:
   preprocessing:
     runtime:
-      max_seq_len: 20000
+      max_seq_len: 60000
   thinker:
     runtime:
-      max_seq_len: 20000
+      max_seq_len: 60000
 ~~~
 
 同时保留单 GPU 的 image/audio encoder、Thinker、Talker 和 Code2Wav 显存预算。
@@ -260,7 +264,7 @@ ready：true
 
 ## 需要继续关注的事项
 
-1. max_seq_len=20000 同时限制 preprocessing 和 thinker。提高到 50000 需要重新评估
+1. max_seq_len=60000 同时限制 preprocessing 和 thinker。提高该值仍需重新评估
    KV cache、显存和并发，不能只修改一个 YAML 数值。
 2. MAX_IMAGES_PER_TURN=64 是服务保护值，不是模型硬限制；长 turn 的图片抽帧策略
    仍需配置化。
@@ -270,3 +274,41 @@ ready：true
    token scores 和 top-1 margin。
 5. 当前测试验证动作评分链路和协议行为，不验证外部动作播放器、骨骼绑定或动画
    渲染是否真正执行。
+
+
+## Session 级候选前缀预填充和历史 KV 边界
+
+动作候选在 `session.start` 中固定后，服务端为 hierarchical 的类别候选或
+flat_children 的全部具体候选建立稳定的 catalog cache namespace，并通过
+`session.started.action_prefix_prefilled` 报告预填充是否成功。动作 prompt 的固定
+catalog 位于最前面，已完成历史位于其后，当前 turn 位于最后。预处理阶段使用实际
+多模态 token 计算“固定候选 + 已完成历史”的安全边界；跨 turn 的 parent prefix
+不会复用当前 turn 的音频、图片或数字人状态。
+
+## flat_children 候选构造优化
+
+在方案 B 的短 `candidate_id` suffix 场景下，候选 suffix 采用独立编码模式，直接拼接到
+已生成的共享 prefix token 后，不再为每个候选重复编码整段多模态 prompt。共享 prefix
+请求先进入 Thinker scheduler；prefix 完成并取得首个 suffix token 的 logprob 后，服务端
+才按 `micro_batch_size` 延迟创建候选请求。上一批完成后再创建下一批，避免在 prefix 入队
+前一次性构造全部候选的 `prefix + suffix` 请求。
+
+该改动不改变 prompt 语义、候选排序或 PPL 公式，只减少 CPU 侧 tokenization、请求对象
+构造和 scheduler queue wait。描述性 suffix 仍使用精确边界 tokenization，不使用短 ID 优化。
+
+## hierarchical 类别兜底与描述元数据边界
+
+当前 realtime 动作链路保持 action-only：turn.commit 只执行动作评分，不进入普通
+文本、语音或回复生成链路；每轮实际动作以 `[action_state]` assistant 历史记录，
+供后续 turn 处理“刚刚那个动作”等指代。
+
+hierarchical 默认仍为类别 Top-1 后评分选中类别 children，保持原有 prompt、候选
+顺序和 PPL/logit 计算不变。新增可选环境变量
+`SGLANG_OMNI_ACTION_CATEGORY_TOP_K`（默认 1，范围 1–3）：设置为大于 1 时，
+将类别阶段 Top-K 类别的 children 合并到第二阶段评分，用于缓解类别边界模糊时的
+候选漏选；该模式会增加第二阶段候选量和耗时。
+
+类别的 `source_label` 和 `short_definition` 属于外部动作目录提供的语义元数据。服务端
+按传入文本原样渲染，不做压缩、去重或改写；其内容参与 action catalog hash 和
+prefix cache identity。需要压缩类别描述时，应在 session.start 之前由外部目录完成，
+并重新验证动作准确率和 cache 命中。
