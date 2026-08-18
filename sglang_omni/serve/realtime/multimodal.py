@@ -308,6 +308,7 @@ class MultimodalSession:
         self.action_catalog_hash = ""
         self.action_prefix_cache_namespace = ""
         self.action_prefix_prefilled = False
+        self._prefilled_action_prefix_namespaces: set[str] = set()
         self.last_avatar_state: dict[str, Any] = {}
         # Detailed candidate scores are useful for diagnostics, but are not
         # needed by the action executor. Keep the production response small
@@ -553,6 +554,10 @@ class MultimodalSession:
                 prefix_cache_namespace=self.action_prefix_cache_namespace,
                 stage=prefill_stage,
             )
+            if self.action_prefix_prefilled:
+                self._prefilled_action_prefix_namespaces.add(
+                    self.action_prefix_cache_namespace
+                )
         self.started = True
 
         await self.send(
@@ -979,6 +984,7 @@ class MultimodalSession:
             images=action_images, sample_rate=16000,
             session_id=self.session_id, history=action_history,
             stage="category", logical_request_id=request_base,
+            action_context_cache_key=request_base,
             prefix_cache_namespace=self.action_prefix_cache_namespace,
             history_audios=action_history_audios, history_images=action_history_images,
             avatar_state=dict(avatar_state or self.last_avatar_state),
@@ -998,6 +1004,17 @@ class MultimodalSession:
         category_started = time.perf_counter()
         category_result = await self.client.score_action_suffixes(category_request)
         category_ms = round((time.perf_counter() - category_started) * 1000.0, 3)
+        logger.info(
+            "[SESSION_ACTION_REALTIME] action stage completed "
+            "session_id=%s turn_id=%s stage=category candidates=%d "
+            "elapsed_ms=%.3f prefix_cached=%s stats=%s",
+            self.session_id,
+            turn_id,
+            len(category_request.candidates),
+            category_ms,
+            category_result.prefix_cached,
+            json.dumps(category_result.stats, ensure_ascii=False, default=str),
+        )
         category_by_id = {item.category_id: item for item in self.categories}
         category_ranked = sorted(category_result.scores, key=lambda item: item.mean_logprob, reverse=True)
         if not category_ranked or category_ranked[0].candidate_id not in category_by_id:
@@ -1017,14 +1034,6 @@ class MultimodalSession:
             for child in category.children
         ]
         child_namespace = ",".join(selected_category_ids)
-        action_common = {
-            **common,
-            "stage": "child",
-            "micro_batch_size": self.action_micro_batch_size,
-            "prefix_cache_namespace": (
-                f"{self.action_prefix_cache_namespace}:child:{child_namespace}"
-            ),
-        }
         if len(selected_categories) == 1:
             child_prefix = (
                 f"已选择动作类别 {selected_category.category_id}。请只在该类别的子动作中选择一个。"
@@ -1036,6 +1045,40 @@ class MultimodalSession:
                 "请只在这些类别的子动作中选择一个。"
             )
             child_system_prompt = self._build_child_system_prompt(selected_categories)
+        child_namespace = (
+            f"{self.action_prefix_cache_namespace}:child:{child_namespace}"
+        )
+
+        # Child catalogs depend on the category result, so they cannot be
+        # prefetched at session.start. Warm the selected child catalog lazily
+        # on its first use; subsequent turns reuse the same immutable prefix.
+        child_prefix_prefilled = False
+        prefill = getattr(self.client, "prefill_action_catalog", None)
+        if callable(prefill) and child_namespace not in self._prefilled_action_prefix_namespaces:
+            child_prefix_prefilled = await prefill(
+                model=self.model_name,
+                system_prompt=child_system_prompt,
+                candidates=[
+                    ActionScoreCandidate(
+                        candidate_id=item.candidate_id,
+                        suffix=item.candidate_id,
+                        action_id=item.action_id,
+                        execution_binding=dict(item.execution_binding),
+                    )
+                    for item in child_candidates
+                ],
+                prefix_cache_namespace=child_namespace,
+                stage="child",
+            )
+            if child_prefix_prefilled:
+                self._prefilled_action_prefix_namespaces.add(child_namespace)
+
+        action_common = {
+            **common,
+            "stage": "child",
+            "micro_batch_size": self.action_micro_batch_size,
+            "prefix_cache_namespace": child_namespace,
+        }
         action_request = ActionSuffixScoreRequest(
             request_id=request_base + "-child", prefix=base + child_prefix
             + "只输出 action_id，不要解释。没有明确动作指令时必须选择 no_action。下一步 action_id 是：",
@@ -1050,6 +1093,18 @@ class MultimodalSession:
         child_started = time.perf_counter()
         child_result = await self.client.score_action_suffixes(action_request)
         child_ms = round((time.perf_counter() - child_started) * 1000.0, 3)
+        logger.info(
+            "[SESSION_ACTION_REALTIME] action stage completed "
+            "session_id=%s turn_id=%s stage=child candidates=%d "
+            "selected_category_ids=%s elapsed_ms=%.3f prefix_cached=%s stats=%s",
+            self.session_id,
+            turn_id,
+            len(action_request.candidates),
+            ",".join(selected_category_ids),
+            child_ms,
+            child_result.prefix_cached,
+            json.dumps(child_result.stats, ensure_ascii=False, default=str),
+        )
         child_by_id = {item.candidate_id: item for item in child_candidates}
         ranked = sorted(child_result.scores, key=lambda item: item.mean_logprob, reverse=True)
         if not ranked or ranked[0].candidate_id not in child_by_id:
@@ -1089,6 +1144,8 @@ class MultimodalSession:
             "category_scores": [compact_stage_score(score) for score in category_ranked],
             "category_compute_ms": category_ms,
             "child_compute_ms": child_ms,
+            "child_prefix_prefilled": child_prefix_prefilled,
+            "child_prefix_cache_namespace": child_namespace,
         })
         return action, scores, round((time.perf_counter() - started) * 1000.0, 3), action_context
 
@@ -1151,6 +1208,17 @@ class MultimodalSession:
         started = time.perf_counter()
         result = await self.client.score_action_suffixes(request)
         compute_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        logger.info(
+            "[SESSION_ACTION_REALTIME] action stage completed "
+            "session_id=%s turn_id=%s stage=flat candidates=%d "
+            "elapsed_ms=%.3f prefix_cached=%s stats=%s",
+            self.session_id,
+            turn_id,
+            len(request.candidates),
+            compute_ms,
+            result.prefix_cached,
+            json.dumps(result.stats, ensure_ascii=False, default=str),
+        )
         ranked = sorted(result.scores, key=lambda x: x.mean_logprob, reverse=True)
         scores: list[dict[str, Any]] = []
         for score in ranked:

@@ -444,6 +444,16 @@ class NestedFakeClient(FakeClient):
         return ActionSuffixScoreResult(request_id=request.request_id, model=request.model, prefix_cached=True, scores=scores)
 
 
+class NestedPrefillFakeClient(NestedFakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prefill_requests = []
+
+    async def prefill_action_catalog(self, **kwargs):
+        self.prefill_requests.append(kwargs)
+        return True
+
+
 @pytest.mark.asyncio
 async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     ws = FakeWebSocket()
@@ -470,6 +480,8 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert [item.candidate_id for item in child_request.candidates] == ["A1", "A0"]
     assert category_request.suffix_tokenization_mode == "short_id"
     assert child_request.suffix_tokenization_mode == "short_id"
+    assert category_request.action_context_cache_key == child_request.action_context_cache_key
+    assert category_request.action_context_cache_key == category_request.logical_request_id
     assert category_request.micro_batch_size == 64
     assert child_request.micro_batch_size == 64
     assert "B1=基础姿态；姿态变化" in category_request.system_prompt
@@ -482,6 +494,52 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert result["media_summary"]["action_context"]["selected_category_id"] == "B1"
     assert result["media_summary"]["action_context"]["selected_category_ids"] == ["B1"]
     assert result["media_summary"]["action_context"]["category_top_k"] == 1
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_child_prefix_is_lazily_prefilled_once_per_namespace() -> None:
+    ws = FakeWebSocket()
+    client = NestedPrefillFakeClient()
+    session = make_session(ws, client)
+    candidates = [
+        {
+            "category_id": "B1",
+            "source_label": "基础姿态",
+            "short_definition": "姿态变化",
+            "children": [
+                {"candidate_id": "A1", "action_id": "A1", "source_label": "站立", "short_definition": "站立"},
+                {"candidate_id": "A0", "action_id": "no_action", "source_label": "不做动作", "short_definition": "保持当前姿态"},
+            ],
+        },
+        {
+            "category_id": "B2",
+            "source_label": "情绪",
+            "short_definition": "情绪变化",
+            "children": [
+                {"candidate_id": "A2", "action_id": "A2", "source_label": "微笑", "short_definition": "微笑"},
+            ],
+        },
+    ]
+    await session.handle_session_start({
+        "type": "session.start",
+        "session_id": "session-lazy-child-prefill",
+        "include_scores": True,
+        "action_candidates": candidates,
+    })
+    assert [item["stage"] for item in client.prefill_requests] == ["category"]
+
+    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-1"})
+    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-1", "text": "请站起来"})
+    assert [item["stage"] for item in client.prefill_requests] == ["category", "child"]
+    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-2"})
+    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-2", "text": "再来一次"})
+    assert [item["stage"] for item in client.prefill_requests] == ["category", "child"]
+    results = [
+        event for event in ws.events
+        if event["type"] == "turn.result"
+    ]
+    assert results[-2]["media_summary"]["action_context"]["child_prefix_prefilled"] is True
+    assert results[-1]["media_summary"]["action_context"]["child_prefix_prefilled"] is False
 
 
 @pytest.mark.asyncio

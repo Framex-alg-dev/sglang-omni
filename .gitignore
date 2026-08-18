@@ -51,3 +51,5 @@ asr_seedtts_results.json
 tests/data/actions/
 
 logs
+
+deploy/sglang-omni-18001.service

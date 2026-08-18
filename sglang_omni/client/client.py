@@ -704,6 +704,7 @@ class Client:
                     "client_started_at": time.perf_counter(),
                     "static_system_prompt": request.system_prompt,
                     "prefix_cache_namespace": request.prefix_cache_namespace,
+                    "action_context_cache_key": request.action_context_cache_key,
                     "history_message_count": history_message_count,
                     "history_audio_count": history_audio_count,
                     "history_image_count": history_image_count,

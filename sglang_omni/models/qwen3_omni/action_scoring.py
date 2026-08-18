@@ -58,6 +58,11 @@ class ActionSuffixScoreRequest:
     avatar_state: dict[str, Any] = field(default_factory=dict)
     stage: str = "single"
     logical_request_id: str | None = None
+    # Same-turn category/child requests use this key to share the prepared
+    # multimodal context in the preprocessing process. It is intentionally
+    # separate from the KV-cache namespace: the former identifies media and
+    # prompt preparation, while the latter identifies immutable text tokens.
+    action_context_cache_key: str | None = None
     # Stable namespace for the immutable catalog prefix. The parent request
     # limits cache matching to the static-catalog/history boundary.
     prefix_cache_namespace: str | None = None

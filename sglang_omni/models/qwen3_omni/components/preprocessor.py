@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -295,6 +296,42 @@ class Qwen3OmniPreprocessor:
             self.tokenizer, "chat_template", None
         ):
             self.processor.chat_template = self.tokenizer.chat_template
+        # Category and child requests in one logical turn have identical
+        # media/history. Keep only a small, one-shot cache of the prepared
+        # media objects so child preprocessing does not decode them again.
+        self._action_context_cache: dict[str, dict[str, Any]] = {}
+        self._action_context_cache_lock = threading.Lock()
+        self._action_context_cache_max_entries = 4
+
+    def _action_context_cache_key(self, payload: StagePayload) -> str | None:
+        metadata = getattr(payload.request, "metadata", None)
+        if not isinstance(metadata, dict) or metadata.get("task") != "action_suffix_scoring":
+            return None
+        action_spec = payload.request.params.get("action_scoring")
+        if not isinstance(action_spec, dict):
+            return None
+        key = action_spec.get("action_context_cache_key")
+        stage = metadata.get("action_stage")
+        if not isinstance(key, str) or not key.strip() or stage not in {"category", "child"}:
+            return None
+        return key.strip()
+
+    def _get_action_context_cache(self, key: str | None) -> dict[str, Any] | None:
+        if key is None:
+            return None
+        with self._action_context_cache_lock:
+            # A context is consumed by the child stage exactly once. This
+            # prevents a stale turn from retaining decoded media in memory.
+            return self._action_context_cache.pop(key, None)
+
+    def _put_action_context_cache(self, key: str | None, value: dict[str, Any]) -> None:
+        if key is None:
+            return
+        with self._action_context_cache_lock:
+            self._action_context_cache[key] = value
+            while len(self._action_context_cache) > self._action_context_cache_max_entries:
+                oldest = next(iter(self._action_context_cache))
+                self._action_context_cache.pop(oldest, None)
 
     def _build_multimodal_messages(
         self,
@@ -346,6 +383,7 @@ class Qwen3OmniPreprocessor:
         return result
 
     async def __call__(self, payload: StagePayload) -> StagePayload:
+        started = time.perf_counter()
         _emit_event(
             request_id=payload.request_id,
             stage=None,
@@ -353,6 +391,45 @@ class Qwen3OmniPreprocessor:
         )
         try:
             result = await self._call_impl(payload)
+            metadata = payload.request.metadata
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("task") == "action_suffix_scoring"
+            ):
+                state = Qwen3OmniPipelineState.from_dict(result.data)
+                raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
+                prompt = state.prompt if isinstance(state.prompt, dict) else {}
+                input_ids = prompt.get("input_ids")
+                encoder_cache_keys = {
+                    stage: values.get("cache_key")
+                    for stage, values in state.encoder_inputs.items()
+                    if isinstance(values, dict) and values.get("cache_key")
+                }
+                diagnostics = {
+                    "event": "action_media_preprocess_completed",
+                    "request_id": payload.request_id,
+                    "session_id": metadata.get("session_id"),
+                    "action_stage": metadata.get("action_stage"),
+                    "logical_request_id": metadata.get("logical_request_id"),
+                    "elapsed_ms": round(
+                        (time.perf_counter() - started) * 1000.0, 3
+                    ),
+                    "prompt_tokens": int(input_ids.numel())
+                    if hasattr(input_ids, "numel")
+                    else 0,
+                    "audio_count": len(
+                        raw_inputs.get("audios", raw_inputs.get("audio", [])) or []
+                    ),
+                    "image_count": len(raw_inputs.get("images", []) or []),
+                    "encoder_cache_keys": encoder_cache_keys,
+                    "action_context_cache_status": metadata.get(
+                        "action_context_cache_status", "disabled"
+                    ),
+                }
+                logger.info(
+                    "action_media %s",
+                    json.dumps(diagnostics, ensure_ascii=False, default=str),
+                )
         finally:
             _emit_event(
                 request_id=payload.request_id,
@@ -662,6 +739,13 @@ class Qwen3OmniPreprocessor:
             image_cache_key = compute_image_cache_key(raw_images)
             raw_audio_cache_key = compute_audio_cache_key(raw_audios)
             video_cache_key = compute_video_cache_key(raw_videos)
+            action_context_key = self._action_context_cache_key(payload)
+            cached_context = self._get_action_context_cache(
+                action_context_key
+                if payload.request.metadata.get("action_stage") == "child"
+                else None
+            )
+            action_context_cache_status = "hit" if cached_context is not None else "miss"
 
             # Count explicit audio inputs (for placeholder insertion)
             if raw_audios:
@@ -669,25 +753,36 @@ class Qwen3OmniPreprocessor:
                     len(raw_audios) if isinstance(raw_audios, list) else 1
                 )
 
-            # Use async versions for concurrent loading
-            # If we need audio from video, extract it during video loading to avoid duplicate downloads
-            extract_audio_from_video_flag = bool(use_audio_in_video and raw_videos)
-
-            images, videos_result, audios_result = await asyncio.gather(
-                ensure_image_list_async(raw_images),
-                ensure_video_list_async(
-                    raw_videos,
-                    fps=resolved_video_fps,
-                    max_frames=resolved_video_max_frames,
-                    min_pixels=resolved_video_min_pixels,
-                    max_pixels=resolved_video_max_pixels,
-                    total_pixels=resolved_video_total_pixels,
-                    extract_audio=extract_audio_from_video_flag,
-                    audio_target_sr=audio_target_sr,
-                ),
-                ensure_audio_list_async(raw_audios, target_sr=audio_target_sr),
-            )
-            videos, sampled_video_fps, extracted_audio_from_video = videos_result
+            # Reuse the category stage's loaded media for the child stage.
+            # The child still renders its own text prompt, while media loading
+            # and decoding happen only once for this logical turn.
+            if cached_context is not None:
+                images = cached_context["images"]
+                videos = cached_context["videos"]
+                audios = cached_context["audios"]
+                sampled_video_fps = cached_context["sampled_video_fps"]
+                extracted_audio_from_video = []
+                audio_from_video = bool(cached_context.get("audio_from_video"))
+                audios_result = audios
+            else:
+                # If we need audio from video, extract it during video loading
+                # to avoid duplicate downloads.
+                extract_audio_from_video_flag = bool(use_audio_in_video and raw_videos)
+                images, videos_result, audios_result = await asyncio.gather(
+                    ensure_image_list_async(raw_images),
+                    ensure_video_list_async(
+                        raw_videos,
+                        fps=resolved_video_fps,
+                        max_frames=resolved_video_max_frames,
+                        min_pixels=resolved_video_min_pixels,
+                        max_pixels=resolved_video_max_pixels,
+                        total_pixels=resolved_video_total_pixels,
+                        extract_audio=extract_audio_from_video_flag,
+                        audio_target_sr=audio_target_sr,
+                    ),
+                    ensure_audio_list_async(raw_audios, target_sr=audio_target_sr),
+                )
+                videos, sampled_video_fps, extracted_audio_from_video = videos_result
 
             # Merge extracted audio from videos with explicit audio (if any)
             if extracted_audio_from_video:
@@ -709,7 +804,27 @@ class Qwen3OmniPreprocessor:
                     audios = audios_result
             else:
                 audios = audios_result
+
+            if (
+                cached_context is None
+                and action_context_key is not None
+                and payload.request.metadata.get("action_stage") == "category"
+            ):
+                self._put_action_context_cache(
+                    action_context_key,
+                    {
+                        "images": images,
+                        "videos": videos,
+                        "audios": audios,
+                        "sampled_video_fps": sampled_video_fps,
+                        "audio_from_video": audio_from_video,
+                    },
+                )
+            payload.request.metadata["action_context_cache_status"] = (
+                action_context_cache_status
+            )
         else:
+            action_context_cache_status = "disabled"
             messages = inputs
             images = []
             videos = []

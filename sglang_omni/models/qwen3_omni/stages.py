@@ -7,8 +7,11 @@ Each factory returns either:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -168,10 +171,13 @@ def _run_single_encoder_payload(
     model: Any,
     cache: StageOutputCache | None = None,
 ) -> StagePayload:
+    started = time.perf_counter()
+    model_ms = 0.0
     state = load_state(payload)
     request = build_encoder_request(state, stage_name=stage_name)
     if request.skip_result is not None:
         result = request.skip_result
+        cache_status = "skip"
     else:
         result = _lookup_cached_encoder_output(
             request=request,
@@ -180,8 +186,11 @@ def _run_single_encoder_payload(
             cache=cache,
         )
         if result is None:
+            model_started = time.perf_counter()
             with torch.no_grad():
                 result = model(**request.model_inputs)
+            model_ms = (time.perf_counter() - model_started) * 1000.0
+            cache_status = "compute"
             _store_cached_encoder_output(
                 request=request,
                 request_id=payload.request_id,
@@ -189,6 +198,20 @@ def _run_single_encoder_payload(
                 cache=cache,
                 result=result,
             )
+        else:
+            cache_status = "hit"
+    _log_action_media_event(
+        payload,
+        encoder_stage=stage_name,
+        event="encoder_completed",
+        cache_status=cache_status,
+        cache_key=_short_cache_key(request.cache_key),
+        input_bytes=_nested_tensor_bytes(request.model_inputs),
+        output_bytes=_nested_tensor_bytes(result),
+        wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        model_ms=round(model_ms, 3),
+        batch_size=1,
+    )
     apply_encoder_result(state, stage_name=stage_name, result=result)
     return store_state(payload, state)
 
@@ -275,6 +298,52 @@ def _nested_tensor_bytes(value: Any) -> int:
 def _encoder_cache_trace_enabled() -> bool:
     value = os.getenv("SGLANG_OMNI_TRACE_ENCODER_CACHE", "")
     return value.lower() not in ("", "0", "false", "no")
+def _action_media_context(payload: StagePayload) -> dict[str, Any] | None:
+    """Return safe correlation fields for action-media diagnostics."""
+    request = getattr(payload, "request", None)
+    metadata = getattr(request, "metadata", None)
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("task") != "action_suffix_scoring"
+    ):
+        return None
+    logical_request_id = metadata.get("logical_request_id")
+    logical_request_id = (
+        str(logical_request_id) if logical_request_id is not None else None
+    )
+    turn_id = None
+    if logical_request_id:
+        match = re.search(r"-turn-(.+?)-action-", logical_request_id)
+        if match:
+            turn_id = match.group(1)
+    return {
+        "session_id": metadata.get("session_id"),
+        "turn_id": turn_id,
+        "action_stage": metadata.get("action_stage"),
+        "logical_request_id": logical_request_id,
+    }
+
+
+def _log_action_media_event(
+    payload: StagePayload,
+    *,
+    encoder_stage: str,
+    event: str,
+    **fields: Any,
+) -> None:
+    """Log action media processing without logging raw audio or image data."""
+    context = _action_media_context(payload)
+    if context is None:
+        return
+    record = {
+        "event": event,
+        "request_id": payload.request_id,
+        "encoder_stage": encoder_stage,
+        **context,
+        **fields,
+    }
+    logger.info("action_media %s", json.dumps(record, ensure_ascii=False, default=str))
+
 
 
 def _short_cache_key(cache_key: str | None) -> str:
@@ -400,6 +469,17 @@ def _batch_image_encoder_payloads(
             cache=cache,
         )
         if cached is not None:
+            _log_action_media_event(
+                payload,
+                encoder_stage=IMAGE_STAGE,
+                event="encoder_completed",
+                cache_status="hit",
+                cache_key=_short_cache_key(request.cache_key),
+                input_bytes=_nested_tensor_bytes(request.model_inputs),
+                output_bytes=_nested_tensor_bytes(cached),
+                model_ms=0.0,
+                batch_size=1,
+            )
             apply_encoder_result(state, stage_name=IMAGE_STAGE, result=cached)
             results[idx] = store_state(payload, state)
             continue
@@ -498,8 +578,10 @@ def _batch_image_encoder_payloads(
         batched_inputs["pixel_values_videos"] = torch.cat(video_pixels, dim=0)
         batched_inputs["video_grid_thw"] = torch.cat(video_grids, dim=0)
 
+    model_started = time.perf_counter()
     with torch.no_grad():
         combined = model(**batched_inputs)
+    model_ms = (time.perf_counter() - model_started) * 1000.0
 
     image_grid_all = combined.get("image_grid_thw")
     image_counts_all = combined.get("image_token_counts")
@@ -563,6 +645,18 @@ def _batch_image_encoder_payloads(
             computed_by_cache_key[request.cache_key] = stage_result
         apply_encoder_result(meta["state"], stage_name=IMAGE_STAGE, result=stage_result)
         results[meta["idx"]] = store_state(meta["payload"], meta["state"])
+        _log_action_media_event(
+            meta["payload"],
+            encoder_stage=IMAGE_STAGE,
+            event="encoder_completed",
+            cache_status="compute",
+            cache_key=_short_cache_key(request.cache_key),
+            input_bytes=_nested_tensor_bytes(request.model_inputs),
+            output_bytes=_nested_tensor_bytes(stage_result),
+            wall_ms=round(model_ms, 3),
+            model_ms=round(model_ms, 3),
+            batch_size=len(active),
+        )
 
     for cache_key, waiters in duplicate_waiters.items():
         stage_result = computed_by_cache_key.get(cache_key)
@@ -660,6 +754,17 @@ def _batch_audio_encoder_payloads(
             cache=cache,
         )
         if cached is not None:
+            _log_action_media_event(
+                payload,
+                encoder_stage=AUDIO_STAGE,
+                event="encoder_completed",
+                cache_status="hit",
+                cache_key=_short_cache_key(request.cache_key),
+                input_bytes=_nested_tensor_bytes(request.model_inputs),
+                output_bytes=_nested_tensor_bytes(cached),
+                model_ms=0.0,
+                batch_size=1,
+            )
             apply_encoder_result(state, stage_name=AUDIO_STAGE, result=cached)
             results[idx] = store_state(payload, state)
             continue
@@ -703,6 +808,7 @@ def _batch_audio_encoder_payloads(
         [_pad_audio_mask(item["mask"], max_time) for item in normalized], dim=0
     )
     batched_lengths = torch.cat([item["lengths"] for item in normalized], dim=0)
+    model_started = time.perf_counter()
 
     with torch.no_grad():
         combined = model(
@@ -710,6 +816,7 @@ def _batch_audio_encoder_payloads(
             feature_attention_mask=batched_mask,
             audio_feature_lengths=batched_lengths,
         )
+    model_ms = (time.perf_counter() - model_started) * 1000.0
 
     output_lengths = combined["audio_output_lengths"]
     embeds = combined["audio_embeds"]
@@ -737,6 +844,18 @@ def _batch_audio_encoder_payloads(
         results[item["idx"]] = store_state(item["payload"], item["state"])
         row_cursor = row_end
         token_cursor = token_end
+        _log_action_media_event(
+            item["payload"],
+            encoder_stage=AUDIO_STAGE,
+            event="encoder_completed",
+            cache_status="compute",
+            cache_key=_short_cache_key(item["request"].cache_key),
+            input_bytes=_nested_tensor_bytes(item["request"].model_inputs),
+            output_bytes=_nested_tensor_bytes(stage_result),
+            wall_ms=round(model_ms, 3),
+            model_ms=round(model_ms, 3),
+            batch_size=len(normalized),
+        )
 
     return [result for result in results if result is not None]
 
