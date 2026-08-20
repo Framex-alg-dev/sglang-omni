@@ -163,7 +163,10 @@ def _contextualize_cache_key(base_key: str | None, **context: Any) -> str | None
 
 
 DEFAULT_THINKER_MAX_NEW_TOKENS = 2048
-QWEN3_OMNI_CHAT_TEMPLATE_FALLBACK_MODEL = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+QWEN3_OMNI_CHAT_TEMPLATE_FALLBACK_MODEL = os.environ.get(
+    "SGLANG_OMNI_QWEN3_CHAT_TEMPLATE_MODEL",
+    "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+)
 
 
 def validate_prompt_seq_len(

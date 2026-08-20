@@ -49,6 +49,7 @@ asr_seedtts_results.json
 
 tests/data/actions/
 
-logs
+logs/*
+!logs/.gitkeep
 
 deploy/sglang-omni-18001.service
