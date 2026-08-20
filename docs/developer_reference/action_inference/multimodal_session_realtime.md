@@ -19,8 +19,9 @@ Session Realtime 只负责从当前角色在 `session.start` 中冻结的候选�
 4. proactive Turn 的 `user_input` 必须为 `null` 或省略，服务端只把 `text` 当作待播文本；
 5. 动作候选继续由调用方提供并在 Session 内冻结，flat 和 hierarchical 格式均继续支持，
    且候选中必须包含 `action_id=no_action`；
-6. `avatar_state` 推荐提供 `current_action_id` 和 `state_description`，现有的 `pose`、
-   `gaze`、`hands`、`conversation_phase` 等旧字段继续兼容并原样进入推理上下文；
+6. `current_action_id` 表示上一次已执行动作；主动 Turn 的 `state_description`
+   表示本次主动场景说明。`pose`、`gaze`、`hands`、`conversation_phase` 等视觉或
+   状态字段继续兼容；
 7. `turn.result.action` 和 `execute` 仍是动作执行入口；`reply` 不再返回，`scores`
    和 `media_summary` 仍只在 `include_scores=true` 时返回。
 
@@ -146,8 +147,9 @@ action-score 前缀预填充，并在 `session.started.action_prefix_prefilled` 
 实际渲染后的多模态 token 计算边界，而不是按字符数估算。
 生产客户端通常保持默认值，只接收实际要执行的动作和服务端耗时；测试、问题
 排查或离线分析时可以在 session.start 中设置 "include_scores": true，让每个
-turn.result 额外返回完整候选排序和媒体摘要。该开关不改变模型计算，只控制返回
-内容；完整评分和 prompt 仍记录在服务端动作诊断日志中。
+turn.result 额外返回完整候选排序和媒体摘要。一般候选下该开关只影响返回内容；
+category 仅有一个 child 时，默认关闭诊断会启用直接返回快路，开启诊断则保留
+child 评分以产生真实分数。所有实际执行的评分阶段都会记录 prompt 和诊断日志。
 
 > 说明：上面的 flat `action_candidates` 仅用于兼容旧接入方。新接入方应使用下面的两层类别格式；嵌套格式下类别 ID 与 child candidate_id 必须跨层全局唯一。
 
@@ -175,7 +177,9 @@ turn.result 额外返回完整候选排序和媒体摘要。该开关不改变�
 默认 hierarchical 模式下，一个外部 turn 内部按以下顺序执行两阶段，外部不会收到中间事件，也不需要创建第二个 session：
 
 1. 第一阶段固定使用 session 的类别 system prompt，只对所有 `category_id` 的短 suffix 评分，选出一个类别。
-2. 第二阶段只使用选中类别的 system prompt 和 children，只对 child `candidate_id` 评分，选出最终动作。
+2. 第二阶段使用选中类别的说明与 children，并确保全局 `no_action` 候选始终在
+   Child 候选集合内；如果选中类别本身不含该候选，服务端自动追加。随后只对
+   `candidate_id` 评分，选出最终动作。
 3. 服务端只返回一个 `turn.result`；其中 `action` 始终返回最终动作。只有 include_scores=true 时才额外返回第二阶段的 `scores`，`media_summary.action_context` 额外包含 `selected_category_id`、`category_scores`、`category_compute_ms`、`child_compute_ms` 和 `selection_stages=2`。
 
 阶段请求使用同一个 `logical_request_id`，诊断日志中的 `stage` 分别为 `category` 和 `child`。第二阶段 system prompt 是当前 turn 内部临时构造的，不会追加到 session 历史，因此多轮对话不会累积多个 system prompt。
@@ -229,7 +233,7 @@ turn.result 额外返回完整候选排序和媒体摘要。该开关不改变�
     }
 
 `image_role=user_camera` 表示用户摄像头画面，用于理解用户及其环境；
-`image_role=avatar_state` 表示数字人最新视频帧，用于理解数字人自身姿态。
+`image_role=avatar_state` 表示数字人最新视频帧，用于理解数字人自身当前可视姿态和行为。
 两类图片可以出现在同一个 Turn，服务端会在排序后逐张绑定角色，并把角色随图片
 记录到 Session。客户端应始终显式传入该字段，尤其不能只依靠
 `turn_origin` 推断混合图片的来源。
@@ -238,10 +242,24 @@ turn.result 额外返回完整候选排序和媒体摘要。该开关不改变�
 `avatar_state`。这只是兼容默认值，不适用于一个 Turn 中同时传入两类图片。
 
 数字人状态图片只在其所属的当前 Turn 中有效。历史 Turn 的 `avatar_state` 图片不会
-进入后续动作评分上下文，不能作为数字人当前姿态的证据。后续 Turn 即使画面没有变化，
-客户端也必须重新发送最新帧；本轮未收到 `avatar_state` 图片时，模型会将数字人当前
-视觉姿态视为未知，禁止从历史图片或用户摄像头图片推断。此限制只针对视觉姿态，
-本轮 `current_action_id`、`state_description` 和 `trigger` 仍正常参与动作决策。
+进入后续动作评分上下文，不能作为数字人当前姿态的证据。当前 Turn 收到数字人状态
+图片时，只使用时间最新的一张表示数字人当前可视姿态和行为；结构化
+`pose/gaze/hands` 等视觉字段不再注入，但仍保留本轮显式提供的
+`current_action_id`，以及主动 Turn 的 `state_description`。没有数字人状态图片时，
+优先使用本轮或 Session 继承的结构化视觉状态；两者都没有时明确标记当前状态未知。
+状态未知不会单独排除不依赖特定起始姿态的候选。任何情况下都禁止从历史图片或用户
+摄像头图片推断数字人当前状态。
+
+收到 `input_image.append` 后，服务端会在后台提前完成压缩图片解码和 RGB 转换，
+客户端协议不变。预处理结果以内部二进制信封传入正式多模态 processor；原始 data URI
+仍用于 Session 历史和重放，因此不会改变图片顺序、角色、像素或动作评分语义。
+每个 Turn 最多保留 8 个预处理任务、并发数为 2，RGB 结果单帧上限 32 MiB、Turn
+总上限 64 MiB。图片无法解析、超过内存限制或没有被提前调度时，会自动回退到原始
+data URI，由原有 commit 后链路处理。
+
+该优化只把图片解码/RGB 转换移到用户仍在输入的时间段，不提前运行 Image Encoder，
+也不改变 Flat/Hierarchical、Thinker 次数或候选评分方式。`turn.cancel`、连接断开和
+`session.close` 会取消尚未完成的图片预处理任务。
 
 提交示例：
 
@@ -253,14 +271,16 @@ turn.result 额外返回完整候选排序和媒体摘要。该开关不改变�
       "text": "你可以挥挥手吗？",
       "avatar_state": {
         "current_action_id": null,
-        "state_description": "数字人当前没有执行动作，正在等待用户回应。",
         "pose": "seated"
       }
     }
 
-`avatar_state` 推荐使用 `current_action_id` 和 `state_description`。
+`current_action_id` 可用于 user 和 proactive Turn；`state_description` 只用于描述
+当前 proactive Turn。
 为兼容现有接入，`pose`、`gaze`、`hands`、`conversation_phase`
-及其他旧字段仍会保留，并随完整对象一起进入模型上下文。
+及其他旧字段仍会保留；没有数字人状态图片时，它们作为结构化视觉状态进入模型上下文，
+有数字人状态图片时则由最新图片替代。本轮显式提供的 `current_action_id` 仍用于动作衔接，
+proactive Turn 显式提供的 `state_description` 仍用于约束本次推理。
 
 ### 系统主动动作
 
@@ -297,6 +317,8 @@ avatar_state 选择伴随动作。例如“Hello，你回来啦！”应优先�
 
 主动文本通常可以直接在 `turn.commit.text` 中提交，也可以先通过
 `turn.text.update` 写入。若两处都提供，以 commit 中的 `text` 为最终文本。
+只有本轮实际提供非空文本时，服务才新增一条本轮 assistant 消息，并在动作 Prompt 中
+将它明确标记为待播文本；该规则不是所有 proactive Turn 的固定假设。
 未提供文本或文本为空时，服务不会创建本轮 assistant 待播消息，也不会把上一条
 assistant 历史误认为本轮待播文本；动作选择只使用 `avatar_state`、`trigger`、历史和媒体。
 proactive Turn 即使通常没有本轮用户音频，也仍会读取同一 Session 中已经完成的
@@ -316,11 +338,11 @@ proactive Turn 即使通常没有本轮用户音频，也仍会读取同一 Sess
       "state_description": "用户刚刚回来；数字人准备友好欢迎，并避免重复最近动作。"
     }
 
-- `current_action_id` 可以是非空字符串或 `null`，用于描述当前或最近执行的动作；
-- `state_description` 可以是字符串，用自然语言描述数字人状态、用户状态、最近动作
-  和本轮表达目标；
-- `pose`、`gaze`、`hands`、`conversation_phase` 以及调用方已有的其他字段不会被删除，
-  服务端会保留完整对象并将其作为动作推理上下文；
+- `current_action_id` 可以是非空字符串或 `null`，表示上一次已经执行的动作；
+- `state_description` 可以是字符串，用自然语言解释当前主动场景，并给出本次动作
+  推理的目标、指引、要求和禁止项；
+- `pose`、`gaze`、`hands`、`conversation_phase` 以及调用方已有的其他字段保持兼容；
+  没有数字人状态图片时作为结构化视觉状态使用，有图片时由最新图片替代；
 - `avatar_state` 不用于扩展候选集合，模型最终仍只能选择 Session 已冻结的动作。
 
 ### `text`、`current_action_id` 和 `state_description` 的作用
@@ -330,8 +352,8 @@ proactive Turn 即使通常没有本轮用户音频，也仍会读取同一 Sess
 | 字段 | 作用 | 是否必需 | 是否写入后续上下文 |
 |---|---|---|---|
 | `text` | 本轮需要理解的语言内容；角色由 `turn_origin/text_role` 决定 | user、proactive 均可选 | 成功后按 user 或 assistant 角色写入历史 |
-| `current_action_id` | 当前正在执行或刚结束的动作，用于判断衔接、冲突和无意义重复 | 可选，可显式传 `null` | 随成功提交的 `avatar_state` 作为下一 Turn 的最近状态 |
-| `state_description` | 用自然语言描述场景目标、用户/数字人状态、动作要求和禁止项 | 可选字符串 | 随成功提交的 `avatar_state` 作为下一 Turn 的最近状态 |
+| `current_action_id` | 上一次已经执行的动作，用于判断衔接和无意义重复 | 可选，可显式传 `null` | 不继承；省略时根据最近一条已执行的 `[action_state]` 判断 |
+| `state_description` | 解释本次主动场景，并提供动作目标、指引、要求和禁止项 | proactive Turn 可选 | 不继承，仅当前 proactive Turn 使用 |
 
 `text` 的具体语义：
 
@@ -344,27 +366,28 @@ proactive Turn 即使通常没有本轮用户音频，也仍会读取同一 Sess
 
 `current_action_id` 的具体语义：
 
-- 非空字符串表示数字人当前正在执行或刚结束的真实动作 ID，`null` 表示当前没有
-  可报告的动作；
-- 模型用它避免与当前动作冲突、判断下一动作能否自然衔接，并在没有明确重复要求时
+- 非空字符串表示上一次已经执行的真实动作 ID，`null` 表示没有可报告的上一次动作；
+- 模型用它判断下一动作能否自然衔接，并在没有明确重复要求时
   避免再次选择同一动作；
 - 它只是上下文约束，不会强制服务返回该动作，也不会把不在 Session 候选目录中的
   ID 加入候选集合。
 
 `state_description` 的具体语义：
 
-- 它是不做结构化解析的自然语言状态，用于补充字段无法表达的业务上下文，例如
-  “用户刚回来”“保持坐姿”“本轮需要友好欢迎”“不要重复挥手”；
+- 它是不做结构化解析的当前主动场景说明，例如“用户刚回来”“本轮需要友好欢迎”
+  “动作应轻量”“不要重复挥手”；
 - proactive Turn 中，`text` 与 `state_description` 是共同的动作选择约束：
   动作既要匹配待播文本，也要满足状态中的目标和禁止项；没有同时满足两者的候选时
   应选择 `no_action`；
-- user Turn 中，它同样用于约束回应动作，例如避免与姿态、当前动作或业务阶段冲突。
+- user Turn 不使用 `state_description`。
 
 状态继承规则：
 
-- 本轮提供非空 `avatar_state` 时，评分使用完整对象；只有 Turn 成功完成后，
-  它才更新为 Session 的最近状态；
-- 省略 `avatar_state` 或传空对象时，服务复用最近一次成功 Turn 的状态；
+- `pose/gaze/hands` 等可复用结构化状态可以在成功 Turn 后成为 Session 最近状态；
+- `current_action_id` 和 `state_description` 都是当前 Turn 字段，不跨 Turn 继承；
+- 当前 Turn 有数字人图片时，图片替代结构化视觉状态，并清除之前缓存的结构化视觉
+  状态，避免下一 Turn 使用已经过期的姿态；
+- 没有数字人图片且省略结构化视觉状态时，可以复用最近一次成功 Turn 的视觉状态；
 - 取消或评分失败的 Turn 不更新最近状态；
 - 这些字段属于当前 Turn 的动态上下文，不会改变固定候选目录或其 prefix cache identity。
 
@@ -377,15 +400,63 @@ proactive Turn 即使通常没有本轮用户音频，也仍会读取同一 Sess
 session.start 之前自行优化描述。类别描述的实际文本会参与 `action_catalog_hash` 和
 prefix cache identity，因此同一 session 内必须保持不变。示例：
 
-    a01=wave_left：左手挥手；使用左手抬起并左右摆动
-    none=no_action：不做动作；保持当前姿态
+    candidate_id=a01｜动作=左手挥手｜说明=使用左手抬起并左右摆动
+    candidate_id=none｜动作=不做动作｜说明=保持当前姿态
+
+`action_id` 只用于服务端结果映射和动作执行，不再混入候选说明或模型输出目标；
+模型在类别阶段只选择 `category_id`，在 Flat/Child 阶段只选择 `candidate_id`。
+因此 `candidate_id`、`action_id` 与 `no_action` 不会以不同格式同时出现在选择指令中。
+
+hierarchical 两次计算的固定部分如下；中间的历史、当前状态、媒体和 Turn 指令按本轮
+动态补入：
+
+    # Category / Child 共用的当前 Turn 动态指令
+    ...
+    没有候选满足全部约束时，选择本阶段定义的兜底项。
+
+动态指令不写具体 `category_id` 或 `candidate_id`。准确的兜底 ID 只出现在对应阶段的
+固定 system prompt 中，避免 Category 阶段被 Child 的 `candidate_id` 干扰。
+
+    # Category system prompt
+    你是数字人动作类别识别器。请从固定类别集合中选择一个 category_id。
+    <明确时间顺序和优先级的历史动作规则>
+    category_id=B1｜类别=基础姿态｜说明=站立、坐下等姿态变化
+    ...
+    没有候选动作满足输入与状态约束时，选择兜底 category_id=B0。
+
+    # Category 当前 Turn 结尾
+    最合适的 category_id：
+
+    # Child system prompt
+    你是数字人动作识别器。请从以下集合中选择一个 candidate_id。
+    <明确时间顺序和优先级的历史动作规则>
+    已选类别：category_id=B1｜类别=基础姿态｜说明=站立、坐下等姿态变化
+    candidate_id=A1｜动作=正式站立｜说明=双脚并拢，脊背挺直双臂自然垂放
+    candidate_id=A0｜动作=不做动作｜说明=保持当前姿态
+    没有候选动作满足输入与状态约束，或需要避免冲突、重复时，选择兜底 candidate_id=A0。
+
+    # Child 当前 Turn 结尾
+    最合适的 candidate_id：
+
+Category 和 Child 使用逐字相同的当前 Turn 动态指令，只在结尾分别追加
+`category_id` 或 `candidate_id` 输出槽。静态 Category system catalog 继续使用
+`hierarchical:<action_catalog_hash>` KV namespace，静态 Child catalog 继续使用
+`hierarchical:<action_catalog_hash>:child:<selected_category_ids>` namespace；本次动态
+Prompt 调整不进入静态 catalog KV 边界，因此不会使已预填充的固定目录前缀失效。
+两阶段相同的 `action_context_cache_key` 继续复用当前 Turn 已解码的图片和音频；该缓存
+复用的是多媒体预处理结果，不是跨不同 system prompt 的文本 KV。
 
 当前 turn 的 suffix 只使用短 candidate_id：
 
     完整 prompt + a01
     完整 prompt + none
 
-第一阶段对 category_id 排名；第二阶段只对选中类别的 child candidate_id 排名，第一阶段完整排序保存在 `media_summary.action_context.category_scores`，最终 child 排序保存在顶层 `scores`，最终再映射成真正的 action_id。短 ID 优先设计成单 token，但实际以 tokenizer 的 token_count 为准；PPL 分母包含实际评分的 suffix token（包括显式终止 token）。
+第一阶段对 category_id 排名；第二阶段对选中类别的 children 加全局 `no_action`
+兜底候选的 candidate_id 排名。第一阶段完整排序保存在
+`media_summary.action_context.category_scores`，最终 Child 排序保存在顶层
+`scores`，再映射成真正的 action_id。短 ID 优先设计成单 token，但实际以
+tokenizer 的 token_count 为准；PPL 分母包含实际评分的 suffix token（包括显式终止
+token）。
 
 对候选 token 的计算为：
 
@@ -439,7 +510,14 @@ prefix cache identity，因此同一 session 内必须保持不变。示例：
       "timing": {
         "server_turn_ingest_ms": 5280.4,
         "server_action_compute_ms": 842.317,
-        "server_total_after_commit_ms": 1250.6
+        "server_result_finalize_ms": 0.8,
+        "server_total_after_commit_ms": 843.2,
+        "action_breakdown": {
+          "selection_mode": "hierarchical",
+          "category": {"client": {}, "pipeline": {}, "scheduler": {}, "suffix": {}},
+          "child": {"client": {}, "pipeline": {}, "scheduler": {}, "suffix": {}},
+          "child_catalog_prefill_ms": 0.0
+        }
       }
     }
 
@@ -448,21 +526,36 @@ server_action_compute_ms 只表示服务端动作评分耗时。客户端应额�
 估算，不等同于纯网络耗时。
 
 当 `include_scores=true` 时，`media_summary.action_context` 仍提供类别/子动作
-阶段总耗时；动作诊断 JSONL 的 `stats` 还会提供更细的字段：
+阶段总耗时。`timing.action_breakdown` 无论是否开启 `include_scores` 都会返回，
+并按 category/child 或 single 暴露以下真实阶段耗时：
 
+- `timing.image_preprocessing.scheduled_count/prepared_count`：本 Turn 调度和成功复用的图片数；
+- `timing.image_preprocessing.fallback_count/not_scheduled_count`：回退原始图片和未提前调度的图片数；
+- `timing.image_preprocessing.worker_total_ms`：各图片后台 worker 耗时之和，任务并行时不能视为墙钟耗时；
+- `timing.image_preprocessing.commit_wait_ms`：收到 commit 后等待尚未完成图片任务的墙钟耗时；
+- `timing.image_preprocessing.prepared_bytes/statuses`：实际复用的 RGB 字节数和逐图片状态；
 - `client_request_build_ms`：客户端构造 action-score 请求的耗时；
+- `action_slot_wait_ms`：等待进程内 action-score 串行槽位的耗时；
+- `coordinator_pipeline_ms`：Coordinator 从提交到返回结果的墙钟耗时；
+- `preprocessing_ms`、`image_encoder_ms`、`audio_encoder_ms`、`mm_aggregate_ms`：多模态各阶段的实际墙钟耗时；
 - `server_request_build_ms`：服务端从收到请求到构造出 prefix 请求的耗时；
 - `scheduler_admission_ms`：prefix 请求构造完成后，到进入 scheduler 等待队列前的准入耗时；
 - `scheduler_wait_ms` / `queue_wait_ms`：prefix 和各 suffix batch 等待 scheduler 的累计耗时；
 - `prefix_prefill_ms`：共享动态多模态 prefix 真正开始执行到完成的耗时；
 - `suffix_batch_queue_wait_ms`：每个 suffix batch 被 scheduler 选中前的等待耗时；
-- `suffix_batch_ms`：每个 suffix batch 从入队到完成的总耗时。
+- `suffix_batch_ms`：每个 suffix batch 从入队到完成的总耗时；
+- `client_result_processing_ms`：结果转换与校验耗时；
+- `server_result_finalize_ms`：动作完成后构造历史和 `turn.result` 的耗时。
 
 `queue_wait_ms` 是兼容字段，新的排查应优先使用上述拆分字段。
 
 ## 完整诊断日志
 
 动作评分链路会将诊断记录追加到 JSONL 文件。默认路径为 `/tmp/sglang-omni-action-debug.jsonl`，也可以通过环境变量 `SGLANG_OMNI_ACTION_DEBUG_LOG_FILE` 指定路径。记录包含 `session_id`、带 `turn_id` 的 request_id、候选列表、system prompt、逻辑 messages、实际渲染后的 `full_prompt`、prompt token 数、阶段耗时、异常堆栈以及音频/图片数量、大小和 hash。原始媒体 Base64 不写入日志。
+
+JSON 序列化、目录创建、跨进程文件锁和磁盘写入均在后台线程完成；请求线程只做
+非阻塞入队。队列有界，过载时丢弃新诊断记录并输出累计 dropped_records 告警，
+避免慢盘反向阻塞动作推理。
 
 超时时间默认 120 秒，可通过 `SGLANG_OMNI_ACTION_SCORE_TIMEOUT_S` 调整。出现超时时，重点查看 `event=action_scoring_timeout`、`phase.name`、`phase.slot_wait_ms` 和 `phase.pipeline_ms`，可区分动作评分排队和模型流水线耗时。
 
@@ -570,7 +663,14 @@ input_audio_buffer.append，其字段与 input_audio.append 相同。
 invalid_sequence。图片 seq 与音频 seq 独立；图片允许乱序，commit 时按
 timestamp_ms 升序、再按 seq 升序排序。图片支持 image/jpeg、image/png、
 image/webp，image 可以是 Base64 内容或 Base64 data URI。图片角色与图片一起排序，
-不会因时间戳重排而错位。当前评分 Prompt 会列出排序后的图片角色；进入历史后，
+不会因时间戳重排而错位。当前评分 Prompt 在所有当前图片之前只放一条压缩后的角色
+说明，例如六张连续用户图片写为 `用户摄像头图片=1-6`，不再为每张图重复角色文本。
+若同一 Turn 有多张 `avatar_state` 图片，动作评分只保留时间最新的一张，数字人的当前
+可视状态完全以它为准，不再同时注入结构化视觉字段；本轮显式提供的
+`current_action_id` 和 proactive Turn 的 `state_description` 仍保留。该图即使早于
+很多用户摄像头图片，也不会被当前图片数量上限挤掉。没有数字人状态图片且存在可用
+结构化状态时才注入结构化视觉字段；两者都没有时将当前状态标记为未知。
+进入历史后，
 历史用户摄像头图片会保留对应角色说明，历史数字人状态图片则从后续评分上下文中
 移除，避免模型把过期数字人姿态当作当前状态。
 
@@ -652,13 +752,17 @@ PPL/logprob。客户端不应从候选分数重新排序，直接使用 action �
 - media_summary：当前 turn 的音频、图片、文本统计，以及 action_context；
 - 每个候选的 mean_logprob、ppl、token_count 和 token_scores。
 
-include_scores 只影响网络返回字段，不影响动作选择结果，也不减少服务端日志。
-服务端动作诊断 JSONL 始终保留完整评分和 prompt 信息。
+include_scores 不影响最终动作选择结果。对于 category 只有一个 child 的情况，
+`include_scores=false` 会直接返回该 child，并跳过 child catalog prefill 与 child 模型评分；
+`include_scores=true` 会保留 child 评分，以返回真实 PPL/logprob。快速路径只记录
+category 阶段诊断日志，并在 `timing.action_breakdown.child` 标记 skipped。
 
 timing 字段含义：
 
 - server_turn_ingest_ms：turn.start 到收到 commit，包含当前 turn 媒体接收；
 - server_action_compute_ms：服务端动作评分耗时；
+- action_breakdown：category/child 或 single 的客户端、流水线、scheduler、suffix 分段耗时；
+- server_result_finalize_ms：动作完成后构造历史和结果帧的耗时；
 - server_total_after_commit_ms：收到 commit 到 turn.result，包含动作评分及其服务端编排，
   不包含普通数字人回复生成，因为当前动作服务不生成回复。
 

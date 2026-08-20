@@ -13,7 +13,6 @@ import traceback
 import uuid
 from contextlib import aclosing
 from dataclasses import replace
-from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 import numpy as np
@@ -46,8 +45,10 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     validate_action_suffix_request,
     validate_score_result,
 )
+from sglang_omni.preprocessing.image import is_prepared_image_wire
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import OmniRequest, RequestState, StreamMessage
+from sglang_omni.utils.async_jsonl import enqueue_jsonl
 
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,19 @@ _ACTION_DEBUG_LOG_FILE = os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/t
 def _summarize_debug_media(values: Any) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
     for index, value in enumerate(values if isinstance(values, list) else []):
+        if is_prepared_image_wire(value):
+            summary.append(
+                {
+                    "index": index,
+                    "type": "prepared_image_rgb",
+                    "width": value["width"],
+                    "height": value["height"],
+                    "pixel_bytes": len(value["pixel_bytes"]),
+                    "source_sha256": value["source_sha256"],
+                    "pixel_sha256": value["pixel_sha256"],
+                }
+            )
+            continue
         if not isinstance(value, str):
             summary.append(
                 {"index": index, "type": type(value).__name__, "repr": repr(value)}
@@ -122,14 +136,8 @@ def _action_request_debug_payload(
 
 
 def _write_action_debug_record(record: dict[str, Any]) -> None:
-    """Append one replayable action-scoring diagnostic record to JSONL."""
-    try:
-        path = Path(_ACTION_DEBUG_LOG_FILE)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except Exception:
-        logger.exception("failed to write action debug log file=%s", _ACTION_DEBUG_LOG_FILE)
+    """Queue one replayable action-scoring diagnostic record for JSONL output."""
+    enqueue_jsonl(_ACTION_DEBUG_LOG_FILE, record)
 
 
 class Client:
@@ -150,6 +158,7 @@ class Client:
         self, request: ActionSuffixScoreRequest
     ) -> ActionSuffixScoreResult:
         """Score all suffixes as one logical multimodal pipeline request."""
+        score_started = time.perf_counter()
         validate_action_suffix_request(request)
         candidates = [
             {
@@ -250,11 +259,25 @@ class Client:
             )
             _write_action_debug_record(diagnostic)
             raise
+        result_processing_started = time.perf_counter()
         result = _coerce_action_score_result(raw_result, request)
         try:
             validate_score_result(request, result)
         except RuntimeError as exc:
             raise ClientError(str(exc)) from exc
+        result_processing_ms = (
+            time.perf_counter() - result_processing_started
+        ) * 1000.0
+        result.stats.update(
+            {
+                "action_slot_wait_ms": float(phase["slot_wait_ms"] or 0.0),
+                "coordinator_pipeline_ms": float(phase["pipeline_ms"] or 0.0),
+                "client_result_processing_ms": round(result_processing_ms, 3),
+                "client_total_ms": round(
+                    (time.perf_counter() - score_started) * 1000.0, 3
+                ),
+            }
+        )
         _write_action_debug_record({
             "event": "action_scoring_completed",
             "timestamp_unix_ms": round(time.time() * 1000.0),
@@ -511,12 +534,65 @@ class Client:
 
 
     @staticmethod
+    def _compact_image_indices(indices: list[int]) -> str:
+        if not indices:
+            return ""
+        ranges: list[str] = []
+        start = previous = indices[0]
+        for index in indices[1:]:
+            if index == previous + 1:
+                previous = index
+                continue
+            ranges.append(str(start) if start == previous else f"{start}-{previous}")
+            start = previous = index
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        return ",".join(ranges)
+
+    @staticmethod
+    def _current_image_content_parts(
+        image_roles: list[str],
+    ) -> list[dict[str, Any]]:
+        """Put one compact role map before all current image placeholders."""
+        user_indices = [
+            i for i, role in enumerate(image_roles, 1) if role == "user_camera"
+        ]
+        avatar_indices = [
+            i for i, role in enumerate(image_roles, 1) if role == "avatar_state"
+        ]
+        descriptions: list[str] = []
+        if user_indices:
+            descriptions.append(
+                "用户摄像头图片="
+                + Client._compact_image_indices(user_indices)
+                + "（只描述用户及其环境）"
+            )
+        if avatar_indices:
+            latest = avatar_indices[-1]
+            descriptions.append(
+                "数字人状态图片=" + Client._compact_image_indices(avatar_indices) + "；"
+                f"图片{latest}是本轮时间最新的数字人照片，"
+                "当前可视姿态和行为以它为准"
+            )
+        elif user_indices:
+            descriptions.append(
+                "本轮没有数字人状态图片，数字人姿态只能使用结构化 avatar_state，"
+                "不得从用户摄像头或历史图片推断"
+            )
+        if not descriptions:
+            descriptions.append("图片角色未提供")
+        return [
+            {"type": "text", "text": "[当前图片角色] " + "；".join(descriptions) + "。"},
+            *({"type": "image"} for _ in image_roles),
+        ]
+
+    @staticmethod
     def _action_instruction_content(
         content: Any,
         instruction: str,
         *,
         audios: list[str],
-        images: list[str],
+        images: list[Any],
+        image_roles: list[str],
     ) -> Any:
         """Append the action instruction to a user message.
 
@@ -528,7 +604,8 @@ class Client:
         if isinstance(content, list):
             parts = [dict(part) if isinstance(part, dict) else part for part in content]
             parts.extend({"type": "audio"} for _ in audios)
-            parts.extend({"type": "image"} for _ in images)
+            if images:
+                parts.extend(Client._current_image_content_parts(image_roles))
             parts.append({"type": "text", "text": instruction})
             return parts
 
@@ -539,7 +616,8 @@ class Client:
         if content is not None:
             parts.append({"type": "text", "text": str(content)})
         parts.extend({"type": "audio"} for _ in audios)
-        parts.extend({"type": "image"} for _ in images)
+        if images:
+            parts.extend(Client._current_image_content_parts(image_roles))
         parts.append({"type": "text", "text": instruction})
         return parts
 
@@ -551,7 +629,8 @@ class Client:
         avatar_state: dict[str, Any] | None,
         system_prompt: str | None,
         audios: list[str],
-        images: list[str],
+        images: list[Any],
+        image_roles: list[str],
     ) -> list[dict[str, Any]]:
         """Build action context with static catalog first and current turn last.
 
@@ -567,14 +646,27 @@ class Client:
             messages.append({"role": "system", "content": system_prompt})
 
         current_instruction = instruction
-        if avatar_state:
+        has_avatar_image = "avatar_state" in image_roles
+        state_for_prompt = dict(avatar_state or {})
+        if has_avatar_image:
+            state_for_prompt = {
+                key: value
+                for key, value in state_for_prompt.items()
+                if key in {"current_action_id", "state_description"}
+            }
+        if state_for_prompt:
             state_text = json.dumps(
-                avatar_state,
+                state_for_prompt,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            current_instruction = f"当前数字人状态：{state_text}\n{instruction}"
+            state_label = (
+                "动作推理补充信息"
+                if has_avatar_image
+                else "当前结构化数字人状态"
+            )
+            current_instruction = f"{state_label}：{state_text}\n{instruction}"
 
         messages.extend(dict(message) for message in history)
 
@@ -606,6 +698,11 @@ class Client:
         )
         missing_audios = [""] * max(len(audios) - existing_audio_placeholders, 0)
         missing_images = [""] * max(len(images) - existing_image_placeholders, 0)
+        missing_image_roles = (
+            image_roles[-len(missing_images) :]
+            if missing_images and image_roles
+            else ["unknown"] * len(missing_images)
+        )
         if messages and messages[-1].get("role") == "user":
             latest_user = messages.pop()
             latest_user["content"] = Client._action_instruction_content(
@@ -613,6 +710,7 @@ class Client:
                 current_instruction,
                 audios=missing_audios,
                 images=missing_images,
+                image_roles=missing_image_roles,
             )
             messages.append(latest_user)
         else:
@@ -620,7 +718,11 @@ class Client:
             if missing_audios or missing_images:
                 current_content = [
                     *({"type": "audio"} for _ in missing_audios),
-                    *({"type": "image"} for _ in missing_images),
+                    *(
+                        Client._current_image_content_parts(missing_image_roles)
+                        if missing_images
+                        else []
+                    ),
                     {"type": "text", "text": current_instruction},
                 ]
             else:
@@ -641,6 +743,7 @@ class Client:
             system_prompt=request.system_prompt,
             audios=[*request.history_audios, *request.audios],
             images=[*request.history_images, *request.images],
+            image_roles=request.image_roles,
         )
         if candidates is None:
             candidates = [

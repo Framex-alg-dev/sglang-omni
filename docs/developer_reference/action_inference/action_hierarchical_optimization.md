@@ -6,6 +6,7 @@
 
 - [动作推理方案总览](action_inference_scheme_summary.md)
 - [动作 suffix 评分](action_suffix_scoring.md)
+- [部署 tokenizer 单-token ID 映射](action_token_mapping.md)
 - [动作耗时演进](action_latency_history.md)
 - [micro-batch 性能验证](action_batch_benchmark.md)
 - [Realtime 外部接入协议](multimodal_session_realtime.md)
@@ -331,15 +332,16 @@ turn ingest
 
 ### 6.3 category 单 child 快速路径
 
-如果某个 category 只有一个确定 child，可以考虑跳过 child 模型评分，直接返回该 child。
+当前已实现：当 category Top-1 有且仅有一个 child 且 `include_scores=false` 时，
+直接返回该 child，同时跳过 child catalog prefill 和 child 模型评分。
 
-必须同时满足：
+边界条件：
 
 - category 选择已经有效；
 - children 数量确实为 1；
-- no_action 规则不会被绕过；
-- 不违反“没有明确动作时选择 no_action”的约束；
-- 有充分测试证明准确率不下降。
+- 唯一 child 为 no_action 时返回 `execute=false`；
+- `include_scores=true` 时仍执行 child 评分，保证返回的 PPL/logprob 为真实值；
+- `timing.action_breakdown.child` 显式记录 `skipped=true` 和 `reason=single_child`。
 
 ### 6.4 模糊类别 Top-K 兜底
 

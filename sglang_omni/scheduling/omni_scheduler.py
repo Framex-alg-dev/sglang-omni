@@ -45,6 +45,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     aggregate_candidate_score,
     score_candidate_from_runtime,
 )
+from sglang_omni.models.qwen3_omni.action_timing import get_action_stage_timings
 from sglang_omni.models.qwen3_omni.request_builders import (
     build_action_scoring_candidate_data,
 )
@@ -1261,6 +1262,20 @@ class OmniScheduler:
                 gpu_stats["process_allocated_delta_bytes"] = (
                     end_allocated - start_allocated
                 )
+        pipeline_stage_timing = (
+            get_action_stage_timings(parent.stage_payload)
+            if parent.stage_payload is not None
+            else {}
+        )
+        preprocessing_ms = float(
+            pipeline_stage_timing.get("preprocessing", {}).get("wall_ms", 0.0)
+        )
+        image_encoder_ms = float(
+            pipeline_stage_timing.get("image_encoder", {}).get("wall_ms", 0.0)
+        )
+        audio_encoder_ms = float(
+            pipeline_stage_timing.get("audio_encoder", {}).get("wall_ms", 0.0)
+        )
         stats = {
             "queue_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "client_request_build_ms": float(plan.get("client_request_build_ms", 0.0)),
@@ -1269,9 +1284,15 @@ class OmniScheduler:
             "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "prefix_prefill_ms": float(plan.get("prefix_prefill_ms", 0.0)),
             "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
-            "preprocessing_ms": float(plan.get("preprocessing_ms", 0.0)),
-            "image_encoder_ms": float(plan.get("image_encoder_ms", 0.0)),
-            "audio_encoder_ms": float(plan.get("audio_encoder_ms", 0.0)),
+            "preprocessing_ms": preprocessing_ms,
+            "image_encoder_ms": image_encoder_ms,
+            "audio_encoder_ms": audio_encoder_ms,
+            "mm_aggregate_ms": float(
+                pipeline_stage_timing.get("mm_aggregate", {}).get(
+                    "wall_ms", 0.0
+                )
+            ),
+            "pipeline_stage_timing": pipeline_stage_timing,
             "logical_prefix_request_count": 1,
             "physical_prefix_chunk_count": int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             "prefix_token_count": prefix_len,

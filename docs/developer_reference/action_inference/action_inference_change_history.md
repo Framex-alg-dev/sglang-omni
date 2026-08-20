@@ -332,8 +332,9 @@ Realtime Session 新增显式 Turn 语义，避免把数字人主动待播文本
 - proactive 待播文本存在时以 assistant 角色进入动作上下文，并与实际
   `[action_state]` 一起写入历史；无文本时只记录动作状态，不创建当前待播消息；
   user Turn 继续以 user 输入加 assistant 动作状态的形式写入历史；
-- `avatar_state.current_action_id` 和 `avatar_state.state_description` 作为推荐字段，
-  原有状态字段仍完整保留。
+- `avatar_state.current_action_id` 表示上一次已执行动作；proactive Turn 的
+  `avatar_state.state_description` 只解释并约束本次主动场景。两者不跨 Turn 继承，
+  原有视觉状态字段仍保持兼容。
 
 Turn 生命周期从仅支持 commit 前取消扩展为支持 processing 阶段取消。commit 后的推理
 在后台任务中运行，WebSocket 仍可继续接收 `turn.cancel`。取消会根据当前阶段 abort
@@ -348,15 +349,20 @@ Turn 生命周期从仅支持 commit 前取消扩展为支持 processing 阶段�
 
 `input_image.append` 新增 `image_role`：`user_camera` 表示用户摄像头画面，
 `avatar_state` 表示数字人最新状态画面。服务端按 `timestamp_ms/seq` 排序图片时同步
-排序角色，在当前评分 Prompt 中提供逐图角色映射，并在后续历史评分上下文中为每个
-图片占位符重新生成角色标签。这样两类图片可在同一 Turn 中使用，而不会把数字人的
-手势或姿态误判为用户状态。
+排序角色，在当前评分 Prompt 的所有图片之前提供一条压缩角色映射，并在后续历史
+评分上下文中为图片占位符保留角色标签。连续六张同类图片会写成 `1-6`，不再重复
+六遍角色说明。这样两类图片可在同一 Turn 中使用，而不会把数字人的手势或姿态误判
+为用户状态。
 
 旧客户端省略字段时按 Turn 来源兼容：user 默认 `user_camera`，proactive 默认
 `avatar_state`；新接入和混合来源 Turn 必须逐张显式传入。图片 `input.ack` 回显最终
 角色，开启 `include_scores` 时 `media_summary` 返回两类图片的计数。
 
-`avatar_state` 图片采用当前 Turn 有效语义，不进入后续 Turn 的动作评分历史。本轮
-没有新 `avatar_state` 图片时，Prompt 将数字人当前视觉姿态标记为未知，禁止根据
-历史数字人图片或用户摄像头图片推断；依赖实际视觉姿态的动作应选择 `no_action`。
-非视觉状态字段 `current_action_id`、`state_description` 和 `trigger` 不受影响。
+`avatar_state` 图片采用当前 Turn 有效语义，不进入后续 Turn 的动作评分历史。同一
+Turn 有多张时只使用时间最新的一张表示数字人当前可视姿态和行为，并停止向模型注入
+`pose/gaze/hands` 等结构化视觉字段；本轮显式提供的 `current_action_id` 仍表示上一次
+已执行动作，proactive Turn 显式提供的 `state_description` 仍约束本次推理。本轮没有
+新 `avatar_state` 图片时才使用本轮或 Session 继承的结构化视觉状态；图片生效后会清除
+之前缓存的结构化视觉状态，避免后续 Turn 复用过期姿态。Prompt 始终禁止根据历史
+数字人图片或用户摄像头图片推断数字人状态；图片和结构化视觉状态都不存在时明确标记
+状态未知，但不会仅因未知而排除不依赖特定起始姿态的候选。

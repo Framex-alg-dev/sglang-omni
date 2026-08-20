@@ -126,6 +126,7 @@ Supported Models
    developer_reference/action_inference/action_inference_scheme_summary.md
    developer_reference/action_inference/multimodal_session_realtime.md
    developer_reference/action_inference/action_suffix_scoring.md
+   developer_reference/action_inference/action_token_mapping.md
    developer_reference/action_inference/action_hierarchical_optimization.md
    developer_reference/action_inference/action_batch_benchmark.md
    developer_reference/action_inference/action_latency_history.md

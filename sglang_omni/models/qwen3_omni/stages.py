@@ -18,6 +18,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from sglang_omni.models.qwen3_omni.action_timing import record_action_stage_timing
 from sglang_omni.models.qwen3_omni.bootstrap import create_thinker_scheduler
 from sglang_omni.models.qwen3_omni.components.audio_encoder import Qwen3OmniAudioEncoder
 from sglang_omni.models.qwen3_omni.components.image_encoder import Qwen3OmniImageEncoder
@@ -930,6 +931,7 @@ def create_image_encoder_executor(
     )
 
     def _encode(payload: StagePayload) -> StagePayload:
+        started = time.perf_counter()
         _emit_event(
             request_id=payload.request_id,
             stage=None,
@@ -950,8 +952,15 @@ def create_image_encoder_executor(
                 event_name="encoder_end",
                 metadata={"modality": "image", "batch_size": 1},
             )
+            record_action_stage_timing(
+                payload,
+                IMAGE_STAGE,
+                wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                batch_size=1,
+            )
 
     def _encode_batch(payloads: list[StagePayload]) -> list[StagePayload]:
+        started = time.perf_counter()
         for p in payloads:
             _emit_event(
                 request_id=p.request_id,
@@ -972,6 +981,12 @@ def create_image_encoder_executor(
                     stage=None,
                     event_name="encoder_end",
                     metadata={"modality": "image", "batch_size": len(payloads)},
+                )
+                record_action_stage_timing(
+                    p,
+                    IMAGE_STAGE,
+                    wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                    batch_size=len(payloads),
                 )
 
     # Preserve the calibrated image-encoder batching shape and add a small
@@ -1003,6 +1018,7 @@ def create_audio_encoder_executor(
     )
 
     def _encode(payload: StagePayload) -> StagePayload:
+        started = time.perf_counter()
         _emit_event(
             request_id=payload.request_id,
             stage=None,
@@ -1023,8 +1039,15 @@ def create_audio_encoder_executor(
                 event_name="encoder_end",
                 metadata={"modality": "audio", "batch_size": 1},
             )
+            record_action_stage_timing(
+                payload,
+                AUDIO_STAGE,
+                wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                batch_size=1,
+            )
 
     def _encode_batch(payloads: list[StagePayload]) -> list[StagePayload]:
+        started = time.perf_counter()
         for p in payloads:
             _emit_event(
                 request_id=p.request_id,
@@ -1045,6 +1068,12 @@ def create_audio_encoder_executor(
                     stage=None,
                     event_name="encoder_end",
                     metadata={"modality": "audio", "batch_size": len(payloads)},
+                )
+                record_action_stage_timing(
+                    p,
+                    AUDIO_STAGE,
+                    wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                    batch_size=len(payloads),
                 )
 
     return SimpleScheduler(

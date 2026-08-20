@@ -20,6 +20,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionSuffixScoreRequest,
     MAX_MICRO_BATCH_SIZE,
 )
+from sglang_omni.preprocessing.image import prepare_image_bytes_for_wire
 from sglang_omni.serve.realtime.audio_buffer import (
     BufferOverflow,
     RealtimeAudioBuffer,
@@ -34,6 +35,9 @@ MAX_ACTION_CHILDREN_PER_CATEGORY = 128
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGES_PER_TURN = 64
 MAX_AUDIO_CHUNKS_PER_TURN = 4096
+MAX_IMAGE_PREPROCESS_TASKS_PER_TURN = 8
+MAX_PREPARED_IMAGE_BYTES_PER_FRAME = 32 * 1024 * 1024
+MAX_PREPARED_IMAGE_BYTES_PER_TURN = 64 * 1024 * 1024
 # Action scoring runs on the thinker stage. Keep the action context bounded
 # while retaining recent session history, including action state records.
 MAX_ACTION_HISTORY_TURNS = 4
@@ -114,6 +118,50 @@ def normalize_action_category_top_k(value: int | str | None = None) -> int:
     return top_k
 
 
+def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
+    """Expose stable action latency buckets without the diagnostic GPU payload."""
+    suffix_batch_ms = [float(value) for value in stats.get("suffix_batch_ms", [])]
+    suffix_queue_ms = [
+        float(value) for value in stats.get("suffix_batch_queue_wait_ms", [])
+    ]
+    return {
+        "client": {
+            "request_build_ms": float(stats.get("client_request_build_ms", 0.0)),
+            "slot_wait_ms": float(stats.get("action_slot_wait_ms", 0.0)),
+            "result_processing_ms": float(
+                stats.get("client_result_processing_ms", 0.0)
+            ),
+            "total_ms": float(stats.get("client_total_ms", 0.0)),
+        },
+        "pipeline": {
+            "coordinator_ms": float(stats.get("coordinator_pipeline_ms", 0.0)),
+            "preprocessing_ms": float(stats.get("preprocessing_ms", 0.0)),
+            "image_encoder_ms": float(stats.get("image_encoder_ms", 0.0)),
+            "audio_encoder_ms": float(stats.get("audio_encoder_ms", 0.0)),
+            "mm_aggregate_ms": float(stats.get("mm_aggregate_ms", 0.0)),
+            "stages": dict(stats.get("pipeline_stage_timing", {})),
+        },
+        "scheduler": {
+            "request_build_ms": float(stats.get("server_request_build_ms", 0.0)),
+            "admission_ms": float(stats.get("scheduler_admission_ms", 0.0)),
+            "wait_ms": float(stats.get("scheduler_wait_ms", 0.0)),
+            "prefix_prefill_ms": float(stats.get("prefix_prefill_ms", 0.0)),
+        },
+        "suffix": {
+            "batch_count": int(
+                stats.get("suffix_batch_count", len(suffix_batch_ms))
+            ),
+            "batch_sizes": list(stats.get("suffix_batch_sizes", [])),
+            "batch_ms": suffix_batch_ms,
+            "batch_total_ms": round(sum(suffix_batch_ms), 3),
+            "queue_wait_ms": suffix_queue_ms,
+            "queue_wait_total_ms": round(sum(suffix_queue_ms), 3),
+            "aggregation_ms": float(stats.get("aggregation_ms", 0.0)),
+        },
+        "server_total_ms": float(stats.get("total_ms", 0.0)),
+    }
+
+
 def normalize_action_selection_mode(value: str | None) -> str:
     mode = (
         value
@@ -161,9 +209,13 @@ DEFAULT_INSTRUCTIONS = (
 )
 
 ACTION_HISTORY_INSTRUCTION = (
-    "历史消息中的 [action_state] 是服务端记录的实际动作，不是新的用户指令。"
-    "选择动作时应参考最近一条 [action_state]，避免与当前动作冲突或无意义重复；"
-    "用户说“刚刚、上一轮、再重复、这个动作”等指代词时也应优先参考它。"
+    "历史消息中的 [action_state] 是服务端实际执行记录，不是用户指令，并按时间从旧到新排列。"
+    "其中 candidate_id 是当轮选中的目录候选，action_id 是对应的执行映射，执行结果表示是否实际播放动作。"
+    "若当前 turn 提供 avatar_state.current_action_id，它表示上一次已经执行的动作并具有最高优先级；"
+    "否则以历史中时间最近且执行结果为已执行动作的 [action_state] 作为上一次动作。"
+    "更早记录仅用于理解指代和识别近期重复模式。"
+    "选择动作时应与上一次动作自然衔接并避免无意义重复；用户说“刚刚、上一轮、再重复、"
+    "这个动作”等指代词时，优先结合最近动作判断。"
 )
 
 
@@ -261,6 +313,7 @@ class ImageFrame:
     timestamp_ms: int
     data_uri: str
     image_role: Literal["user_camera", "avatar_state"]
+    preprocess_task: asyncio.Task[dict[str, Any]] | None = None
 
 
 @dataclass(slots=True)
@@ -295,6 +348,8 @@ class TurnBuffer:
     request_base: str | None = None
     current_request_id: str | None = None
     inference_task: asyncio.Task[None] | None = None
+    prepared_image_bytes: int = 0
+    image_preprocess_stats: dict[str, Any] | None = None
 
 
 class MultimodalSession:
@@ -342,6 +397,7 @@ class MultimodalSession:
         self.history_audios: list[str] = []
         self.history_images: list[str] = []
         self.history_image_roles: list[str] = []
+        self._image_preprocess_semaphore = asyncio.Semaphore(2)
         self.history_turns: list[ActionHistoryTurn] = []
         self.candidates: list[SessionActionCandidate] = []
         self.categories: list[SessionActionCategory] = []
@@ -698,6 +754,130 @@ class MultimodalSession:
         turn.audio_chunk_count += 1
         await self._ack_media(turn, "audio", seq)
 
+    async def _prepare_image_frame(
+        self,
+        turn: TurnBuffer,
+        *,
+        seq: int,
+        decoded: bytes,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            async with self._image_preprocess_semaphore:
+                if turn.phase not in {
+                    TURN_PHASE_COLLECTING,
+                    TURN_PHASE_PROCESSING,
+                }:
+                    return {
+                        "status": "stale",
+                        "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+                        "prepared_bytes": 0,
+                    }
+                payload = await asyncio.to_thread(
+                    prepare_image_bytes_for_wire,
+                    decoded,
+                )
+            prepared_bytes = len(payload["pixel_bytes"])
+            if prepared_bytes > MAX_PREPARED_IMAGE_BYTES_PER_FRAME:
+                status = "frame_too_large"
+                payload = None
+                prepared_bytes = 0
+            elif (
+                turn.prepared_image_bytes + prepared_bytes
+                > MAX_PREPARED_IMAGE_BYTES_PER_TURN
+            ):
+                status = "turn_budget_exceeded"
+                payload = None
+                prepared_bytes = 0
+            else:
+                status = "prepared"
+                turn.prepared_image_bytes += prepared_bytes
+            return {
+                "status": status,
+                "payload": payload,
+                "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+                "prepared_bytes": prepared_bytes,
+            }
+        except Exception as exc:
+            logger.warning(
+                "[SESSION_ACTION_REALTIME] image preprocessing fell back "
+                "session_id=%s turn_id=%s seq=%s error=%s",
+                self.session_id,
+                turn.turn_id,
+                seq,
+                exc,
+            )
+            return {
+                "status": "failed",
+                "error": str(exc),
+                "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+                "prepared_bytes": 0,
+            }
+
+    @staticmethod
+    def _discard_image_preprocess(turn: TurnBuffer, frame: ImageFrame) -> None:
+        task = frame.preprocess_task
+        if task is None:
+            return
+        if task.done() and not task.cancelled():
+            try:
+                result = task.result()
+            except Exception:
+                result = {}
+            turn.prepared_image_bytes = max(
+                turn.prepared_image_bytes
+                - int(result.get("prepared_bytes", 0)),
+                0,
+            )
+        elif not task.done():
+            task.cancel()
+        frame.preprocess_task = None
+
+    async def _resolve_prepared_images(
+        self,
+        turn: TurnBuffer,
+        frames: list[ImageFrame],
+    ) -> tuple[list[Any], dict[str, Any]]:
+        wait_started = time.perf_counter()
+        tasks = [frame.preprocess_task for frame in frames if frame.preprocess_task]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        wait_ms = (time.perf_counter() - wait_started) * 1000.0
+        images: list[Any] = []
+        results: list[dict[str, Any]] = []
+        for frame in frames:
+            task = frame.preprocess_task
+            result: dict[str, Any] = {}
+            if task is not None and task.done() and not task.cancelled():
+                try:
+                    value = task.result()
+                except Exception:
+                    value = None
+                if isinstance(value, dict):
+                    result = value
+            payload = result.get("payload")
+            images.append(payload if isinstance(payload, dict) else frame.data_uri)
+            results.append(result)
+        statuses = [str(result.get("status", "not_scheduled")) for result in results]
+        stats = {
+            "scheduled_count": len(tasks),
+            "prepared_count": statuses.count("prepared"),
+            "fallback_count": sum(
+                status not in {"prepared", "not_scheduled"} for status in statuses
+            ),
+            "not_scheduled_count": statuses.count("not_scheduled"),
+            "worker_total_ms": round(
+                sum(float(result.get("elapsed_ms", 0.0)) for result in results), 3
+            ),
+            "commit_wait_ms": round(wait_ms, 3),
+            "prepared_bytes": sum(
+                int(result.get("prepared_bytes", 0)) for result in results
+            ),
+            "statuses": statuses,
+        }
+        turn.image_preprocess_stats = stats
+        return images, stats
+
     async def handle_image_append(self, event: dict[str, Any]) -> None:
         turn = self._require_collecting_turn(event)
         seq = self._positive_int(event.get("seq"), "seq")
@@ -744,14 +924,22 @@ class MultimodalSession:
             raise ValueError(
                 f"image frame count exceeds {MAX_IMAGES_PER_TURN}"
             )
-        turn.images.append(
-            ImageFrame(
-                seq=seq,
-                timestamp_ms=timestamp_ms,
-                data_uri=data_uri,
-                image_role=image_role,
-            )
+        frame = ImageFrame(
+            seq=seq,
+            timestamp_ms=timestamp_ms,
+            data_uri=data_uri,
+            image_role=image_role,
         )
+        frame.preprocess_task = asyncio.create_task(
+            self._prepare_image_frame(turn, seq=seq, decoded=decoded),
+            name=f"image-preprocess-{turn.turn_id}-{seq}",
+        )
+        turn.images.append(frame)
+        scheduled_frames = [
+            item for item in turn.images if item.preprocess_task is not None
+        ]
+        while len(scheduled_frames) > MAX_IMAGE_PREPROCESS_TASKS_PER_TURN:
+            self._discard_image_preprocess(turn, scheduled_frames.pop(0))
         turn.image_seqs.add(seq)
         await self._ack_media(turn, "image", seq, image_role=image_role)
 
@@ -819,6 +1007,17 @@ class MultimodalSession:
             ):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+
+        image_tasks = [
+            frame.preprocess_task
+            for frame in turn.images
+            if frame.preprocess_task is not None
+        ]
+        for image_task in image_tasks:
+            if not image_task.done():
+                image_task.cancel()
+        if image_tasks:
+            await asyncio.gather(*image_tasks, return_exceptions=True)
 
         if self.active_turn is turn:
             self.active_turn = None
@@ -891,6 +1090,7 @@ class MultimodalSession:
         turn.request_base = f"session-{self.session_id}-turn-{turn.turn_id}-action-{uuid.uuid4().hex}"
 
         turn_id = turn.turn_id
+        commit_started = time.perf_counter()
 
         try:
             await self.send(
@@ -906,7 +1106,9 @@ class MultimodalSession:
             if self.closed:
                 await self._cancel_active_turn(send_event=False, expected_turn=turn)
                 return
-            commit_started = time.perf_counter()
+            prepared_current_images, image_preprocess_stats = (
+                await self._resolve_prepared_images(turn, current_image_frames)
+            )
             logger.info(
                 "[SESSION_ACTION_REALTIME] turn.commit input session_id=%s turn_id=%s payload=%s",
                 self.session_id,
@@ -929,7 +1131,7 @@ class MultimodalSession:
             )
             action_started = time.perf_counter()
             action, scores, action_timing, action_context = await self._score_action(
-                current_audio_list, current_images, current_image_roles,
+                current_audio_list, prepared_current_images, current_image_roles,
                 turn.text, turn.avatar_state,
                 turn_origin=turn.turn_origin, text_role=turn.text_role,
                 trigger=turn.trigger, turn_id=turn_id, turn=turn,
@@ -939,12 +1141,16 @@ class MultimodalSession:
                 "[SESSION_ACTION_REALTIME] action completed session_id=%s turn_id=%s elapsed_ms=%.3f top_action=%s",
                 self.session_id, turn_id, (time.perf_counter() - action_started) * 1000.0, action.get("action_id"),
             )
-            total_after_commit_ms = (time.perf_counter() - commit_started) * 1000.0
+            action_finished = time.perf_counter()
             if self.active_turn is not turn or turn.phase != TURN_PHASE_PROCESSING:
                 return
             turn.phase = TURN_PHASE_COMPLETED
-            if turn.avatar_state is not None:
-                self.last_avatar_state = dict(turn.avatar_state)
+            self._persist_avatar_state(
+                turn.avatar_state,
+                has_avatar_image=(
+                    IMAGE_ROLE_AVATAR_STATE in current_image_roles
+                ),
+            )
 
             self._append_action_history(
                 current_audio_list,
@@ -966,8 +1172,9 @@ class MultimodalSession:
                 "timing": {
                     "server_turn_ingest_ms": round(ingest_ms, 3),
                     "server_action_compute_ms": action_timing,
-                    "server_total_after_commit_ms": round(
-                        total_after_commit_ms, 3
+                    "image_preprocessing": image_preprocess_stats,
+                    "action_breakdown": action_context.get(
+                        "action_timing_breakdown", {}
                     ),
                 },
             }
@@ -983,13 +1190,32 @@ class MultimodalSession:
                         IMAGE_ROLE_AVATAR_STATE
                     ),
                     "received_image_count": len(turn.images),
-                    "scored_image_count": action_context["scored_current_image_count"],
+                    "scored_image_count": action_context[
+                        "scored_current_image_count"
+                    ],
                     "text_present": bool(turn.text),
                     "duplicate_audio_chunks": turn.duplicate_audio_chunks,
                     "duplicate_image_frames": turn.duplicate_image_frames,
                     "action_context": action_context,
                 }
+            result_finalize_ms = (time.perf_counter() - action_finished) * 1000.0
+            total_after_commit_ms = (time.perf_counter() - commit_started) * 1000.0
+            result["timing"].update(
+                {
+                    "server_result_finalize_ms": round(result_finalize_ms, 3),
+                    "server_total_after_commit_ms": round(total_after_commit_ms, 3),
+                }
+            )
+            send_started = time.perf_counter()
             await self.send(result)
+            logger.info(
+                "[SESSION_ACTION_REALTIME] turn.result sent session_id=%s "
+                "turn_id=%s serialize_and_send_ms=%.3f total_after_commit_ms=%.3f",
+                self.session_id,
+                turn_id,
+                (time.perf_counter() - send_started) * 1000.0,
+                (time.perf_counter() - commit_started) * 1000.0,
+            )
         except asyncio.CancelledError:
             logger.info(
                 "[SESSION_ACTION_REALTIME] turn inference cancelled "
@@ -1029,13 +1255,13 @@ class MultimodalSession:
     def _build_bounded_action_context(
         self,
         audios: list[str],
-        images: list[str],
+        images: list[Any],
         image_roles: list[str],
     ) -> tuple[
         list[dict[str, Any]],
         list[str],
         list[str],
-        list[str],
+        list[Any],
         list[str],
         dict[str, Any],
     ]:
@@ -1125,8 +1351,26 @@ class MultimodalSession:
                 {**message, "content": bounded_parts}
             )
 
-        bounded_images = images[-MAX_ACTION_CURRENT_IMAGES:]
-        bounded_image_roles = image_roles[-MAX_ACTION_CURRENT_IMAGES:]
+        latest_avatar_index = next(
+            (
+                index
+                for index in range(len(image_roles) - 1, -1, -1)
+                if image_roles[index] == IMAGE_ROLE_AVATAR_STATE
+            ),
+            None,
+        )
+        eligible_indices = [
+            index
+            for index, role in enumerate(image_roles)
+            if role != IMAGE_ROLE_AVATAR_STATE or index == latest_avatar_index
+        ]
+        selected_indices = eligible_indices[-MAX_ACTION_CURRENT_IMAGES:]
+        if latest_avatar_index is not None and latest_avatar_index not in selected_indices:
+            selected_indices = sorted(
+                [latest_avatar_index, *selected_indices[-(MAX_ACTION_CURRENT_IMAGES - 1):]]
+            )
+        bounded_images = [images[index] for index in selected_indices]
+        bounded_image_roles = [image_roles[index] for index in selected_indices]
         bounded_audios = list(audios)
         truncated = (
             len(self.history_turns) > len(selected_turns)
@@ -1158,7 +1402,7 @@ class MultimodalSession:
     def _image_role_label(image_role: str) -> str:
         if image_role == IMAGE_ROLE_USER_CAMERA:
             return "用户摄像头画面（用于观察用户及其环境）"
-        return "数字人当前状态画面（用于观察数字人自身姿态）"
+        return "数字人当前状态画面（用于观察数字人自身当前可视姿态和行为）"
 
     @classmethod
     def _image_role_text_part(cls, image_role: str) -> dict[str, str]:
@@ -1167,37 +1411,85 @@ class MultimodalSession:
             "text": f"[image_role] {cls._image_role_label(image_role)}：",
         }
 
+    @staticmethod
+    def _has_structured_avatar_state(avatar_state: dict[str, Any]) -> bool:
+        """Return whether reusable structured avatar state is actually present."""
+        for key, value in avatar_state.items():
+            if key in {"current_action_id", "state_description"} or value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, (list, tuple, dict, set)) and not value:
+                continue
+            return True
+        return False
+
     @classmethod
-    def _build_current_image_role_instruction(
-        cls, image_roles: list[str]
+    def _avatar_state_source(
+        cls,
+        avatar_state: dict[str, Any],
+        image_roles: list[str],
+    ) -> Literal["image", "structured", "unknown"]:
+        if IMAGE_ROLE_AVATAR_STATE in image_roles:
+            return "image"
+        if cls._has_structured_avatar_state(avatar_state):
+            return "structured"
+        return "unknown"
+
+    @staticmethod
+    def _build_avatar_state_instruction(
+        source: Literal["image", "structured", "unknown"],
     ) -> str:
-        if not image_roles:
+        """Build stage-neutral state guidance outside the static KV prefix."""
+        if source == "image":
             return (
-                "本轮未提供数字人最新状态图片。数字人当前视觉姿态未知；"
-                "不得根据历史图片推断，也不得把用户摄像头画面当成数字人状态。"
-                "如果动作选择依赖数字人当前视觉姿态，应选择 no_action。\n"
+                "判断候选动作可执行性时，以本轮最新数字人照片中的当前可视姿态和行为"
+                "为准。\n"
             )
-        mapping = "；".join(
-            f"图片{index}={cls._image_role_label(role)}"
-            for index, role in enumerate(image_roles, start=1)
+        if source == "structured":
+            return (
+                "本轮未提供数字人状态照片；判断候选动作可执行性时，以结构化 "
+                "avatar_state 中的当前状态信息为准；不得从历史图片或用户摄像头图片"
+                "推断数字人状态。\n"
+            )
+        return (
+            "本轮没有可用的数字人当前状态信息；不得从历史图片或用户摄像头图片"
+            "推断数字人状态。不依赖特定起始姿态的候选，不应仅因状态未知而被排除。\n"
         )
-        instruction = (
-            f"当前图片角色（按模型接收顺序）：{mapping}。"
-            "用户摄像头图片描述用户及其环境；数字人状态图片描述数字人自身。"
-            "不得混淆两类图片中的人物、姿态或动作。\n"
-        )
-        if IMAGE_ROLE_AVATAR_STATE not in image_roles:
-            instruction += (
-                "本轮未提供数字人最新状态图片。数字人当前视觉姿态未知；"
-                "不得根据历史图片或当前用户摄像头图片推断。"
-                "如果动作选择依赖数字人当前视觉姿态，应选择 no_action。\n"
-            )
-        else:
-            instruction += (
-                "只有本轮标记为 avatar_state 的图片可用于判断数字人当前视觉姿态；"
-                "不得使用历史数字人图片推断当前状态。\n"
-            )
-        return instruction
+
+    def _effective_avatar_state(
+        self,
+        avatar_state: dict[str, Any] | None,
+        *,
+        turn_origin: str,
+        has_avatar_image: bool,
+    ) -> dict[str, Any]:
+        """Build model-visible state without mixing visual and turn-local fields."""
+        explicit = dict(avatar_state or {})
+        effective = {} if has_avatar_image else dict(self.last_avatar_state)
+        for key, value in explicit.items():
+            if key == "state_description":
+                if turn_origin == TURN_ORIGIN_PROACTIVE:
+                    effective[key] = value
+            elif key == "current_action_id" or not has_avatar_image:
+                effective[key] = value
+        return effective
+
+    def _persist_avatar_state(
+        self,
+        avatar_state: dict[str, Any] | None,
+        *,
+        has_avatar_image: bool,
+    ) -> None:
+        """Persist only reusable structured visual state across turns."""
+        if has_avatar_image:
+            self.last_avatar_state = {}
+        elif avatar_state is not None:
+            self.last_avatar_state = {
+                key: value
+                for key, value in avatar_state.items()
+                if key not in {"current_action_id", "state_description"}
+            }
 
     @staticmethod
     def _with_current_proactive_text(
@@ -1211,61 +1503,81 @@ class MultimodalSession:
             return history
         return [*history, {"role": "assistant", "content": text.strip()}]
 
-    @staticmethod
     def _build_turn_action_instruction(
+        self,
         text: str | None,
         *,
         turn_origin: str,
         trigger: str | None,
+        has_audio: bool = False,
         image_roles: list[str] | None = None,
+        has_current_action_id: bool = False,
+        has_state_description: bool = False,
+        avatar_state_source: Literal["image", "structured", "unknown"] | None = None,
     ) -> str:
-        image_instruction = MultimodalSession._build_current_image_role_instruction(
-            image_roles or []
+        resolved_image_roles = image_roles or []
+        if avatar_state_source is None:
+            avatar_state_source = (
+                "image"
+                if IMAGE_ROLE_AVATAR_STATE in resolved_image_roles
+                else "unknown"
+            )
+        state_instruction = self._build_avatar_state_instruction(avatar_state_source)
+        scene_constraint = (
+            "候选必须满足 state_description 对本次主动场景给出的目标、指引、要求和禁止项。"
+            if has_state_description
+            else ""
+        )
+        transition_constraint = (
+            "候选必须与 current_action_id 所表示的上一次已执行动作自然衔接，并避免无意义重复。"
+            if has_current_action_id
+            else "结合历史动作判断衔接关系，并避免无意义重复。"
         )
         if turn_origin == TURN_ORIGIN_PROACTIVE:
-            trigger_text = (
-                f"本轮主动触发原因：{trigger}。\n" if trigger is not None else ""
-            )
+            trigger_text = f"主动触发原因：{trigger}。\n" if trigger is not None else ""
             if not isinstance(text, str) or not text.strip():
                 return (
-                    image_instruction
-                    + "本轮来源是 proactive，但未提供本轮待播文本。不要把历史中的 "
-                    "assistant 消息当成本轮待播文本。\n"
+                    state_instruction
+                    + "本轮为主动触发，未提供待播文本；"
+                    "不要把历史 assistant 消息当成本轮待播文本。\n"
                     + trigger_text
-                    + "本轮动作决策不依赖当前语言文本。请仅根据 avatar_state、"
-                    "触发原因、历史对话、历史动作和当前媒体选择最合适的动作；"
-                    "动作必须满足 avatar_state.state_description 描述的场景目标、"
-                    "动作要求和禁止项。avatar_state.current_action_id 表示当前或刚结束"
-                    "的动作，后续动作必须与它自然衔接；除非 state_description 明确"
-                    "要求重复，否则不要再次选择同一动作。没有满足这些约束的动作时"
-                    "选择 no_action，不要生成新的回复。"
+                    + "根据主动触发原因、本次主动场景说明（如有）、当前媒体和历史动作"
+                    "选择自然衔接的动作。"
+                    + scene_constraint
+                    + transition_constraint
+                    + "没有候选满足全部约束时选择本阶段定义的兜底项；不要生成回复。"
                 )
             return (
-                image_instruction
-                + "本轮来源是 proactive。上一条 assistant 消息是数字人已经准备好、"
-                "即将播放的文本，不是用户输入或用户动作请求。\n"
+                state_instruction
+                + "本轮由数字人主动表达触发，且本轮已提供待播文本。"
+                "该文本位于紧邻本指令之前、本轮新增的 assistant 消息中，"
+                "不是用户输入或用户动作请求。\n"
                 + trigger_text
-                + "上一条 assistant 消息与 avatar_state 是动作选择的共同核心约束。"
-                "动作必须与待播文本的语义、语气和表达目标直接相关，同时满足 "
-                "avatar_state.state_description 描述的场景目标、动作要求和禁止项；"
-                "与任一约束冲突的候选动作不可选择。avatar_state.current_action_id "
-                "表示当前或刚结束的动作，后续动作必须与它自然衔接；除非 "
-                "state_description 明确要求重复，否则不要再次选择同一动作。\n"
-                "请结合历史对话选择最合适的伴随动作，不要生成新的回复。即使待播"
-                "文本没有直接要求动作，只要候选动作与其表达意图相关且满足数字人状态"
-                "约束，也应选择它；没有同时满足文本和状态约束的动作时选择 no_action。"
+                + "待播文本的语义、语气和表达目标是本轮核心约束。"
+                + "候选动作必须与待播文本的语义、语气和表达目标直接相关。"
+                + scene_constraint
+                + transition_constraint
+                + "没有候选满足全部约束时选择本阶段定义的兜底项；不要生成回复。"
             )
+        modalities: list[str] = []
+        if isinstance(text, str) and text.strip():
+            modalities.append("用户文本")
+        if has_audio:
+            modalities.append("用户音频")
+        if image_roles:
+            modalities.append("当前图片")
+        input_summary = "、".join(modalities) if modalities else "未提供文本、音频或图片"
         text_prefix = (
             f"当前用户文本：{text.strip()}\n"
             if isinstance(text, str) and text.strip()
             else ""
         )
         return (
-            image_instruction
-            + "本轮来源是 user。当前文本和音频是用户输入；当前图片的来源以图片角色标注为准。\n"
+            state_instruction
+            + f"本轮由用户输入触发；有效输入：{input_summary}。\n"
             + text_prefix
-            + "请理解用户意图，并根据历史对话和数字人状态选择合适的回应动作。"
-            "如果用户没有动作意图且上下文中也没有合适动作，则选择 no_action。"
+            + "只有用户的语言、语音语义或可观察行为明确支持某个动作时，才选择该动作；"
+            "否则选择本阶段定义的兜底项。"
         )
 
     @staticmethod
@@ -1291,7 +1603,7 @@ class MultimodalSession:
     async def _score_action(
         self,
         audios: list[str],
-        images: list[str],
+        images: list[Any],
         image_roles: list[str],
         text: str | None,
         avatar_state: dict[str, Any] | None,
@@ -1320,7 +1632,7 @@ class MultimodalSession:
     async def _score_action_hierarchical(
         self,
         audios: list[str],
-        images: list[str],
+        images: list[Any],
         image_roles: list[str],
         text: str | None,
         avatar_state: dict[str, Any] | None,
@@ -1339,13 +1651,27 @@ class MultimodalSession:
         action_history = self._with_current_proactive_text(
             action_history, text, turn_origin
         )
+        effective_avatar_state = self._effective_avatar_state(
+            avatar_state,
+            turn_origin=turn_origin,
+            has_avatar_image=IMAGE_ROLE_AVATAR_STATE in action_image_roles,
+        )
         base = self._build_turn_action_instruction(
             text, turn_origin=turn_origin, trigger=trigger,
+            has_audio=bool(audios),
             image_roles=action_image_roles,
+            has_current_action_id=(
+                effective_avatar_state.get("current_action_id") is not None
+            ),
+            has_state_description=("state_description" in effective_avatar_state),
+            avatar_state_source=self._avatar_state_source(
+                effective_avatar_state, action_image_roles
+            ),
         )
         common = dict(
             model=self.model_name, language=self.language, audios=audios,
             images=action_images, sample_rate=16000,
+            image_roles=action_image_roles,
             session_id=self.session_id, history=action_history,
             stage="category", logical_request_id=request_base,
             turn_origin=turn_origin,
@@ -1354,11 +1680,11 @@ class MultimodalSession:
             action_context_cache_key=request_base,
             prefix_cache_namespace=self.action_prefix_cache_namespace,
             history_audios=action_history_audios, history_images=action_history_images,
-            avatar_state=dict(avatar_state or self.last_avatar_state),
+            avatar_state=effective_avatar_state,
         )
         category_request = ActionSuffixScoreRequest(
-            request_id=request_base + "-category", prefix=base +
-            "先选择最合适的动作类别。只输出 category_id，不要解释。下一步 category_id 是：",
+            request_id=request_base + "-category",
+            prefix=base + "最合适的 category_id：",
             system_prompt=self._build_category_system_prompt(),
             candidates=[ActionScoreCandidate(
                 candidate_id=item.category_id, suffix=item.category_id, action_id=item.category_id
@@ -1395,23 +1721,71 @@ class MultimodalSession:
             raise ValueError("category action score did not select a valid category")
         selected_category = selected_categories[0]
         selected_category_ids = [item.category_id for item in selected_categories]
-        child_candidates = [
-            child
-            for category in selected_categories
-            for child in category.children
-        ]
+
+        def compact_stage_score(score: Any) -> dict[str, Any]:
+            return {
+                "candidate_id": score.candidate_id,
+                "token_count": score.token_count,
+                "mean_logprob": score.mean_logprob,
+                "mean_nll": score.mean_nll,
+                "ppl": score.ppl,
+                "token_scores": [
+                    {"token_id": item.token_id, "logprob": item.logprob}
+                    for item in score.token_scores
+                ],
+            }
+
+        child_candidates = self._child_candidates_for_categories(selected_categories)
+        if (
+            len(selected_categories) == 1
+            and len(child_candidates) == 1
+            and not self.include_scores
+        ):
+            only_child = child_candidates[0]
+            total_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            action = {
+                "candidate_id": only_child.candidate_id,
+                "action_id": only_child.action_id,
+                "category_id": only_child.category_id,
+                "execution_binding": dict(only_child.execution_binding),
+                "execute": only_child.action_id != "no_action",
+            }
+            action_context.update(
+                {
+                    "selection_stages": 1,
+                    "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
+                    "logical_request_id": request_base,
+                    "selected_category_id": selected_category.category_id,
+                    "selected_category_ids": selected_category_ids,
+                    "category_top_k": self.action_category_top_k,
+                    "category_compute_ms": category_ms,
+                    "child_compute_ms": 0.0,
+                    "child_prefix_prefilled": False,
+                    "child_scoring_skipped": True,
+                    "child_scoring_skip_reason": "single_child",
+                    "action_timing_breakdown": {
+                        "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
+                        "category": _action_timing_breakdown(category_result.stats),
+                        "child": {
+                            "skipped": True,
+                            "reason": "single_child",
+                        },
+                        "child_catalog_prefill_ms": 0.0,
+                        "total_ms": total_ms,
+                    },
+                }
+            )
+            return action, [], total_ms, action_context
+
         child_namespace = ",".join(selected_category_ids)
         if len(selected_categories) == 1:
-            child_prefix = (
-                f"已选择动作类别 {selected_category.category_id}。请只在该类别的子动作中选择一个。"
+            child_system_prompt = self._build_child_system_prompt(
+                selected_category, child_candidates
             )
-            child_system_prompt = self._build_child_system_prompt(selected_category)
         else:
-            child_prefix = (
-                f"已选择动作类别候选 {', '.join(selected_category_ids)}。"
-                "请只在这些类别的子动作中选择一个。"
+            child_system_prompt = self._build_child_system_prompt(
+                selected_categories, child_candidates
             )
-            child_system_prompt = self._build_child_system_prompt(selected_categories)
         child_namespace = (
             f"{self.action_prefix_cache_namespace}:child:{child_namespace}"
         )
@@ -1420,8 +1794,13 @@ class MultimodalSession:
         # prefetched at session.start. Warm the selected child catalog lazily
         # on its first use; subsequent turns reuse the same immutable prefix.
         child_prefix_prefilled = False
+        child_catalog_prefill_ms = 0.0
         prefill = getattr(self.client, "prefill_action_catalog", None)
-        if callable(prefill) and child_namespace not in self._prefilled_action_prefix_namespaces:
+        if (
+            callable(prefill)
+            and child_namespace not in self._prefilled_action_prefix_namespaces
+        ):
+            child_prefill_started = time.perf_counter()
             prefill_request_id = request_base + "-child-prefill"
             self._ensure_turn_processing(turn)
             turn.current_request_id = prefill_request_id
@@ -1448,6 +1827,9 @@ class MultimodalSession:
             self._ensure_turn_processing(turn)
             if child_prefix_prefilled:
                 self._prefilled_action_prefix_namespaces.add(child_namespace)
+            child_catalog_prefill_ms = round(
+                (time.perf_counter() - child_prefill_started) * 1000.0, 3
+            )
 
         action_common = {
             **common,
@@ -1456,8 +1838,8 @@ class MultimodalSession:
             "prefix_cache_namespace": child_namespace,
         }
         action_request = ActionSuffixScoreRequest(
-            request_id=request_base + "-child", prefix=base + child_prefix
-            + "只输出 action_id，不要解释。没有合适的伴随或回应动作时选择 no_action。下一步 action_id 是：",
+            request_id=request_base + "-child",
+            prefix=base + "最合适的 candidate_id：",
             system_prompt=child_system_prompt,
             candidates=[ActionScoreCandidate(
                 candidate_id=item.candidate_id, suffix=item.candidate_id,
@@ -1501,15 +1883,11 @@ class MultimodalSession:
         top = scores[0]
         action = {
             "candidate_id": top["candidate_id"], "action_id": top["action_id"],
-            "category_id": selected_category.category_id,
+            "category_id": top["category_id"],
             "execution_binding": dict(top.get("execution_binding") or {}),
             "execute": top["action_id"] != "no_action",
             "mean_logprob": top["mean_logprob"], "ppl": top["ppl"], "token_count": top["token_count"],
         }
-        def compact_stage_score(score: Any) -> dict[str, Any]:
-            return {"candidate_id": score.candidate_id, "token_count": score.token_count,
-                    "mean_logprob": score.mean_logprob, "mean_nll": score.mean_nll, "ppl": score.ppl,
-                    "token_scores": [{"token_id": item.token_id, "logprob": item.logprob} for item in score.token_scores]}
         action_context.update({
             "selection_stages": 2,
             "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
@@ -1522,13 +1900,23 @@ class MultimodalSession:
             "child_compute_ms": child_ms,
             "child_prefix_prefilled": child_prefix_prefilled,
             "child_prefix_cache_namespace": child_namespace,
+            "child_catalog_prefill_ms": child_catalog_prefill_ms,
+            "action_timing_breakdown": {
+                "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
+                "category": _action_timing_breakdown(category_result.stats),
+                "child": _action_timing_breakdown(child_result.stats),
+                "child_catalog_prefill_ms": child_catalog_prefill_ms,
+                "total_ms": round(
+                    (time.perf_counter() - started) * 1000.0, 3
+                ),
+            },
         })
         return action, scores, round((time.perf_counter() - started) * 1000.0, 3), action_context
 
     async def _score_action_flat(
         self,
         audios: list[str],
-        images: list[str],
+        images: list[Any],
         image_roles: list[str],
         text: str | None,
         avatar_state: dict[str, Any] | None,
@@ -1551,15 +1939,29 @@ class MultimodalSession:
         action_history = self._with_current_proactive_text(
             action_history, text, turn_origin
         )
+        effective_avatar_state = self._effective_avatar_state(
+            avatar_state,
+            turn_origin=turn_origin,
+            has_avatar_image=IMAGE_ROLE_AVATAR_STATE in action_image_roles,
+        )
         prefix = (
             self._build_turn_action_instruction(
                 text,
                 turn_origin=turn_origin,
                 trigger=trigger,
+                has_audio=bool(audios),
                 image_roles=action_image_roles,
+                has_current_action_id=(
+                    effective_avatar_state.get("current_action_id") is not None
+                ),
+                has_state_description=(
+                    "state_description" in effective_avatar_state
+                ),
+                avatar_state_source=self._avatar_state_source(
+                    effective_avatar_state, action_image_roles
+                ),
             )
-            + "请从固定候选集合中选择唯一一个最合适的动作。"
-            "下一步 action_id 是："
+            + "最合适的 candidate_id："
         )
         candidates = [
             ActionScoreCandidate(
@@ -1580,6 +1982,7 @@ class MultimodalSession:
             suffix_tokenization_mode="short_id",
             audios=audios,
             images=action_images,
+            image_roles=action_image_roles,
             sample_rate=16000,
             micro_batch_size=self.action_micro_batch_size,
             prefix_cache_namespace=self.action_prefix_cache_namespace,
@@ -1590,7 +1993,7 @@ class MultimodalSession:
             history=action_history,
             history_audios=action_history_audios,
             history_images=action_history_images,
-            avatar_state=dict(avatar_state or self.last_avatar_state),
+            avatar_state=effective_avatar_state,
         )
         started = time.perf_counter()
         result = await self._score_action_request(turn, request)
@@ -1649,6 +2052,11 @@ class MultimodalSession:
                     len(self.candidates) if self.categories else None
                 ),
                 "compute_ms": compute_ms,
+                "action_timing_breakdown": {
+                    "selection_mode": self.action_selection_mode,
+                    "single": _action_timing_breakdown(result.stats),
+                    "total_ms": compute_ms,
+                },
             }
         )
         return action, scores, compute_ms, action_context
@@ -1683,17 +2091,16 @@ class MultimodalSession:
         candidate_id = str(action["candidate_id"])
         candidate = self.candidate_by_id[candidate_id]
         action_id = str(action["action_id"])
-        if action_id == "no_action":
-            status = "本轮数字人未执行动作"
-        else:
-            status = "本轮数字人已执行动作"
+        execution_result = (
+            "未执行动作（保持当前姿态）"
+            if action_id == "no_action"
+            else "已执行动作"
+        )
         action_state = (
             "[action_state] "
-            f"turn_id={turn_id}；candidate_id={candidate.candidate_id}；"
-            f"action_id={candidate.action_id}；"
-            f"动作名称={candidate.source_label}；"
-            f"动作描述={candidate.short_definition}；"
-            f"状态={status}。"
+            f"turn_id={turn_id}｜执行结果={execution_result}｜"
+            f"candidate_id={candidate.candidate_id}｜action_id={candidate.action_id}｜"
+            f"动作={candidate.source_label}｜说明={candidate.short_definition}。"
         )
 
         if turn_origin == TURN_ORIGIN_USER:
@@ -1772,16 +2179,34 @@ class MultimodalSession:
         parts.append({"type": "text", "text": action_state})
         return parts
 
-    def _no_action_candidate_id(self) -> str:
+    def _no_action_candidate(self) -> SessionActionCandidate:
         for candidate in self.candidates:
             if candidate.action_id == "no_action":
-                return candidate.candidate_id
+                return candidate
         raise ValueError("session has no no_action candidate")
+
+    def _no_action_candidate_id(self) -> str:
+        return self._no_action_candidate().candidate_id
+
+    @staticmethod
+    def _format_candidate_for_prompt(candidate: SessionActionCandidate) -> str:
+        return (
+            f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
+            f"说明={candidate.short_definition}"
+        )
+
+    def _child_candidates_for_categories(
+        self, categories: list[SessionActionCategory]
+    ) -> list[SessionActionCandidate]:
+        candidates = [child for category in categories for child in category.children]
+        fallback = self._no_action_candidate()
+        if all(item.candidate_id != fallback.candidate_id for item in candidates):
+            candidates.append(fallback)
+        return candidates
 
     def _build_category_system_prompt(self) -> str:
         lines = [
-            "你是数字人动作类别识别器。",
-            "以下类别集合在整个 session 内固定。只能输出一个 category_id。",
+            "你是数字人动作类别识别器。请从固定类别集合中选择一个 category_id。",
             ACTION_HISTORY_INSTRUCTION,
         ]
         # Category descriptions are opaque external metadata. Do not compress,
@@ -1789,62 +2214,54 @@ class MultimodalSession:
         # before session.start and the exact rendered catalog participates in
         # the catalog hash/prefix-cache identity.
         for item in self.categories:
-            lines.append(f"{item.category_id}={item.source_label}；{item.short_definition}")
-        no_action_categories = [item.category_id for item in self.categories if any(child.action_id == "no_action" for child in item.children)]
+            lines.append(
+                f"category_id={item.category_id}｜类别={item.source_label}｜"
+                f"说明={item.short_definition}"
+            )
+        no_action_categories = [
+            item.category_id
+            for item in self.categories
+            if any(child.action_id == "no_action" for child in item.children)
+        ]
         if no_action_categories:
-            lines.append("没有合适的伴随或回应动作时，选择包含 no_action 的类别：" + ", ".join(no_action_categories))
-        lines.append("只输出 category_id，不要解释。")
+            lines.append(
+                "没有候选动作满足输入与状态约束时，选择兜底 category_id="
+                + ",".join(no_action_categories)
+                + "。"
+            )
         return "\n".join(lines)
 
     def _build_child_system_prompt(
-        self, category: SessionActionCategory | list[SessionActionCategory]
+        self,
+        category: SessionActionCategory | list[SessionActionCategory],
+        candidates: list[SessionActionCandidate],
     ) -> str:
         categories = category if isinstance(category, list) else [category]
-        if len(categories) == 1:
-            selected = categories[0]
-            lines = [
-                "你是数字人动作识别器。",
-                f"当前已选动作类别：{selected.category_id}={selected.source_label}；{selected.short_definition}",
-                "以下是该类别内固定的子动作集合，只能输出一个 action_id。",
-                ACTION_HISTORY_INSTRUCTION,
-            ]
-        else:
-            lines = [
-                "你是数字人动作识别器。",
-                "以下是候选动作类别及其固定子动作集合，只能输出一个 action_id。",
-                ACTION_HISTORY_INSTRUCTION,
-            ]
-            for selected in categories:
-                lines.append(
-                    f"候选动作类别：{selected.category_id}={selected.source_label}；"
-                    f"{selected.short_definition}"
-                )
+        lines = [
+            "你是数字人动作识别器。请从以下集合中选择一个 candidate_id。",
+            ACTION_HISTORY_INSTRUCTION,
+        ]
         for selected in categories:
-            for item in selected.children:
-                lines.append(
-                    f"{item.candidate_id}={item.action_id}："
-                    f"{item.source_label}；{item.short_definition}"
-                )
-        lines.extend(["没有合适的伴随或回应动作、状态冲突或需要避免重复时选择 no_action。", "只输出 action_id，不要解释。"])
+            lines.append(
+                f"已选类别：category_id={selected.category_id}｜类别={selected.source_label}｜"
+                f"说明={selected.short_definition}"
+            )
+        lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+        lines.append(
+            "没有候选动作满足输入与状态约束，或需要避免冲突、重复时，选择兜底 "
+            f"candidate_id={self._no_action_candidate_id()}。"
+        )
         return "\n".join(lines)
 
     def _build_action_system_prompt(self) -> str:
         lines = [
-            "你是数字人动作识别器。",
-            "以下是本 session 固定的动作候选集合。",
-            "候选 ID 是模型唯一允许输出的短 ID，必须从列表中选择一个。",
+            "你是数字人动作识别器。请从本 session 的固定集合中选择一个 candidate_id。",
             ACTION_HISTORY_INSTRUCTION,
         ]
-        for item in self.candidates:
-            lines.append(
-                f"{item.candidate_id}={item.action_id}："
-                f"{item.source_label}；{item.short_definition}"
-            )
-        lines.extend(
-            [
-                f"没有合适的伴随或回应动作、状态冲突或需要避免重复时，选择 {self._no_action_candidate_id()} 对应的 no_action。",
-                "只输出候选 ID，不要解释。",
-            ]
+        lines.extend(self._format_candidate_for_prompt(item) for item in self.candidates)
+        lines.append(
+            "没有候选动作满足输入与状态约束，或需要避免冲突、重复时，选择兜底 "
+            f"candidate_id={self._no_action_candidate_id()}。"
         )
         return "\n".join(lines)
 

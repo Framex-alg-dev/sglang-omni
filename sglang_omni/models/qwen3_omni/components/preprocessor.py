@@ -19,6 +19,7 @@ from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import (
     Qwen3OmniMoeProcessor,
 )
 
+from sglang_omni.models.qwen3_omni.action_timing import record_action_stage_timing
 from sglang_omni.models.qwen3_omni.payload_types import Qwen3OmniPipelineState
 from sglang_omni.models.qwen3_omni.request_builders import build_lightweight_mm_inputs
 from sglang_omni.models.weight_loader import resolve_model_path
@@ -36,6 +37,7 @@ from sglang_omni.preprocessing import (
 )
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.proto import StagePayload
+from sglang_omni.utils.async_jsonl import enqueue_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -142,14 +144,11 @@ def _summarize_prompt_media(values: Any) -> list[dict[str, Any]]:
 
 
 def _write_action_prompt_debug_record(record: dict[str, Any]) -> None:
-    """Persist the actual rendered action prompt for postmortem analysis."""
-    path = Path(os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/tmp/sglang-omni-action-debug.jsonl"))
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except Exception:
-        logger.exception("failed to write action prompt debug log file=%s", path)
+    """Queue the rendered action prompt for postmortem analysis."""
+    path = os.environ.get(
+        "SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/tmp/sglang-omni-action-debug.jsonl"
+    )
+    enqueue_jsonl(path, record)
 
 
 def _contextualize_cache_key(base_key: str | None, **context: Any) -> str | None:
@@ -405,15 +404,14 @@ class Qwen3OmniPreprocessor:
                     for stage, values in state.encoder_inputs.items()
                     if isinstance(values, dict) and values.get("cache_key")
                 }
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
                 diagnostics = {
                     "event": "action_media_preprocess_completed",
                     "request_id": payload.request_id,
                     "session_id": metadata.get("session_id"),
                     "action_stage": metadata.get("action_stage"),
                     "logical_request_id": metadata.get("logical_request_id"),
-                    "elapsed_ms": round(
-                        (time.perf_counter() - started) * 1000.0, 3
-                    ),
+                    "elapsed_ms": round(elapsed_ms, 3),
                     "prompt_tokens": int(input_ids.numel())
                     if hasattr(input_ids, "numel")
                     else 0,
@@ -429,6 +427,17 @@ class Qwen3OmniPreprocessor:
                 logger.info(
                     "action_media %s",
                     json.dumps(diagnostics, ensure_ascii=False, default=str),
+                )
+                record_action_stage_timing(
+                    result,
+                    "preprocessing",
+                    wall_ms=round(elapsed_ms, 3),
+                    prompt_tokens=diagnostics["prompt_tokens"],
+                    audio_count=diagnostics["audio_count"],
+                    image_count=diagnostics["image_count"],
+                    context_cache_status=diagnostics[
+                        "action_context_cache_status"
+                    ],
                 )
         finally:
             _emit_event(

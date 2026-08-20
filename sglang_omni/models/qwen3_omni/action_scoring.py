@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal, Sequence
 
+from sglang_omni.preprocessing.image import is_prepared_image_wire
+
 
 Language = Literal["zh", "en"]
 TurnOrigin = Literal["user", "proactive"]
@@ -49,7 +51,7 @@ class ActionSuffixScoreRequest:
     language: Language
     candidates: list[ActionScoreCandidate]
     audios: list[str]
-    images: list[str]
+    images: list[Any]
     sample_rate: int
     system_prompt: str | None = None
     micro_batch_size: int = 64
@@ -57,6 +59,10 @@ class ActionSuffixScoreRequest:
     history: list[dict[str, Any]] = field(default_factory=list)
     history_audios: list[str] = field(default_factory=list)
     history_images: list[str] = field(default_factory=list)
+    # Optional semantic roles for current-turn images. Realtime sessions use
+    # these to place compact role labels immediately before the corresponding
+    # image placeholders. Older/direct callers may omit the field.
+    image_roles: list[str] = field(default_factory=list)
     avatar_state: dict[str, Any] = field(default_factory=dict)
     turn_origin: TurnOrigin = "user"
     text_role: TextRole = "user_input"
@@ -144,6 +150,8 @@ class ActionScoringStats:
     preprocessing_ms: float = 0.0
     image_encoder_ms: float = 0.0
     audio_encoder_ms: float = 0.0
+    mm_aggregate_ms: float = 0.0
+    pipeline_stage_timing: dict[str, dict[str, Any]] = field(default_factory=dict)
     logical_prefix_request_count: int = 0
     physical_prefix_chunk_count: int = 0
     prefix_token_count: int = 0
@@ -167,6 +175,8 @@ class ActionScoringStats:
             "preprocessing_ms": self.preprocessing_ms,
             "image_encoder_ms": self.image_encoder_ms,
             "audio_encoder_ms": self.audio_encoder_ms,
+            "mm_aggregate_ms": self.mm_aggregate_ms,
+            "pipeline_stage_timing": dict(self.pipeline_stage_timing),
             "logical_prefix_request_count": self.logical_prefix_request_count,
             "physical_prefix_chunk_count": self.physical_prefix_chunk_count,
             "prefix_token_count": self.prefix_token_count,
@@ -226,9 +236,23 @@ def validate_action_suffix_request(
         )
     if not isinstance(request.sample_rate, int) or request.sample_rate <= 0:
         raise ValueError("sample_rate must be a positive integer")
-    for name, media in (("audios", request.audios), ("images", request.images)):
-        if not isinstance(media, list) or not all(isinstance(item, str) for item in media):
-            raise ValueError(f"{name} must be a list of strings")
+    if not isinstance(request.audios, list) or not all(
+        isinstance(item, str) for item in request.audios
+    ):
+        raise ValueError("audios must be a list of strings")
+    if not isinstance(request.images, list) or not all(
+        isinstance(item, str) or is_prepared_image_wire(item)
+        for item in request.images
+    ):
+        raise ValueError(
+            "images must be a list of strings or prepared image payloads"
+        )
+    if not isinstance(request.image_roles, list) or not all(
+        isinstance(item, str) and item.strip() for item in request.image_roles
+    ):
+        raise ValueError("image_roles must be a list of non-empty strings")
+    if request.image_roles and len(request.image_roles) != len(request.images):
+        raise ValueError("image_roles must match images length when provided")
     if request.session_id is not None and not SAFE_REQUEST_ID.fullmatch(
         request.session_id
     ):

@@ -81,6 +81,15 @@ def test_contract_validation_and_limits():
         validate_action_suffix_request(request(request_id="bad id"))
     with pytest.raises(ValueError, match="micro_batch_size"):
         validate_action_suffix_request(request(micro_batch_size=0))
+    validate_action_suffix_request(
+        request(images=["image"], image_roles=["avatar_state"])
+    )
+    with pytest.raises(ValueError, match="image_roles must match images length"):
+        validate_action_suffix_request(
+            request(images=["image"], image_roles=["user_camera", "avatar_state"])
+        )
+    with pytest.raises(ValueError, match="image_roles must be a list"):
+        validate_action_suffix_request(request(image_roles=[""]))
 
 
 def test_turn_semantics_validation_and_metadata_propagation():
@@ -415,7 +424,7 @@ def test_multiturn_session_context_preserves_history_media_and_avatar_state():
     ]
     assert omni.inputs["messages"][0]["content"] == score_request.system_prompt
     assert "left_hand" not in omni.inputs["messages"][0]["content"]
-    assert "当前数字人状态：" in omni.inputs["messages"][3]["content"][-1]["text"]
+    assert "当前结构化数字人状态：" in omni.inputs["messages"][3]["content"][-1]["text"]
     assert "left_hand" in omni.inputs["messages"][3]["content"][-1]["text"]
     assert omni.inputs["messages"][1]["content"][0]["type"] == "audio"
     assert omni.inputs["messages"][3]["content"][0]["type"] == "image"

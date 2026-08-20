@@ -24,7 +24,7 @@
 
 ```text
 用户：请挥手。
-服务动作：[action_state] action_id=A002；本轮数字人已执行动作
+服务动作：[action_state] 执行结果=已执行动作｜candidate_id=A002｜action_id=A002
 用户：再重复一遍刚刚的动作。
 服务动作：A002
 ```
@@ -143,12 +143,16 @@ audio/image 数量与传给模型的媒体数组一致；这些限制不改变 S
 
 - `text` 决定本轮语言内容。user Turn 中是可选用户输入；proactive Turn 中是
   可选的数字人待播文本，提供时以 assistant 角色参与动作选择和后续历史；
-- `current_action_id` 表示当前或刚结束的动作，用于动作衔接、冲突检查和避免
+- `current_action_id` 表示上一次已经执行的动作，用于动作衔接、冲突检查和避免
   无意义重复，但不会强制返回该动作或扩展候选集合；
-- `state_description` 是自然语言场景约束，可描述表达目标、姿态、用户状态、
-  必须满足的动作要求和禁止项；没有同时满足文本与状态约束的候选时选择 `no_action`；
-- 成功 Turn 提供的非空 `avatar_state` 会成为 Session 最近状态；省略或传空对象时
-  复用上次成功状态，取消或失败不会更新它。
+- `state_description` 是本次 proactive 场景的自然语言解释，可描述表达目标、推理指引、
+  必须满足的动作要求和禁止项；没有同时满足文本与场景约束的候选时选择 `no_action`；
+- `pose/gaze/hands` 等结构化视觉状态可随成功 Turn 继承；`current_action_id` 和
+  `state_description` 只在显式提供它们的当前 Turn 生效，不跨 Turn 继承；
+- 当前 Turn 有数字人状态图片时，最新图片表示当前可视姿态和行为，并替代、清除之前
+  缓存的结构化视觉状态；取消或失败不会更新最近状态；
+- 图片和结构化视觉状态都不存在时，Prompt 明确标记当前状态未知，但不会仅因未知而
+  排除不依赖特定起始姿态的候选。
 
 ## 5. Turn 生命周期和取消
 

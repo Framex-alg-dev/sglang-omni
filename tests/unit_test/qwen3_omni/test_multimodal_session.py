@@ -3,16 +3,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from starlette.websockets import WebSocketState
 
+from sglang_omni.client.client import Client
 from sglang_omni.client.types import CompletionResult
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionSuffixScoreResult,
     CandidateScore,
     TokenScore,
 )
+from sglang_omni.preprocessing.image import is_prepared_image_wire
 from sglang_omni.serve.realtime.multimodal import (
     ACTION_CATEGORY_TOP_K_ENV,
     ACTION_MICRO_BATCH_SIZE_ENV,
@@ -273,14 +277,38 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
     request = client.score_requests[0]
     assert len(request.audios) == 1
     assert len(request.images) == 2
+    assert request.image_roles == ["user_camera", "avatar_state"]
+    assert request.avatar_state == {}
     assert request.history == []
-    assert "图片1=用户摄像头画面" in request.prefix
-    assert "图片2=数字人当前状态画面" in request.prefix
-    assert "不得混淆两类图片" in request.prefix
-    assert "只有本轮标记为 avatar_state 的图片" in request.prefix
+    assert "本轮图片2是时间最新的数字人状态照片" not in request.prefix
     assert request.candidates[0].suffix == "a01"
-    assert "a01=wave_left" in request.system_prompt
-    assert "none=no_action" in request.system_prompt
+    assert (
+        "candidate_id=a01｜动作=左手挥手｜说明=使用左手抬起并左右摆动"
+        in request.system_prompt
+    )
+    assert (
+        "candidate_id=none｜动作=不做动作｜说明=保持当前姿态"
+        in request.system_prompt
+    )
+    omni_request = Client._build_action_scoring_request(request)
+    current_parts = omni_request.inputs["messages"][-1]["content"]
+    role_map_index = next(
+        index
+        for index, part in enumerate(current_parts)
+        if part.get("type") == "text"
+        and part["text"].startswith("[当前图片角色]")
+    )
+    image_indices = [
+        index for index, part in enumerate(current_parts) if part.get("type") == "image"
+    ]
+    assert role_map_index < min(image_indices)
+    assert "用户摄像头图片=1" in current_parts[role_map_index]["text"]
+    assert "数字人状态图片=2" in current_parts[role_map_index]["text"]
+    assert "图片2是本轮时间最新的数字人照片" in current_parts[role_map_index]["text"]
+    assert current_parts[role_map_index]["text"].count("用户摄像头图片") == 1
+    assert current_parts[role_map_index]["text"].count("数字人状态图片") == 1
+    assert "当前数字人状态：" not in current_parts[-1]["text"]
+    assert '"pose":"seated"' not in current_parts[-1]["text"]
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["action"]["action_id"] == "wave_left"
@@ -318,8 +346,13 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
         "[image_role] 用户摄像头画面（用于观察用户及其环境）：",
     ]
     assert len(second_request.history_images) == 1
-    assert "数字人当前视觉姿态未知" in second_request.prefix
-    assert "不得根据历史图片推断" in second_request.prefix
+    assert second_request.avatar_state == {}
+    assert "本轮没有可用的数字人当前状态信息" in second_request.prefix
+    assert "不得从历史图片或用户摄像头图片推断数字人状态" in second_request.prefix
+    assert "结构化 avatar_state 中的当前状态信息" not in second_request.prefix
+    assert "候选动作必须与当前可视姿态兼容" not in second_request.prefix
+    second_omni_request = Client._build_action_scoring_request(second_request)
+    assert "当前结构化数字人状态：" not in second_omni_request.inputs["messages"][-1]["content"]
     second_result = next(
         event
         for event in ws.events
@@ -331,6 +364,180 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
         ]
         == 1
     )
+
+
+def test_current_image_role_map_is_compact_and_precedes_images() -> None:
+    parts = Client._current_image_content_parts(["user_camera"] * 6)
+
+    assert parts[0] == {
+        "type": "text",
+        "text": (
+            "[当前图片角色] 用户摄像头图片=1-6（只描述用户及其环境）；"
+            "本轮没有数字人状态图片，数字人姿态只能使用结构化 avatar_state，"
+            "不得从用户摄像头或历史图片推断。"
+        ),
+    }
+    assert [part["type"] for part in parts[1:]] == ["image"] * 6
+
+    audio_only = Client._action_instruction_content(
+        [],
+        "选择动作",
+        audios=["pcm"],
+        images=[],
+        image_roles=[],
+    )
+    assert not any(
+        part.get("type") == "text"
+        and part["text"].startswith("[当前图片角色]")
+        for part in audio_only
+    )
+
+
+def test_avatar_image_replaces_visual_state_but_keeps_action_context() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.last_avatar_state = {"pose": "standing", "gaze": "camera"}
+    explicit = {
+        "pose": "seated",
+        "current_action_id": "wave",
+        "state_description": "用户刚回来，本次应轻量欢迎。",
+    }
+
+    proactive_state = session._effective_avatar_state(
+        explicit,
+        turn_origin="proactive",
+        has_avatar_image=True,
+    )
+    assert proactive_state == {
+        "current_action_id": "wave",
+        "state_description": "用户刚回来，本次应轻量欢迎。",
+    }
+    passive_state = session._effective_avatar_state(
+        explicit,
+        turn_origin="user",
+        has_avatar_image=True,
+    )
+    assert passive_state == {"current_action_id": "wave"}
+    assert session._avatar_state_source(proactive_state, ["avatar_state"]) == "image"
+    assert session._avatar_state_source(proactive_state, []) == "unknown"
+    assert session._avatar_state_source(
+        {"pose": " ", "gaze": None, "hands": []}, []
+    ) == "unknown"
+
+    messages = Client._build_action_context_messages(
+        [],
+        "选择动作",
+        avatar_state=proactive_state,
+        system_prompt=None,
+        audios=[],
+        images=["image"],
+        image_roles=["avatar_state"],
+    )
+    instruction = messages[-1]["content"][-1]["text"]
+    assert instruction.startswith("动作推理补充信息：")
+    assert '"current_action_id":"wave"' in instruction
+    assert '"state_description":"用户刚回来，本次应轻量欢迎。"' in instruction
+    assert '"pose"' not in instruction
+
+    session._persist_avatar_state(explicit, has_avatar_image=False)
+    assert session.last_avatar_state == {"pose": "seated"}
+    inherited = session._effective_avatar_state(
+        None,
+        turn_origin="proactive",
+        has_avatar_image=False,
+    )
+    assert inherited == {"pose": "seated"}
+    assert session._avatar_state_source(inherited, []) == "structured"
+    session._persist_avatar_state(explicit, has_avatar_image=True)
+    assert session.last_avatar_state == {}
+
+
+def test_bounded_context_keeps_only_latest_current_avatar_image() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    images = [
+        "avatar-old",
+        "avatar-latest",
+        *(f"user-{index}" for index in range(1, 10)),
+    ]
+    roles = ["avatar_state", "avatar_state", *(["user_camera"] * 9)]
+
+    (
+        _,
+        _,
+        _,
+        bounded_images,
+        bounded_roles,
+        context,
+    ) = session._build_bounded_action_context([], images, roles)
+
+    assert len(bounded_images) == 8
+    assert bounded_images[0] == "avatar-latest"
+    assert "avatar-old" not in bounded_images
+    assert bounded_roles.count("avatar_state") == 1
+    assert context["received_current_image_count"] == 11
+    assert context["scored_current_image_count"] == 8
+    assert context["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_image_append_preprocesses_before_action_scoring() -> None:
+    ws = FakeWebSocket()
+    client = FakeClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-image-preprocess",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave_left",
+                    "source_label": "wave left",
+                    "short_definition": "wave left",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "no action",
+                    "short_definition": "keep pose",
+                },
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-image-preprocess"))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    original_b64 = base64.b64encode(encoded.getvalue()).decode()
+
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": "turn-image-preprocess",
+            "seq": 1,
+            "timestamp_ms": 1,
+            "mime_type": "image/png",
+            "image": original_b64,
+        }
+    )
+    assert session.active_turn is not None
+    assert session.active_turn.images[0].preprocess_task is not None
+
+    await session.handle_turn_commit(user_turn_commit("turn-image-preprocess"))
+
+    assert len(client.score_requests) == 1
+    prepared = client.score_requests[0].images[0]
+    assert is_prepared_image_wire(prepared)
+    assert prepared["width"] == 3
+    assert prepared["height"] == 2
+    assert session.history_images == [f"data:image/png;base64,{original_b64}"]
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    stats = result["timing"]["image_preprocessing"]
+    assert stats["scheduled_count"] == 1
+    assert stats["prepared_count"] == 1
+    assert stats["fallback_count"] == 0
+    assert stats["prepared_bytes"] == 18
+    assert stats["statuses"] == ["prepared"]
+    assert stats["commit_wait_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -476,7 +683,8 @@ async def test_current_turn_is_not_sent_as_completed_assistant_history() -> None
         "assistant",
     ]
     assert "action_id=wave_left" in second_request.history[1]["content"]
-    assert "动作名称=左手挥手" in second_request.history[1]["content"]
+    assert "执行结果=已执行动作" in second_request.history[1]["content"]
+    assert "动作=左手挥手" in second_request.history[1]["content"]
     assert second_request.system_prompt == client.score_requests[0].system_prompt
 
 @pytest.mark.asyncio
@@ -818,8 +1026,20 @@ async def test_proactive_without_text_uses_state_only_context() -> None:
 
     request = client.score_requests[0]
     assert request.history == []
-    assert "未提供本轮待播文本" in request.prefix
-    assert "不依赖当前语言文本" in request.prefix
+    assert "未提供待播文本" in request.prefix
+    assert "本轮已提供待播文本" not in request.prefix
+    assert "本轮新增的 assistant 消息" not in request.prefix
+    assert "不要把历史 assistant 消息当成本轮待播文本" in request.prefix
+    assert "本轮没有可用的数字人当前状态信息" in request.prefix
+    assert "结构化 avatar_state 中的当前状态信息" not in request.prefix
+    assert "候选动作必须与当前可视姿态兼容" not in request.prefix
+    assert "state_description 对本次主动场景给出的目标、指引、要求和禁止项" in request.prefix
+    assert "current_action_id 所表示的上一次已执行动作" in request.prefix
+    assert request.avatar_state == {
+        "current_action_id": "wave",
+        "state_description": "上一动作已结束，保持当前状态。",
+    }
+    assert session.last_avatar_state == {}
     assert "上一条 assistant 消息是数字人已经准备好" not in request.prefix
     assert session.history[0]["role"] == "assistant"
     assert session.history[0]["content"].startswith("[action_state]")
@@ -885,17 +1105,42 @@ async def test_proactive_text_is_assistant_context_and_persists_for_next_turn() 
         "role": "assistant",
         "content": "Hello，你回来啦！",
     }
-    assert "上一条 assistant 消息" in proactive_request.prefix
-    assert "上一条 assistant 消息与 avatar_state 是动作选择的共同核心约束" in proactive_request.prefix
-    assert "待播文本的语义、语气和表达目标直接相关" in proactive_request.prefix
-    assert "state_description 描述的场景目标、动作要求和禁止项" in proactive_request.prefix
-    assert "current_action_id 表示当前或刚结束的动作" in proactive_request.prefix
-    assert "没有同时满足文本和状态约束的动作时选择 no_action" in proactive_request.prefix
+    assert "本轮已提供待播文本" in proactive_request.prefix
+    assert "本轮新增的 assistant 消息" in proactive_request.prefix
+    assert (
+        "判断候选动作可执行性时，以结构化 avatar_state 中的当前状态信息为准"
+        in proactive_request.prefix
+    )
+    assert "待播文本的语义、语气和表达目标是本轮核心约束" in proactive_request.prefix
+    assert "文本的语义、语气和表达目标直接相关" in proactive_request.prefix
+    assert "state_description 对本次主动场景给出的目标、指引、要求和禁止项" in proactive_request.prefix
+    assert "结合历史动作判断衔接关系" in proactive_request.prefix
+    assert "选择本阶段定义的兜底项" in proactive_request.prefix
+    assert "candidate_id=none" not in proactive_request.prefix
     assert proactive_request.prefix.count("Hello，你回来啦！") == 0
-    assert "不要生成新的回复" in proactive_request.prefix
+    assert "不要生成回复" in proactive_request.prefix
     assert "当前用户文本" not in proactive_request.prefix
     assert proactive_request.avatar_state["pose"] == "seated"
     assert proactive_request.avatar_state["conversation_phase"] == "greeting"
+    image_state_prompt = session._build_turn_action_instruction(
+        "Hello，你回来啦！",
+        turn_origin="proactive",
+        trigger="user_returned",
+        image_roles=["avatar_state"],
+        has_current_action_id=True,
+        has_state_description=True,
+    )
+    assert (
+        "以本轮最新数字人照片中的当前可视姿态和行为为准"
+        in image_state_prompt
+    )
+    assert "待播文本的语义、语气和表达目标是本轮核心约束" in image_state_prompt
+    assert "state_description 对本次主动场景给出的目标、指引、要求和禁止项" in image_state_prompt
+    assert "current_action_id 所表示的上一次已执行动作" in image_state_prompt
+    assert session.last_avatar_state == {
+        "pose": "seated",
+        "conversation_phase": "greeting",
+    }
 
     assert len(session.history_turns) == 1
     assert session.history_turns[0].turn_origin == "proactive"
@@ -913,7 +1158,7 @@ async def test_proactive_text_is_assistant_context_and_persists_for_next_turn() 
     assert next_request.history[0]["role"] == "assistant"
     assert "Hello，你回来啦！" in next_request.history[0]["content"]
     assert "[action_state]" in next_request.history[0]["content"]
-    assert "本轮来源是 user" in next_request.prefix
+    assert "本轮由用户输入触发" in next_request.prefix
 
 
 @pytest.mark.asyncio
@@ -992,6 +1237,7 @@ async def test_candidate_list_is_fixed_and_no_action_returns_execute_false() -> 
     assert result["action"]["execute"] is False
     assert result["media_summary"]["received_image_count"] == 0
     assert result["media_summary"]["scored_image_count"] == 0
+    assert "执行结果=未执行动作（保持当前姿态）" in session.history[-1]["content"]
 
 
 
@@ -1121,18 +1367,218 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert child_request.suffix_tokenization_mode == "short_id"
     assert category_request.action_context_cache_key == child_request.action_context_cache_key
     assert category_request.action_context_cache_key == category_request.logical_request_id
+    assert category_request.prefix_cache_namespace == session.action_prefix_cache_namespace
+    assert child_request.prefix_cache_namespace == (
+        f"{session.action_prefix_cache_namespace}:child:B1"
+    )
     assert category_request.micro_batch_size == 64
     assert child_request.micro_batch_size == 64
-    assert "B1=基础姿态；姿态变化" in category_request.system_prompt
-    assert "B2=重心变化；重心变化" in category_request.system_prompt
-    assert "A1=A1" in child_request.system_prompt
-    assert "B2=重心变化" not in child_request.system_prompt
+    assert (
+        "category_id=B1｜类别=基础姿态｜说明=姿态变化"
+        in category_request.system_prompt
+    )
+    assert (
+        "category_id=B2｜类别=重心变化｜说明=重心变化"
+        in category_request.system_prompt
+    )
+    assert (
+        "candidate_id=A1｜动作=正式站立｜说明=站立"
+        in child_request.system_prompt
+    )
+    assert (
+        "candidate_id=A0｜动作=不做动作｜说明=保持当前姿态"
+        in child_request.system_prompt
+    )
+    assert child_request.system_prompt.count("已选类别：category_id=B1") == 1
+    assert "已选择 category_id=" not in child_request.prefix
+    assert "candidate_id=A0" not in category_request.prefix
+    assert "category_id=B1" not in child_request.prefix
+    assert "选择本阶段定义的兜底项" in category_request.prefix
+    assert "选择本阶段定义的兜底项" in child_request.prefix
+    assert "兜底 category_id=B1" in category_request.system_prompt
+    assert "兜底 candidate_id=A0" in child_request.system_prompt
+    assert category_request.prefix.removesuffix("最合适的 category_id：") == (
+        child_request.prefix.removesuffix("最合适的 candidate_id：")
+    )
+    assert "category_id=B2｜类别=重心变化" not in child_request.system_prompt
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["action"]["action_id"] == "A1"
     assert result["media_summary"]["action_context"]["selection_stages"] == 2
     assert result["media_summary"]["action_context"]["selected_category_id"] == "B1"
     assert result["media_summary"]["action_context"]["selected_category_ids"] == ["B1"]
     assert result["media_summary"]["action_context"]["category_top_k"] == 1
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_single_child_adds_fallback_and_scores_child() -> None:
+    ws = FakeWebSocket()
+    client = NestedPrefillFakeClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-single-child-fast-path",
+            "action_candidates": [
+                {
+                    "category_id": "B1",
+                    "source_label": "问候",
+                    "short_definition": "问候动作",
+                    "children": [
+                        {
+                            "candidate_id": "A1",
+                            "action_id": "wave",
+                            "source_label": "挥手",
+                            "short_definition": "挥手问候",
+                        }
+                    ],
+                },
+                {
+                    "category_id": "B0",
+                    "source_label": "静止",
+                    "short_definition": "不做动作",
+                    "children": [
+                        {
+                            "candidate_id": "A0",
+                            "action_id": "no_action",
+                            "source_label": "不做动作",
+                            "short_definition": "保持当前状态",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-single-child"))
+    await session.handle_turn_commit(
+        user_turn_commit("turn-single-child", text="向用户问好")
+    )
+
+    assert len(client.score_requests) == 2
+    assert client.score_requests[0].stage == "category"
+    child_request = client.score_requests[1]
+    assert child_request.stage == "child"
+    assert [item.candidate_id for item in child_request.candidates] == ["A1", "A0"]
+    assert (
+        "candidate_id=A0｜动作=不做动作｜说明=保持当前状态"
+        in child_request.system_prompt
+    )
+    assert [item["stage"] for item in client.prefill_requests] == [
+        "category",
+        "child",
+    ]
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["action"] == {
+        "action_id": "wave",
+        "candidate_id": "A1",
+        "category_id": "B1",
+        "execute": True,
+    }
+    assert result["timing"]["server_result_finalize_ms"] >= 0.0
+    assert result["timing"]["server_total_after_commit_ms"] >= 0.0
+    breakdown = result["timing"]["action_breakdown"]
+    assert breakdown["category"]["client"]["total_ms"] == 0.0
+    assert breakdown["child"]["server_total_ms"] == 0.0
+    assert breakdown["child_catalog_prefill_ms"] >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_single_no_action_child_returns_execute_false() -> None:
+    ws = FakeWebSocket()
+    client = NestedFakeClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-single-no-action",
+            "action_candidates": [
+                {
+                    "category_id": "B0",
+                    "source_label": "静止",
+                    "short_definition": "不做动作",
+                    "children": [
+                        {
+                            "candidate_id": "A0",
+                            "action_id": "no_action",
+                            "source_label": "不做动作",
+                            "short_definition": "保持当前状态",
+                        }
+                    ],
+                },
+                {
+                    "category_id": "B1",
+                    "source_label": "问候",
+                    "short_definition": "问候动作",
+                    "children": [
+                        {
+                            "candidate_id": "A1",
+                            "action_id": "wave",
+                            "source_label": "挥手",
+                            "short_definition": "挥手问候",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-single-none"))
+    await session.handle_turn_commit(user_turn_commit("turn-single-none"))
+
+    assert len(client.score_requests) == 1
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["action"]["action_id"] == "no_action"
+    assert result["action"]["execute"] is False
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_single_child_keeps_scoring_for_diagnostics() -> None:
+    ws = FakeWebSocket()
+    client = NestedFakeClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-single-child-diagnostics",
+            "include_scores": True,
+            "action_candidates": [
+                {
+                    "category_id": "B1",
+                    "source_label": "问候",
+                    "short_definition": "问候动作",
+                    "children": [
+                        {
+                            "candidate_id": "A1",
+                            "action_id": "wave",
+                            "source_label": "挥手",
+                            "short_definition": "挥手问候",
+                        }
+                    ],
+                },
+                {
+                    "category_id": "B0",
+                    "source_label": "静止",
+                    "short_definition": "不做动作",
+                    "children": [
+                        {
+                            "candidate_id": "A0",
+                            "action_id": "no_action",
+                            "source_label": "不做动作",
+                            "short_definition": "保持当前状态",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-single-diagnostics"))
+    await session.handle_turn_commit(user_turn_commit("turn-single-diagnostics"))
+
+    assert [request.stage for request in client.score_requests] == [
+        "category",
+        "child",
+    ]
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert len(result["scores"]) == 2
+    assert result["timing"]["action_breakdown"]["child"]["server_total_ms"] == 0.0
 
 @pytest.mark.asyncio
 async def test_hierarchical_proactive_turn_uses_character_reply_in_both_stages() -> None:
@@ -1195,12 +1641,15 @@ async def test_hierarchical_proactive_turn_uses_character_reply_in_both_stages()
             "role": "assistant",
             "content": "Hello，你回来啦！",
         }
-        assert "上一条 assistant 消息与 avatar_state 是动作选择的共同核心约束" in request.prefix
-        assert "待播文本的语义、语气和表达目标直接相关" in request.prefix
-        assert "state_description 描述的场景目标、动作要求和禁止项" in request.prefix
-        assert "current_action_id 表示当前或刚结束的动作" in request.prefix
-        assert "没有同时满足文本和状态约束的动作时选择 no_action" in request.prefix
+        assert "本轮没有可用的数字人当前状态信息" in request.prefix
+        assert "结构化 avatar_state 中的当前状态信息" not in request.prefix
+        assert "文本的语义、语气和表达目标直接相关" in request.prefix
+        assert "state_description 对本次主动场景" not in request.prefix
+        assert "结合历史动作判断衔接关系" in request.prefix
+        assert "选择本阶段定义的兜底项" in request.prefix
+        assert "candidate_id=A0" not in request.prefix
         assert request.prefix.count("Hello，你回来啦！") == 0
+    assert "已选择 category_id=" not in child_request.prefix
     assert session.history_turns[-1].turn_origin == "proactive"
     assert session.history[-1]["role"] == "assistant"
     assert "action_id=wave" in session.history[-1]["content"]
@@ -1276,9 +1725,18 @@ async def test_hierarchical_top_k_scores_children_from_multiple_categories() -> 
     category_request, child_request = client.score_requests
     assert [item.candidate_id for item in category_request.candidates] == ["B1", "B2"]
     assert [item.candidate_id for item in child_request.candidates] == ["A1", "A0", "A15"]
-    assert "B1=基础姿态；姿态变化" in child_request.system_prompt
-    assert "B2=重心变化；重心变化" in child_request.system_prompt
-    assert "A15=A15" in child_request.system_prompt
+    assert (
+        "已选类别：category_id=B1｜类别=基础姿态｜说明=姿态变化"
+        in child_request.system_prompt
+    )
+    assert (
+        "已选类别：category_id=B2｜类别=重心变化｜说明=重心变化"
+        in child_request.system_prompt
+    )
+    assert (
+        "candidate_id=A15｜动作=重心左移｜说明=左移"
+        in child_request.system_prompt
+    )
     context = next(event for event in ws.events if event["type"] == "turn.result")["media_summary"]["action_context"]
     assert context["selected_category_id"] == "B1"
     assert context["selected_category_ids"] == ["B1", "B2"]
@@ -1454,9 +1912,15 @@ async def test_nested_catalog_flat_children_runs_one_stage() -> None:
     assert len(client.score_requests) == 1
     request = client.score_requests[0]
     assert [item.candidate_id for item in request.candidates] == ["A1", "A0", "A15"]
-    assert "A1=A1" in request.system_prompt
-    assert "A15=A15" in request.system_prompt
-    assert "B1=基础姿态" not in request.system_prompt
+    assert (
+        "candidate_id=A1｜动作=正式站立｜说明=站立"
+        in request.system_prompt
+    )
+    assert (
+        "candidate_id=A15｜动作=重心左移｜说明=左移"
+        in request.system_prompt
+    )
+    assert "category_id=B1｜类别=基础姿态" not in request.system_prompt
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["action"]["action_id"] == "A1"
@@ -1576,8 +2040,11 @@ async def test_session_start_prefills_hierarchical_category_catalog() -> None:
     prefill = client.prefill_requests[0]
     assert prefill["stage"] == "category"
     assert [item.candidate_id for item in prefill["candidates"]] == ["B1", "B2"]
-    assert "B1=基础姿态" in prefill["system_prompt"]
-    assert "A1" not in prefill["system_prompt"]
+    assert (
+        "category_id=B1｜类别=基础姿态｜说明=姿态变化"
+        in prefill["system_prompt"]
+    )
+    assert "candidate_id=A1" not in prefill["system_prompt"]
     started = next(event for event in ws.events if event["type"] == "session.started")
     assert started["action_prefix_prefilled"] is True
 
@@ -1615,8 +2082,8 @@ async def test_session_start_prefills_flat_children_without_category_stage() -> 
     prefill = client.prefill_requests[0]
     assert prefill["stage"] == "single"
     assert [item.candidate_id for item in prefill["candidates"]] == ["A1", "A2", "A0"]
-    assert "A1=A1" in prefill["system_prompt"]
-    assert "B1=" not in prefill["system_prompt"]
+    assert "candidate_id=A1｜动作=站立｜说明=站立" in prefill["system_prompt"]
+    assert "category_id=B1｜" not in prefill["system_prompt"]
     started = next(event for event in ws.events if event["type"] == "session.started")
     assert started["action_selection_mode"] == "flat_children"
     assert started["action_selection_stages"] == 1
