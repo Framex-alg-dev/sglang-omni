@@ -3,6 +3,31 @@
 /v1/session/realtime 是服务内置的、面向数字人多轮对话的手动 turn WebSocket。它与
 /v1/realtime 分开，后者保持现有音频 + server VAD 行为。
 
+Session Realtime 只负责从当前角色在 `session.start` 中冻结的候选集合里选择
+`action_id` 或 `no_action`。它不生成回复文本、动作脚本，也不执行 Motion。
+
+## 接入方必改项
+
+本节面向已经接入旧版 Session Realtime 的客户端，只列当前分支带来的增量迁移要求。
+原有 `session.start`、候选目录、音频/图片追加、`action` 执行逻辑无需重做；
+客户端需要调整以下内容：
+
+1. `turn.start` 和 `turn.commit` 都必须发送 `turn_origin`、`text_role`，并保持一致；
+2. 只允许 `user/user_input` 和 `proactive/character_reply` 两种组合，服务端不会自动纠正；
+3. proactive Turn 的数字人待播文本可选；`trigger` 可选，但如果在 start 中提供，
+   commit 中去除首尾空白后的值必须一致；
+4. proactive Turn 的 `user_input` 必须为 `null` 或省略，服务端只把 `text` 当作待播文本；
+5. 动作候选继续由调用方提供并在 Session 内冻结，flat 和 hierarchical 格式均继续支持，
+   且候选中必须包含 `action_id=no_action`；
+6. `avatar_state` 推荐提供 `current_action_id` 和 `state_description`，现有的 `pose`、
+   `gaze`、`hands`、`conversation_phase` 等旧字段继续兼容并原样进入推理上下文；
+7. `turn.result.action` 和 `execute` 仍是动作执行入口；`reply` 不再返回，`scores`
+   和 `media_summary` 仍只在 `include_scores=true` 时返回。
+
+未携带新字段的旧 Turn 请求会返回
+`invalid_request / invalid_turn_semantics`，因此调用方需要同步升级 start 和 commit，
+不能只改其中一个事件。
+
 ## Action-score 进程级预热
 
 pipeline 启动完成后，服务在对外提供 HTTP/WebSocket 服务前执行一次进程级预热：
@@ -157,13 +182,31 @@ turn.result 额外返回完整候选排序和媒体摘要。该开关不改变�
 
 实现层会执行两个内部 action-score pipeline pass；这不是两个 session，也不是两个外部 turn。两阶段传入同一份媒体和历史输入，媒体 encoder 是否命中内容缓存由服务端缓存层决定。
 
-## 当前 turn
+## Turn 来源与文本角色
+
+`turn.start` 和 `turn.commit` 都必须携带相同的 `turn_origin` 和
+`text_role`。只接受以下组合：
+
+| turn_origin | text_role | text 语义 |
+|---|---|---|
+| `user` | `user_input` | 用户当前输入 |
+| `proactive` | `character_reply` | 数字人已经准备好、即将播放的文本 |
+
+组合不合法或 start/commit 不一致时返回
+`invalid_request / invalid_turn_semantics`，不会静默纠正。
+
+### 用户触发动作
 
 用户按住空格期间：
 
-    {"type":"turn.start","turn_id":"turn-003"}
+    {
+      "type": "turn.start",
+      "turn_id": "turn-003",
+      "turn_origin": "user",
+      "text_role": "user_input"
+    }
 
-音频使用 Base64 原始 PCM16：
+用户 Turn 可以追加 Base64 PCM16 音频和图片帧。音频事件示例：
 
     {
       "type": "input_audio.append",
@@ -172,38 +215,158 @@ turn.result 额外返回完整候选排序和媒体摘要。该开关不改变�
       "audio": "<Base64 PCM16>"
     }
 
-也兼容现有 Realtime 的事件名：
-
-    input_audio_buffer.append
-
-图片帧使用 Base64 图片数据和时间戳：
+也兼容事件名 `input_audio_buffer.append`。图片事件使用
+`input_image.append`，并通过 `image_role` 明确图片主体：
 
     {
       "type": "input_image.append",
       "turn_id": "turn-003",
       "seq": 1,
-      "timestamp_ms": 1000,
+      "timestamp_ms": 1710000000000,
+      "image_role": "user_camera",
       "mime_type": "image/jpeg",
-      "image": "<Base64 image bytes>"
+      "image": "<Base64 JPEG>"
     }
 
-文本是可选的。用户松开空格后提交：
+`image_role=user_camera` 表示用户摄像头画面，用于理解用户及其环境；
+`image_role=avatar_state` 表示数字人最新视频帧，用于理解数字人自身姿态。
+两类图片可以出现在同一个 Turn，服务端会在排序后逐张绑定角色，并把角色随图片
+记录到 Session。客户端应始终显式传入该字段，尤其不能只依靠
+`turn_origin` 推断混合图片的来源。
+
+为兼容旧客户端，字段省略时，user Turn 默认 `user_camera`，proactive Turn 默认
+`avatar_state`。这只是兼容默认值，不适用于一个 Turn 中同时传入两类图片。
+
+数字人状态图片只在其所属的当前 Turn 中有效。历史 Turn 的 `avatar_state` 图片不会
+进入后续动作评分上下文，不能作为数字人当前姿态的证据。后续 Turn 即使画面没有变化，
+客户端也必须重新发送最新帧；本轮未收到 `avatar_state` 图片时，模型会将数字人当前
+视觉姿态视为未知，禁止从历史图片或用户摄像头图片推断。此限制只针对视觉姿态，
+本轮 `current_action_id`、`state_description` 和 `trigger` 仍正常参与动作决策。
+
+提交示例：
 
     {
       "type": "turn.commit",
       "turn_id": "turn-003",
-      "text": null,
+      "turn_origin": "user",
+      "text_role": "user_input",
+      "text": "你可以挥挥手吗？",
       "avatar_state": {
-        "pose": "seated",
-        "gaze": "camera",
-        "hands": "resting"
+        "current_action_id": null,
+        "state_description": "数字人当前没有执行动作，正在等待用户回应。",
+        "pose": "seated"
       }
     }
 
-服务端按顺序合并当前 turn 的音频 chunk，把图片按时间戳排序，然后只计算动作。
-当前版本不生成普通数字人回复，turn.result 不返回 reply 字段。动作决策完成后，
-服务端会把当前用户输入和实际动作写入 session 内部历史；下一轮动作 Prompt
-可以使用这条历史处理“刚刚那个动作”“再重复一遍”等指代。
+`avatar_state` 推荐使用 `current_action_id` 和 `state_description`。
+为兼容现有接入，`pose`、`gaze`、`hands`、`conversation_phase`
+及其他旧字段仍会保留，并随完整对象一起进入模型上下文。
+
+### 系统主动动作
+
+主动文本由外部 Qwen Omni 基于同一 session 历史生成后提交。它是数字人待播文本，
+不是用户输入，也不是用户动作请求：
+
+    {
+      "type": "turn.start",
+      "turn_id": "turn-proactive-001",
+      "turn_origin": "proactive",
+      "text_role": "character_reply",
+      "trigger": "user_returned"
+    }
+
+    {
+      "type": "turn.commit",
+      "turn_id": "turn-proactive-001",
+      "turn_origin": "proactive",
+      "text_role": "character_reply",
+      "trigger": "user_returned",
+      "text": "Hello，你回来啦！",
+      "user_input": null,
+      "avatar_state": {
+        "current_action_id": null,
+        "state_description": "用户刚刚回来，动作应轻量友好，并避免重复最近动作。"
+      }
+    }
+
+proactive Turn 的待播文本可选；`trigger` 可选，但 start 和 commit 必须一致。
+提供待播文本时，服务根据其语义、语气、表达目标、历史对话、历史动作和
+avatar_state 选择伴随动作。例如“Hello，你回来啦！”应优先匹配“挥手欢迎”等
+候选，而不是因为文本没有直接动作指令就选择 `no_action`。服务不会基于该文本
+生成新回复。
+
+主动文本通常可以直接在 `turn.commit.text` 中提交，也可以先通过
+`turn.text.update` 写入。若两处都提供，以 commit 中的 `text` 为最终文本。
+未提供文本或文本为空时，服务不会创建本轮 assistant 待播消息，也不会把上一条
+assistant 历史误认为本轮待播文本；动作选择只使用 `avatar_state`、`trigger`、历史和媒体。
+proactive Turn 即使通常没有本轮用户音频，也仍会读取同一 Session 中已经完成的
+历史对话、历史媒体、历史动作和当前 `avatar_state`；调用方不需要在待播文本中
+重复拼接这些历史。
+
+两类 Turn 都只计算动作。用户输入以 user 角色写入历史；主动待播文本以 assistant
+角色写入历史；实际动作以 `[action_state]` 一并记录，供后续 Turn 处理指代、
+冲突和重复。
+
+### avatar_state 兼容约定
+
+`avatar_state` 是可选对象，推荐结构如下：
+
+    {
+      "current_action_id": "wave",
+      "state_description": "用户刚刚回来；数字人准备友好欢迎，并避免重复最近动作。"
+    }
+
+- `current_action_id` 可以是非空字符串或 `null`，用于描述当前或最近执行的动作；
+- `state_description` 可以是字符串，用自然语言描述数字人状态、用户状态、最近动作
+  和本轮表达目标；
+- `pose`、`gaze`、`hands`、`conversation_phase` 以及调用方已有的其他字段不会被删除，
+  服务端会保留完整对象并将其作为动作推理上下文；
+- `avatar_state` 不用于扩展候选集合，模型最终仍只能选择 Session 已冻结的动作。
+
+### `text`、`current_action_id` 和 `state_description` 的作用
+
+这三个字段共同描述“本轮要表达什么”和“数字人当前允许怎样表达”，但职责不同：
+
+| 字段 | 作用 | 是否必需 | 是否写入后续上下文 |
+|---|---|---|---|
+| `text` | 本轮需要理解的语言内容；角色由 `turn_origin/text_role` 决定 | user、proactive 均可选 | 成功后按 user 或 assistant 角色写入历史 |
+| `current_action_id` | 当前正在执行或刚结束的动作，用于判断衔接、冲突和无意义重复 | 可选，可显式传 `null` | 随成功提交的 `avatar_state` 作为下一 Turn 的最近状态 |
+| `state_description` | 用自然语言描述场景目标、用户/数字人状态、动作要求和禁止项 | 可选字符串 | 随成功提交的 `avatar_state` 作为下一 Turn 的最近状态 |
+
+`text` 的具体语义：
+
+- user Turn：表示用户当前说的话或输入的文字，与本轮音频、图片一起用于理解用户
+  意图和动作请求；可以为空。成功后作为 user 历史保存；
+- proactive Turn：表示数字人已经生成、即将播放的文本。提供时，服务根据其语义、
+  语气和表达目标选择伴随动作，不把它当成用户指令，也不基于它生成新回复；
+  成功后作为 assistant 历史保存；未提供时不创建本轮待播文本消息；
+- 可以先用 `turn.text.update` 更新，`turn.commit.text` 如果存在则覆盖此前文本。
+
+`current_action_id` 的具体语义：
+
+- 非空字符串表示数字人当前正在执行或刚结束的真实动作 ID，`null` 表示当前没有
+  可报告的动作；
+- 模型用它避免与当前动作冲突、判断下一动作能否自然衔接，并在没有明确重复要求时
+  避免再次选择同一动作；
+- 它只是上下文约束，不会强制服务返回该动作，也不会把不在 Session 候选目录中的
+  ID 加入候选集合。
+
+`state_description` 的具体语义：
+
+- 它是不做结构化解析的自然语言状态，用于补充字段无法表达的业务上下文，例如
+  “用户刚回来”“保持坐姿”“本轮需要友好欢迎”“不要重复挥手”；
+- proactive Turn 中，`text` 与 `state_description` 是共同的动作选择约束：
+  动作既要匹配待播文本，也要满足状态中的目标和禁止项；没有同时满足两者的候选时
+  应选择 `no_action`；
+- user Turn 中，它同样用于约束回应动作，例如避免与姿态、当前动作或业务阶段冲突。
+
+状态继承规则：
+
+- 本轮提供非空 `avatar_state` 时，评分使用完整对象；只有 Turn 成功完成后，
+  它才更新为 Session 的最近状态；
+- 省略 `avatar_state` 或传空对象时，服务复用最近一次成功 Turn 的状态；
+- 取消或评分失败的 Turn 不更新最近状态；
+- 这些字段属于当前 Turn 的动态上下文，不会改变固定候选目录或其 prefix cache identity。
 
 ## 方案 B 动作评分
 
@@ -241,20 +404,33 @@ prefix cache identity，因此同一 session 内必须保持不变。示例：
         "candidate_id": "A1",
         "category_id": "B1",
         "action_id": "A1",
-        "execute": true,
-        "mean_logprob": -0.35,
-        "ppl": 1.42,
-        "token_count": 1
+        "execute": true
       },
+      "scores": [
+        {
+          "candidate_id": "A1",
+          "category_id": "B1",
+          "action_id": "A1",
+          "mean_logprob": -0.35,
+          "mean_nll": 0.35,
+          "ppl": 1.42,
+          "token_count": 1,
+          "token_scores": []
+        }
+      ],
       "media_summary": {
         "audio_chunk_count": 24,
         "image_frame_count": 6,
+        "user_camera_image_count": 5,
+        "avatar_state_image_count": 1,
         "scored_image_count": 6,
         "text_present": false,
         "action_context": {
           "selection_stages": 2,
           "logical_request_id": "session-session-001-turn-turn-003-action-...",
           "selected_category_id": "B1",
+          "selected_category_ids": ["B1"],
+          "category_top_k": 1,
           "category_compute_ms": 310.2,
           "child_compute_ms": 532.1,
           "category_scores": [{"candidate_id":"B1", "mean_logprob":-0.21, "ppl":1.23, "token_count":1, "token_scores":[]}]
@@ -324,23 +500,67 @@ category_id、candidate_id 和 action_id 由外部调用方在 session.start 中
 |---|---|---|
 | session.start | 客户端 -> 服务端 | 初始化 session 和固定候选 |
 | session.started | 服务端 -> 客户端 | 返回候选 hash 和 session 确认 |
-| turn.start | 客户端 -> 服务端 | 开始一个新 turn |
+| turn.start | 客户端 -> 服务端 | 开始一个新 turn；必须声明 `turn_origin` 和 `text_role` |
 | turn.started | 服务端 -> 客户端 | 确认 turn 已创建 |
 | input_audio.append | 客户端 -> 服务端 | 追加 PCM16 音频 chunk |
-| input_image.append | 客户端 -> 服务端 | 追加图片帧 |
-| input.ack | 服务端 -> 客户端 | 确认媒体序号已接收 |
-| turn.text.update | 客户端 -> 服务端 | 更新可选文本 |
-| turn.commit | 客户端 -> 服务端 | 结束输入并触发动作计算 |
+| input_image.append | 客户端 -> 服务端 | 追加图片帧；用 `image_role` 区分用户摄像头与数字人状态 |
+| input.ack | 服务端 -> 客户端 | 确认媒体序号已接收；图片 ACK 回显最终 `image_role` |
+| turn.text.update | 客户端 -> 服务端 | 更新本轮文本；语义由 start 中的 `turn_origin` 决定 |
+| turn.commit | 客户端 -> 服务端 | 回传相同 Turn 语义字段，结束输入并触发动作计算 |
 | turn.committed | 服务端 -> 客户端 | 确认开始处理 |
 | turn.result | 服务端 -> 客户端 | 返回动作和耗时；可选返回评分详情 |
-| turn.cancel | 客户端 -> 服务端 | commit 前取消当前 turn |
-| turn.cancelled | 服务端 -> 客户端 | 确认取消 |
+| turn.cancel | 客户端 -> 服务端 | 取消 collecting 或 processing 状态的当前 turn |
+| turn.cancelled | 服务端 -> 客户端 | 确认已停止后续处理；processing Turn 已触发底层 abort |
 | error | 服务端 -> 客户端 | 返回协议或处理错误 |
 | session.close | 客户端 -> 服务端 | 主动关闭 session |
 
 第一条有效事件必须是 session.start；一个 session 同时只能有一个 active turn。
 WebSocket 只使用 JSON 文本帧，媒体使用 Base64，不接受二进制帧。服务端仍兼容
 input_audio_buffer.append，其字段与 input_audio.append 相同。
+
+### Turn 字段约束
+
+| turn_origin | text_role | `text` 的解释 | `trigger` | `user_input` |
+|---|---|---|---|---|
+| `user` | `user_input` | 用户本轮说的话或输入的文本 | 不允许 | 建议省略 |
+| `proactive` | `character_reply` | 数字人已经生成、即将播放的文本 | 可选，start/commit 必须一致 | 必须为 `null` 或省略 |
+
+`user_input` 仅是主动场景的兼容字段。服务端始终以 `turn_origin` 判断本轮来源，
+不会根据 `user_input` 是否为空推断文本角色。
+
+字段校验规则：
+
+- start 和 commit 的 `turn_origin`、`text_role` 必须完全一致；`trigger` 去除
+  首尾空白后的值必须一致；
+- `trigger` 如果存在，必须是去除首尾空白后仍非空的字符串，并且只允许 proactive Turn；
+- proactive 和 user Turn 的 `text` 均可为空；提供时必须是字符串，可以来自最近一次
+  `turn.text.update`，也可以由 `turn.commit.text` 提供；
+- 所有文本和媒体只用于动作选择，不会触发回复生成。
+
+### Turn 生命周期与错误恢复
+
+一个成功 Turn 的最短时序为：
+
+    turn.start -> turn.started -> turn.commit -> turn.committed -> turn.result
+
+接入方应按以下规则处理失败：
+
+- `turn.start` 的语义字段非法时，Turn 尚未创建；修正后可以重新发送该 `turn_id`；
+- `turn.commit` 在发送 `turn.committed` 前因语义字段、文本或 `avatar_state` 校验失败时，
+  当前 Turn 仍处于 active 状态；可以修正后重新 commit，或发送 `turn.cancel`；
+- 收到 `turn.committed` 后仍可发送 `turn.cancel`。服务端会停止后续评分阶段、
+  abort 当前物理评分请求，并且不发送 `turn.result`、不写入动作历史；
+- 发送 `turn.cancel` 后必须等待对应的 `turn.cancelled`，再发送下一个
+  `turn.start`。取消清理期间旧 Turn 仍是 active turn；
+- `turn.commit` 后输入已被冻结，不能继续追加音频或图片、更新文本或重复 commit；
+- result 和 cancel 发生竞态时只有一个终态：先进入 completed 则返回 result，
+  先进入 cancelling 则返回 cancelled；
+- 收到 `turn.committed` 后若返回动作评分错误，该 Turn 已结束；应使用新的 `turn_id`
+  创建下一 Turn；
+- 只要某个 `turn.start` 已成功，同一 Session 内该 `turn_id` 就不能再次使用，
+  即使该 Turn 后来被 cancel；
+- 连接断开后当前 Session 历史会被释放。需要连续历史时，应保持同一 WebSocket
+  Session，不要为每个 proactive Turn 新建连接。
 
 ### 序号与媒体规则
 
@@ -349,10 +569,19 @@ input_audio_buffer.append，其字段与 input_audio.append 相同。
 服务端不重复追加并以 input.ack 的 duplicate=true 确认。跳号或乱序返回
 invalid_sequence。图片 seq 与音频 seq 独立；图片允许乱序，commit 时按
 timestamp_ms 升序、再按 seq 升序排序。图片支持 image/jpeg、image/png、
-image/webp，image 可以是 Base64 内容或 Base64 data URI。
+image/webp，image 可以是 Base64 内容或 Base64 data URI。图片角色与图片一起排序，
+不会因时间戳重排而错位。当前评分 Prompt 会列出排序后的图片角色；进入历史后，
+历史用户摄像头图片会保留对应角色说明，历史数字人状态图片则从后续评分上下文中
+移除，避免模型把过期数字人姿态当作当前状态。
 
-turn.commit 后不能继续追加媒体或更新文本。turn.cancel 只保证取消尚未
-commit 的 turn。连接断开会清理当前进程内 session 状态，不做持久化。
+turn.commit 后不能继续追加媒体、更新文本或重复 commit。turn.cancel 同时支持
+尚未 commit 的 collecting Turn 和正在评分的 processing Turn。processing Turn
+取消时会中止当前 Flat、category、child 或 child catalog prefill 请求，并阻止
+后续评分阶段启动。WebSocket 断开或收到 session.close 时也会执行相同的后台
+任务取消和底层 abort 清理，然后释放当前进程内的 session 状态。
+
+底层 abort 是广播式取消；已经进入 GPU 执行的单个 kernel 可能要到可中断边界
+才会停止，但排队请求、后续候选批次和后续层级阶段不会继续执行。
 
 ### turn.result 和计时
 
@@ -412,7 +641,7 @@ commit 的 turn。连接断开会清理当前进程内 session 状态，不做�
       "execute": false
     }
 
-默认不会返回 reply、scores、media_summary、score_count 或每个候选的
+默认不会返回 `reply`、`scores`、`media_summary`、`score_count` 或每个候选的
 PPL/logprob。客户端不应从候选分数重新排序，直接使用 action 即可。
 
 如果 session.start 设置 "include_scores": true，服务端会在同一个 turn.result
@@ -459,6 +688,7 @@ server_total_after_commit_ms 的差值只能作为排队和传输开销估计。
 | duplicate_session_id | session_id 已被另一个连接占用 |
 | duplicate_active_turn | 当前 session 已有 active turn |
 | invalid_turn_id | turn_id 缺失、为空或不匹配 |
+| invalid_turn_semantics | turn_origin/text_role 非法、start/commit 不一致，或 proactive 的 user_input 非空 |
 | invalid_sequence | 音频 seq 缺失、跳号或乱序 |
 | invalid_audio | PCM16、Base64 或音频参数非法 |
 | invalid_image | 图片 Base64、类型或大小非法 |

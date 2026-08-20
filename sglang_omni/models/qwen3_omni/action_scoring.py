@@ -19,6 +19,8 @@ from typing import Any, Iterable, Literal, Sequence
 
 
 Language = Literal["zh", "en"]
+TurnOrigin = Literal["user", "proactive"]
+TextRole = Literal["user_input", "character_reply"]
 
 MAX_ACTION_CANDIDATES = 512
 MAX_ACTION_SUFFIX_CHARS = 512
@@ -56,6 +58,9 @@ class ActionSuffixScoreRequest:
     history_audios: list[str] = field(default_factory=list)
     history_images: list[str] = field(default_factory=list)
     avatar_state: dict[str, Any] = field(default_factory=dict)
+    turn_origin: TurnOrigin = "user"
+    text_role: TextRole = "user_input"
+    trigger: str | None = None
     stage: str = "single"
     logical_request_id: str | None = None
     # Same-turn category/child requests use this key to share the prepared
@@ -261,6 +266,23 @@ def validate_action_suffix_request(
         raise ValueError("history image placeholders must match history_images length")
     if not isinstance(request.avatar_state, dict):
         raise ValueError("avatar_state must be an object")
+    expected_text_role = {
+        "user": "user_input",
+        "proactive": "character_reply",
+    }.get(request.turn_origin)
+    if expected_text_role is None:
+        raise ValueError("turn_origin must be 'user' or 'proactive'")
+    if request.text_role != expected_text_role:
+        raise ValueError(
+            f"text_role must be {expected_text_role!r} when "
+            f"turn_origin is {request.turn_origin!r}"
+        )
+    if request.trigger is not None and (
+        not isinstance(request.trigger, str) or not request.trigger.strip()
+    ):
+        raise ValueError("trigger must be a non-empty string or null")
+    if request.turn_origin == "user" and request.trigger is not None:
+        raise ValueError("trigger is only supported for proactive turns")
     return request
 
 

@@ -467,6 +467,7 @@ class Client:
         self,
         *,
         model: str,
+        request_id: str | None = None,
         system_prompt: str,
         candidates: list[ActionScoreCandidate],
         prefix_cache_namespace: str,
@@ -477,7 +478,7 @@ class Client:
             return False
         probe = candidates[0]
         request = ActionSuffixScoreRequest(
-            request_id=f"catalog-prefill-{stage}-{uuid.uuid4().hex}",
+            request_id=request_id or f"catalog-prefill-{stage}-{uuid.uuid4().hex}",
             model=model,
             prefix="请根据当前输入选择动作。下一步 action_id 是：",
             language="zh",
@@ -678,7 +679,11 @@ class Client:
             "task": "action_suffix_scoring",
             "model": request.model,
             "language": request.language,
+            "turn_origin": request.turn_origin,
+            "text_role": request.text_role,
         }
+        if request.trigger is not None:
+            metadata["trigger"] = request.trigger
         if request.session_id is not None:
             metadata["session_id"] = request.session_id
         if request.avatar_state:
@@ -705,6 +710,9 @@ class Client:
                     "static_system_prompt": request.system_prompt,
                     "prefix_cache_namespace": request.prefix_cache_namespace,
                     "action_context_cache_key": request.action_context_cache_key,
+                    "turn_origin": request.turn_origin,
+                    "text_role": request.text_role,
+                    "trigger": request.trigger,
                     "history_message_count": history_message_count,
                     "history_audio_count": history_audio_count,
                     "history_image_count": history_image_count,

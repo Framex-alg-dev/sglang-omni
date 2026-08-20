@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
@@ -35,6 +36,12 @@ class FakeWebSocket:
         self.close_calls += 1
         self.client_state = WebSocketState.DISCONNECTED
         self.application_state = WebSocketState.DISCONNECTED
+
+
+class DisconnectingFakeWebSocket(FakeWebSocket):
+    async def receive(self) -> dict:
+        self.client_state = WebSocketState.DISCONNECTED
+        return {"type": "websocket.disconnect"}
 
 
 class FakeClient:
@@ -76,6 +83,27 @@ class FakeClient:
                 ),
             ],
         )
+
+
+class BlockingActionClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.started_requests = []
+        self.aborted: list[str] = []
+
+    async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+        self.started_requests.append(request)
+        if len(self.started_requests) == 1:
+            self.started.set()
+            await self.release.wait()
+        return await super().score_action_suffixes(request)
+
+    async def abort(self, request_id: str):
+        self.aborted.append(request_id)
+        self.release.set()
+        return None
 
 
 class PrefillFakeClient(FakeClient):
@@ -130,6 +158,27 @@ def make_session(
     )
 
 
+def user_turn_start(turn_id: str | None) -> dict:
+    event = {
+        "type": "turn.start",
+        "turn_origin": "user",
+        "text_role": "user_input",
+    }
+    if turn_id is not None:
+        event["turn_id"] = turn_id
+    return event
+
+
+def user_turn_commit(turn_id: str, **fields) -> dict:
+    return {
+        "type": "turn.commit",
+        "turn_id": turn_id,
+        "turn_origin": "user",
+        "text_role": "user_input",
+        **fields,
+    }
+
+
 @pytest.mark.asyncio
 async def test_cleanup_does_not_send_duplicate_close_frame() -> None:
     ws = FakeWebSocket()
@@ -179,7 +228,7 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
             ],
         }
     )
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-1"})
+    await session.handle_turn_start(user_turn_start("turn-1"))
 
     pcm = base64.b64encode(b"\x00\x00" * 160).decode()
     await session.handle_audio_append(
@@ -199,24 +248,24 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
         }
     )
     image = base64.b64encode(b"image-bytes").decode()
-    for seq, timestamp in ((1, 2000), (2, 1000)):
+    for seq, timestamp, image_role in (
+        (1, 2000, "avatar_state"),
+        (2, 1000, "user_camera"),
+    ):
         await session.handle_image_append(
             {
                 "type": "input_image.append",
                 "turn_id": "turn-1",
                 "seq": seq,
                 "timestamp_ms": timestamp,
+                "image_role": image_role,
                 "mime_type": "image/jpeg",
                 "image": image,
             }
         )
 
     await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-1",
-            "avatar_state": {"pose": "seated"},
-        }
+        user_turn_commit("turn-1", avatar_state={"pose": "seated"})
     )
 
     assert len(client.chat_requests) == 0
@@ -225,6 +274,10 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
     assert len(request.audios) == 1
     assert len(request.images) == 2
     assert request.history == []
+    assert "图片1=用户摄像头画面" in request.prefix
+    assert "图片2=数字人当前状态画面" in request.prefix
+    assert "不得混淆两类图片" in request.prefix
+    assert "只有本轮标记为 avatar_state 的图片" in request.prefix
     assert request.candidates[0].suffix == "a01"
     assert "a01=wave_left" in request.system_prompt
     assert "none=no_action" in request.system_prompt
@@ -234,11 +287,113 @@ async def test_manual_turn_collects_multiple_audio_and_images() -> None:
     assert result["action"]["execute"] is True
     assert result["media_summary"]["audio_chunk_count"] == 2
     assert result["media_summary"]["image_frame_count"] == 2
+    assert result["media_summary"]["user_camera_image_count"] == 1
+    assert result["media_summary"]["avatar_state_image_count"] == 1
     assert result["timing"]["server_action_compute_ms"] >= 0
     assert len(session.history) == 2
     assert session.history[0]["role"] == "user"
     assert session.history[1]["role"] == "assistant"
     assert "action_id=wave_left" in session.history[1]["content"]
+
+    image_acks = [
+        event
+        for event in ws.events
+        if event["type"] == "input.ack" and event["media_type"] == "image"
+    ]
+    assert [event["image_role"] for event in image_acks] == [
+        "avatar_state",
+        "user_camera",
+    ]
+
+    await session.handle_turn_start(user_turn_start("turn-2"))
+    await session.handle_turn_commit(user_turn_commit("turn-2"))
+    second_request = client.score_requests[1]
+    historical_parts = second_request.history[0]["content"]
+    historical_labels = [
+        part["text"]
+        for part in historical_parts
+        if part.get("type") == "text" and part["text"].startswith("[image_role]")
+    ]
+    assert historical_labels == [
+        "[image_role] 用户摄像头画面（用于观察用户及其环境）：",
+    ]
+    assert len(second_request.history_images) == 1
+    assert "数字人当前视觉姿态未知" in second_request.prefix
+    assert "不得根据历史图片推断" in second_request.prefix
+    second_result = next(
+        event
+        for event in ws.events
+        if event["type"] == "turn.result" and event["turn_id"] == "turn-2"
+    )
+    assert (
+        second_result["media_summary"]["action_context"][
+            "ignored_history_avatar_image_count"
+        ]
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_image_role_defaults_by_turn_origin_and_rejects_unknown_role() -> None:
+    ws = FakeWebSocket()
+    session = make_session(ws, FakeClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-image-role",
+            "action_candidates": [
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前姿态",
+                }
+            ],
+        }
+    )
+    image = base64.b64encode(b"image-bytes").decode()
+
+    await session.handle_turn_start(user_turn_start("user-image"))
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": "user-image",
+            "seq": 1,
+            "image": image,
+        }
+    )
+    assert session.active_turn.images[0].image_role == "user_camera"
+    with pytest.raises(ValueError, match="image_role must be"):
+        await session.handle_image_append(
+            {
+                "type": "input_image.append",
+                "turn_id": "user-image",
+                "seq": 2,
+                "image_role": "unknown",
+                "image": image,
+            }
+        )
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "user-image"}
+    )
+
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "proactive-image",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+        }
+    )
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": "proactive-image",
+            "seq": 1,
+            "image": image,
+        }
+    )
+    assert session.active_turn.images[0].image_role == "avatar_state"
 
 
 @pytest.mark.asyncio
@@ -267,10 +422,8 @@ async def test_action_score_failure_returns_turn_error_and_session_recovers() ->
         }
     )
 
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-failed"})
-    await session.handle_turn_commit(
-        {"type": "turn.commit", "turn_id": "turn-failed"}
-    )
+    await session.handle_turn_start(user_turn_start("turn-failed"))
+    await session.handle_turn_commit(user_turn_commit("turn-failed"))
 
     error = next(event for event in ws.events if event["type"] == "error")
     assert error["error"]["type"] == "action_score_error"
@@ -279,10 +432,8 @@ async def test_action_score_failure_returns_turn_error_and_session_recovers() ->
     assert error["turn_id"] == "turn-failed"
     assert session.active_turn is None
 
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-recovered"})
-    await session.handle_turn_commit(
-        {"type": "turn.commit", "turn_id": "turn-recovered"}
-    )
+    await session.handle_turn_start(user_turn_start("turn-recovered"))
+    await session.handle_turn_commit(user_turn_commit("turn-recovered"))
     result = next(
         event
         for event in ws.events
@@ -315,8 +466,8 @@ async def test_current_turn_is_not_sent_as_completed_assistant_history() -> None
     )
 
     for turn_id in ("turn-1", "turn-2"):
-        await session.handle_turn_start({"type": "turn.start", "turn_id": turn_id})
-        await session.handle_turn_commit({"type": "turn.commit", "turn_id": turn_id})
+        await session.handle_turn_start(user_turn_start(turn_id))
+        await session.handle_turn_commit(user_turn_commit(turn_id))
 
     assert len(client.score_requests) == 2
     second_request = client.score_requests[1]
@@ -327,6 +478,154 @@ async def test_current_turn_is_not_sent_as_completed_assistant_history() -> None
     assert "action_id=wave_left" in second_request.history[1]["content"]
     assert "动作名称=左手挥手" in second_request.history[1]["content"]
     assert second_request.system_prompt == client.score_requests[0].system_prompt
+
+@pytest.mark.asyncio
+async def test_committed_turn_can_be_aborted_and_next_turn_runs() -> None:
+    ws = FakeWebSocket()
+    client = BlockingActionClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-cancel-committed",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave",
+                    "source_label": "挥手",
+                    "short_definition": "抬手挥手",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前状态",
+                },
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("low-priority"))
+    await session.dispatch(
+        user_turn_commit(
+            "low-priority",
+            text="稍后向用户挥手",
+            avatar_state={
+                "current_action_id": None,
+                "state_description": "低优先级欢迎动作",
+            },
+        )
+    )
+    await asyncio.wait_for(client.started.wait(), timeout=1)
+
+    turn = session.active_turn
+    assert turn is not None
+    assert turn.phase == "processing"
+    assert turn.current_request_id is not None
+    assert turn.current_request_id.endswith("-single")
+    with pytest.raises(ValueError, match="already committed"):
+        await session.handle_text_update(
+            {
+                "type": "turn.text.update",
+                "turn_id": "low-priority",
+                "text": "不能再修改",
+            }
+        )
+
+    request_id = turn.current_request_id
+    with pytest.raises(ValueError, match="already committed"):
+        await session.handle_audio_append(
+            {"type": "input_audio.append", "turn_id": "low-priority", "seq": 1}
+        )
+    with pytest.raises(ValueError, match="already committed"):
+        await session.handle_image_append(
+            {"type": "input_image.append", "turn_id": "low-priority", "seq": 1}
+        )
+    with pytest.raises(ValueError, match="already committed"):
+        await session.handle_turn_commit(
+            user_turn_commit("low-priority", text="不能重复提交")
+        )
+
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "low-priority"}
+    )
+
+    assert client.aborted == [request_id]
+    assert session.active_turn is None
+    assert session.history == []
+    assert session.history_turns == []
+    assert session.last_avatar_state == {}
+    assert not any(event["type"] == "turn.result" for event in ws.events)
+    assert not any(event["type"] == "error" for event in ws.events)
+    assert ws.events[-1] == {
+        "type": "turn.cancelled",
+        "session_id": "session-cancel-committed",
+        "turn_id": "low-priority",
+    }
+
+    await session.handle_turn_start(user_turn_start("high-priority"))
+    await session.handle_turn_commit(
+        user_turn_commit("high-priority", text="现在挥手")
+    )
+    assert ws.events[-1]["type"] == "turn.result"
+    assert ws.events[-1]["turn_id"] == "high-priority"
+    assert len(session.history_turns) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_close_aborts_committed_turn() -> None:
+    client = BlockingActionClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-close-abort",
+            "action_candidates": [{"candidate_id": "none", "action_id": "no_action", "source_label": "不做动作", "short_definition": "保持当前状态"}],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-close"))
+    await session.dispatch(user_turn_commit("turn-close"))
+    await asyncio.wait_for(client.started.wait(), timeout=1)
+    request_id = session.active_turn.current_request_id
+
+    await session.handle_session_close({"type": "session.close"})
+
+    assert client.aborted == [request_id]
+    assert session.active_turn is None
+    assert session.closed is True
+    assert session.websocket.events[-1]["type"] == "session.closed"
+
+
+@pytest.mark.asyncio
+async def test_websocket_disconnect_aborts_committed_turn() -> None:
+    ws = DisconnectingFakeWebSocket()
+    client = BlockingActionClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-disconnect-abort",
+            "action_candidates": [
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前状态",
+                }
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-disconnect"))
+    await session.dispatch(user_turn_commit("turn-disconnect"))
+    await asyncio.wait_for(client.started.wait(), timeout=1)
+    request_id = session.active_turn.current_request_id
+
+    await session.run()
+
+    assert client.aborted == [request_id]
+    assert session.active_turn is None
+    assert session.closed is True
+    assert ws.close_calls == 0
+
 
 @pytest.mark.asyncio
 async def test_turn_id_is_required_and_cannot_be_reused() -> None:
@@ -346,11 +645,275 @@ async def test_turn_id_is_required_and_cannot_be_reused() -> None:
         }
     )
     with pytest.raises(ValueError, match="generated by the caller"):
-        await session.handle_turn_start({"type": "turn.start"})
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-1"})
+        await session.handle_turn_start(user_turn_start(None))
+    await session.handle_turn_start(user_turn_start("turn-1"))
     await session.handle_turn_cancel({"type": "turn.cancel", "turn_id": "turn-1"})
     with pytest.raises(ValueError, match="already been used"):
-        await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-1"})
+
+
+        await session.handle_turn_start(user_turn_start("turn-1"))
+@pytest.mark.asyncio
+async def test_turn_semantics_are_required_and_must_match_commit() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-turn-semantics",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave",
+                    "source_label": "挥手",
+                    "short_definition": "抬手向用户挥手",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前状态",
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="turn_origin"):
+        await session.handle_turn_start({"type": "turn.start", "turn_id": "missing"})
+    with pytest.raises(ValueError, match="text_role"):
+        await session.handle_turn_start(
+            {
+                "type": "turn.start",
+                "turn_id": "invalid-pair",
+                "turn_origin": "proactive",
+                "text_role": "user_input",
+            }
+        )
+
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "proactive-1",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "user_returned",
+        }
+    )
+    with pytest.raises(ValueError, match="must match turn.start"):
+        await session.handle_turn_commit(
+            {
+                "type": "turn.commit",
+                "turn_id": "proactive-1",
+                "turn_origin": "proactive",
+                "text_role": "character_reply",
+                "trigger": "different_trigger",
+                "text": "Hello，你回来啦！",
+            }
+        )
+    assert session.active_turn is not None
+
+    await session.handle_turn_commit(
+        {
+            "type": "turn.commit",
+            "turn_id": "proactive-1",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "user_returned",
+            "text": "Hello，你回来啦！",
+            "user_input": None,
+        }
+    )
+    assert session.active_turn is None
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "proactive-missing-text",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+        }
+    )
+    await session.handle_turn_commit(
+        {
+            "type": "turn.commit",
+            "turn_id": "proactive-missing-text",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+        }
+    )
+    assert session.active_turn is None
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "proactive-invalid-user-input",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+        }
+    )
+    with pytest.raises(ValueError, match="user_input must be null"):
+        await session.handle_turn_commit(
+            {
+                "type": "turn.commit",
+                "turn_id": "proactive-invalid-user-input",
+                "turn_origin": "proactive",
+                "text_role": "character_reply",
+                "text": "欢迎回来",
+                "user_input": "不应使用",
+            }
+        )
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "proactive-invalid-user-input"}
+    )
+    assert (
+        session._classify_error(
+            {"type": "turn.commit"}, ValueError("text_role does not match")
+        )
+        == "invalid_turn_semantics"
+    )
+
+
+@pytest.mark.asyncio
+async def test_proactive_without_text_uses_state_only_context() -> None:
+    client = FakeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-proactive-without-text",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave",
+                    "source_label": "挥手",
+                    "short_definition": "友好地挥手",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前状态",
+                },
+            ],
+        }
+    )
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "proactive-without-text",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "action_finished",
+        }
+    )
+    await session.handle_turn_commit(
+        {
+            "type": "turn.commit",
+            "turn_id": "proactive-without-text",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "action_finished",
+            "avatar_state": {
+                "current_action_id": "wave",
+                "state_description": "上一动作已结束，保持当前状态。",
+            },
+        }
+    )
+
+    request = client.score_requests[0]
+    assert request.history == []
+    assert "未提供本轮待播文本" in request.prefix
+    assert "不依赖当前语言文本" in request.prefix
+    assert "上一条 assistant 消息是数字人已经准备好" not in request.prefix
+    assert session.history[0]["role"] == "assistant"
+    assert session.history[0]["content"].startswith("[action_state]")
+    assert "None" not in session.history[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_proactive_text_is_assistant_context_and_persists_for_next_turn() -> None:
+    client = FakeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-proactive-context",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave",
+                    "source_label": "挥手",
+                    "short_definition": "友好地抬手挥手欢迎用户",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前状态",
+                },
+            ],
+        }
+    )
+
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "proactive-welcome",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "user_returned",
+        }
+    )
+    await session.handle_turn_commit(
+        {
+            "type": "turn.commit",
+            "turn_id": "proactive-welcome",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "user_returned",
+            "text": "Hello，你回来啦！",
+            "avatar_state": {
+                "current_action_id": None,
+                "state_description": "用户刚刚回来，动作应轻量友好。",
+                "pose": "seated",
+                "conversation_phase": "greeting",
+            },
+        }
+    )
+
+    proactive_request = client.score_requests[0]
+    assert proactive_request.turn_origin == "proactive"
+    assert proactive_request.text_role == "character_reply"
+    assert proactive_request.trigger == "user_returned"
+    assert proactive_request.history[-1] == {
+        "role": "assistant",
+        "content": "Hello，你回来啦！",
+    }
+    assert "上一条 assistant 消息" in proactive_request.prefix
+    assert "上一条 assistant 消息与 avatar_state 是动作选择的共同核心约束" in proactive_request.prefix
+    assert "待播文本的语义、语气和表达目标直接相关" in proactive_request.prefix
+    assert "state_description 描述的场景目标、动作要求和禁止项" in proactive_request.prefix
+    assert "current_action_id 表示当前或刚结束的动作" in proactive_request.prefix
+    assert "没有同时满足文本和状态约束的动作时选择 no_action" in proactive_request.prefix
+    assert proactive_request.prefix.count("Hello，你回来啦！") == 0
+    assert "不要生成新的回复" in proactive_request.prefix
+    assert "当前用户文本" not in proactive_request.prefix
+    assert proactive_request.avatar_state["pose"] == "seated"
+    assert proactive_request.avatar_state["conversation_phase"] == "greeting"
+
+    assert len(session.history_turns) == 1
+    assert session.history_turns[0].turn_origin == "proactive"
+    assert [message["role"] for message in session.history] == ["assistant"]
+    assert "Hello，你回来啦！" in session.history[0]["content"]
+    assert "[action_state]" in session.history[0]["content"]
+    assert "action_id=wave" in session.history[0]["content"]
+
+    await session.handle_turn_start(user_turn_start("user-after-proactive"))
+    await session.handle_turn_commit(
+        user_turn_commit("user-after-proactive", text="我们继续聊吧")
+    )
+    next_request = client.score_requests[1]
+    assert len(next_request.history) == 1
+    assert next_request.history[0]["role"] == "assistant"
+    assert "Hello，你回来啦！" in next_request.history[0]["content"]
+    assert "[action_state]" in next_request.history[0]["content"]
+    assert "本轮来源是 user" in next_request.prefix
 
 
 @pytest.mark.asyncio
@@ -371,7 +934,7 @@ async def test_audio_sequence_is_strict_and_duplicate_is_idempotent() -> None:
             ],
         }
     )
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-seq"})
+    await session.handle_turn_start(user_turn_start("turn-seq"))
     pcm = base64.b64encode(b"\x00\x00" * 8).decode()
     event = {
         "type": "input_audio.append",
@@ -422,8 +985,8 @@ async def test_candidate_list_is_fixed_and_no_action_returns_execute_false() -> 
                 "action_candidates": [candidates[1]],
             }
         )
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-none"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-none"})
+    await session.handle_turn_start(user_turn_start("turn-none"))
+    await session.handle_turn_commit(user_turn_commit("turn-none"))
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["action"]["action_id"] == "no_action"
     assert result["action"]["execute"] is False
@@ -454,6 +1017,82 @@ class NestedPrefillFakeClient(NestedFakeClient):
         return True
 
 
+class BlockingNestedPrefillClient(NestedFakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prefill_requests = []
+        self.child_prefill_started = asyncio.Event()
+        self.release_child_prefill = asyncio.Event()
+        self.aborted: list[str] = []
+
+    async def prefill_action_catalog(self, **kwargs):
+        self.prefill_requests.append(kwargs)
+        if kwargs["stage"] == "child":
+            self.child_prefill_started.set()
+            await self.release_child_prefill.wait()
+        return True
+
+    async def abort(self, request_id: str):
+        self.aborted.append(request_id)
+        self.release_child_prefill.set()
+        return None
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_child_prefill_can_be_aborted() -> None:
+    ws = FakeWebSocket()
+    client = BlockingNestedPrefillClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-cancel-child-prefill",
+            "action_candidates": [
+                {
+                    "category_id": "B1",
+                    "source_label": "问候",
+                    "short_definition": "问候动作",
+                    "children": [
+                        {
+                            "candidate_id": "A1",
+                            "action_id": "wave",
+                            "source_label": "挥手",
+                            "short_definition": "挥手问候",
+                        },
+                        {
+                            "candidate_id": "A0",
+                            "action_id": "no_action",
+                            "source_label": "不做动作",
+                            "short_definition": "保持当前状态",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-child-prefill"))
+    await session.dispatch(
+        user_turn_commit("turn-child-prefill", text="向用户问好")
+    )
+    await asyncio.wait_for(client.child_prefill_started.wait(), timeout=1)
+
+    request_id = session.active_turn.current_request_id
+    assert request_id.endswith("-child-prefill")
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "turn-child-prefill"}
+    )
+
+    assert client.aborted == [request_id]
+    assert len(client.score_requests) == 1
+    assert client.score_requests[0].stage == "category"
+    assert session.active_turn is None
+    assert session.history_turns == []
+    assert [event["type"] for event in ws.events[-2:]] == [
+        "turn.committed",
+        "turn.cancelled",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     ws = FakeWebSocket()
@@ -472,8 +1111,8 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
             ]},
         ],
     })
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-nested"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-nested", "text": "请站起来"})
+    await session.handle_turn_start(user_turn_start("turn-nested"))
+    await session.handle_turn_commit(user_turn_commit("turn-nested", text="请站起来"))
     assert len(client.score_requests) == 2
     category_request, child_request = client.score_requests
     assert [item.candidate_id for item in category_request.candidates] == ["B1", "B2"]
@@ -495,6 +1134,76 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert result["media_summary"]["action_context"]["selected_category_ids"] == ["B1"]
     assert result["media_summary"]["action_context"]["category_top_k"] == 1
 
+@pytest.mark.asyncio
+async def test_hierarchical_proactive_turn_uses_character_reply_in_both_stages() -> None:
+    client = NestedFakeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-nested-proactive",
+            "action_candidates": [
+                {
+                    "category_id": "B1",
+                    "source_label": "问候",
+                    "short_definition": "欢迎或告别用户",
+                    "children": [
+                        {
+                            "candidate_id": "A1",
+                            "action_id": "wave",
+                            "source_label": "挥手",
+                            "short_definition": "友好地挥手欢迎用户",
+                        },
+                        {
+                            "candidate_id": "A0",
+                            "action_id": "no_action",
+                            "source_label": "不做动作",
+                            "short_definition": "保持当前状态",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "nested-proactive",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "user_returned",
+        }
+    )
+    await session.handle_turn_commit(
+        {
+            "type": "turn.commit",
+            "turn_id": "nested-proactive",
+            "turn_origin": "proactive",
+            "text_role": "character_reply",
+            "trigger": "user_returned",
+            "text": "Hello，你回来啦！",
+        }
+    )
+
+    assert len(client.score_requests) == 2
+    category_request, child_request = client.score_requests
+    for request in (category_request, child_request):
+        assert request.turn_origin == "proactive"
+        assert request.text_role == "character_reply"
+        assert request.trigger == "user_returned"
+        assert request.history[-1] == {
+            "role": "assistant",
+            "content": "Hello，你回来啦！",
+        }
+        assert "上一条 assistant 消息与 avatar_state 是动作选择的共同核心约束" in request.prefix
+        assert "待播文本的语义、语气和表达目标直接相关" in request.prefix
+        assert "state_description 描述的场景目标、动作要求和禁止项" in request.prefix
+        assert "current_action_id 表示当前或刚结束的动作" in request.prefix
+        assert "没有同时满足文本和状态约束的动作时选择 no_action" in request.prefix
+        assert request.prefix.count("Hello，你回来啦！") == 0
+    assert session.history_turns[-1].turn_origin == "proactive"
+    assert session.history[-1]["role"] == "assistant"
+    assert "action_id=wave" in session.history[-1]["content"]
 
 @pytest.mark.asyncio
 async def test_hierarchical_child_prefix_is_lazily_prefilled_once_per_namespace() -> None:
@@ -528,11 +1237,11 @@ async def test_hierarchical_child_prefix_is_lazily_prefilled_once_per_namespace(
     })
     assert [item["stage"] for item in client.prefill_requests] == ["category"]
 
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-1"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-1", "text": "请站起来"})
+    await session.handle_turn_start(user_turn_start("turn-1"))
+    await session.handle_turn_commit(user_turn_commit("turn-1", text="请站起来"))
     assert [item["stage"] for item in client.prefill_requests] == ["category", "child"]
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-2"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-2", "text": "再来一次"})
+    await session.handle_turn_start(user_turn_start("turn-2"))
+    await session.handle_turn_commit(user_turn_commit("turn-2", text="再来一次"))
     assert [item["stage"] for item in client.prefill_requests] == ["category", "child"]
     results = [
         event for event in ws.events
@@ -560,8 +1269,8 @@ async def test_hierarchical_top_k_scores_children_from_multiple_categories() -> 
             ]},
         ],
     })
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-nested-top-k"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-nested-top-k", "text": "请站起来"})
+    await session.handle_turn_start(user_turn_start("turn-nested-top-k"))
+    await session.handle_turn_commit(user_turn_commit("turn-nested-top-k", text="请站起来"))
 
     assert len(client.score_requests) == 2
     category_request, child_request = client.score_requests
@@ -737,12 +1446,10 @@ async def test_nested_catalog_flat_children_runs_one_stage() -> None:
     assert started["action_selection_mode"] == "flat_children"
     assert started["action_selection_stages"] == 1
 
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-flat"})
-    await session.handle_turn_commit({
-        "type": "turn.commit",
-        "turn_id": "turn-flat",
-        "text": "请站起来",
-    })
+    await session.handle_turn_start(user_turn_start("turn-flat"))
+    await session.handle_turn_commit(
+        user_turn_commit("turn-flat", text="请站起来")
+    )
 
     assert len(client.score_requests) == 1
     request = client.score_requests[0]
@@ -784,8 +1491,8 @@ async def test_turn_result_defaults_to_compact_action_payload() -> None:
             ],
         }
     )
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-compact"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-compact"})
+    await session.handle_turn_start(user_turn_start("turn-compact"))
+    await session.handle_turn_commit(user_turn_commit("turn-compact"))
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert set(result) == {
@@ -827,8 +1534,8 @@ async def test_include_scores_returns_diagnostic_fields() -> None:
             ],
         }
     )
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-detailed"})
-    await session.handle_turn_commit({"type": "turn.commit", "turn_id": "turn-detailed"})
+    await session.handle_turn_start(user_turn_start("turn-detailed"))
+    await session.handle_turn_commit(user_turn_commit("turn-detailed"))
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["action"] == {"action_id": "wave_left", "candidate_id": "a01", "execute": True}

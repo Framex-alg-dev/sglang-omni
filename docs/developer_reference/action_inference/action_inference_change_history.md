@@ -1,15 +1,14 @@
 # Qwen3-Omni 动作推理能力变更总览
 
-本文统一记录当前分支从基线提交
-10dd097eaae52b33eadccd437947ed758520c31a（包含该提交）到当前 HEAD 的完整
-动作推理能力实现，以及本次开发形成的相关代码、测试、协议和运行配置。
+本文统一记录当前分支相对 `main` 基线 `fe3f2c5` 的完整动作推理能力实现，
+以及当前工作区继续补充的主动 Turn、可中断推理、测试、协议和运行配置。
 
 ## 实现范围
 
 - 分支：feature/action-suffix-scoring
-- 基线：10dd097 chore(qwen3): preserve single-gpu low-latency profile
-- 当前 HEAD：c0b59b9 add catalog-backed action scoring comparisons
-- 提交范围：15 个提交。
+- 主线基线：fe3f2c5 [ASR Refactor][M3] Extract shared pre-LM encoder service mechanics
+- 当前分支 HEAD：6c01c02 feat: optimize hierarchical action scoring
+- 已提交范围：`main..HEAD` 共 19 个提交；文末另记当前工作区尚未提交的协议扩展。
 
 这次改动整体目标不是增加一个孤立的接口，而是在 sglang-omni 内形成一套
 Qwen3-Omni 数字人动作推理能力：接收多模态对话上下文，比较动作候选，
@@ -25,11 +24,15 @@ Qwen3-Omni 数字人动作推理能力：接收多模态对话上下文，比较
 3. 通过 KV/prefix cache 复用共享前缀，并将音频/图片内容纳入 cache identity。
 4. 支持 session 历史、历史音频、历史图片和数字人状态。
 5. 支持 flat 候选和“动作类别 → 具体动作”的两阶段选择。
-6. 支持 action-only 多模态 session：当前 turn 不生成普通回复，但会记录最终动作，
-   供下一轮理解“刚刚那个动作”“再重复一遍”等指代。
+6. 支持 action-only 多模态 session：用户输入和数字人主动待播文本使用不同角色进入
+   Prompt；当前 turn 不生成普通回复，但会记录最终动作，供下一轮理解动作指代和重复约束。
 7. 支持音频 chunk、图片帧、文本和动作候选的外部接入协议。
 8. 增加动作目录驱动的 smoke 测试、A/B/C 评分方案比较和日志分析 skill。
 9. 增加 Qwen3-Omni 单 GPU 配置、Docker runtime 支持和 action-score 预热。
+10. 支持 hierarchical 类别 Top-K、child catalog 延迟预填充、同 Turn 多模态上下文复用
+    和共享前缀边界检查。
+11. 支持 commit 后取消：WebSocket 接收循环不中断，当前物理评分请求会被 abort，取消
+    Turn 不写入结果、动作历史或 `avatar_state`。
 
 ## 变更时间线
 
@@ -50,6 +53,11 @@ Qwen3-Omni 数字人动作推理能力：接收多模态对话上下文，比较
 | 43520c5 | 增加固定 action ID 分类测试，用于区分模型理解失败和自然语言 suffix 概率偏置。 |
 | a9b45a2 | 避免多模态动作测试重复发送相同媒体输入。 |
 | c0b59b9 | 使用动作目录生成候选，增加 A/B/C action-score 对比脚本、catalog 驱动 smoke 调整及 catalog 单测。 |
+| 1c35d15 | 增加多模态 Session Realtime、动作目录协议、完整诊断日志和日志分析 skill。 |
+| 7fd30d8 | 完成 action-only 服务链路、层级选择、预热、micro-batch benchmark、耗时记录及调度器优化。 |
+| 34c3321 | 增加多模态动作推理方案总览。 |
+| 6c01c02 | 优化 hierarchical 上下文准备与跨阶段复用，并补充层级优化文档和测试。 |
+| 当前工作区 | 增加 `user/proactive` Turn 语义、`avatar_state` 推荐字段、processing 阶段取消和相关测试/文档。 |
 
 ## 动作推理核心链路
 
@@ -92,16 +100,16 @@ action-score 是 prefill/评分路径，不进入普通文本 decode、Talker �
 
 当前实现的主要代码位置：
 
-- [action_scoring.py](/home/ubuntu/fanshide/sglang-omni/sglang_omni/models/qwen3_omni/action_scoring.py)
-- [request_builders.py](/home/ubuntu/fanshide/sglang-omni/sglang_omni/models/qwen3_omni/request_builders.py)
-- [omni_scheduler.py](/home/ubuntu/fanshide/sglang-omni/sglang_omni/scheduling/omni_scheduler.py)
-- [client.py](/home/ubuntu/fanshide/sglang-omni/sglang_omni/client/client.py)
-- [action_suffix_scoring.md](/home/ubuntu/fanshide/sglang-omni/docs/developer_reference/action_inference/action_suffix_scoring.md)
+- [action_scoring.py](../../../sglang_omni/models/qwen3_omni/action_scoring.py)
+- [request_builders.py](../../../sglang_omni/models/qwen3_omni/request_builders.py)
+- [omni_scheduler.py](../../../sglang_omni/scheduling/omni_scheduler.py)
+- [client.py](../../../sglang_omni/client/client.py)
+- [action_suffix_scoring.md](action_suffix_scoring.md)
 
 ## Session Realtime 能力
 
-新增 [multimodal.py](/home/ubuntu/fanshide/sglang-omni/sglang_omni/serve/realtime/multimodal.py)，并在
-[openai_api.py](/home/ubuntu/fanshide/sglang-omni/sglang_omni/serve/openai_api.py) 中注册：
+新增 [multimodal.py](../../../sglang_omni/serve/realtime/multimodal.py)，并在
+[openai_api.py](../../../sglang_omni/serve/openai_api.py) 中注册：
 
 ~~~text
 WS /v1/session/realtime
@@ -120,8 +128,8 @@ WS /v1/session/realtime
 - session.close 和 error。
 
 session 状态保存在进程内，不做持久化。一个 session 同时只有一个 active turn。
-用户松开空格并提交 turn.commit 后，服务只计算动作，turn.result.reply 为 null。
-服务会把当前用户输入和实际选中的动作写入内部历史，供后续 turn 处理动作指代。
+用户松开空格并提交 turn.commit 后，服务只计算动作，turn.result 不包含 reply 字段。
+服务会把本轮用户输入或主动待播文本与实际选中的动作写入内部历史，供后续 turn 处理动作指代。
 
 音频使用 Base64 PCM16，图片使用 Base64 图片 bytes 和 timestamp。一个 turn 可以包含
 多个音频 chunk 和图片帧；服务按音频 seq 合并，图片按 timestamp/seq 排序。
@@ -183,28 +191,28 @@ session 状态保存在进程内，不做持久化。一个 session 同时只有
 
 ## 测试和实验能力
 
-- [qwen3_omni_atomic_action_smoke.py](/home/ubuntu/fanshide/sglang-omni/scripts/qwen3_omni_atomic_action_smoke.py)
+- [qwen3_omni_atomic_action_smoke.py](../../../scripts/qwen3_omni_atomic_action_smoke.py)
   从动作目录加载候选，支持音频、图片、文本、session 历史和 action ID 分类。
-- [qwen3_omni_action_scheme_comparison.py](/home/ubuntu/fanshide/sglang-omni/scripts/qwen3_omni_action_scheme_comparison.py)
+- [qwen3_omni_action_scheme_comparison.py](../../../scripts/qwen3_omni_action_scheme_comparison.py)
   比较：
   - A：自然语言 short_definition suffix；
   - B：固定候选列表 + 短 candidate_id suffix；
   - C：source_label suffix。
 - 方案比较脚本的最终 turn 只加入最新用户输入，不伪造最新 assistant 回复。
-- [test_action_scoring.py](/home/ubuntu/fanshide/sglang-omni/tests/unit_test/qwen3_omni/test_action_scoring.py)
+- [test_action_scoring.py](../../../tests/unit_test/qwen3_omni/test_action_scoring.py)
   增加 system prompt、两阶段选择、预热和失败非致命等覆盖。
-- [test_multimodal_session.py](/home/ubuntu/fanshide/sglang-omni/tests/unit_test/qwen3_omni/test_multimodal_session.py)
+- [test_multimodal_session.py](../../../tests/unit_test/qwen3_omni/test_multimodal_session.py)
   覆盖 session 初始化、多媒体 chunk、图片排序、turn 历史、commit/cancel、错误、
   动作结果和耗时。
 - tests/data/actions 作为外部测试资源，动作目录可以独立变化，不随服务代码固化。
 - 新增日志分析 skill：
-  [.claude/skills/analyze-qwen3-omni-action-logs](/home/ubuntu/fanshide/sglang-omni/.claude/skills/analyze-qwen3-omni-action-logs)
+  [.claude/skills/analyze-qwen3-omni-action-logs](../../../.claude/skills/analyze-qwen3-omni-action-logs/SKILL.md)
   用于统计成功 turn、category/child 耗时、prompt tokens、媒体数量、prefix cache
   和动作排序结果。
 
 ## 配置和部署
 
-[config_single_gpu.yaml](/home/ubuntu/fanshide/sglang-omni/deploy/config_single_gpu.yaml)
+[config_single_gpu.yaml](../../../deploy/config_single_gpu.yaml)
 本次实现将 preprocessing 和 thinker 的 max_seq_len 固定为 60000：
 
 ~~~yaml
@@ -224,14 +232,15 @@ Dockerfile、模型 worker、placement 和相关 launcher 修改使 action-score
 ## 协议和返回结果
 
 正式接入说明位于
-[multimodal_session_realtime.md](/home/ubuntu/fanshide/sglang-omni/docs/developer_reference/action_inference/multimodal_session_realtime.md)。
+[multimodal_session_realtime.md](multimodal_session_realtime.md)。
 
 当前 turn.result 重点字段：
 
-- reply：当前为 null；
-- action：Top-1 candidate、action_id、execute、PPL 和执行绑定；
-- scores：全部候选排序和 token scores；
-- media_summary：音频 chunk、图片帧和两阶段上下文；
+- `reply`：不返回；
+- `action`：默认只含 Top-1 的 `candidate_id`、`action_id`、`execute`，以及可选
+  `category_id` 和 `execution_binding`；
+- `scores`：仅 `include_scores=true` 时返回最终阶段的完整候选排序、PPL 和 token scores；
+- `media_summary`：仅 `include_scores=true` 时返回音频 chunk、图片帧和层级选择上下文；
 - timing.server_turn_ingest_ms；
 - timing.server_action_compute_ms；
 - timing.server_total_after_commit_ms；
@@ -242,13 +251,12 @@ no_action 也是普通候选；若 Top-1 是 no_action，则 execute=false。
 
 ## 验证记录
 
-本次预热实现完成后已执行：
+当前工作区同步文档后已执行：
 
 ~~~text
-py_compile：通过
 git diff --check：通过
 pytest tests/unit_test/qwen3_omni/test_action_scoring.py
-       tests/unit_test/qwen3_omni/test_multimodal_session.py：25 passed
+       tests/unit_test/qwen3_omni/test_multimodal_session.py：55 passed
 ~~~
 
 一次本地启动中的预热结果：
@@ -312,3 +320,43 @@ hierarchical 默认仍为类别 Top-1 后评分选中类别 children，保持原
 按传入文本原样渲染，不做压缩、去重或改写；其内容参与 action catalog hash 和
 prefix cache identity。需要压缩类别描述时，应在 session.start 之前由外部目录完成，
 并重新验证动作准确率和 cache 命中。
+
+## 主动 Turn 语义与可中断推理
+
+Realtime Session 新增显式 Turn 语义，避免把数字人主动待播文本当成用户输入：
+
+- `turn.start` 和 `turn.commit` 必须携带一致的 `turn_origin`、`text_role` 和可选
+  `trigger`；
+- 只接受 `user/user_input` 与 `proactive/character_reply` 两种组合；
+- proactive Turn 的待播文本可选，且 `user_input` 必须为 `null` 或省略；
+- proactive 待播文本存在时以 assistant 角色进入动作上下文，并与实际
+  `[action_state]` 一起写入历史；无文本时只记录动作状态，不创建当前待播消息；
+  user Turn 继续以 user 输入加 assistant 动作状态的形式写入历史；
+- `avatar_state.current_action_id` 和 `avatar_state.state_description` 作为推荐字段，
+  原有状态字段仍完整保留。
+
+Turn 生命周期从仅支持 commit 前取消扩展为支持 processing 阶段取消。commit 后的推理
+在后台任务中运行，WebSocket 仍可继续接收 `turn.cancel`。取消会根据当前阶段 abort
+具体物理请求，包括 flat、category、child 评分和首次 child catalog prefill；随后取消
+后台任务并阻止 `turn.result`、历史与 avatar state 落盘。`session.close` 和连接断开执行
+同样的清理。客户端收到 `turn.cancelled` 后才能安全开始下一 Turn。
+
+对应协议、Prompt 角色、错误恢复和取消竞态详见
+[multimodal_session_realtime.md](multimodal_session_realtime.md)。
+
+## 用户摄像头与数字人状态图片分流
+
+`input_image.append` 新增 `image_role`：`user_camera` 表示用户摄像头画面，
+`avatar_state` 表示数字人最新状态画面。服务端按 `timestamp_ms/seq` 排序图片时同步
+排序角色，在当前评分 Prompt 中提供逐图角色映射，并在后续历史评分上下文中为每个
+图片占位符重新生成角色标签。这样两类图片可在同一 Turn 中使用，而不会把数字人的
+手势或姿态误判为用户状态。
+
+旧客户端省略字段时按 Turn 来源兼容：user 默认 `user_camera`，proactive 默认
+`avatar_state`；新接入和混合来源 Turn 必须逐张显式传入。图片 `input.ack` 回显最终
+角色，开启 `include_scores` 时 `media_summary` 返回两类图片的计数。
+
+`avatar_state` 图片采用当前 Turn 有效语义，不进入后续 Turn 的动作评分历史。本轮
+没有新 `avatar_state` 图片时，Prompt 将数字人当前视觉姿态标记为未知，禁止根据
+历史数字人图片或用户摄像头图片推断；依赖实际视觉姿态的动作应选择 `no_action`。
+非视觉状态字段 `current_action_id`、`state_description` 和 `trigger` 不受影响。

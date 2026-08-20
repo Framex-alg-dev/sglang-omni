@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 
 import pytest
@@ -80,6 +81,31 @@ def test_contract_validation_and_limits():
         validate_action_suffix_request(request(request_id="bad id"))
     with pytest.raises(ValueError, match="micro_batch_size"):
         validate_action_suffix_request(request(micro_batch_size=0))
+
+
+def test_turn_semantics_validation_and_metadata_propagation():
+    proactive = request(
+        turn_origin="proactive",
+        text_role="character_reply",
+        trigger="user_returned",
+    )
+    validate_action_suffix_request(proactive)
+    omni = Client._build_action_scoring_request(proactive)
+
+    assert omni.metadata["turn_origin"] == "proactive"
+    assert omni.metadata["text_role"] == "character_reply"
+    assert omni.metadata["trigger"] == "user_returned"
+    action_spec = omni.params["action_scoring"]
+    assert action_spec["turn_origin"] == "proactive"
+    assert action_spec["text_role"] == "character_reply"
+    assert action_spec["trigger"] == "user_returned"
+
+    with pytest.raises(ValueError, match="text_role"):
+        validate_action_suffix_request(
+            request(turn_origin="proactive", text_role="user_input")
+        )
+    with pytest.raises(ValueError, match="only supported for proactive"):
+        validate_action_suffix_request(request(trigger="user_returned"))
 
 
 def test_tokenization_handles_suffix_boundary_and_special_tokens():
@@ -446,3 +472,58 @@ def test_second_turn_keeps_first_turn_in_context():
     assert second_request.inputs["messages"][:2] == second_turn.history
     assert second_request.inputs["messages"][-1]["content"][-1]["text"] == second_turn.prefix
     assert second_request.metadata["session_id"] == first_request.metadata["session_id"]
+
+
+class BlockingActionCoordinator:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.aborted: list[str] = []
+        self.submit_order: list[str] = []
+
+    async def submit(self, request_id, omni_request):
+        del omni_request
+        self.submit_order.append(request_id)
+        if len(self.submit_order) == 1:
+            self.started.set()
+            await asyncio.Event().wait()
+        return ActionSuffixScoreResult(
+            request_id=request_id,
+            model="qwen3-omni",
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id="left",
+                    token_count=1,
+                    mean_logprob=-0.1,
+                    mean_nll=0.1,
+                    ppl=1.105,
+                    token_scores=[TokenScore(token_id=1, logprob=-0.1)],
+                )
+            ],
+        )
+
+    async def abort(self, request_id: str) -> bool:
+        self.aborted.append(request_id)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_action_scoring_cancellation_aborts_and_releases_slot() -> None:
+    coordinator = BlockingActionCoordinator()
+    client = Client(coordinator)
+    first = asyncio.create_task(
+        client.score_action_suffixes(request(request_id="cancel-first"))
+    )
+    await asyncio.wait_for(coordinator.started.wait(), timeout=1)
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    assert coordinator.aborted == ["cancel-first"]
+    second = await asyncio.wait_for(
+        client.score_action_suffixes(request(request_id="run-second")),
+        timeout=1,
+    )
+    assert second.request_id == "run-second"
+    assert coordinator.submit_order == ["cancel-first", "run-second"]

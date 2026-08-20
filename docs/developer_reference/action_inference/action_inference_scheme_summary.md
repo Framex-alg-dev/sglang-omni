@@ -7,10 +7,20 @@
 
 ## 1. 目标和边界
 
-服务在一个进程内维护一个多模态 session。外部服务通过 WebSocket 发送一个 turn 的音频、图片和
-可选文本，服务只推理当前 turn 的动作，不生成普通数字人文本回复。
+服务在一个进程内维护一个多模态 session。外部服务通过 WebSocket 发送用户输入，或提交已经由
+外部模型生成的数字人待播文本；服务只为当前 turn 选择动作，不生成普通数字人文本回复。
 
-每次成功推理都会把用户输入和实际动作写入 session 内存历史，供后续 turn 理解：
+每个 turn 必须显式声明来源和文本角色：
+
+| `turn_origin` | `text_role` | 当前 `text` 的语义 |
+| --- | --- | --- |
+| `user` | `user_input` | 用户当前输入，可与音频、图片一起提交 |
+| `proactive` | `character_reply` | 数字人已经生成、即将播放的文本 |
+
+主动 Turn 的文本可选，并可携带可选 `trigger` 说明触发原因。Turn 语义字段必须在
+`turn.start` 和 `turn.commit` 中保持一致。
+
+每次成功推理都会把本轮用户输入或主动待播文本与实际动作写入 session 内存历史，供后续 turn 理解：
 
 ```text
 用户：请挥手。
@@ -63,13 +73,28 @@
 `candidate_id`。候选的 logit、token logprob、mean logprob、NLL 和 PPL 计算规则不变，变化点是
 不再为每个候选 suffix 重复拼接长动作描述。
 
-逻辑 prompt 顺序为：
+用户 Turn 的逻辑 prompt 顺序为：
 
 ```text
 system: 固定动作候选目录
 历史 user/assistant: 历史输入和服务端记录的 [action_state]
 当前 user: 本轮音频、图片、文本、数字人状态和动作选择指令
 ```
+
+主动 Turn 不会把待播文本伪装成用户输入，其逻辑顺序为：
+
+```text
+system: 固定动作候选目录
+历史 user/assistant: 历史输入、待播文本和服务端记录的 [action_state]
+当前 assistant: 本轮已经生成的待播文本
+内部 user 指令: 结合待播文本、avatar_state 和历史选择伴随动作，不生成回复
+```
+
+未提供待播文本时省略“当前 assistant”消息，内部指令明确本轮不依赖当前语言文本，
+只根据 `avatar_state`、`trigger`、历史和媒体选择动作。
+
+`turn_origin`、`text_role` 和 `trigger` 同时进入 action-score metadata 和诊断信息。
+它们不改变 suffix 的 logprob/PPL 公式，只决定当前文本的角色和动作选择指令。
 
 这样候选目录在 session 内保持同一前缀，而当前 turn 的媒体和状态位于后面。`session.start` 会
 根据选择模式预填充固定候选前缀：
@@ -88,27 +113,62 @@ prompt 追加到 session 历史。
 
 ## 4. Session 历史和媒体处理
 
-成功 turn 会追加以下两条逻辑历史消息：
+成功的用户 Turn 会追加以下两条逻辑历史消息：
 
 ```text
 user       当前 turn 的音频、图片和文本占位信息
 assistant   [action_state] turn_id、candidate_id、action_id、动作名称、动作描述和执行状态
 ```
 
+成功的主动 Turn 则追加一条 assistant 历史消息，把可选待播文本与本轮实际
+`[action_state]` 放在一起；无待播文本时只记录 `[action_state]`。这样下一轮能够区分“用户说了什么”和“数字人刚刚说了什么”，
+同时继续利用最近动作处理重复、冲突和指代。取消或评分失败的 Turn 不写入历史。
+
 `[action_state]` 是服务端记录的实际动作，不是新的用户指令。动作 prompt 明确要求遇到“刚刚、上一轮、
 再重复、这个动作”等指代时优先参考最近一条 action state。`no_action` 也会记录为“本轮未执行动作”。
 
-历史按最近 turn 保留，并限制历史音频、历史图片和当前 turn 图片数量，防止上下文无限膨胀。裁剪按
-完整 turn 和媒体占位符进行，保证消息中的 audio/image 数量与传给模型的媒体数组一致。
+动作评分最多保留最近 4 个已完成 Turn、4 个历史音频、8 个历史图片和当前 Turn
+最近 8 张图片，防止上下文无限膨胀。裁剪按完整 Turn 和媒体占位符进行，保证消息中的
+audio/image 数量与传给模型的媒体数组一致；这些限制不改变 Session 内候选目录。
 
 一个 turn 可以包含多个音频 chunk 和图片帧：
 
 - 音频：JSON 文本帧中的 Base64，16 kHz、单声道 PCM16，按 seq 顺序合并；
 - 图片：JSON 文本帧中的 Base64 图片 bytes，按 timestamp/seq 排序；
-- 文本：可选，通常以音频和图片为主；
-- 数字人状态：作为当前 turn 动态上下文，不污染固定候选前缀。
+- 文本：用户 Turn 和主动 Turn 均可选；主动 Turn 中表示数字人待播文本；
+- 数字人状态：作为当前 turn 动态上下文，不污染固定候选前缀。推荐提供
+  `current_action_id` 和 `state_description`，其他已有字段保持兼容。
 
-## 5. 返回结果和客户端使用
+`text` 与 `avatar_state` 的职责不同：
+
+- `text` 决定本轮语言内容。user Turn 中是可选用户输入；proactive Turn 中是
+  可选的数字人待播文本，提供时以 assistant 角色参与动作选择和后续历史；
+- `current_action_id` 表示当前或刚结束的动作，用于动作衔接、冲突检查和避免
+  无意义重复，但不会强制返回该动作或扩展候选集合；
+- `state_description` 是自然语言场景约束，可描述表达目标、姿态、用户状态、
+  必须满足的动作要求和禁止项；没有同时满足文本与状态约束的候选时选择 `no_action`；
+- 成功 Turn 提供的非空 `avatar_state` 会成为 Session 最近状态；省略或传空对象时
+  复用上次成功状态，取消或失败不会更新它。
+
+## 5. Turn 生命周期和取消
+
+正常时序为：
+
+```text
+turn.start -> turn.started -> turn.commit -> turn.committed -> turn.result
+```
+
+`turn.commit` 后 Turn 进入 processing，输入被冻结，但仍可以通过 `turn.cancel`
+取消。服务会 abort 当前 flat、category、child 或 child catalog prefill 物理请求，
+取消后台推理任务，阻止后续层级阶段启动，并在清理完成后返回 `turn.cancelled`。
+被取消的 Turn 不返回 `turn.result`，也不更新动作历史和最后一次 `avatar_state`。
+
+WebSocket 断开和 `session.close` 使用相同的后台任务取消与底层 abort 清理，但不会
+额外发送 `turn.cancelled`。结果与取消发生竞态时只会产生一个 Turn 终态；客户端应等待
+`turn.result`、`turn.cancelled` 或 Turn 级 `error` 后再启动下一 Turn。已成功 start 的
+`turn_id` 即使随后取消也不能复用。
+
+## 6. 返回结果和客户端使用
 
 默认 `turn.result` 只返回动作执行所需的信息：
 
@@ -147,7 +207,7 @@ assistant   [action_state] turn_id、candidate_id、action_id、动作名称、�
 只有 `session.start.include_scores=true` 时才返回完整 `scores` 排序、PPL、mean_logprob、token
 scores 和媒体上下文摘要。生产动作执行通常不需要这些诊断字段。
 
-## 6. 性能和资源优化
+## 7. 性能和资源优化
 
 候选评分采用“共享 prefix + 短 ID suffix”：
 
@@ -174,14 +234,14 @@ scores 和媒体上下文摘要。生产动作执行通常不需要这些诊断�
 业务历史，也不计入业务 turn 耗时；它只提前初始化 tokenizer、请求构造、scheduler admission、
 Thinker 和 prefix cache 路径。
 
-## 7. 上下文和部署配置
+## 8. 上下文和部署配置
 
 当前单 GPU 配置将 preprocessing 和 thinker 的 `max_seq_len` 设置为 60000。它是服务处理上下文
 的上限，不是单个 turn 的独立长度；实际可用空间还受固定候选目录、历史、媒体展开 token、显存和
 KV cache 影响。服务通过内置 `WS /v1/session/realtime` 路由提供能力，不依赖
 `--enable-realtime` 开关。
 
-## 8. 主要代码和验证入口
+## 9. 主要代码和验证入口
 
 - Realtime session：`sglang_omni/serve/realtime/multimodal.py`
 - 客户端请求和预填充：`sglang_omni/client/client.py`

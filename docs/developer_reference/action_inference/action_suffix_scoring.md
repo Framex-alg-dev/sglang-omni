@@ -27,6 +27,16 @@ requests.
 
 Each turn may include `session_id`, the ordered `history` messages, `history_audios`, `history_images`, and an `avatar_state` object. The caller sends the complete context on every request; `session_id` is a correlation key and does not store conversation state inside the server. Historical audio/image entries must have explicit structured parts in `history`, for example `{"type":"audio"}` or `{"type":"image"}`, with matching entries in `history_audios`/`history_images`. The current turn remains in `prefix`, `audios`, and `images`. The service combines historical and current media in message order, so the action decision can use prior audio, text, images, and the current digital-human state.
 
+The Realtime Session adapter also attaches internal `turn_origin`, `text_role`,
+and optional `trigger` metadata to scoring requests. The only valid pairs are
+`user/user_input` and `proactive/character_reply`. User-turn content is treated
+as user input. For a proactive turn, the already-generated character reply is
+inserted as the latest assistant message before the internal candidate-selection
+instruction is appended. Both paths use the complete bounded history and
+`avatar_state`, score only the supplied suffixes, and never enter ordinary reply
+generation. These fields are Realtime Session metadata and are not currently
+part of the public `POST /v1/action-scores` request schema.
+
 Example shape:
 
 ```json
@@ -104,9 +114,9 @@ second model.
 Run the pure contract tests and compile checks before launching the model:
 
 ```bash
-/data/hanning/envs/qwen-voice-clone/bin/python -m pytest -q \
+python -m pytest -q \
   tests/unit_test/qwen3_omni/test_action_scoring.py
-python3 -m py_compile \
+python -m py_compile \
   sglang_omni/models/qwen3_omni/action_scoring.py \
   sglang_omni/models/qwen3_omni/request_builders.py \
   sglang_omni/models/qwen3_omni/config.py \
@@ -172,14 +182,22 @@ Structured events include queue entry, suffix batch enqueue, first emit, and mod
 
 The client serializes MIS calls. Timeout and cancellation first cancel the coordinator task, then abort the logical request; the scheduler recursively removes waiting, running, and candidate requests. Internal candidate IDs are never sent through the external request-finished abort callback.
 
+For `WS /v1/session/realtime`, `turn.commit` runs scoring in a background task
+so the socket can still receive `turn.cancel`. The adapter tracks the currently
+active flat, category, child, or first-use child-catalog-prefill request ID,
+aborts that request, cancels the orchestration task, and prevents later stages,
+`turn.result`, history updates, and `avatar_state` updates. A cancelled Turn is
+complete only after `turn.cancelled` is received. Socket disconnect and
+`session.close` perform the same cleanup without emitting that event.
+
 ### GPU smoke and benchmark checklist
 
 The following commands are intentionally dry-run checks until the operator explicitly authorizes a launch:
 
 ```bash
 # Check model/config/GPU prerequisites without starting a server
-python3 -m py_compile sglang_omni/models/qwen3_omni/*.py
-python3 -m pytest -q tests/unit_test/qwen3_omni/test_action_scoring.py
+python -m py_compile sglang_omni/models/qwen3_omni/*.py
+python -m pytest -q tests/unit_test/qwen3_omni/test_action_scoring.py
 
 # After explicit launch approval, use the single-GPU profile as the baseline
 # bash scripts/launch_server.sh --config deploy/config_single_gpu.yaml

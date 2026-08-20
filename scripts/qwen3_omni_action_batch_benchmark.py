@@ -175,6 +175,7 @@ async def run_once(
             "turn_id": turn_id,
             "seq": 1,
             "timestamp_ms": 1000,
+            "image_role": "user_camera",
             "mime_type": image_mime,
             "image": image_b64,
         }))
