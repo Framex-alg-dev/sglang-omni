@@ -36,7 +36,6 @@ output.wav
 .DS_Store
 Thumbs.db
 .ruff_cache/
-uv.lock
 results/
 .humanize/
 .benchmark-data/

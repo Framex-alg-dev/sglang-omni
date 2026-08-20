@@ -21,11 +21,16 @@ RUN git clone https://github.com/openucx/ucx.git \
     && make -j install-strip \
     && ldconfig
 
-# Install the repository and its pinned runtime dependencies into the image so
-# containers do not depend on an ad-hoc host-side pip install.
+# Install the locked runtime dependency graph, then the repository itself, so
+# containers do not depend on an ad-hoc host-side dependency resolution.
 WORKDIR /opt/sglang-omni
 COPY . /opt/sglang-omni
-RUN uv pip install --system --break-system-packages --no-cache --index-url https://pypi.org/simple -e .
+RUN uv export --locked --no-dev --no-emit-project --output-file /tmp/sglang-omni-requirements.txt \
+    && uv pip install --system --break-system-packages --no-cache --require-hashes \
+        --index-url https://pypi.org/simple \
+        --requirement /tmp/sglang-omni-requirements.txt \
+    && uv pip install --system --break-system-packages --no-cache --no-deps -e . \
+    && rm -f /tmp/sglang-omni-requirements.txt
 
 ENV SGLANG_JIT_DEEPGEMM_PRECOMPILE=0 \
     FLASHINFER_DISABLE_VERSION_CHECK=1 \

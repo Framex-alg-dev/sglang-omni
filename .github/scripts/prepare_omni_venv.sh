@@ -40,7 +40,7 @@ uv venv "${HOST}" -p 3.11
 rm -rf "./${VENV_NAME}"
 ln -sfn "${HOST}" "./${VENV_NAME}"
 source "${VENV_NAME}/bin/activate"
-uv pip install -e .
+uv sync --active --locked
 
 if ! python -c "import av" 2>/dev/null; then
   echo "PyAV native libraries corrupted in prepared venv, force-reinstalling..."

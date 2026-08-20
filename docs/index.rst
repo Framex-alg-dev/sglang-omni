@@ -69,6 +69,13 @@ Supported Models
 
 .. toctree::
    :maxdepth: 1
+   :caption: Operations
+
+   operations/environment.md
+
+
+.. toctree::
+   :maxdepth: 1
    :caption: Cookbook
 
    cookbook/higgs_tts.md
