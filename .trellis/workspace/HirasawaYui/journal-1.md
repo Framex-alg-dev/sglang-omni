@@ -26,3 +26,26 @@ Initialized Trellis project workflow and populated source-backed backend directo
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: 完成 Session Realtime 本地 fake-model
+
+**Date**: 2026-08-25
+**Task**: 完成 Session Realtime 本地 fake-model
+**Branch**: `main`
+
+### Summary
+
+完成 /v1/session/realtime 确定性 text/action 模型替身、真正取消、Windows 轻量开发入口、进程外 smoke、并发偏序校验和中文实施报告。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8dee03f` | (see git log) |
+| `b45c565` | (see git log) |
+| `9702bae` | (see git log) |
+
+### Status
+
+[OK] **Completed**
