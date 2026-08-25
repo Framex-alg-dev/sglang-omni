@@ -76,6 +76,64 @@ logger = logging.getLogger(__name__)
 _NVML_INITIALIZED = False
 _NVML_MODULE: Any | None = None
 
+
+def _to_python_list(value: Any) -> list[Any]:
+    """Convert a tensor-like value to a list without failing on lists.
+
+    SGLang's result processor normally receives tensors here, but mixed
+    generation and action-prefix batches can expose a value that has already
+    been moved to Python.  Keeping this conversion idempotent prevents a
+    second ``.tolist()`` call from terminating the scheduler process.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    return list(value)
+
+
+def _move_logprobs_to_cpu_compat(
+    _processor: Any,
+    *,
+    batch: Any,
+    logits_output: Any,
+) -> None:
+    """Idempotent equivalent of SGLang's logprob CPU transfer."""
+    if not batch.return_logprob:
+        return
+
+    next_token_logprobs = getattr(logits_output, "next_token_logprobs", None)
+    if next_token_logprobs is not None:
+        logits_output.next_token_logprobs = _to_python_list(next_token_logprobs)
+
+    input_token_logprobs = getattr(logits_output, "input_token_logprobs", None)
+    if input_token_logprobs is not None:
+        logits_output.input_token_logprobs = tuple(
+            _to_python_list(input_token_logprobs)
+        )
+
+    top_values = getattr(logits_output, "next_token_top_logprobs_val", None)
+    if top_values is not None and len(top_values) > 0:
+        logits_output.next_token_top_logprobs_val = [
+            _to_python_list(value) for value in top_values
+        ]
+        top_indices = getattr(logits_output, "next_token_top_logprobs_idx", None)
+        if top_indices is not None:
+            logits_output.next_token_top_logprobs_idx = [
+                _to_python_list(value) for value in top_indices
+            ]
+
+    selected_values = getattr(
+        logits_output, "next_token_token_ids_logprobs_val", None
+    )
+    if selected_values is not None and len(selected_values) > 0:
+        logits_output.next_token_token_ids_logprobs_val = [
+            _to_python_list(value) for value in selected_values
+        ]
+
 def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
     """Return process-local CUDA memory and best-effort device telemetry."""
     snapshot: dict[str, Any] = {
@@ -675,6 +733,13 @@ class OmniScheduler:
             SchedulerPoolStatsObserver,
         )
 
+        class CompatibleSchedulerBatchResultProcessor(
+            SchedulerBatchResultProcessor
+        ):
+            """SGLang result processor with idempotent logprob conversion."""
+
+            move_logprobs_to_cpu = _move_logprobs_to_cpu_compat
+
         self.dp_attn_adapter = SchedulerDPAttnAdapter(
             tp_group=self.tp_group,
             req_to_token_pool=self.req_to_token_pool,
@@ -737,7 +802,7 @@ class OmniScheduler:
                 reqs, return_logprob
             ),
         )
-        self.batch_result_processor = SchedulerBatchResultProcessor(
+        self.batch_result_processor = CompatibleSchedulerBatchResultProcessor(
             is_generation=self.is_generation,
             disaggregation_mode=self.disaggregation_mode,
             enable_overlap=self.enable_overlap,
@@ -1233,7 +1298,11 @@ class OmniScheduler:
                 raise RuntimeError(f"missing action suffix result: {candidate_id}")
             scores.append(
                 score_candidate_from_runtime(
-                    candidate_id, suffix_ids, prefix_logits, raw
+                    candidate_id,
+                    suffix_ids,
+                    prefix_logits,
+                    raw,
+                    terminal_token_id=plan.get("terminal_token_id"),
                 )
             )
         prefix_len = int(plan["prefix_token_count"])

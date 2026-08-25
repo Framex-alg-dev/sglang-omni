@@ -1,258 +1,114 @@
-# Qwen3-Omni 多模态动作推理方案总览
+# Qwen3-Omni 回复与动作推理方案总览
 
-本文总结当前 `sglang-omni` 内的数字人动作推理方案，供服务接入、调试和后续优化使用。
-相关协议细节见 [multimodal_session_realtime.md](multimodal_session_realtime.md)，评分算法见
-[action_suffix_scoring.md](action_suffix_scoring.md)，变更时间线见
-[action_inference_change_history.md](action_inference_change_history.md)。
+本服务通过 `/v1/session/realtime` 在同一个 Session 和 Turn 内处理回复与动作。客户端正式
+协议见 [realtime_reply_action_client_guide.md](realtime_reply_action_client_guide.md)，融合实现
+语义见 [reply_action_fusion.md](reply_action_fusion.md)。
 
-## 1. 目标和边界
+## 能力边界
 
-服务在一个进程内维护一个多模态 session。外部服务通过 WebSocket 发送用户输入，或提交已经由
-外部模型生成的数字人待播文本；服务只为当前 turn 选择动作，不生成普通数字人文本回复。
+- 输出类型：`text`、`action`，可单独或同时启用；
+- 输入：用户 PCM16LE 音频、用户摄像头图片、数字人当前图片、可选用户文本、结构化状态；
+- Turn 类型：用户触发 `origin=user`，数字人主动触发 `origin=proactive`；
+- Session 内保留有限多轮回复、媒体和已执行动作事实；断线后不持久化；
+- 服务负责动作选择，不负责动画播放器和最终播放成功确认。
 
-每个 turn 必须显式声明来源和文本角色：
+## 全局目录与 Session 白名单
 
-| `turn_origin` | `text_role` | 当前 `text` 的语义 |
-| --- | --- | --- |
-| `user` | `user_input` | 用户当前输入，可与音频、图片一起提交 |
-| `proactive` | `character_reply` | 数字人已经生成、即将播放的文本 |
+服务启动时加载全局只读动作目录并预热 Category 与 Child 静态前缀。每个 Session 通过
+`action.allowed_candidates` 发送全局候选的子集，只携带 `candidate_id` 和可选
+`execution_binding`。
 
-主动 Turn 的文本可选，并可携带可选 `trigger` 说明触发原因。Turn 语义字段必须在
-`turn.start` 和 `turn.commit` 中保持一致。
+服务端根据全局目录恢复：
 
-每次成功推理都会把本轮用户输入或主动待播文本与实际动作写入 session 内存历史，供后续 turn 理解：
+- 动作所属类别；
+- `action_id`；
+- 类别/动作名称和定义；
+- Category 与 Child Prompt 语义。
 
-```text
-用户：请挥手。
-服务动作：[action_state] 执行结果=已执行动作｜candidate_id=A002｜action_id=A002
-用户：再重复一遍刚刚的动作。
-服务动作：A002
-```
+Session 白名单不会修改全局目录。评分和结果都不能越过当前 Session 白名单。
 
-服务不做 session 持久化；断开连接后释放 session。本文不涉及外部动作播放器、骨骼绑定和动画渲染。
-
-## 2. 候选目录和选择模式
-
-`session.start` 初始化候选目录。候选目录在整个 session 内固定，并计算
-`action_catalog_hash` 作为版本标识。每个具体动作至少包含：
-
-- `candidate_id`：模型评分和返回排序使用的候选 ID；
-- `action_id`：动作执行器使用的真实动作 ID；
-- `source_label`：动作名称；
-- `short_definition`：动作语义描述；
-- `execution_binding`：可选的左右手、方向等执行参数；
-- `category_id`：嵌套候选中的所属类别。
-
-候选目录必须包含 `action_id=no_action`。它与其他动作一样参与评分；如果被选中，返回
-`execute=false`，客户端保持当前姿态。
-
-支持两种模式：
-
-| 模式 | 固定候选内容 | 每个 turn 的计算 | 是否有类别阶段 |
-| --- | --- | --- | --- |
-| `hierarchical` | 所有一级类别及其描述 | 先评分类别，再评分选中类别的 children | 有，两阶段 |
-| `flat_children` | 所有具体 children 及其描述 | 直接评分所有具体动作 | 无，一阶段 |
-
-模式优先级为：
-
-1. `session.start.selection_mode`；
-2. 环境变量 `SGLANG_OMNI_ACTION_SELECTION_MODE`；
-3. 默认值 `hierarchical`。
-
-`session.start` 的 `selection_mode` 非法时，session 仍可正常启动，该值被忽略并继续使用环境变量
-或默认值。环境变量只控制未被 session 覆盖的默认模式。
-
-`hierarchical` 默认只选择类别 Top-1。可以通过 `SGLANG_OMNI_ACTION_CATEGORY_TOP_K` 设置为
-1–3，在类别边界模糊时同时取多个类别的 children；Top-K 越大，准确率兜底能力越强，但第二阶段
-候选数和耗时也会增加。 `flat_children` 不做类别评分，所有 children（包括 `no_action`）直接进入
-同一次具体动作评分。
-
-## 3. Prompt 结构和 KV cache
-
-当前使用方案 B：候选语义定义放在固定 system prompt 中，模型真正评分的 suffix 只使用短
-`candidate_id`。候选的 logit、token logprob、mean logprob、NLL 和 PPL 计算规则不变，变化点是
-不再为每个候选 suffix 重复拼接长动作描述。
-
-用户 Turn 的逻辑 prompt 顺序为：
+## 两阶段选择
 
 ```text
-system: 固定动作候选目录
-历史 user/assistant: 历史输入和服务端记录的 [action_state]
-当前 user: 本轮音频、图片、文本、数字人状态和动作选择指令
+当前 Session 实际覆盖的类别
+        │
+        ▼
+Category PPL 在类别与 B000（UNSUPPORTED）中评分，选 Top-1
+        │
+        ▼
+选中类别下的 Session 白名单动作
+        │
+        ▼
+Child PPL 在类别动作与 A000（UNSUPPORTED）中评分
 ```
 
-主动 Turn 不会把待播文本伪装成用户输入，其逻辑顺序为：
+所有 Session 必须通过 `action.fallback_category_ids` 配置至少一个兜底类别，并在每个兜底
+类别下提供至少一个白名单动作。Category 的 `B000` 和 Child 的 `A000` 都映射为
+`UNSUPPORTED`；其中 `B000` 只判断目标语义类别是否存在，不能用于判断类别内具体动作；
+`A000` 只在类别已选定、但该类别下的 Session 具体动作无法满足明确请求时使用。它们只是
+推理判断，不是目录动作。任一阶段选择
+它时，服务端进入数组中的最高优先级类别并返回真实动作，`execute=true`，同时标记
+`support_status=unsupported`、`fallback_applied=true`。
 
-```text
-system: 固定动作候选目录
-历史 user/assistant: 历史输入、待播文本和服务端记录的 [action_state]
-当前 assistant: 本轮已经生成的待播文本
-内部 user 指令: 结合待播文本、avatar_state 和历史选择伴随动作，不生成回复
-```
+## 上下文和 Prompt 隔离
 
-未提供待播文本时省略“当前 assistant”消息，内部指令明确本轮不依赖当前语言文本，
-只根据 `avatar_state`、`trigger`、历史和媒体选择动作。
+| 上下文 | 回复 | Category | Child |
+|---|---:|---:|---:|
+| `character_profile` | 是 | 是 | 是 |
+| `reply.instructions` | 是 | 否 | 否 |
+| `action.category_guidance` | 否 | 主要 | 背景 |
+| `action.candidate_guidance` | 否 | 可行性参考 | 主要 |
+| `reply.context` | 是 | 否 | 否 |
+| `action.guidance` | 否 | 是 | 是 |
+| 用户音频/图片/文本 | 是 | 是 | 是 |
+| 数字人当前图片/状态 | 间接场景理解 | 是 | 是 |
 
-`turn_origin`、`text_role` 和 `trigger` 同时进入 action-score metadata 和诊断信息。
-它们不改变 suffix 的 logprob/PPL 公式，只决定当前文本的角色和动作选择指令。
+回复与动作拥有独立 System Prompt。服务端不会把动作临时约束混入回复 Prompt，也不会把
+回复临时约束混入动作 Prompt。
 
-这样候选目录在 session 内保持同一前缀，而当前 turn 的媒体和状态位于后面。`session.start` 会
-根据选择模式预填充固定候选前缀：
+## 融合时序
 
-- `hierarchical`：预填充类别候选阶段；
-- `flat_children`：预填充所有具体动作的一阶段候选。
+Category 选出后，回复生成与 Child 动作评分并行。回复不等待 Child，因此 Child 失败不会
+阻塞或改写已成功的回复；最终以 `status=partial`、`outputs.action=failed` 返回动作错误。
 
-后续 turn 只在 token 完全一致且边界安全时复用固定候选目录以及已完成历史的 KV。当前 turn 的
-音频、图片、数字人状态和最新动作指令不进入可复用边界，避免把上一轮动态内容错误复用到本轮。
-日志中的 `prefix_cached`、`cached_prefix_token_count` 和 `candidate_prefix_recompute_tokens` 用于
-确认缓存结果；理想状态是缓存命中且候选前缀重算为 0。
+客户端主动提供 `reply.provided_text` 时，服务不再生成回复。空字符串是明确的静默回复，
+不会被误判为缺省。
 
-`hierarchical` 的第二阶段是同一个逻辑请求内的临时阶段：类别阶段完成后，服务根据 Top-K 类别
-构造 children system prompt，再评分具体动作。它不创建第二个 session，也不会把第二阶段 system
-prompt 追加到 session 历史。
+## 历史与动作事实
 
-## 4. Session 历史和媒体处理
+成功动作选择暂时视为实际执行，保存为 Session 动作事实。后续 Turn 可以：
 
-成功的用户 Turn 会追加以下两条逻辑历史消息：
+- 回答“上一个动作是什么”；
+- 理解“再做一次刚才的动作”；
+- 结合 `action.last_executed_action_id`（上一动作结果的 `action_id`）做动作衔接和重复判断。
 
-```text
-user       当前 turn 的音频、图片和文本占位信息
-assistant   [action_state] turn_id、candidate_id、action_id、动作名称、动作描述和执行状态
-```
+Child 失败或取消的 Turn 不覆盖上一条成功动作事实。
 
-成功的主动 Turn 则追加一条 assistant 历史消息，把可选待播文本与本轮实际
-`[action_state]` 放在一起；无待播文本时只记录 `[action_state]`。这样下一轮能够区分“用户说了什么”和“数字人刚刚说了什么”，
-同时继续利用最近动作处理重复、冲突和指代。取消或评分失败的 Turn 不写入历史。
+## 结果
 
-`[action_state]` 是服务端记录的实际动作，不是新的用户指令。动作 prompt 明确要求遇到“刚刚、上一轮、
-再重复、这个动作”等指代时优先参考最近一条 action state。`no_action` 也会记录为“本轮未执行动作”。
-
-动作评分最多保留最近 4 个已完成 Turn、4 个历史音频、8 个历史图片和当前 Turn
-最近 8 张图片，防止上下文无限膨胀。裁剪按完整 Turn 和媒体占位符进行，保证消息中的
-audio/image 数量与传给模型的媒体数组一致；这些限制不改变 Session 内候选目录。
-
-一个 turn 可以包含多个音频 chunk 和图片帧：
-
-- 音频：JSON 文本帧中的 Base64，16 kHz、单声道 PCM16，按 seq 顺序合并；
-- 图片：JSON 文本帧中的 Base64 图片 bytes，按 timestamp/seq 排序；
-- 文本：用户 Turn 和主动 Turn 均可选；主动 Turn 中表示数字人待播文本；
-- 数字人状态：作为当前 turn 动态上下文，不污染固定候选前缀。推荐提供
-  `current_action_id` 和 `state_description`，其他已有字段保持兼容。
-
-`text` 与 `avatar_state` 的职责不同：
-
-- `text` 决定本轮语言内容。user Turn 中是可选用户输入；proactive Turn 中是
-  可选的数字人待播文本，提供时以 assistant 角色参与动作选择和后续历史；
-- `current_action_id` 表示上一次已经执行的动作，用于动作衔接、冲突检查和避免
-  无意义重复，但不会强制返回该动作或扩展候选集合；
-- `state_description` 是本次 proactive 场景的自然语言解释，可描述表达目标、推理指引、
-  必须满足的动作要求和禁止项；没有同时满足文本与场景约束的候选时选择 `no_action`；
-- `pose/gaze/hands` 等结构化视觉状态可随成功 Turn 继承；`current_action_id` 和
-  `state_description` 只在显式提供它们的当前 Turn 生效，不跨 Turn 继承；
-- 当前 Turn 有数字人状态图片时，最新图片表示当前可视姿态和行为，并替代、清除之前
-  缓存的结构化视觉状态；取消或失败不会更新最近状态；
-- 图片和结构化视觉状态都不存在时，Prompt 明确标记当前状态未知，但不会仅因未知而
-  排除不依赖特定起始姿态的候选。
-
-## 5. Turn 生命周期和取消
-
-正常时序为：
-
-```text
-turn.start -> turn.started -> turn.commit -> turn.committed -> turn.result
-```
-
-`turn.commit` 后 Turn 进入 processing，输入被冻结，但仍可以通过 `turn.cancel`
-取消。服务会 abort 当前 flat、category、child 或 child catalog prefill 物理请求，
-取消后台推理任务，阻止后续层级阶段启动，并在清理完成后返回 `turn.cancelled`。
-被取消的 Turn 不返回 `turn.result`，也不更新动作历史和最后一次 `avatar_state`。
-
-WebSocket 断开和 `session.close` 使用相同的后台任务取消与底层 abort 清理，但不会
-额外发送 `turn.cancelled`。结果与取消发生竞态时只会产生一个 Turn 终态；客户端应等待
-`turn.result`、`turn.cancelled` 或 Turn 级 `error` 后再启动下一 Turn。已成功 start 的
-`turn_id` 即使随后取消也不能复用。
-
-## 6. 返回结果和客户端使用
-
-默认 `turn.result` 只返回动作执行所需的信息：
+三种输出模式统一返回：
 
 ```json
 {
   "type": "turn.result",
-  "action": {
-    "action_id": "A328",
-    "candidate_id": "A328",
-    "category_id": "B055",
-    "execute": true,
-    "execution_binding": {"body_side": "right"}
+  "status": "completed",
+  "outputs": {
+    "text": "completed",
+    "action": "completed"
   },
-  "timing": {
-    "server_turn_ingest_ms": 120.4,
-    "server_action_compute_ms": 318.6,
-    "server_total_after_commit_ms": 319.1
-  },
-  "action_catalog_hash": "sha256:..."
+  "reply": {},
+  "action": {},
+  "timing": {}
 }
 ```
 
-客户端通常直接使用 `action`：
+动作可以通过 `turn.action.ready` 提前下发。客户端只依据 `execute` 执行，并按 `turn_id`
+幂等，不能在 `turn.result` 再次执行同一动作。
 
-- `action_id`：动作执行器实际播放的动作；
-- `candidate_id`：与本 session 候选目录、日志和评分结果对应的 ID；
-- `category_id`：`hierarchical` 下实际选中的类别；`flat_children` 可为空或不返回；
-- `execution_binding`：执行动作所需的附加参数；
-- `execute=false`：不播放动作，保持当前姿态。
+## 缓存与性能
 
-`server_turn_ingest_ms` 是服务接收并聚合当前 turn 输入的时间；
-`server_action_compute_ms` 是动作评分耗时；
-`server_total_after_commit_ms` 是从收到 `turn.commit` 到生成结果的服务端耗时。
-它们都不包含客户端到服务端的网络传输时间。
-
-只有 `session.start.include_scores=true` 时才返回完整 `scores` 排序、PPL、mean_logprob、token
-scores 和媒体上下文摘要。生产动作执行通常不需要这些诊断字段。
-
-## 7. 性能和资源优化
-
-候选评分采用“共享 prefix + 短 ID suffix”：
-
-1. 先构造并执行共享 prefix；
-2. prefix 完成后再延迟构造 suffix；
-3. 按 micro-batch 分批评分候选；
-4. 聚合全部候选的 logprob/PPL 并返回 Top-1。
-
-这样避免在 prefix 进入 scheduler 前，一次性构造所有完整候选请求。批大小由
-`SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE` 控制，默认 64，允许范围 1–256；两种模式统一使用。
-增大 batch 只能减少批次数，不能消除总候选计算量，并可能增加单批显存压力。
-
-当前日志会记录：
-
-- client/server request build；
-- scheduler admission、scheduler wait 和 queue wait；
-- prefix prefill；
-- 每个 suffix batch 的等待和计算；
-- 音频/图片预处理；
-- GPU 显存起止值、峰值、利用率、功耗和温度；
-- prefix cache 命中情况、候选数量、批次大小和最终动作。
-
-服务启动时会执行与当前模式一致的 action-score 预热。预热不带业务 session、历史和媒体，不写入
-业务历史，也不计入业务 turn 耗时；它只提前初始化 tokenizer、请求构造、scheduler admission、
-Thinker 和 prefix cache 路径。
-
-## 8. 上下文和部署配置
-
-当前单 GPU 配置将 preprocessing 和 thinker 的 `max_seq_len` 设置为 60000。它是服务处理上下文
-的上限，不是单个 turn 的独立长度；实际可用空间还受固定候选目录、历史、媒体展开 token、显存和
-KV cache 影响。服务通过内置 `WS /v1/session/realtime` 路由提供能力，不依赖
-`--enable-realtime` 开关。
-
-## 9. 主要代码和验证入口
-
-- Realtime session：`sglang_omni/serve/realtime/multimodal.py`
-- 客户端请求和预填充：`sglang_omni/client/client.py`
-- Prompt/媒体预处理：`sglang_omni/models/qwen3_omni/components/preprocessor.py`
-- 候选构造：`sglang_omni/models/qwen3_omni/request_builders.py`
-- 评分调度：`sglang_omni/scheduling/omni_scheduler.py`
-- PPL/token score：`sglang_omni/models/qwen3_omni/action_scoring.py`
-- Realtime 协议：`multimodal_session_realtime.md`
-- 批量性能验证：`action_batch_benchmark.md`
-- 历史耗时分析：`action_latency_history.md`
+- 全局 Category/Child 静态前缀跨 Session 共享；
+- 当前 Session 白名单和偏好动态追加，不污染全局缓存；
+- 当前 Turn 媒体、状态和临时 guidance 位于动态上下文；
+- 资源日志按 20 秒周期采样，并在 Turn 推理前后额外采样；
+- 客户端可以顺序发送媒体和 commit，无需逐 ACK 等待。

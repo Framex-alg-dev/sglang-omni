@@ -77,6 +77,10 @@ class ActionSuffixScoreRequest:
     # Stable namespace for the immutable catalog prefix. The parent request
     # limits cache matching to the static-catalog/history boundary.
     prefix_cache_namespace: str | None = None
+    # Global cross-session namespaces may reuse only the immutable system
+    # catalog. History can contain multimodal placeholder token IDs whose
+    # embeddings differ by session, so it must stay outside that boundary.
+    cache_static_system_only: bool = False
     # Scheme B uses identifier-only suffixes (for example A328, A329, ...).
     # These can be tokenized independently of the long multimodal prefix.
     suffix_tokenization_mode: Literal["exact", "short_id"] = "exact"
@@ -640,10 +644,30 @@ def score_candidate_from_runtime(
     suffix_token_ids: Sequence[int],
     prefix_next_token_logits: Any,
     continuation_logprobs: Sequence[float],
+    *,
+    terminal_token_id: int | None = None,
 ) -> CandidateScore:
-    """Combine shared-prefix next-token logits with suffix input logprobs."""
+    """Combine shared-prefix logits and score only the candidate suffix.
+
+    The runtime suffix may end with the ChatML assistant-turn terminator.  It
+    remains part of the executed token sequence, but it is not part of the
+    candidate content and therefore must not affect mean logprob or PPL.
+    """
     if not suffix_token_ids:
         raise ValueError("candidate suffix has no tokens")
+
+    def aggregate_runtime_scores(token_scores: list[TokenScore]) -> CandidateScore:
+        if terminal_token_id is not None:
+            terminal = int(terminal_token_id)
+            if int(suffix_token_ids[-1]) != terminal:
+                raise ValueError("candidate suffix is missing the expected terminal token")
+            if not token_scores or token_scores[-1].token_id != terminal:
+                raise ValueError("candidate terminal token score is missing or misaligned")
+            token_scores = token_scores[:-1]
+        if not token_scores:
+            raise ValueError("candidate suffix has no scoreable tokens")
+        return aggregate_candidate_score(candidate_id, token_scores)
+
     logits = prefix_next_token_logits
     if isinstance(logits, dict):
         raw = [float(value) for value in continuation_logprobs]
@@ -651,8 +675,7 @@ def score_candidate_from_runtime(
             # The regular SGLang prefill path returns the input-token logprob
             # for every token from logprob_start_len, including token 0 of the
             # suffix.  It is already predicted by the shared prefix state.
-            return aggregate_candidate_score(
-                candidate_id,
+            return aggregate_runtime_scores(
                 [
                     TokenScore(int(token_id), value)
                     for token_id, value in zip(suffix_token_ids, raw, strict=True)
@@ -664,8 +687,7 @@ def score_candidate_from_runtime(
             first = float(logits[int(suffix_token_ids[0])])
         except KeyError as exc:
             raise ValueError("prefix logprob for first suffix token is missing") from exc
-        return aggregate_candidate_score(
-            candidate_id,
+        return aggregate_runtime_scores(
             [TokenScore(int(suffix_token_ids[0]), first)]
             + [
                 TokenScore(int(token_id), value)
@@ -703,7 +725,7 @@ def score_candidate_from_runtime(
             "candidate input-token logprob count is neither the full suffix "
             "nor the continuation-only suffix length"
         )
-    return aggregate_candidate_score(candidate_id, token_scores)
+    return aggregate_runtime_scores(token_scores)
 
 
 __all__ = [

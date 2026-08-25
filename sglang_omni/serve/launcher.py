@@ -31,6 +31,7 @@ import os
 import socket
 import time
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -40,6 +41,10 @@ from pydantic import BaseModel
 from sglang_omni.client import Client
 from sglang_omni.config import PipelineConfig
 from sglang_omni.models.model_capabilities import get_model_capabilities
+from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    load_global_action_catalog,
+    prewarm_global_action_catalog,
+)
 from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
 from sglang_omni.profiler.event_recorder import get_recorder as _get_event_recorder
 from sglang_omni.profiler.profiler_control import ProfilerControlClient
@@ -53,6 +58,41 @@ from sglang_omni.utils.gpu_memory import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_ACTION_WARMUP_AUDIO_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "audio_encoder_warmup.wav"
+)
+
+
+def _resolve_action_warmup_audio_path() -> str | None:
+    """Resolve the process-level audio warmup asset.
+
+    The packaged deterministic WAV is used by default. Operators may point to
+    another local file, or disable only the audio portion with one of the
+    usual false-like values while keeping action-score warmup enabled.
+    """
+    configured = os.environ.get("SGLANG_OMNI_ACTION_WARMUP_AUDIO_PATH")
+    if configured is not None and configured.strip().lower() in {
+        "",
+        "0",
+        "false",
+        "off",
+        "no",
+    }:
+        return None
+    path = (
+        Path(configured).expanduser()
+        if configured
+        else _DEFAULT_ACTION_WARMUP_AUDIO_PATH
+    )
+    path = path.resolve()
+    if not path.is_file():
+        logger.warning(
+            "[ACTION_WARMUP] audio asset does not exist; continuing without audio: %s",
+            path,
+        )
+        return None
+    return str(path)
 
 # ---------------------------------------------------------------------------
 # Built-in pipeline registry
@@ -346,6 +386,17 @@ async def _run_server(
 
     This is the async entry point.  For a blocking call use :func:`launch_server`.
     """
+    # Validate the server-authoritative catalog before allocating model/GPU
+    # resources. A malformed catalog is a startup configuration error.
+    global_action_catalog = load_global_action_catalog()
+    logger.info(
+        "[GLOBAL_ACTION_CATALOG] loaded version=%s hash=%s categories=%d actions=%d",
+        global_action_catalog.catalog_version,
+        global_action_catalog.catalog_hash,
+        len(global_action_catalog.categories),
+        global_action_catalog.candidate_count,
+    )
+
     # 0. Check port availability before loading models
     port = _find_available_port(host, port)
 
@@ -382,24 +433,39 @@ async def _run_server(
             "SGLANG_OMNI_ACTION_WARMUP", "1"
         ).strip().lower() not in {"0", "false", "off", "no"}
         if warmup_enabled:
-            warmup_result = await client.warmup_action_score(
-                model=model_name or pipeline_config.name,
-                category_count=int(
-                    os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60")
-                ),
-                child_count=int(
-                    os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8")
-                ),
-                selection_mode=os.environ.get(
-                    "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
-                ).strip().lower(),
-                timeout_s=float(
-                    os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
-                ),
-            )
-            logger.info("[ACTION_WARMUP] readiness=%s", warmup_result)
+            warmup_results = {}
+            for prompt_language in ("en", "zh"):
+                warmup_results[prompt_language] = await client.warmup_action_score(
+                    model=model_name or pipeline_config.name,
+                    category_count=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60"
+                        )
+                    ),
+                    child_count=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8"
+                        )
+                    ),
+                    selection_mode=os.environ.get(
+                        "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
+                    ).strip().lower(),
+                    timeout_s=float(
+                        os.environ.get(
+                            "SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30"
+                        )
+                    ),
+                    audio_path=_resolve_action_warmup_audio_path(),
+                    language=prompt_language,
+                )
+            logger.info("[ACTION_WARMUP] readiness=%s", warmup_results)
         else:
             logger.info("[ACTION_WARMUP] disabled by SGLANG_OMNI_ACTION_WARMUP")
+        global_action_prewarm = await prewarm_global_action_catalog(
+            client,
+            model=model_name or pipeline_config.name,
+            catalog=global_action_catalog,
+        )
         app = create_app(
             client,
             model_name=model_name or pipeline_config.name,
@@ -421,6 +487,8 @@ async def _run_server(
             allowed_media_domains=allowed_media_domains,
             tts_batch_max_items=tts_batch_max_items,
             architectures=[pipeline_config.architecture],
+            global_action_catalog=global_action_catalog,
+            global_action_prewarm=global_action_prewarm,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
         profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)

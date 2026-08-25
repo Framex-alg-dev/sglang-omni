@@ -38,6 +38,7 @@ from sglang_omni.preprocessing import (
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.proto import StagePayload
 from sglang_omni.utils.async_jsonl import enqueue_jsonl
+from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +144,25 @@ def _summarize_prompt_media(values: Any) -> list[dict[str, Any]]:
     return summary
 
 
-def _write_action_prompt_debug_record(record: dict[str, Any]) -> None:
-    """Queue the rendered action prompt for postmortem analysis."""
-    path = os.environ.get(
-        "SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/tmp/sglang-omni-action-debug.jsonl"
+def _write_prompt_debug_record(
+    record: dict[str, Any], *, legacy_action_sink: bool = False
+) -> None:
+    """Queue one rendered prompt without writing raw media payloads."""
+    event = str(record.get("event") or "prompt_rendered")
+    emit_structured_log(
+        "diagnostic",
+        event,
+        component="preprocessing",
+        **{key: value for key, value in record.items() if key != "event"},
     )
-    enqueue_jsonl(path, record)
+    path = os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE")
+    if legacy_action_sink and path:
+        enqueue_jsonl(path, record)
+
+
+def _write_action_prompt_debug_record(record: dict[str, Any]) -> None:
+    """Keep the explicit legacy action-log compatibility sink."""
+    _write_prompt_debug_record(record, legacy_action_sink=True)
 
 
 def _contextualize_cache_key(base_key: str | None, **context: Any) -> str | None:
@@ -489,6 +503,8 @@ class Qwen3OmniPreprocessor:
         history_count = action_spec.get("history_message_count")
         if not isinstance(history_count, int) or history_count < 0:
             return None
+        if action_spec.get("cache_static_system_only") is True:
+            history_count = 0
 
         system_count = int(messages_mm[0].get("role") == "system")
         boundary_end = system_count + history_count
@@ -924,9 +940,15 @@ class Qwen3OmniPreprocessor:
         )
 
         input_ids = hf_inputs["input_ids"][0]
-        if payload.request.metadata.get("task") == "action_suffix_scoring":
+        request_task = payload.request.metadata.get("task")
+        if request_task in {"action_suffix_scoring", "session_reply"}:
+            is_action = request_task == "action_suffix_scoring"
             prompt_diagnostics = {
-                "event": "action_scoring_prompt_rendered",
+                "event": (
+                    "action_scoring_prompt_rendered"
+                    if is_action
+                    else "reply_prompt_rendered"
+                ),
                 "timestamp_unix_ms": round(time.time() * 1000.0),
                 "request_id": payload.request_id,
                 "session_id": payload.request.metadata.get("session_id"),
@@ -938,11 +960,14 @@ class Qwen3OmniPreprocessor:
                 "params": payload.request.params,
                 "metadata": payload.request.metadata,
             }
-            logger.info(
-                "Qwen3-Omni action scoring prompt rendered=%s",
-                json.dumps(prompt_diagnostics, ensure_ascii=False, default=str),
-            )
-            _write_action_prompt_debug_record(prompt_diagnostics)
+            if is_action:
+                logger.info(
+                    "Qwen3-Omni action scoring prompt rendered=%s",
+                    json.dumps(prompt_diagnostics, ensure_ascii=False, default=str),
+                )
+                _write_action_prompt_debug_record(prompt_diagnostics)
+            else:
+                _write_prompt_debug_record(prompt_diagnostics)
         attention_mask = hf_inputs.get("attention_mask")
         if isinstance(attention_mask, torch.Tensor):
             attention_mask = attention_mask[0]

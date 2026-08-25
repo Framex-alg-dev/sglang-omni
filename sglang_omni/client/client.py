@@ -45,16 +45,21 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     validate_action_suffix_request,
     validate_score_result,
 )
+from sglang_omni.models.qwen3_omni.prompt_localization import (
+    localized_prompt,
+    normalize_prompt_language,
+)
 from sglang_omni.preprocessing.image import is_prepared_image_wire
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import OmniRequest, RequestState, StreamMessage
 from sglang_omni.utils.async_jsonl import enqueue_jsonl
+from sglang_omni.utils.structured_logs import emit_structured_log
 
 
 logger = logging.getLogger(__name__)
 
 _ACTION_SCORE_TIMEOUT_S = float(os.environ.get("SGLANG_OMNI_ACTION_SCORE_TIMEOUT_S", "120"))
-_ACTION_DEBUG_LOG_FILE = os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE", "/tmp/sglang-omni-action-debug.jsonl")
+_ACTION_DEBUG_LOG_FILE = os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE")
 
 
 def _summarize_debug_media(values: Any) -> list[dict[str, Any]]:
@@ -137,7 +142,23 @@ def _action_request_debug_payload(
 
 def _write_action_debug_record(record: dict[str, Any]) -> None:
     """Queue one replayable action-scoring diagnostic record for JSONL output."""
-    enqueue_jsonl(_ACTION_DEBUG_LOG_FILE, record)
+    event = str(record.get("event") or "action_diagnostic")
+    log_type = (
+        "error"
+        if event.endswith(("_failed", "_timeout", "_cancelled"))
+        else "diagnostic"
+    )
+    emit_structured_log(
+        log_type,
+        event,
+        component="client",
+        **{key: value for key, value in record.items() if key != "event"},
+    )
+    # Compatibility sink for deployments that explicitly request the legacy
+    # single-file action log.  New deployments should use the partitioned
+    # SGLANG_OMNI_REALTIME_LOG_DIR sink instead.
+    if _ACTION_DEBUG_LOG_FILE:
+        enqueue_jsonl(_ACTION_DEBUG_LOG_FILE, record)
 
 
 class Client:
@@ -153,6 +174,26 @@ class Client:
         self._result_builder = result_builder or self._default_result_builder
         self._stream_builder = stream_builder or self._default_stream_builder
         self._action_scoring_semaphore = asyncio.Semaphore(1)
+        self._action_scoring_capacity = 1
+        self._action_scoring_waiting = 0
+        self._action_scoring_inflight = 0
+        self._action_scoring_submitted_total = 0
+        self._action_scoring_finished_total = 0
+        self._action_scoring_cancelled_before_admission_total = 0
+
+    def action_scoring_load(self) -> dict[str, int]:
+        """Return API-process action admission load for resource telemetry."""
+
+        return {
+            "capacity": self._action_scoring_capacity,
+            "waiting": self._action_scoring_waiting,
+            "inflight": self._action_scoring_inflight,
+            "submitted_total": self._action_scoring_submitted_total,
+            "finished_total": self._action_scoring_finished_total,
+            "cancelled_before_admission_total": (
+                self._action_scoring_cancelled_before_admission_total
+            ),
+        }
 
     async def score_action_suffixes(
         self, request: ActionSuffixScoreRequest
@@ -190,14 +231,35 @@ class Client:
 
         async def _submit() -> Any:
             slot_started = time.perf_counter()
-            async with self._action_scoring_semaphore:
-                phase["slot_wait_ms"] = round((time.perf_counter() - slot_started) * 1000.0, 3)
-                phase["name"] = "coordinator_pipeline"
-                pipeline_started = time.perf_counter()
-                try:
-                    return await self._coordinator.submit(request.request_id, omni_request)
-                finally:
-                    phase["pipeline_ms"] = round((time.perf_counter() - pipeline_started) * 1000.0, 3)
+            admitted = False
+            self._action_scoring_submitted_total += 1
+            self._action_scoring_waiting += 1
+            try:
+                async with self._action_scoring_semaphore:
+                    admitted = True
+                    self._action_scoring_waiting -= 1
+                    self._action_scoring_inflight += 1
+                    phase["slot_wait_ms"] = round(
+                        (time.perf_counter() - slot_started) * 1000.0, 3
+                    )
+                    phase["name"] = "coordinator_pipeline"
+                    pipeline_started = time.perf_counter()
+                    try:
+                        return await self._coordinator.submit(
+                            request.request_id, omni_request
+                        )
+                    finally:
+                        phase["pipeline_ms"] = round(
+                            (time.perf_counter() - pipeline_started) * 1000.0,
+                            3,
+                        )
+            finally:
+                if admitted:
+                    self._action_scoring_inflight -= 1
+                    self._action_scoring_finished_total += 1
+                else:
+                    self._action_scoring_waiting -= 1
+                    self._action_scoring_cancelled_before_admission_total += 1
 
         task = asyncio.create_task(
             _submit(), name=f"action-score-{request.request_id}"
@@ -313,6 +375,8 @@ class Client:
         stage: str,
         candidate_prefix: str,
         candidate_count: int,
+        audio_path: str | None = None,
+        language: str = "zh",
     ) -> ActionSuffixScoreRequest:
         candidates = [
             ActionScoreCandidate(
@@ -326,38 +390,71 @@ class Client:
             f"{item.candidate_id}=warmup candidate" for item in candidates
         )
         if stage == "category":
-            system_prompt = (
-                "你是数字人动作类别识别器。只能输出一个 category_id。"
-                f"固定类别集合：{definitions}"
+            system_prompt = localized_prompt(
+                language,
+                zh=(
+                    "你是数字人动作类别识别器。只能输出一个 category_id。"
+                    f"固定类别集合：{definitions}"
+                ),
+                en=(
+                    "You are a digital-character action category classifier. Output "
+                    f"exactly one category_id. Fixed category set: {definitions}"
+                ),
             )
-            prefix = "请根据当前输入选择一个动作类别。下一步 category_id 是："
+            prefix = localized_prompt(
+                language,
+                zh="请根据当前输入选择一个动作类别。下一步 category_id 是：",
+                en="Select an action category for the current input. Next category_id:",
+            )
         elif stage == "child":
-            system_prompt = (
-                "你是数字人动作识别器。只能输出一个 action_id。"
-                f"固定子动作集合：{definitions}"
+            system_prompt = localized_prompt(
+                language,
+                zh=(
+                    "你是数字人动作识别器。只能输出一个 action_id。"
+                    f"固定子动作集合：{definitions}"
+                ),
+                en=(
+                    "You are a digital-character action classifier. Output exactly "
+                    f"one action_id. Fixed child action set: {definitions}"
+                ),
             )
-            prefix = "请根据当前输入选择一个子动作。下一步 action_id 是："
+            prefix = localized_prompt(
+                language,
+                zh="请根据当前输入选择一个子动作。下一步 action_id 是：",
+                en="Select a child action for the current input. Next action_id:",
+            )
         elif stage == "single":
-            system_prompt = (
-                "你是数字人动作识别器。只能输出一个 action_id。"
-                f"固定具体动作集合：{definitions}"
+            system_prompt = localized_prompt(
+                language,
+                zh=(
+                    "你是数字人动作识别器。只能输出一个 action_id。"
+                    f"固定具体动作集合：{definitions}"
+                ),
+                en=(
+                    "You are a digital-character action classifier. Output exactly "
+                    f"one action_id. Fixed concrete action set: {definitions}"
+                ),
             )
-            prefix = "请根据当前输入选择一个具体动作。下一步 action_id 是："
+            prefix = localized_prompt(
+                language,
+                zh="请根据当前输入选择一个具体动作。下一步 action_id 是：",
+                en="Select a concrete action for the current input. Next action_id:",
+            )
         else:
             raise ValueError(f"unsupported action warmup stage: {stage!r}")
         return ActionSuffixScoreRequest(
             request_id=request_id,
             model=model,
             prefix=prefix,
-            language="zh",
+            language=language,
             candidates=candidates,
-            audios=[],
+            audios=[audio_path] if audio_path else [],
             images=[],
             sample_rate=16000,
             system_prompt=system_prompt,
             micro_batch_size=64,
             stage=stage,
-            logical_request_id="warmup-process",
+            logical_request_id=f"warmup-process-{language}",
             suffix_tokenization_mode="short_id",
         )
 
@@ -369,28 +466,35 @@ class Client:
         child_count: int = 8,
         selection_mode: str = "hierarchical",
         timeout_s: float = 30.0,
+        audio_path: str | None = None,
+        language: str = "zh",
     ) -> dict[str, Any]:
-        # Warm the action-score request path before accepting user turns.
-        # The requests have no session, media, or history; results are discarded.
+        # Warm the action-score request path before accepting user turns. The
+        # first stage may carry one internal audio asset; requests still have
+        # no session/history and all results are discarded.
         if category_count <= 0 or child_count <= 0:
             raise ValueError("warmup candidate counts must be positive")
         if selection_mode not in {"hierarchical", "flat_children"}:
             raise ValueError(f"unsupported action selection mode: {selection_mode!r}")
         started = time.perf_counter()
         logger.info(
-            "[ACTION_WARMUP] started model=%s mode=%s category_candidates=%d child_candidates=%d",
+            "[ACTION_WARMUP] started model=%s language=%s mode=%s category_candidates=%d child_candidates=%d audio=%s",
             model,
+            language,
             selection_mode,
             category_count,
             child_count,
+            audio_path or "disabled",
         )
         _write_action_debug_record({
             "event": "action_score_warmup_started",
             "timestamp_unix_ms": round(time.time() * 1000.0),
             "model": model,
+            "language": language,
             "selection_mode": selection_mode,
             "category_candidates": category_count,
             "child_candidates": child_count,
+            "audio_path": audio_path,
         })
 
         async def run_warmup() -> tuple[float | None, float | None, float | None]:
@@ -398,11 +502,13 @@ class Client:
                 single_started = time.perf_counter()
                 await self.score_action_suffixes(
                     self._build_action_warmup_request(
-                        request_id="warmup-process-single",
+                        request_id=f"warmup-process-{language}-single",
                         model=model,
                         stage="single",
                         candidate_prefix="D",
                         candidate_count=child_count,
+                        audio_path=audio_path,
+                        language=language,
                     )
                 )
                 return None, None, (time.perf_counter() - single_started) * 1000.0
@@ -410,11 +516,13 @@ class Client:
             category_started = time.perf_counter()
             await self.score_action_suffixes(
                 self._build_action_warmup_request(
-                    request_id="warmup-process-category",
+                    request_id=f"warmup-process-{language}-category",
                     model=model,
                     stage="category",
                     candidate_prefix="C",
                     candidate_count=category_count,
+                    audio_path=audio_path,
+                    language=language,
                 )
             )
             category_ms = (time.perf_counter() - category_started) * 1000.0
@@ -422,11 +530,12 @@ class Client:
             child_started = time.perf_counter()
             await self.score_action_suffixes(
                 self._build_action_warmup_request(
-                    request_id="warmup-process-child",
+                    request_id=f"warmup-process-{language}-child",
                     model=model,
                     stage="child",
                     candidate_prefix="D",
                     candidate_count=child_count,
+                    language=language,
                 )
             )
             child_ms = (time.perf_counter() - child_started) * 1000.0
@@ -442,7 +551,9 @@ class Client:
                 "event": "action_score_warmup_failed",
                 "timestamp_unix_ms": round(time.time() * 1000.0),
                 "model": model,
+                "language": language,
                 "selection_mode": selection_mode,
+                "audio_path": audio_path,
                 "elapsed_ms": round(elapsed_ms, 3),
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
@@ -456,7 +567,9 @@ class Client:
             _write_action_debug_record(diagnostic)
             return {
                 "ready": False,
+                "language": language,
                 "selection_mode": selection_mode,
+                "audio_warmup_enabled": audio_path is not None,
                 "elapsed_ms": round(elapsed_ms, 3),
                 "error": f"{type(exc).__name__}: {exc}",
             }
@@ -464,7 +577,9 @@ class Client:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         result = {
             "ready": True,
+            "language": language,
             "selection_mode": selection_mode,
+            "audio_warmup_enabled": audio_path is not None,
             "elapsed_ms": round(elapsed_ms, 3),
             "category_ms": round(category_ms, 3) if category_ms is not None else None,
             "child_ms": round(child_ms, 3) if child_ms is not None else None,
@@ -495,6 +610,7 @@ class Client:
         candidates: list[ActionScoreCandidate],
         prefix_cache_namespace: str,
         stage: str,
+        language: str = "zh",
     ) -> bool:
         """Prefill one immutable action catalog prefix."""
         if not candidates:
@@ -503,8 +619,12 @@ class Client:
         request = ActionSuffixScoreRequest(
             request_id=request_id or f"catalog-prefill-{stage}-{uuid.uuid4().hex}",
             model=model,
-            prefix="请根据当前输入选择动作。下一步 action_id 是：",
-            language="zh",
+            prefix=localized_prompt(
+                language,
+                zh="请根据当前输入选择动作。下一步 action_id 是：",
+                en="Select an action for the current input. Next action_id:",
+            ),
+            language=language,
             candidates=[probe],
             audios=[],
             images=[],
@@ -551,6 +671,7 @@ class Client:
     @staticmethod
     def _current_image_content_parts(
         image_roles: list[str],
+        language: str = "zh",
     ) -> list[dict[str, Any]]:
         """Put one compact role map before all current image placeholders."""
         user_indices = [
@@ -561,27 +682,68 @@ class Client:
         ]
         descriptions: list[str] = []
         if user_indices:
+            index_text = Client._compact_image_indices(user_indices)
             descriptions.append(
-                "用户摄像头图片="
-                + Client._compact_image_indices(user_indices)
-                + "（只描述用户及其环境）"
+                localized_prompt(
+                    language,
+                    zh=f"用户摄像头画面={index_text}（只描述用户及其环境）",
+                    en=f"User camera view={index_text} (describe only the user and their environment)",
+                )
             )
         if avatar_indices:
             latest = avatar_indices[-1]
+            index_text = Client._compact_image_indices(avatar_indices)
             descriptions.append(
-                "数字人状态图片=" + Client._compact_image_indices(avatar_indices) + "；"
-                f"图片{latest}是本轮时间最新的数字人照片，"
-                "当前可视姿态和行为以它为准"
+                localized_prompt(
+                    language,
+                    zh=(
+                        f"数字人当前状态画面={index_text}；"
+                        f"画面{latest}是本轮时间最新的数字人照片，"
+                        "当前可视姿态和行为以它为准"
+                    ),
+                    en=(
+                        f"Current digital character state view={index_text}; image "
+                        f"{latest} is the latest character image in this interaction "
+                        "and is authoritative for the currently visible pose and behavior"
+                    ),
+                )
             )
         elif user_indices:
             descriptions.append(
-                "本轮没有数字人状态图片，数字人姿态只能使用结构化 avatar_state，"
-                "不得从用户摄像头或历史图片推断"
+                localized_prompt(
+                    language,
+                    zh=(
+                        "本轮没有数字人当前状态画面，数字人姿态只能使用结构化的"
+                        "数字人当前状态信息，不得从用户摄像头画面或历史图片推断"
+                    ),
+                    en=(
+                        "No current digital character state view is provided in this "
+                        "interaction. Use only structured current character state "
+                        "information for the character pose; do not infer it from the "
+                        "user camera view or historical images"
+                    ),
+                )
             )
         if not descriptions:
-            descriptions.append("图片角色未提供")
+            descriptions.append(
+                localized_prompt(
+                    language,
+                    zh="当前图片用途未提供",
+                    en="Current image purposes are not provided",
+                )
+            )
+        separator = localized_prompt(language, zh="；", en="; ")
         return [
-            {"type": "text", "text": "[当前图片角色] " + "；".join(descriptions) + "。"},
+            {
+                "type": "text",
+                "text": localized_prompt(
+                    language,
+                    zh="[当前图片用途] " + separator.join(descriptions) + "。",
+                    en="[Current image purposes] "
+                    + separator.join(descriptions)
+                    + ".",
+                ),
+            },
             *({"type": "image"} for _ in image_roles),
         ]
 
@@ -593,6 +755,7 @@ class Client:
         audios: list[str],
         images: list[Any],
         image_roles: list[str],
+        language: str = "zh",
     ) -> Any:
         """Append the action instruction to a user message.
 
@@ -605,7 +768,9 @@ class Client:
             parts = [dict(part) if isinstance(part, dict) else part for part in content]
             parts.extend({"type": "audio"} for _ in audios)
             if images:
-                parts.extend(Client._current_image_content_parts(image_roles))
+                parts.extend(
+                    Client._current_image_content_parts(image_roles, language)
+                )
             parts.append({"type": "text", "text": instruction})
             return parts
 
@@ -617,7 +782,7 @@ class Client:
             parts.append({"type": "text", "text": str(content)})
         parts.extend({"type": "audio"} for _ in audios)
         if images:
-            parts.extend(Client._current_image_content_parts(image_roles))
+            parts.extend(Client._current_image_content_parts(image_roles, language))
         parts.append({"type": "text", "text": instruction})
         return parts
 
@@ -631,6 +796,7 @@ class Client:
         audios: list[str],
         images: list[Any],
         image_roles: list[str],
+        language: str = "zh",
     ) -> list[dict[str, Any]]:
         """Build action context with static catalog first and current turn last.
 
@@ -655,18 +821,44 @@ class Client:
                 if key in {"current_action_id", "state_description"}
             }
         if state_for_prompt:
+            state_labels = (
+                {
+                    "current_action_id": "当前实际动作 ID",
+                    "state_description": "本轮主动场景约束",
+                }
+                if normalize_prompt_language(language) == "zh"
+                else {
+                    "current_action_id": "current physical action ID",
+                    "state_description": "proactive-scene constraints for this interaction",
+                }
+            )
+            state_for_prompt = {
+                state_labels.get(key, key): value
+                for key, value in state_for_prompt.items()
+            }
             state_text = json.dumps(
                 state_for_prompt,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            state_label = (
-                "动作推理补充信息"
-                if has_avatar_image
-                else "当前结构化数字人状态"
+            state_label = localized_prompt(
+                language,
+                zh=(
+                    "本轮动作选择补充信息"
+                    if has_avatar_image
+                    else "数字人当前状态信息"
+                ),
+                en=(
+                    "Additional action-selection information for this interaction"
+                    if has_avatar_image
+                    else "Current digital character state information"
+                ),
             )
-            current_instruction = f"{state_label}：{state_text}\n{instruction}"
+            delimiter = localized_prompt(language, zh="：", en=": ")
+            current_instruction = (
+                f"{state_label}{delimiter}{state_text}\n{instruction}"
+            )
 
         messages.extend(dict(message) for message in history)
 
@@ -711,6 +903,7 @@ class Client:
                 audios=missing_audios,
                 images=missing_images,
                 image_roles=missing_image_roles,
+                language=language,
             )
             messages.append(latest_user)
         else:
@@ -719,7 +912,9 @@ class Client:
                 current_content = [
                     *({"type": "audio"} for _ in missing_audios),
                     *(
-                        Client._current_image_content_parts(missing_image_roles)
+                        Client._current_image_content_parts(
+                            missing_image_roles, language
+                        )
                         if missing_images
                         else []
                     ),
@@ -744,6 +939,7 @@ class Client:
             audios=[*request.history_audios, *request.audios],
             images=[*request.history_images, *request.images],
             image_roles=request.image_roles,
+            language=request.language,
         )
         if candidates is None:
             candidates = [
@@ -812,6 +1008,7 @@ class Client:
                     "client_started_at": time.perf_counter(),
                     "static_system_prompt": request.system_prompt,
                     "prefix_cache_namespace": request.prefix_cache_namespace,
+                    "cache_static_system_only": request.cache_static_system_only,
                     "action_context_cache_key": request.action_context_cache_key,
                     "turn_origin": request.turn_origin,
                     "text_role": request.text_role,

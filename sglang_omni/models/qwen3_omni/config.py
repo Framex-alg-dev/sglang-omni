@@ -317,6 +317,10 @@ class Qwen3OmniPipelineConfig(_Qwen3OmniBasePipelineConfig):
 
     model_path: str
     placement_policy: str | None = _PLACEMENT_POLICY
+    # Text generation and action suffix scoring terminate on different stages.
+    # Resolve the active terminal per request so action-only requests do not
+    # wait indefinitely for the decode stage.
+    terminal_stages_fn: str | None = f"{_PKG}.request_builders.resolve_terminal_stages"
     placement: PlacementConfig = Field(
         default_factory=lambda: PlacementConfig(
             require_memory_fraction_for_colocation=False

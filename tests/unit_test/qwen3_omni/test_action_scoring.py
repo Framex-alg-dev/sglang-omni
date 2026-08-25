@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import wave
+from pathlib import Path
 
 import pytest
 
@@ -21,7 +23,6 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     tokenize_suffixes,
     validate_action_suffix_request,
     validate_score_result,
-    score_candidate_from_runtime,
 )
 
 
@@ -49,6 +50,20 @@ class OffsetTokenizer:
 
 def candidate(candidate_id: str, suffix: str) -> ActionScoreCandidate:
     return ActionScoreCandidate(candidate_id, suffix, "wave", {"body_side": "left"})
+
+
+def test_packaged_audio_encoder_warmup_asset_format() -> None:
+    asset = (
+        Path(__file__).resolve().parents[3]
+        / "sglang_omni"
+        / "assets"
+        / "audio_encoder_warmup.wav"
+    )
+    with wave.open(str(asset), "rb") as source:
+        assert source.getnchannels() == 1
+        assert source.getsampwidth() == 2
+        assert source.getframerate() == 16_000
+        assert source.getnframes() == 24 * 16_000
 
 
 def request(**kwargs) -> ActionSuffixScoreRequest:
@@ -225,7 +240,7 @@ def test_math_counts_only_finite_suffix_tokens():
         aggregate_candidate_score("empty", [])
 
 
-def test_math_includes_action_terminal_token_in_ppl():
+def test_aggregate_math_counts_every_explicit_token_score():
     scores = aggregate_candidate_score(
         "left",
         [TokenScore(1, -0.1), TokenScore(2, -0.3), TokenScore(151645, -0.2)],
@@ -234,6 +249,58 @@ def test_math_includes_action_terminal_token_in_ppl():
     assert scores.mean_logprob == pytest.approx(-0.2)
     assert scores.ppl == pytest.approx(math.exp(0.2))
     assert scores.token_scores[-1].token_id == 151645
+
+
+def test_runtime_score_excludes_terminal_from_identifier_ppl():
+    score = score_candidate_from_runtime(
+        "B027",
+        [100, 0, 2, 7, 151645],
+        {},
+        [-9.2338, -0.0056, -0.2165, -0.0035, -6.4764],
+        terminal_token_id=151645,
+    )
+
+    assert [item.token_id for item in score.token_scores] == [100, 0, 2, 7]
+    assert score.token_count == 4
+    assert score.mean_logprob == pytest.approx(-2.36485)
+    assert score.ppl == pytest.approx(math.exp(2.36485))
+
+
+def test_runtime_score_excludes_terminal_on_continuation_only_backend():
+    score = score_candidate_from_runtime(
+        "B027",
+        [10, 11, 151645],
+        {10: -0.7},
+        [-0.2, -6.0],
+        terminal_token_id=151645,
+    )
+
+    assert [item.token_id for item in score.token_scores] == [10, 11]
+    assert [item.logprob for item in score.token_scores] == [-0.7, -0.2]
+    assert score.token_count == 2
+
+
+def test_terminal_bias_cannot_flip_captured_category_ranking():
+    terminal = 151645
+    b000 = score_candidate_from_runtime(
+        "B000",
+        [100, 0, 0, 0, terminal],
+        {},
+        [-9.2338, -0.0056, -2.3386, -1.5422, -0.0122],
+        terminal_token_id=terminal,
+    )
+    b027 = score_candidate_from_runtime(
+        "B027",
+        [100, 0, 2, 7, terminal],
+        {},
+        [-9.2338, -0.0056, -0.2165, -0.0035, -6.4764],
+        terminal_token_id=terminal,
+    )
+
+    assert b027.mean_logprob > b000.mean_logprob
+    assert b027.ppl < b000.ppl
+    assert all(item.token_id != terminal for item in b000.token_scores)
+    assert all(item.token_id != terminal for item in b027.token_scores)
 
 
 def test_alignment_rejects_nan_and_preserves_first_suffix_token():
@@ -314,6 +381,7 @@ async def test_action_score_warmup_is_sessionless_and_runs_both_stages() -> None
         category_count=3,
         child_count=2,
         timeout_s=1.0,
+        audio_path="/warmup/audio.wav",
     )
 
     assert result["ready"] is True
@@ -322,8 +390,11 @@ async def test_action_score_warmup_is_sessionless_and_runs_both_stages() -> None
     assert all(request.suffix_tokenization_mode == "short_id" for request in requests)
     assert all(request.session_id is None for request in requests)
     assert all(request.history == [] for request in requests)
-    assert all(request.audios == [] and request.images == [] for request in requests)
+    assert requests[0].audios == ["/warmup/audio.wav"]
+    assert requests[1].audios == []
+    assert all(request.images == [] for request in requests)
     assert [len(request.candidates) for request in requests] == [3, 2]
+    assert result["audio_warmup_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -356,6 +427,7 @@ async def test_action_score_flat_warmup_runs_one_single_stage() -> None:
         child_count=5,
         selection_mode="flat_children",
         timeout_s=1.0,
+        audio_path="/warmup/audio.wav",
     )
 
     assert result["ready"] is True
@@ -367,7 +439,24 @@ async def test_action_score_flat_warmup_runs_one_single_stage() -> None:
     assert "固定具体动作集合" in requests[0].system_prompt
     assert requests[0].session_id is None
     assert requests[0].history == []
-    assert requests[0].audios == [] and requests[0].images == []
+    assert requests[0].audios == ["/warmup/audio.wav"]
+    assert requests[0].images == []
+    assert result["audio_warmup_enabled"] is True
+
+
+def test_action_score_warmup_prompt_supports_english() -> None:
+    request = Client._build_action_warmup_request(
+        request_id="warmup-en",
+        model="qwen3-omni",
+        stage="category",
+        candidate_prefix="C",
+        candidate_count=2,
+        language="en",
+    )
+
+    assert request.language == "en"
+    assert request.prefix.startswith("Select an action category")
+    assert "digital-character action category classifier" in request.system_prompt
 
 
 @pytest.mark.asyncio
@@ -424,7 +513,7 @@ def test_multiturn_session_context_preserves_history_media_and_avatar_state():
     ]
     assert omni.inputs["messages"][0]["content"] == score_request.system_prompt
     assert "left_hand" not in omni.inputs["messages"][0]["content"]
-    assert "当前结构化数字人状态：" in omni.inputs["messages"][3]["content"][-1]["text"]
+    assert "数字人当前状态信息：" in omni.inputs["messages"][3]["content"][-1]["text"]
     assert "left_hand" in omni.inputs["messages"][3]["content"][-1]["text"]
     assert omni.inputs["messages"][1]["content"][0]["type"] == "audio"
     assert omni.inputs["messages"][3]["content"][0]["type"] == "image"

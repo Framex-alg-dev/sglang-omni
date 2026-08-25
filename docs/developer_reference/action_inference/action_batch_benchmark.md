@@ -8,7 +8,7 @@
 
 固定输入：
 
-- 动作目录：`tests/data/actions/character_action_catalog.json`
+- 当前脚本动作目录：`sglang_omni/assets/character_action_global_catalog.json`
 - 目录实际包含 386 个具体动作、64 个类别
 - 额外加入一个 `no_action`，因此 flat_children 共 387 个 child 候选，hierarchical 共 65 个类别
 - 音频：`/data/models/hehy/D_human_train/examples/test/bench20_examples/none_4.wav`
@@ -16,7 +16,11 @@
 - 当前文本：`你可以开心一点吗？`
 - 数字人状态：`pose=seated, gaze=camera, hands=resting`
 - 每组 3 个独立 session；音频按 200 ms PCM16 chunk 发送，当前 turn 发送 1 张图片
-- `include_scores=true`，用于校验候选完整性和排序结果
+- `diagnostics.include_action_scores=true`，用于校验候选完整性和排序结果
+
+下文 flat/hierarchical 对比数据是正式协议收敛前的历史测量。当前
+`protocol_version=1` 固定使用 hierarchical，benchmark 脚本只上传全局目录的紧凑
+candidate ID 白名单，不再接受 `--mode` 或上传动作语义目录。
 
 为了验证 batch 大小本身，benchmark 使用短的外部 `candidate_id`（`A000`、`A001`……），同时保留目录中的长 canonical `action_id` 作为动作执行 ID。这样不会把长 action_id 的 token 数量误算成 batch 优化收益。
 
@@ -156,8 +160,8 @@ flat_children 虽然使用短 `candidate_id` suffix，但所有具体动作的�
 3. 对 hierarchical 使用 `SGLANG_OMNI_ACTION_CATEGORY_TOP_K` 做可选类别兜底；
 4. 在显存余量充足的独立环境再评估 512 以上 batch，不建议在当前单卡服务直接放开。
 
-类别 `source_label` 和 `short_definition` 不由服务端压缩或重写；如果需要减少类别 prompt，
-应由外部动作目录在 `session.start` 前完成，并重新验证动作准确率和 catalog hash。
+类别 `source_label` 和 `short_definition` 来自服务端全局目录。若需减少类别 Prompt，应更新
+并重新验证服务端全局目录，而不是由客户端在 `session.start` 覆盖。
 
 本次验证只比较动作推理服务耗时，不验证外部动作播放器、骨骼绑定或动画渲染。
 

@@ -61,14 +61,17 @@ the first token of every candidate. Candidate requests reuse the same
 multimodal cache identity and score input-token log probabilities from
 `logprob_start_len = prefix_token_count`. Tokenization uses offsets when
 available, preserves a token that crosses the text boundary, and excludes
-special tokens.
+special tokens. The executed candidate sequence keeps the explicit ChatML
+assistant-turn terminator, but aggregation removes that trailing terminator so
+the returned score measures only the supplied candidate suffix.
 
 For candidate tokens with log probabilities `l_1 ... l_n`, the response returns
 `mean_logprob = sum(l_i) / n`, `mean_nll = -mean_logprob`, and
 `ppl = exp(mean_nll)`, together with each token ID and log probability. Results
-are emitted in the original candidate order. A result is accepted only when
-the shared prefix was verified in the KV cache; otherwise the request fails
-with `prefix_cached=false`.
+are emitted in the original candidate order. Here `n`, `token_count`, and
+`token_scores` cover candidate suffix tokens only and exclude the trailing
+ChatML terminator. A result is accepted only when the shared prefix was verified
+in the KV cache; otherwise the request fails with `prefix_cached=false`.
 
 ### Flat-children latency path
 

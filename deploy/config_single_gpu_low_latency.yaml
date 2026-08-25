@@ -4,8 +4,8 @@
 #   CUDA_VISIBLE_DEVICES=<physical_gpu> sgl-omni serve \
 #     --config <profile.yaml>
 #
-# Realtime output is limited to text and action. The text-only Qwen pipeline
-# still accepts audio/image input, but does not load Talker AR or Code2Wav.
+# Kept as a compatibility profile. Text + action output has no Talker/Code2Wav
+# latency knobs, so this profile intentionally matches config_single_gpu.yaml.
 config_cls: Qwen3OmniPipelineConfig
 name: qwen3-omni-single-gpu
 model_path: /data/models/Qwen3-Omni-30B-A3B-FP8

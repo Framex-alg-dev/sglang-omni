@@ -152,7 +152,7 @@ def parse_canonical_action_catalog(
     document: dict[str, Any],
     *,
     category_depth: int = 2,
-    add_no_action: bool = True,
+    add_no_action: bool = False,
 ) -> ParsedCatalog:
     """Convert the canonical ``actions`` document into stable mapping entities."""
     if category_depth <= 0:

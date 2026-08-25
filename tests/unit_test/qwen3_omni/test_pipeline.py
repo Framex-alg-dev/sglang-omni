@@ -87,6 +87,10 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
         "action_score",
         "decode",
     ]
+    assert (
+        text_config.terminal_stages_fn
+        == "sglang_omni.models.qwen3_omni.request_builders.resolve_terminal_stages"
+    )
     assert speech_config.terminal_stages == ["action_score", "decode", "code2wav"]
     assert (
         speech_config.terminal_stages_fn

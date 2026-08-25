@@ -3,6 +3,11 @@
 本文统一记录当前分支相对 `main` 基线 `fe3f2c5` 的完整动作推理能力实现，
 以及当前工作区继续补充的主动 Turn、可中断推理、测试、协议和运行配置。
 
+> 当前对外 WebSocket 已收敛为正式 `protocol_version=1`。本文后续时间线中的
+> `modalities`、`turn_origin/text_role`、`input_audio.append`、完整
+> `action_candidates` 等名称是历史实现记录，不再是客户端协议。最新接入字段以
+> [realtime_reply_action_client_guide.md](realtime_reply_action_client_guide.md) 为准。
+
 ## 实现范围
 
 - 分支：feature/action-suffix-scoring
@@ -225,9 +230,11 @@ stage_overrides:
       max_seq_len: 60000
 ~~~
 
-同时保留单 GPU 的 image/audio encoder、Thinker、Talker 和 Code2Wav 显存预算。
-Dockerfile、模型 worker、placement 和相关 launcher 修改使 action-score 运行时可以
-在自包含 Docker 环境中启动。
+当前单 GPU 配置只保留 image/audio encoder、Thinker、action-score 和文本 decode；
+客户端音频仍作为输入，但服务不输出回复音频，因此不再加载 Talker 和 Code2Wav。
+Thinker 配置预算为 `0.78`，运行时扣除 `0.05` encoder reserve 后的有效静态比例为
+`0.73`。Dockerfile、模型 worker、placement 和相关 launcher 修改使 action-score
+运行时可以在自包含 Docker 环境中启动。
 
 ## 协议和返回结果
 

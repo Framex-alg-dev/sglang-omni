@@ -1,5 +1,9 @@
 # hierarchical 动作推理优化总结
 
+> 正式 `protocol_version=1` 已固定使用 hierarchical。本文中的 `flat_children`、客户端
+> `selection_mode` 和旧 Session 目录上传方式仅用于历史对比与内部实现，不属于当前
+> 客户端协议。
+
 本文集中说明 Qwen3-Omni 动作推理 hierarchical 模式的完整链路、已经实施的优化、实际收益和剩余瓶颈。
 
 相关文档：
@@ -23,14 +27,14 @@ session 最近历史和动作历史
         ▼
 category 阶段
   固定 system prompt：所有一级类别
-  suffix：B001、B002、...
-  选择 Top-K 类别
+  suffix：B001、B002、...、B000（语义映射为 UNSUPPORTED）
+  选择 Top-1 类别或不支持判断
         │
         ▼
 child 阶段
-  临时 system prompt：Top-K 类别下的 children
-  suffix：A001、A002、...
-  选择最终具体动作
+  固定 system prompt：选中类别的全局 children
+  suffix：Session 白名单 A001、A002、...、A000（语义映射为 UNSUPPORTED）
+  选择最终具体动作或不支持判断
         │
         ▼
 action_id / candidate_id / category_id / execute
@@ -44,8 +48,10 @@ action_id / candidate_id / category_id / execute
 - suffix 只使用短 candidate_id；
 - 每个候选都计算 token logprob、mean logprob、NLL 和 PPL；
 - PPL 越低、mean logprob 越高，候选排名越靠前；
-- no_action 和其他动作一起参与评分；
-- no_action 被选中时返回 execute=false；
+- `B000` 和 `A000` 是内部评分 ID，统一映射为语义判断 `UNSUPPORTED`，不是可执行动作；
+  `B000` 仅表示明确动作请求的目标语义类别不在当前 Session 中，`A000` 仅表示类别已存在、
+  但该类别下的 Session 具体动作均无法满足明确请求；
+- 任一阶段选择 `UNSUPPORTED` 时，进入 Session 配置的最高优先级兜底类别并返回真实动作；
 - 不生成普通数字人回复，只保存动作结果到 session 历史。
 
 ## 2. 优化目标
@@ -77,7 +83,7 @@ child：   共享上下文 + A328
 
 - 每个候选 suffix token 数显著减少；
 - 不同候选之间的 token 长度更稳定；
-- PPL 计算仍完整覆盖 suffix token；
+- PPL 完整覆盖候选 ID token；执行序列末尾的 terminal token 不参与聚合；
 - 减少候选请求构造和 scheduler 排队压力；
 - 不改变动作语义和动作映射。
 
@@ -138,9 +144,11 @@ SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE
 
 hierarchical 的 category 和 child 通常已经各自一批，因此继续增大 batch 的收益有限。batch 主要影响批次数，不能消除两个阶段本身的模型计算，还可能增加单批显存压力。
 
-### 3.5 category prefix 在 session.start 预填充
+### 3.5 全局 category prefix 在服务启动时预填充
 
-category 候选目录在整个 session 内固定，因此 session.start 会预填充类别 prefix。
+服务端全局类别目录在进程生命周期内固定。服务在开放端口前预填充包含全部全局类别的
+Category prefix；`session.start` 提交的类别白名单用于构造实际 PPL 候选，但不在每个 Turn
+的动态 Prompt 中重复列举全部 category_id。
 
 这部分预热：
 
@@ -149,30 +157,35 @@ category 候选目录在整个 session 内固定，因此 session.start 会预�
 - 不写入 session 历史；
 - 只初始化 tokenizer、scheduler、Thinker 和固定类别 prompt 的 KV cache 路径。
 
-### 3.6 child prefix 延迟缓存
+### 3.6 全量 child prefix 启动预热
 
-child 候选依赖 category 结果，不能在 session.start 预填充所有类别的 children，否则会为未选中的类别浪费 prefill、显存和 KV cache。
+全局目录规模固定为 64 个类别、386 个动作，当前单卡 KV 容量允许在服务启动阶段预热每个
+类别的 Child 静态 Prompt。每个 Session 仍只对自身白名单中的 child ID 计算 PPL。
 
 当前流程：
 
-1. category 阶段完成；
-2. 根据 Top-K category_id 构造 child namespace；
-3. 第一次使用该 namespace 时执行 child prefix prefill；
-4. 将 namespace 记录到当前 session；
-5. 后续 turn 复用该 child prefix，不重复 prefill。
+1. 服务启动加载、校验并冻结全局目录；
+2. 预热全局 Category prefix 和 64 个全局 Child prefix；
+3. session.start 校验并保存会话白名单和 execution_binding；
+4. category 阶段完成；
+5. 按动态 category_id 复用对应全局 Child namespace，并只评分会话白名单 ID；
+6. 若某个启动预热失败或 KV 被淘汰，真实请求自然重新 prefill。
 
 诊断结果中会记录：
 
 ~~~json
 {
   "child_prefix_prefilled": true,
-  "child_prefix_cache_namespace": "hierarchical:...:child:B051"
+  "child_prefix_cache_namespace": "hierarchical:child:B051:sha256:..."
 }
 ~~~
 
-同一 namespace 的后续 turn 中 child_prefix_prefilled 为 false。
+`child_prefix_prefilled` 表示该类别的启动预热状态，不表示本 Turn 是否发生物理 prefill；
+是否命中以 scheduler/cache 的性能统计为准。
 
-第一次使用某个 child namespace 仍需支付一次 prefill 成本；优化目标是避免所有类别提前支付，并在后续 turn 摊薄成本。
+普通 Child 除 Session 白名单动作外还允许返回非执行型 `UNSUPPORTED`；客户端通过
+`action.fallback_category_ids` 配置的兜底类别始终从真实动作中选择，不加入 `UNSUPPORTED`。
+拒识结果最终映射到最高优先级兜底类别中的默认真实动作。
 
 ### 3.7 category/child 同 turn 多模态上下文复用
 
@@ -180,10 +193,12 @@ child 候选依赖 category 结果，不能在 session.start 预填充所有类�
 
 - 当前音频；
 - 当前图片帧；
-- 历史音频；
-- 历史图片；
-- 历史消息媒体占位关系；
+- 最近一次助手回复文本；
+- 最近一次已执行动作事实；
 - 当前 turn 的多模态输入集合。
+
+动作评分不再携带历史音频、历史图片或最近四个完整 Turn。回复生成继续使用独立的有界
+多轮历史，不受该优化影响。
 
 两个阶段使用同一个 action_context_cache_key。category 预处理后，在 preprocessing 进程内暂存已加载的媒体对象；child 阶段直接复用，避免重复媒体加载和解码。
 
@@ -196,7 +211,8 @@ child 候选依赖 category 结果，不能在 session.start 预填充所有类�
 - 音频、图片和视频派生音频的 cache identity 保持一致；
 - category 和 child 的文本 prompt 仍分别构造，因为两者的 system prompt 不同。
 
-这项优化复用的是同一 turn 的完整媒体上下文，不是把 category 文本 prompt 直接复制成 child prompt，因此不会改变两阶段的文本语义。
+这项优化复用的是同一 turn 的当前媒体和精简动作历史，不是把 category 文本 prompt 直接
+复制成 child prompt，因此不会改变两阶段各自的类别与动作选择规则。
 
 日志中可观察：
 
@@ -339,7 +355,7 @@ turn ingest
 
 - category 选择已经有效；
 - children 数量确实为 1；
-- 唯一 child 为 no_action 时返回 `execute=false`；
+- 唯一 child 仍必须是真实可执行动作并返回 `execute=true`；
 - `include_scores=true` 时仍执行 child 评分，保证返回的 PPL/logprob 为真实值；
 - `timing.action_breakdown.child` 显式记录 `skipped=true` 和 `reason=single_child`。
 
@@ -386,7 +402,7 @@ turn ingest
 
 - category 候选完整；
 - child 候选只来自选中 category Top-K；
-- no_action 始终参与评分；
+- 普通 Category/Child 的 `UNSUPPORTED` 候选始终参与评分；
 - category/child 候选顺序稳定；
 - prefix_cached=true；
 - candidate_prefix_recompute_tokens=0；

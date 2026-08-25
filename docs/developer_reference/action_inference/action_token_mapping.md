@@ -6,8 +6,9 @@
 
 ## 为什么不能继续假设 A000 是单 token
 
-部署配置 `deploy/config_single_gpu.yaml` 中的 FP8 Thinker 和 Instruct checkpoint
-使用相同的 Qwen2Tokenizer。实测结果如下：
+部署配置 `deploy/config_single_gpu.yaml` 中的 FP8 Thinker checkpoint 与用于
+chat template fallback 的 Instruct checkpoint 使用相同的 Qwen2Tokenizer。
+Instruct checkpoint 不作为 Talker 加载。实测结果如下：
 
 ~~~text
 A000 -> [32, 15, 15, 15]
@@ -51,12 +52,24 @@ python scripts/qwen3_omni_action_token_mapping.py generate \
 - active/retired 状态；
 - assignment SHA-256、容量和剩余数量。
 
-`catalog-output` 包含可直接放入 `session.start.action_candidates` 的两层目录：
+`catalog-output` 是服务端全局动作目录的构建/校验产物。正式 Realtime 协议不再由客户端
+上传这份两层目录；客户端只从目录中选出当前 Session 允许的 candidate ID：
 
 ~~~python
 document = json.load(open("results/qwen3_omni_action_single_token_catalog.json"))
-session_start["action_candidates"] = document["action_candidates"]
+allowed_ids = select_session_candidate_ids(document)
+session_start["action"]["allowed_candidates"] = [
+    {"candidate_id": candidate_id} for candidate_id in allowed_ids
+]
+session_start["action"]["fallback_category_ids"] = ["B008"]
 ~~~
+
+`fallback_category_ids` 是客户端根据当前数字人配置给出的有序类别数组，不是服务端固定值；
+显式非空白名单必须包含每个兜底类别下至少一个真实动作 candidate ID；白名单缺省或为空时，
+服务端自动展开所有兜底类别下的全部动作。服务端根据权威全局目录
+恢复类别、动作名称、定义和 `action_id`，并校验客户端 ID 是否属于当前目录版本。
+`UNSUPPORTED` 是服务端自动加入的非执行型推理判断；Category 使用 `B000`、Child 使用
+`A000` 参与 PPL 评分。三者均为保留值，不占用业务类别或动作 ID。
 
 业务 `action_id` 保持 canonical catalog 中的永久 ID；只有模型实际评分的
 `category_id/candidate_id` 会替换成单-token ID。
@@ -112,8 +125,9 @@ token 具有不同先验概率，即使 prompt 中提供了完整动作定义，
 - category/child 的 mean_logprob 与错误分布；
 - `server_action_compute_ms`、suffix batch 和端到端 p50/p95。
 
-当前 scorer 会在短 ID 后显式追加 terminal token。因此 ID 本身虽然只有一个 token，
-实际参与评分的 suffix 通常仍包含 `ID token + terminal token` 两个 token。
+当前 scorer 会在短 ID 后显式追加 terminal token，保持候选执行序列是完整的 ChatML
+assistant turn；评分聚合只统计 ID token，terminal token 不进入 `token_scores`、
+`token_count`、mean logprob 或 PPL。因此单-token ID 的评分分母仍为一个 token。
 
 禁止仅使用 `tokenizer.add_tokens` 创建 `<ACT_001>`。没有同步扩展和训练模型 embedding
 及输出头时，新 token 的 logprob 不具备可靠可比性。

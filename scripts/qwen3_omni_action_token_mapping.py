@@ -88,7 +88,7 @@ def _catalog_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--add-no-action",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
     )
 
 
