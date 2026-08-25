@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核取消竞争、WebSocket 断连、TTS 错误映射和资源清理"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "复核关联字段、日志量和敏感数据脱敏"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核异步生命周期、背压、测试覆盖和 disabled 路径"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核 outputs、事件、provider 和下游消费端的跨层合同"}
