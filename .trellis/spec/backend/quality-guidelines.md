@@ -58,3 +58,15 @@ implicitly available in substitute mode and fail only after accepting a request.
 - Keep development action selection inside the Session whitelist. If the
   production global catalog is intentionally unavailable, any development-only
   inline-catalog projection must be opt-in and default off for production apps.
+
+## Change Reporting
+
+较大改动完成后必须在当前 `.trellis/tasks/<task>/` 下形成中文复盘报告，供开发者与组长
+评审和后续接手。较大改动包括：新增或迁移公共接口、跨层数据流、启动/部署方式、环境
+变量合同、并发或生命周期语义，或者修改多个核心模块的功能任务。
+
+报告至少包含：目标与边界、最终链路、主要文件和行为变化、启用与停止步骤、验证证据、
+已知限制、回滚或后续工作，并区分已提交内容与尚未提交内容。停止说明必须区分“终止
+当前进程”和“禁用下次启动”；修改环境变量本身不能被描述为停止已运行服务。
+
+小型局部修改不新增报告文档，在最终回复末尾用一段话说明修改文件、行为和验证结果即可。
