@@ -7,14 +7,17 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 
 AudioSink = Callable[[bytes], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 class EmbeddedTTSError(RuntimeError):
@@ -91,6 +94,37 @@ def _session_url(url: str, *, voice: str, session_id: str) -> str:
     )
 
 
+def _exception_chain(exception: BaseException) -> list[BaseException]:
+    chain = [exception]
+    seen = {id(exception)}
+    while True:
+        current = chain[-1]
+        nested = current.__cause__ or current.__context__
+        if nested is None or id(nested) in seen:
+            return chain
+        chain.append(nested)
+        seen.add(id(nested))
+
+
+def _safe_close_reason(reason: str) -> str:
+    # A provider-controlled close reason may contain a URL, credentials,
+    # headers, request text, or encoded media. Its content cannot be made safe
+    # with pattern-based redaction, so retain only bounded structural metadata.
+    return f"<redacted:{min(len(reason), 9999)} chars>"
+
+
+def _failure_diagnostics(exception: Exception) -> tuple[str, int | None, str | None]:
+    chain = _exception_chain(exception)
+    underlying_type = type(chain[-1]).__name__
+    for nested in chain:
+        if isinstance(nested, ConnectionClosed):
+            close = nested.rcvd or nested.sent
+            if close is None:
+                return underlying_type, None, None
+            return underlying_type, int(close.code), _safe_close_reason(close.reason)
+    return underlying_type, None, None
+
+
 class EmbeddedTTSConnection:
     """Own one lazy provider connection for exactly one external Session."""
 
@@ -143,6 +177,11 @@ class EmbeddedTTSConnection:
             receiver: asyncio.Task[EmbeddedTTSResult] | None = None
             try:
                 websocket = await self._borrow_connection(selected_voice)
+                logger.debug(
+                    "Embedded TTS turn started session_id=%s turn_id=%s lifecycle=streaming",
+                    self._session_id,
+                    turn_id,
+                )
                 queue: asyncio.Queue[str | None] = asyncio.Queue(
                     maxsize=self._config.text_queue_max_chunks
                 )
@@ -164,11 +203,31 @@ class EmbeddedTTSConnection:
                     timeout=self._config.turn_timeout_seconds,
                     phase="turn_timeout",
                 )
+                logger.debug(
+                    "Embedded TTS turn completed session_id=%s turn_id=%s "
+                    "audio_chunks=%d audio_bytes=%d lifecycle=ready",
+                    self._session_id,
+                    turn_id,
+                    result.chunk_count,
+                    result.audio_bytes,
+                )
                 return result
             except asyncio.CancelledError:
                 await self._cancel_and_discard(websocket)
                 raise
             except Exception as exc:
+                phase = exc.phase if isinstance(exc, EmbeddedTTSError) else "transport"
+                exception_type, close_code, close_reason = _failure_diagnostics(exc)
+                logger.error(
+                    "Embedded TTS turn failed session_id=%s turn_id=%s phase=%s "
+                    "exception_type=%s close_code=%s close_reason=%r",
+                    self._session_id,
+                    turn_id,
+                    phase,
+                    exception_type,
+                    close_code,
+                    close_reason,
+                )
                 await self._cancel_and_discard(websocket)
                 if isinstance(exc, EmbeddedTTSError):
                     raise
@@ -209,6 +268,10 @@ class EmbeddedTTSConnection:
 
     async def _borrow_connection(self, voice: str) -> Any:
         if self.connected and self._connection_voice == voice:
+            logger.debug(
+                "Embedded TTS connection reused session_id=%s lifecycle=ready",
+                self._session_id,
+            )
             return self._websocket
         await self._discard_connection()
         self._broken = False
@@ -237,6 +300,10 @@ class EmbeddedTTSConnection:
         self._connection_context = context
         self._websocket = websocket
         self._connection_voice = voice
+        logger.debug(
+            "Embedded TTS connection ready session_id=%s lifecycle=ready",
+            self._session_id,
+        )
         return websocket
 
     @staticmethod

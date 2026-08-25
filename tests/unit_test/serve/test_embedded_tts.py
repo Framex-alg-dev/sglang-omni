@@ -8,6 +8,8 @@ from typing import Any, AsyncIterator
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 from sglang_omni.serve.realtime.embedded_tts import (
     EmbeddedTTSConfig,
@@ -399,6 +401,89 @@ async def test_transport_failure_does_not_retain_sensitive_url_cause() -> None:
     assert str(exc_info.value) == "embedded TTS turn failed"
     assert exc_info.value.__cause__ is None
     assert "top-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_log_is_correlated_and_redacted(caplog) -> None:
+    secret_url = "wss://tts.local/realtime?token=top-secret"
+
+    def failing_connector(url: str, **kwargs: Any) -> Any:
+        del kwargs
+        raise RuntimeError(f"cannot connect to {url}; body=private-text")
+
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url=secret_url, voice="secret-voice"),
+        session_id="external-session",
+        connector=failing_connector,
+    )
+
+    with (
+        caplog.at_level("ERROR"),
+        pytest.raises(EmbeddedTTSError, match="embedded TTS turn failed"),
+    ):
+        await manager.synthesize_streaming(
+            turn_id="turn-transport-log",
+            text_chunks=_chunks("private-text"),
+            audio_sink=lambda _: asyncio.sleep(0),
+        )
+
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert "session_id=external-session" in message
+    assert "turn_id=turn-transport-log" in message
+    assert "phase=transport" in message
+    assert "exception_type=RuntimeError" in message
+    assert "top-secret" not in message
+    assert "secret-voice" not in message
+    assert "private-text" not in message
+    assert "wss://" not in message
+
+
+@pytest.mark.asyncio
+async def test_connection_closed_log_sanitizes_bounded_reason(caplog) -> None:
+    reason = "provider\nclosed\ttoken=" + ("x" * 200)
+    closed = ConnectionClosedError(Close(1011, reason), None, None)
+
+    class ClosingWebSocket(FakeWebSocket):
+        async def recv(self) -> str:
+            if not self.events.empty():
+                return await super().recv()
+            raise closed
+
+    class ClosingConnector(FakeConnector):
+        def __call__(self, url: str, **kwargs: Any) -> FakeConnectionContext:
+            del kwargs
+            self.urls.append(url)
+            context = FakeConnectionContext(
+                ClosingWebSocket([_event("session.created")])
+            )
+            self.contexts.append(context)
+            return context
+
+    manager = _manager(ClosingConnector([[]]), session_id="close-session")
+    with (
+        caplog.at_level("ERROR"),
+        pytest.raises(EmbeddedTTSError, match="embedded TTS turn failed"),
+    ):
+        await manager.synthesize_streaming(
+            turn_id="turn-close",
+            text_chunks=_chunks("private-text"),
+            audio_sink=lambda _: asyncio.sleep(0),
+        )
+
+    message = caplog.records[0].getMessage()
+    assert "session_id=close-session" in message
+    assert "turn_id=turn-close" in message
+    assert "phase=transport" in message
+    assert "exception_type=ConnectionClosedError" in message
+    assert "close_code=1011" in message
+    assert "close_reason='<redacted:222 chars>'" in message
+    assert "provider" not in message
+    assert "token=" not in message
+    assert "x" * 20 not in message
+    assert "\n" not in message
+    assert "\t" not in message
+    assert len(message) < 350
 
 
 @pytest.mark.asyncio
