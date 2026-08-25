@@ -10,13 +10,12 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
 )
-from sglang_omni.serve.openai_api import create_app
 from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelClient,
     DevRealtimeModelConfig,
     DevRealtimeModelRequestError,
-    install_dev_model_error_handler,
 )
+from sglang_omni.serve.realtime.dev_server import create_dev_app
 
 
 def _request() -> GenerateRequest:
@@ -105,15 +104,7 @@ def _dev_app(*, action_candidate_id: str = ""):
             action_candidate_id=action_candidate_id,
         )
     )
-    app = create_app(
-        client,
-        model_name="dev-model",
-        enable_realtime=False,
-        enable_resource_monitor=False,
-        allow_unregistered_protocol_actions=True,
-    )
-    install_dev_model_error_handler(app)
-    return app
+    return create_dev_app(client, model_name="dev-model")
 
 
 def _session_start(outputs: list[str]) -> dict:
@@ -226,7 +217,7 @@ def test_optional_capability_detection_is_safe() -> None:
     assert not hasattr(client, "action_scoring_load")
 
 
-def test_fusion_uses_deterministic_fallback_for_unavailable_configured_action() -> None:
+def test_fusion_category_ignores_unavailable_child_preference() -> None:
     with TestClient(_dev_app(action_candidate_id="A999")).websocket_connect(
         "/v1/session/realtime"
     ) as ws:
@@ -248,9 +239,9 @@ def test_fusion_uses_deterministic_fallback_for_unavailable_configured_action() 
             if event["type"] == "turn.result":
                 break
         result = events[-1]
-        assert result["status"] == "partial"
-        assert result["action"]["action_id"] == "no_action"
-        assert result["action"]["fallback_applied"] is True
+        assert result["status"] == "completed"
+        assert result["action"]["action_id"] == "ADEV"
+        assert "fallback_applied" not in result["action"]
 
 
 def test_turn_cancel_stops_stream_and_has_single_terminal_event() -> None:
@@ -262,14 +253,7 @@ def test_turn_cancel_stops_stream_and_has_single_terminal_event() -> None:
             chunk_interval_ms=1000,
         )
     )
-    app = create_app(
-        client,
-        model_name="dev-model",
-        enable_realtime=False,
-        enable_resource_monitor=False,
-        allow_unregistered_protocol_actions=True,
-    )
-    install_dev_model_error_handler(app)
+    app = create_dev_app(client, model_name="dev-model")
     with TestClient(app).websocket_connect("/v1/session/realtime") as ws:
         ws.send_json(_session_start(["text"]))
         assert ws.receive_json()["type"] == "session.started"
@@ -290,27 +274,5 @@ def test_late_cancel_after_result_is_idempotent_and_next_turn_can_start() -> Non
             pass
 
         ws.send_json({"type": "turn.cancel", "turn_id": "turn-done"})
-        ws.send_json({"type": "turn.start", "turn_id": "turn-next", "origin": "user"})
-        assert ws.receive_json()["type"] == "turn.started"
-        ws.send_json(
-            {
-                "type": "input.text.set",
-                "turn_id": "turn-cancel",
-                "text": "停止",
-            }
-        )
-        assert ws.receive_json()["type"] == "input.text.ack"
-        ws.send_json({"type": "turn.commit", "turn_id": "turn-cancel"})
-        first = ws.receive_json()
-        assert first["type"] == "response.created"
-        ws.send_json({"type": "turn.cancel", "turn_id": "turn-cancel"})
-        events = [first]
-        while events[-1]["type"] != "turn.cancelled":
-            events.append(ws.receive_json())
-        event_types = [event["type"] for event in events]
-        assert event_types.count("turn.cancelled") == 1
-        assert "response.done" not in event_types
-        assert "turn.result" not in event_types
-        ws.send_json({"type": "turn.cancel", "turn_id": "turn-cancel"})
         ws.send_json({"type": "turn.start", "turn_id": "turn-next", "origin": "user"})
         assert ws.receive_json()["type"] == "turn.started"

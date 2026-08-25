@@ -93,7 +93,7 @@ async def test_standalone_dev_server_wires_real_app_without_pipeline(
     app = object()
     captured: dict[str, object] = {}
 
-    def fake_create_app(client, **kwargs):
+    def fake_create_dev_app(client, **kwargs):
         captured["client"] = client
         captured["kwargs"] = kwargs
         return app
@@ -105,12 +105,7 @@ async def test_standalone_dev_server_wires_real_app_without_pipeline(
         async def serve(self) -> None:
             captured["served"] = True
 
-    monkeypatch.setattr(dev_server, "create_app", fake_create_app)
-    monkeypatch.setattr(
-        dev_server,
-        "install_dev_model_error_handler",
-        lambda installed_app: captured.setdefault("error_handler_app", installed_app),
-    )
+    monkeypatch.setattr(dev_server, "create_dev_app", fake_create_dev_app)
     monkeypatch.setattr(dev_server.uvicorn, "Server", FakeServer)
     await dev_server.serve_dev_realtime_model(
         DevRealtimeModelConfig(enabled=True),
@@ -120,11 +115,7 @@ async def test_standalone_dev_server_wires_real_app_without_pipeline(
         log_level="info",
     )
     assert captured["client"].health()["running"] is True
-    assert captured["kwargs"]["enable_realtime"] is False
-    assert captured["kwargs"]["enable_resource_monitor"] is False
-    assert captured["kwargs"]["allow_unregistered_protocol_actions"] is True
     assert captured["kwargs"]["model_name"] == "dev-model"
-    assert captured["error_handler_app"] is app
     assert captured["served"] is True
 
 

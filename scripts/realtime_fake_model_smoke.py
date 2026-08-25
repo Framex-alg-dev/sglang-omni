@@ -147,18 +147,58 @@ def _validate_turn_events(
     types = [event["type"] for event in events]
     required = ["session.started", "turn.committed"]
     if mode in {"text", "fusion"}:
-        required.extend(["response.text.done", "response.done"])
+        required.extend(
+            ["response.created", "response.text.done", "response.done"]
+        )
     if mode in {"action", "fusion"}:
         required.append("turn.action.ready")
     required.append("turn.result")
     missing = [event_type for event_type in required if event_type not in types]
     if missing:
         raise AssertionError(f"missing events {missing}; received {types}")
-    positions = [types.index(event_type) for event_type in required]
-    if positions != sorted(positions):
-        raise AssertionError(
-            f"events out of order: expected {required}, received {types}"
+    order_constraints = [
+        ("session.started", "turn.committed"),
+        ("turn.committed", "turn.result"),
+    ]
+    if mode in {"text", "fusion"}:
+        order_constraints.extend(
+            [
+                ("turn.committed", "response.created"),
+                ("response.created", "response.text.done"),
+                ("response.text.done", "response.done"),
+                ("response.done", "turn.result"),
+            ]
         )
+    if mode in {"action", "fusion"}:
+        order_constraints.extend(
+            [
+                ("turn.committed", "turn.action.ready"),
+                ("turn.action.ready", "turn.result"),
+            ]
+        )
+    violated = [
+        f"{before} < {after}"
+        for before, after in order_constraints
+        if types.index(before) >= types.index(after)
+    ]
+    if violated:
+        raise AssertionError(
+            f"events out of order: violated {violated}; received {types}"
+        )
+    if mode in {"text", "fusion"}:
+        created_at = types.index("response.created")
+        text_done_at = types.index("response.text.done")
+        misplaced_deltas = [
+            index
+            for index, event_type in enumerate(types)
+            if event_type == "response.text.delta"
+            and not created_at < index < text_done_at
+        ]
+        if misplaced_deltas:
+            raise AssertionError(
+                "events out of order: response.text.delta must be between "
+                f"response.created and response.text.done; received {types}"
+            )
 
     result = next(event for event in events if event["type"] == "turn.result")
     if mode in {"text", "fusion"}:

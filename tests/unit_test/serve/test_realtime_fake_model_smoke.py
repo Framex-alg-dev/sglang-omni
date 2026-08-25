@@ -91,6 +91,7 @@ def test_parser_rejects_non_positive_timeout() -> None:
 def test_turn_validation_rejects_out_of_order_events() -> None:
     events = [
         {"type": "session.started"},
+        {"type": "response.created"},
         {"type": "response.text.done", "text": "回复"},
         {"type": "turn.committed"},
         {"type": "response.text.delta", "delta": "回复"},
@@ -99,6 +100,48 @@ def test_turn_validation_rejects_out_of_order_events() -> None:
     ]
     with pytest.raises(AssertionError, match="out of order"):
         smoke._validate_turn_events(events, mode="text", response_text="回复")
+
+
+def test_fusion_allows_action_ready_during_text_stream() -> None:
+    events = [
+        {"type": "session.started"},
+        {"type": "turn.committed"},
+        {"type": "response.created"},
+        {"type": "response.text.delta", "delta": "固"},
+        {"type": "turn.action.ready", "action": {"candidate_id": "ADEV"}},
+        {"type": "response.text.delta", "delta": "定回复"},
+        {"type": "response.text.done", "text": "固定回复"},
+        {"type": "response.done"},
+        {
+            "type": "turn.result",
+            "reply": {"text": "固定回复"},
+            "action": {"candidate_id": "ADEV"},
+        },
+    ]
+
+    smoke._validate_turn_events(events, mode="fusion", response_text="固定回复")
+
+
+def test_fusion_rejects_text_delta_after_text_done() -> None:
+    events = [
+        {"type": "session.started"},
+        {"type": "turn.committed"},
+        {"type": "response.created"},
+        {"type": "response.text.done", "text": "固定回复"},
+        {"type": "turn.action.ready", "action": {"candidate_id": "ADEV"}},
+        {"type": "response.text.delta", "delta": "固定回复"},
+        {"type": "response.done"},
+        {
+            "type": "turn.result",
+            "reply": {"text": "固定回复"},
+            "action": {"candidate_id": "ADEV"},
+        },
+    ]
+
+    with pytest.raises(AssertionError, match="out of order"):
+        smoke._validate_turn_events(
+            events, mode="fusion", response_text="固定回复"
+        )
 
 
 def test_audio_loader_rejects_empty_wav(tmp_path: Path) -> None:

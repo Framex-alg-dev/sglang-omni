@@ -11,12 +11,12 @@ import time
 import uuid
 from contextlib import aclosing
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from sglang_omni.client import Client, GenerateRequest, Message, SamplingParams
+from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.models.qwen3_omni.action_scoring import (
     MAX_MICRO_BATCH_SIZE,
     ActionScoreCandidate,
@@ -45,6 +45,9 @@ from sglang_omni.utils.structured_logs import (
     get_structured_log_writer,
     new_trace_id,
 )
+
+if TYPE_CHECKING:
+    from sglang_omni.client.client import Client
 
 logger = logging.getLogger(__name__)
 

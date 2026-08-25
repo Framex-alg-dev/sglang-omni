@@ -18,6 +18,11 @@ protocol v1 接口 `WS /v1/session/realtime`。替身复用正式 `MultimodalSes
 `SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED=true` 时进入相同开发分支；关闭时保持生产
 `action catalog -> port -> Pipeline runner` 顺序。
 
+Windows 本地验证必须优先使用独立 `dev_server`，不得把生产 launcher 当作 fake
+验证入口；生产 launcher 的依赖链允许包含 Linux 专用模块。仓库 `.venv` 只安装
+FastAPI、Uvicorn、WebSockets、Pydantic、NumPy、Pillow 和 xxhash 等替身直接依赖，
+不得为了本地替身执行完整 `uv sync` 或安装 torch/CUDA/Pipeline 依赖。
+
 ## 2. 接口签名与模块边界
 
 `MultimodalSession` 对替身 client 只使用窄接口，不继承需要 Coordinator 的生产
@@ -60,6 +65,11 @@ class RealtimeModelClient(Protocol):
   response.text.done -> response.done -> turn.result` 输出，正文等于 delta 拼接；
 - action：只从已验证的 `allowed_candidates` 选择；空配置确定性选择首个合法候选；
 - text+action：走正式 provisional promotion/discard 与 action ready/result；
+- 配置的 child action 偏好不适用于 category 阶段时，category 评分确定性选择当前
+  合法候选首项，Turn 状态为 `completed` 且紧凑 action 载荷不包含
+  `fallback_applied`；非 category
+  阶段若配置 action 不在本轮白名单中则明确失败，只有实际 `action_error` 才使
+  Turn 状态为 `partial`；
 - audio：当前稳定返回 `unsupported_output`，不得静默降级为 text。
 
 开发内联 action catalog 必须保留生产约束：拒绝 `A000`、`B000`、
@@ -106,7 +116,7 @@ cancel 竞争、断线和重复 teardown 必须幂等；收到 `turn.cancelled` 
 - 配置：严格布尔/整数、空正文、保留 action ID、日志摘要不含正文；
 - client text：Unicode chunk 拼接等于配置正文，独立 stop chunk，abort 后无 stop；
 - client action：配置 candidate 在 child 白名单中胜出，不在白名单明确失败；
-- Session：真实 `create_app()` + TestClient/WebSocket 覆盖 text、action、融合、
+- Session：真实 `create_dev_app()` + TestClient/WebSocket 覆盖 text、action、融合、
   audio unsupported、重复 Turn；
 - action：逐项断言保留/内部/重复/冲突 ID 和非法 binding 被拒绝；
 - 取消：慢流 commit 后 cancel，断言 `turn.cancelled` 恰好一次，且其后不存在
@@ -119,6 +129,13 @@ cancel 竞争、断线和重复 teardown 必须幂等；收到 `turn.cancelled` 
 - smoke：检查 ACK、`turn.committed`、delta 聚合、done/result、action 一致性、
   cancel、乱序、timeout、服务 error、意外关闭和非零退出；WAV 必须是非空、未压缩、
   16 kHz、单声道、PCM16，并且只发送 raw frames。
+
+融合模式的事件顺序必须按并发分支的偏序合同断言，不能把所有事件强制排成一个
+全序列：文本分支保持 `response.created < response.text.delta* < response.text.done <
+response.done < turn.result`，且每个 delta 都必须位于 created 与 text.done 之间；动作分支
+保持 `turn.action.ready < turn.result`，但 `turn.action.ready` 可以出现在任意两个
+`response.text.delta` 之间，也可以早于或晚于 `response.text.done`。后续增加音频分支
+时同样只约束分支内部顺序和共同终态屏障。
 
 ## 7. Wrong vs Correct
 
@@ -135,7 +152,7 @@ if fake.enabled:
 ```python
 fake = DevRealtimeModelConfig.from_env()
 if fake.enabled:
-    return await serve_dev_realtime_model(fake)  # create_app + MultimodalSession
+    return await serve_dev_realtime_model(fake)  # create_dev_app + MultimodalSession
 
 catalog = load_production_action_catalog()
 port = find_available_port(...)

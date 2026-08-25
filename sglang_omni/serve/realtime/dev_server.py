@@ -8,15 +8,67 @@ import asyncio
 import logging
 
 import uvicorn
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import JSONResponse
 
-from sglang_omni.serve.openai_api import create_app
 from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelClient,
     DevRealtimeModelConfig,
     install_dev_model_error_handler,
 )
+from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
 
 logger = logging.getLogger(__name__)
+
+
+def create_dev_app(client: DevRealtimeModelClient, *, model_name: str) -> FastAPI:
+    """Build the narrow fake-model app without importing production services."""
+    app = FastAPI(title="sglang-omni Realtime development model", version="0.1.0")
+    app.state.client = client
+    app.state.model_name = model_name
+    manager = MultimodalSessionManager(
+        client=client,
+        model_name=model_name,
+        allow_unregistered_protocol_actions=True,
+    )
+    app.state.multimodal_realtime_manager = manager
+
+    @app.get("/health")
+    async def health() -> JSONResponse:
+        info = client.health()
+        running = info.get("running", False)
+        return JSONResponse(
+            content={
+                "status": "healthy" if running else "unhealthy",
+                **info,
+            },
+            status_code=200 if running else 503,
+        )
+
+    @app.get("/v1/models")
+    async def list_models() -> JSONResponse:
+        return JSONResponse(
+            content={
+                "object": "list",
+                "data": [
+                    {
+                        "id": model_name,
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "sglang-omni",
+                        "root": model_name,
+                    }
+                ],
+            }
+        )
+
+    @app.websocket("/v1/session/realtime")
+    async def multimodal_realtime(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await manager.create(websocket).run()
+
+    install_dev_model_error_handler(app)
+    return app
 
 
 async def serve_dev_realtime_model(
@@ -39,17 +91,8 @@ async def serve_dev_realtime_model(
         "DEV FAKE REALTIME MODEL ENABLED: pipeline and model loading are bypassed; %s",
         config.log_summary(),
     )
-    app = create_app(
-        DevRealtimeModelClient(config),
-        model_name=model_name,
-        enable_realtime=False,
-        allowed_local_media_path=allowed_local_media_path,
-        allowed_media_domains=allowed_media_domains,
-        architectures=[],
-        enable_resource_monitor=False,
-        allow_unregistered_protocol_actions=True,
-    )
-    install_dev_model_error_handler(app)
+    del allowed_local_media_path, allowed_media_domains
+    app = create_dev_app(DevRealtimeModelClient(config), model_name=model_name)
     uvicorn_config = uvicorn.Config(
         app,
         host=host,

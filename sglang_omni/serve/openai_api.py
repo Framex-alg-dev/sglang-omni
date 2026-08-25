@@ -29,7 +29,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing, suppress
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from fastapi import (
     Depends,
@@ -50,8 +50,7 @@ from fastapi.responses import (
 )
 from starlette.types import Receive, Scope, Send
 
-from sglang_omni.client import (
-    Client,
+from sglang_omni.client.types import (
     ClientError,
     CompletionResult,
     GenerateChunk,
@@ -59,6 +58,9 @@ from sglang_omni.client import (
     Message,
     SamplingParams,
 )
+
+if TYPE_CHECKING:
+    from sglang_omni.client.client import Client
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
