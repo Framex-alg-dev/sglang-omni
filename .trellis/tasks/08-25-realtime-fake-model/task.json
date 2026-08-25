@@ -3,7 +3,7 @@
   "name": "realtime-fake-model",
   "title": "Session Realtime 本地开发模型替身",
   "description": "为 /v1/session/realtime 提供无需 Pipeline/GPU 的确定性 text/action 模型替身、真正取消和进程外 smoke，作为 outputs 驱动内嵌 TTS 的前置任务。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": "feature",
   "scope": "Realtime local development launcher and model-client substitute; no TTS integration",
   "package": "backend",

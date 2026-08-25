@@ -35,3 +35,26 @@ Every Trellis task must have a local Git checkpoint after its planning artifacts
 - Verify the checkpoint commit exists before implementation begins. If task changes overlap unrelated work and cannot be isolated, stop rather than creating an unsafe archive.
 
 This checkpoint is a recoverable planning baseline. It does not replace the normal implementation, quality-check, final commit, archive, and journal steps.
+
+## Development Substitute Boundaries
+
+When a local development substitute intentionally implements only a narrow
+client protocol, its transport surface must be narrowed at application setup as
+well. New HTTP or WebSocket routes added to the shared app must not become
+implicitly available in substitute mode and fail only after accepting a request.
+
+- Keep the supported HTTP and WebSocket route sets explicit and test their exact
+  contents when the shared application registers routes globally.
+- Branch before production-only catalog loading, model imports, GPU discovery,
+  pipeline construction, warmup, profiler setup, and runtime watchers.
+- Keep production initialization after the development branch unchanged; test
+  both enabled bypass behavior and disabled production behavior.
+- Prefer a standalone development entry point when the production CLI must
+  resolve model-specific configuration before reaching the shared launcher.
+- A Session Realtime substitute must reuse the production `session.start`,
+  Turn, media ACK, cancellation, provisional-reply, and terminal-event parser.
+  Inject only narrow model/action capabilities; do not recreate the external
+  WebSocket protocol in the fake client.
+- Keep development action selection inside the Session whitelist. If the
+  production global catalog is intentionally unavailable, any development-only
+  inline-catalog projection must be opt-in and default off for production apps.

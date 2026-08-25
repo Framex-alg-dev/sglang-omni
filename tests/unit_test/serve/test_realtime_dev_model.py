@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import asyncio
-import base64
-from dataclasses import dataclass
-
 import pytest
 from fastapi.testclient import TestClient
+from starlette.routing import WebSocketRoute
 
 from sglang_omni.client.types import GenerateRequest, Message
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+)
 from sglang_omni.serve.openai_api import create_app
 from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelClient,
@@ -16,309 +17,300 @@ from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelRequestError,
     install_dev_model_error_handler,
 )
-from sglang_omni.serve.realtime.vad import VADEvent
 
 
-def _request(*, transcription: bool = False) -> GenerateRequest:
-    instruction = (
-        "Transcribe the spoken audio."
-        if transcription
-        else "Listen to the spoken audio above and respond to it."
-    )
+def _request() -> GenerateRequest:
     return GenerateRequest(
         messages=[
-            Message(role="system", content="development test"),
-            Message(role="user", content=instruction),
+            Message(role="system", content="reply"),
+            Message(role="user", content="hello"),
         ],
         stream=True,
         output_modalities=["text"],
-        metadata={"audios": ["data:audio/wav;base64,UklGRg=="]},
     )
 
 
-def test_config_defaults_to_disabled_and_parses_strict_values() -> None:
-    assert DevRealtimeModelConfig.from_env({}).enabled is False
+def _action_request(*candidate_ids: str) -> ActionSuffixScoreRequest:
+    return ActionSuffixScoreRequest(
+        request_id="action-1",
+        model="dev-model",
+        prefix="prefix",
+        language="zh",
+        candidates=[
+            ActionScoreCandidate(candidate_id=item, suffix=item)
+            for item in candidate_ids
+        ],
+        audios=[],
+        images=[],
+        sample_rate=16000,
+    )
+
+
+def test_config_parses_session_fake_settings() -> None:
     config = DevRealtimeModelConfig.from_env(
         {
             "SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED": "true",
-            "SGLANG_OMNI_DEV_FAKE_MODEL_RESPONSE_TEXT": "回复",
-            "SGLANG_OMNI_DEV_FAKE_MODEL_TRANSCRIPT_TEXT": "转写",
-            "SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_SIZE": "1",
-            "SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_INTERVAL_MS": "2",
+            "SGLANG_OMNI_DEV_FAKE_MODEL_RESPONSE_TEXT": "固定回复",
+            "SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_SIZE": "2",
+            "SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_INTERVAL_MS": "3",
+            "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID": "A002",
         }
     )
-    assert config == DevRealtimeModelConfig(
-        enabled=True,
-        response_text="回复",
-        transcript_text="转写",
-        chunk_size=1,
-        chunk_interval_ms=2,
-    )
-    assert "回复" not in str(config.log_summary())
+    assert (config.response_text, config.action_candidate_id) == ("固定回复", "A002")
+    assert "固定回复" not in str(config.log_summary())
 
 
-@pytest.mark.parametrize(
-    ("name", "value", "message"),
-    [
-        ("ENABLED", "1", "must be 'true' or 'false'"),
-        ("CHUNK_SIZE", "0", "must be >= 1"),
-        ("CHUNK_INTERVAL_MS", "-1", "must be >= 0"),
-        ("CHUNK_SIZE", "one", "must be an integer"),
-        ("RESPONSE_TEXT", "", "must not be empty"),
-    ],
-)
-def test_config_rejects_invalid_values(name: str, value: str, message: str) -> None:
-    env = {
-        "SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED": "true",
-        f"SGLANG_OMNI_DEV_FAKE_MODEL_{name}": value,
-    }
-    with pytest.raises(ValueError, match=message):
-        DevRealtimeModelConfig.from_env(env)
+@pytest.mark.parametrize("candidate_id", ["A000", "B000", "UNSUPPORTED", "DEV_NONE_0"])
+def test_config_rejects_reserved_action_candidate(candidate_id: str) -> None:
+    with pytest.raises(ValueError, match="reserved action identifier"):
+        DevRealtimeModelConfig.from_env(
+            {
+                "SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED": "true",
+                "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID": candidate_id,
+            }
+        )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("transcription", "expected"),
-    [(False, "固定回复文本"), (True, "固定转写文本")],
-)
-async def test_client_streams_selected_text_and_terminal_chunk(
-    transcription: bool, expected: str
-) -> None:
+async def test_text_stream_and_abort() -> None:
     client = DevRealtimeModelClient(
-        DevRealtimeModelConfig(
-            enabled=True,
-            response_text="固定回复文本",
-            transcript_text="固定转写文本",
-            chunk_size=2,
-        )
-    )
-    chunks = [
-        chunk
-        async for chunk in client.completion_stream(
-            _request(transcription=transcription), request_id="request-1"
-        )
-    ]
-    assert "".join(chunk.text for chunk in chunks) == expected
-    assert all(chunk.request_id == "request-1" for chunk in chunks)
-    assert all(chunk.modality == "text" for chunk in chunks)
-    assert all(chunk.finish_reason is None for chunk in chunks[:-1])
-    assert chunks[-1].text == ""
-    assert chunks[-1].finish_reason == "stop"
-
-
-@pytest.mark.asyncio
-async def test_abort_stops_an_active_stream() -> None:
-    client = DevRealtimeModelClient(
-        DevRealtimeModelConfig(enabled=True, response_text="abcdef", chunk_size=1)
+        DevRealtimeModelConfig(enabled=True, response_text="abcdef", chunk_size=2)
     )
     stream = client.completion_stream(_request(), request_id="request-1")
-    first = await anext(stream)
-    result = await client.abort("request-1")
-    remaining = [chunk async for chunk in stream]
-    unknown = await client.abort("unknown")
-    assert first.text == "a"
-    assert result.success is True
-    assert remaining == []
-    assert unknown.success is False
+    assert (await anext(stream)).text == "ab"
+    assert (await client.abort("request-1")).success is True
+    assert [item async for item in stream] == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (lambda req: setattr(req, "stream", False), "stream must be true"),
-        (
-            lambda req: setattr(req, "output_modalities", ["audio"]),
-            "output_modalities",
-        ),
-        (lambda req: setattr(req, "messages", []), "messages must not be empty"),
-        (lambda req: req.metadata.clear(), "metadata.audios"),
-        (
-            lambda req: req.metadata.update({"audios": ["not-a-data-uri"]}),
-            "audio data URIs",
-        ),
-        (
-            lambda req: req.metadata.update({"audios": ["data:audio/wav"]}),
-            "audio data URIs",
-        ),
-        (
-            lambda req: req.metadata.update(
-                {"audios": ["data:audio/wav;base64,not base64"]}
-            ),
-            "audio data URIs",
-        ),
-        (
-            lambda req: setattr(
-                req,
-                "messages",
-                [Message(role="system", content="unknown")],
-            ),
-            "system and user",
-        ),
-    ],
-)
-async def test_client_rejects_invalid_realtime_contract(mutate, message: str) -> None:
-    client = DevRealtimeModelClient(DevRealtimeModelConfig(enabled=True))
-    request = _request()
-    mutate(request)
-    with pytest.raises(DevRealtimeModelRequestError, match=message):
-        await anext(client.completion_stream(request, request_id="request-1"))
-
-
-@pytest.mark.asyncio
-async def test_client_rejects_empty_id_and_unknown_pass() -> None:
-    client = DevRealtimeModelClient(DevRealtimeModelConfig(enabled=True))
-    with pytest.raises(DevRealtimeModelRequestError, match="request_id"):
-        await anext(client.completion_stream(_request(), request_id=" "))
-
-    request = _request()
-    request.messages[-1].content = "unknown prompt"
-    with pytest.raises(DevRealtimeModelRequestError, match="unable to classify"):
-        await anext(client.completion_stream(request, request_id="request-1"))
-
-
-def test_client_rejects_unsupported_non_realtime_operations() -> None:
-    client = DevRealtimeModelClient(DevRealtimeModelConfig(enabled=True))
-    with pytest.raises(RuntimeError, match="unsupported"):
-        client.generate
-
-
-def test_interval_is_applied_only_between_text_chunks(monkeypatch) -> None:
-    sleeps: list[float] = []
-
-    async def fake_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+async def test_action_scoring_selects_configured_whitelisted_candidate() -> None:
     client = DevRealtimeModelClient(
-        DevRealtimeModelConfig(
-            enabled=True,
-            response_text="abcd",
-            chunk_size=2,
-            chunk_interval_ms=25,
-        )
+        DevRealtimeModelConfig(enabled=True, action_candidate_id="A002")
     )
-
-    async def consume() -> None:
-        _ = [
-            chunk
-            async for chunk in client.completion_stream(
-                _request(), request_id="request-1"
-            )
-        ]
-
-    asyncio.run(consume())
-    assert sleeps == [0.025]
-
-
-@pytest.fixture
-def dev_app_client() -> TestClient:
-    model = DevRealtimeModelClient(DevRealtimeModelConfig(enabled=True))
-    app = create_app(model, model_name="dev-model", enable_realtime=True)
-    install_dev_model_error_handler(app)
-    return TestClient(app, raise_server_exceptions=False)
-
-
-def test_supported_http_endpoints_remain_available(dev_app_client: TestClient) -> None:
-    assert dev_app_client.get("/health").status_code == 200
-    assert dev_app_client.get("/v1/models").status_code == 200
-
-
-@pytest.mark.parametrize(
-    ("path", "payload"),
-    [
-        ("/model_info", None),
-        (
-            "/v1/chat/completions",
-            {"model": "dev-model", "messages": [{"role": "user", "content": "hi"}]},
-        ),
-        ("/generate", {"prompt": "hi"}),
-        ("/v1/audio/speech", {"model": "dev-model", "input": "hi"}),
-        ("/v1/audio/transcriptions", {}),
-    ],
-)
-def test_unsupported_http_endpoints_return_explicit_development_error(
-    dev_app_client: TestClient, path: str, payload: dict[str, object] | None
-) -> None:
-    response = (
-        dev_app_client.get(path)
-        if payload is None
-        else dev_app_client.post(path, json=payload)
+    result = await client.score_action_suffixes(_action_request("A001", "A002"))
+    assert max(result.scores, key=lambda item: item.mean_logprob).candidate_id == "A002"
+    client = DevRealtimeModelClient(
+        DevRealtimeModelConfig(enabled=True, action_candidate_id="A999")
     )
-
-    assert response.status_code == 501
-    assert response.json() == {
-        "detail": f"{path} is unsupported while the Realtime development model is enabled",
-        "type": "dev_fake_model_unsupported",
-    }
+    with pytest.raises(DevRealtimeModelRequestError, match="Session whitelist"):
+        await client.score_action_suffixes(_action_request("A001"))
 
 
-def test_realtime_websocket_audio_runs_response_and_transcription(monkeypatch) -> None:
-    from sglang_omni.serve.realtime import session as session_module
-
-    @dataclass
-    class Emit:
-        event_type: str
-        sample_offset: int
-
-    class DeterministicVAD:
-        """Exercise the VAD boundary without loading Silero weights."""
-
-        def __init__(self, config) -> None:
-            del config
-
-        def process(self, pcm_bytes: bytes) -> list[Emit]:
-            assert pcm_bytes
-            samples = len(pcm_bytes) // 2
-            return [
-                Emit(VADEvent.SPEECH_STARTED, 0),
-                Emit(VADEvent.SPEECH_STOPPED, samples),
-            ]
-
-        def reset(self) -> None:
-            pass
-
-    monkeypatch.setattr(session_module, "StreamingVAD", DeterministicVAD)
-    model = DevRealtimeModelClient(
+def _dev_app(*, action_candidate_id: str = ""):
+    client = DevRealtimeModelClient(
         DevRealtimeModelConfig(
             enabled=True,
             response_text="固定回复",
-            transcript_text="固定转写",
             chunk_size=2,
+            action_candidate_id=action_candidate_id,
         )
     )
-    app = create_app(model, model_name="dev-model", enable_realtime=True)
+    app = create_app(
+        client,
+        model_name="dev-model",
+        enable_realtime=False,
+        enable_resource_monitor=False,
+        allow_unregistered_protocol_actions=True,
+    )
     install_dev_model_error_handler(app)
-    pcm = b"\x00\x01" * 512
+    return app
 
-    with TestClient(app).websocket_connect("/v1/realtime") as websocket:
-        assert websocket.receive_json()["type"] == "session.created"
-        websocket.send_json(
-            {
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(pcm).decode("ascii"),
-            }
-        )
+
+def _session_start(outputs: list[str]) -> dict:
+    event = {
+        "type": "session.start",
+        "protocol_version": 1,
+        "session_id": "dev-session",
+        "outputs": outputs,
+        "locale": "zh-CN",
+    }
+    if "text" in outputs:
+        event["reply"] = {"instructions": "简短回复"}
+    if "action" in outputs:
+        event["action"] = {
+            "fallback_category_ids": ["BDEV"],
+            "allowed_candidates": [{"candidate_id": "ADEV"}],
+        }
+    if outputs == ["text", "action"]:
+        event["reply"]["unsupported_action_text"] = "动作不支持"
+    return event
+
+
+def test_development_route_allowlist_uses_only_session_realtime() -> None:
+    app = _dev_app()
+    paths = {
+        route.path for route in app.router.routes if isinstance(route, WebSocketRoute)
+    }
+    assert paths == {"/v1/session/realtime"}
+
+
+def test_audio_output_is_explicitly_unsupported() -> None:
+    with TestClient(_dev_app()).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(_session_start(["audio"]))
+        event = ws.receive_json()
+        assert event["type"] == "error"
+        assert event["error"]["code"] == "unsupported_output"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {
+            "fallback_category_ids": ["B000"],
+            "allowed_candidates": [{"candidate_id": "ADEV"}],
+        },
+        {
+            "fallback_category_ids": ["BDEV"],
+            "allowed_candidates": [{"candidate_id": "A000"}],
+        },
+        {
+            "fallback_category_ids": ["BDEV"],
+            "allowed_candidates": [
+                {
+                    "candidate_id": "ADEV",
+                    "execution_binding": {"clip": " "},
+                }
+            ],
+        },
+        {
+            "fallback_category_ids": ["ADEV"],
+            "allowed_candidates": [{"candidate_id": "ADEV"}],
+        },
+    ],
+)
+def test_development_action_catalog_preserves_reserved_and_binding_constraints(
+    action: dict,
+) -> None:
+    start = _session_start(["action"])
+    start["action"] = action
+    with TestClient(_dev_app()).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(start)
+        event = ws.receive_json()
+        assert event["type"] == "error"
+        assert event["error"]["code"] == "session_candidate_invalid"
+
+
+@pytest.mark.parametrize("outputs", [["text"], ["action"], ["text", "action"]])
+def test_session_realtime_runs_deterministic_turn(outputs: list[str]) -> None:
+    with TestClient(_dev_app()).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(_session_start(outputs))
+        assert ws.receive_json()["type"] == "session.started"
+        ws.send_json({"type": "turn.start", "turn_id": "turn-1", "origin": "user"})
+        assert ws.receive_json()["type"] == "turn.started"
+        ws.send_json({"type": "input.text.set", "turn_id": "turn-1", "text": "你好"})
+        assert ws.receive_json()["type"] == "input.text.ack"
+        ws.send_json({"type": "turn.commit", "turn_id": "turn-1"})
         events = []
         while True:
-            event = websocket.receive_json()
+            event = ws.receive_json()
             events.append(event)
-            if event["type"] == (
-                "conversation.item.input_audio_transcription.completed"
-            ):
+            if event["type"] == "turn.result":
                 break
+        if "text" in outputs:
+            done = next(item for item in events if item["type"] == "response.done")
+            assert done["response"]["output"][0]["text"] == "固定回复"
+        if "action" in outputs:
+            ready = next(item for item in events if item["type"] == "turn.action.ready")
+            assert ready["action"]["candidate_id"] == "ADEV"
+        if outputs == ["text", "action"]:
+            resolved = next(
+                item
+                for item in events
+                if item["type"] == "response.provisional.resolved"
+            )
+            assert resolved["status"] == "promoted"
 
-    event_types = [event["type"] for event in events]
-    assert event_types[:3] == [
-        "input_audio_buffer.speech_started",
-        "input_audio_buffer.speech_stopped",
-        "input_audio_buffer.committed",
-    ]
-    assert "response.done" in event_types
-    assert "conversation.item.input_audio_transcription.delta" in event_types
-    response_done = next(event for event in events if event["type"] == "response.done")
-    transcript_done = events[-1]
-    assert response_done["response"]["output"][0]["content"] == [
-        {"type": "text", "text": "固定回复"}
-    ]
-    assert transcript_done["transcript"] == "固定转写"
+
+def test_optional_capability_detection_is_safe() -> None:
+    client = DevRealtimeModelClient(DevRealtimeModelConfig(enabled=True))
+    assert not hasattr(client, "action_scoring_load")
+
+
+def test_fusion_uses_deterministic_fallback_for_unavailable_configured_action() -> None:
+    with TestClient(_dev_app(action_candidate_id="A999")).websocket_connect(
+        "/v1/session/realtime"
+    ) as ws:
+        ws.send_json(_session_start(["text", "action"]))
+        assert ws.receive_json()["type"] == "session.started"
+        ws.send_json(
+            {"type": "turn.start", "turn_id": "turn-fallback", "origin": "user"}
+        )
+        assert ws.receive_json()["type"] == "turn.started"
+        ws.send_json(
+            {"type": "input.text.set", "turn_id": "turn-fallback", "text": "未知动作"}
+        )
+        assert ws.receive_json()["type"] == "input.text.ack"
+        ws.send_json({"type": "turn.commit", "turn_id": "turn-fallback"})
+        events = []
+        while True:
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] == "turn.result":
+                break
+        result = events[-1]
+        assert result["status"] == "partial"
+        assert result["action"]["action_id"] == "no_action"
+        assert result["action"]["fallback_applied"] is True
+
+
+def test_turn_cancel_stops_stream_and_has_single_terminal_event() -> None:
+    client = DevRealtimeModelClient(
+        DevRealtimeModelConfig(
+            enabled=True,
+            response_text="取消后不应完成",
+            chunk_size=1,
+            chunk_interval_ms=1000,
+        )
+    )
+    app = create_app(
+        client,
+        model_name="dev-model",
+        enable_realtime=False,
+        enable_resource_monitor=False,
+        allow_unregistered_protocol_actions=True,
+    )
+    install_dev_model_error_handler(app)
+    with TestClient(app).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(_session_start(["text"]))
+        assert ws.receive_json()["type"] == "session.started"
+        ws.send_json({"type": "turn.start", "turn_id": "turn-cancel", "origin": "user"})
+        assert ws.receive_json()["type"] == "turn.started"
+
+
+def test_late_cancel_after_result_is_idempotent_and_next_turn_can_start() -> None:
+    with TestClient(_dev_app()).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(_session_start(["text"]))
+        assert ws.receive_json()["type"] == "session.started"
+        ws.send_json({"type": "turn.start", "turn_id": "turn-done", "origin": "user"})
+        assert ws.receive_json()["type"] == "turn.started"
+        ws.send_json({"type": "input.text.set", "turn_id": "turn-done", "text": "完成"})
+        assert ws.receive_json()["type"] == "input.text.ack"
+        ws.send_json({"type": "turn.commit", "turn_id": "turn-done"})
+        while ws.receive_json()["type"] != "turn.result":
+            pass
+
+        ws.send_json({"type": "turn.cancel", "turn_id": "turn-done"})
+        ws.send_json({"type": "turn.start", "turn_id": "turn-next", "origin": "user"})
+        assert ws.receive_json()["type"] == "turn.started"
+        ws.send_json(
+            {
+                "type": "input.text.set",
+                "turn_id": "turn-cancel",
+                "text": "停止",
+            }
+        )
+        assert ws.receive_json()["type"] == "input.text.ack"
+        ws.send_json({"type": "turn.commit", "turn_id": "turn-cancel"})
+        first = ws.receive_json()
+        assert first["type"] == "response.created"
+        ws.send_json({"type": "turn.cancel", "turn_id": "turn-cancel"})
+        events = [first]
+        while events[-1]["type"] != "turn.cancelled":
+            events.append(ws.receive_json())
+        event_types = [event["type"] for event in events]
+        assert event_types.count("turn.cancelled") == 1
+        assert "response.done" not in event_types
+        assert "turn.result" not in event_types
+        ws.send_json({"type": "turn.cancel", "turn_id": "turn-cancel"})
+        ws.send_json({"type": "turn.start", "turn_id": "turn-next", "origin": "user"})
+        assert ws.receive_json()["type"] == "turn.started"

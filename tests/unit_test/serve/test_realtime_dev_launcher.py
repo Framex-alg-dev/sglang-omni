@@ -26,11 +26,17 @@ async def test_enabled_dev_model_bypasses_pipeline_runner(monkeypatch) -> None:
     monkeypatch.setattr(launcher, "_find_available_port", lambda host, port: port)
     monkeypatch.setattr(launcher, "MultiProcessPipelineRunner", ForbiddenRunner)
     monkeypatch.setattr(launcher, "serve_dev_realtime_model", fake_serve)
+    monkeypatch.setattr(
+        launcher,
+        "_load_production_action_catalog_support",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("development mode must not load the action catalog")
+        ),
+    )
 
     await launcher._run_server(
         SimpleNamespace(name="fake-pipeline"),
         port=8123,
-        enable_realtime=True,
     )
 
     assert captured["config"].enabled is True
@@ -38,33 +44,44 @@ async def test_enabled_dev_model_bypasses_pipeline_runner(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enabled_dev_model_requires_realtime_endpoint(monkeypatch) -> None:
-    from sglang_omni.serve import launcher
-
-    monkeypatch.setenv("SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED", "true")
-    monkeypatch.setattr(launcher, "_find_available_port", lambda host, port: port)
-    with pytest.raises(ValueError, match="requires --enable-realtime"):
-        await launcher._run_server(SimpleNamespace(name="fake"))
-
-
-@pytest.mark.asyncio
 async def test_disabled_dev_model_keeps_pipeline_path(monkeypatch) -> None:
     from sglang_omni.serve import launcher
 
     constructed: list[object] = []
+    startup_order: list[str] = []
+    catalog = SimpleNamespace(
+        catalog_version="test",
+        catalog_hash="hash",
+        categories=[],
+        candidate_count=0,
+    )
+
+    def load_catalog_support():
+        startup_order.append("catalog")
+        return catalog, object()
+
+    def find_port(host, port):
+        del host
+        startup_order.append("port")
+        return port
 
     class MarkerRunner:
         def __init__(self, pipeline_config) -> None:
+            startup_order.append("runner")
             constructed.append(pipeline_config)
             raise RuntimeError("production pipeline marker")
 
     monkeypatch.delenv("SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED", raising=False)
-    monkeypatch.setattr(launcher, "_find_available_port", lambda host, port: port)
+    monkeypatch.setattr(
+        launcher, "_load_production_action_catalog_support", load_catalog_support
+    )
+    monkeypatch.setattr(launcher, "_find_available_port", find_port)
     monkeypatch.setattr(launcher, "MultiProcessPipelineRunner", MarkerRunner)
     config = SimpleNamespace(name="real-pipeline")
     with pytest.raises(RuntimeError, match="production pipeline marker"):
         await launcher._run_server(config)
     assert constructed == [config]
+    assert startup_order == ["catalog", "port", "runner"]
 
 
 @pytest.mark.asyncio
@@ -103,7 +120,9 @@ async def test_standalone_dev_server_wires_real_app_without_pipeline(
         log_level="info",
     )
     assert captured["client"].health()["running"] is True
-    assert captured["kwargs"]["enable_realtime"] is True
+    assert captured["kwargs"]["enable_realtime"] is False
+    assert captured["kwargs"]["enable_resource_monitor"] is False
+    assert captured["kwargs"]["allow_unregistered_protocol_actions"] is True
     assert captured["kwargs"]["model_name"] == "dev-model"
     assert captured["error_handler_app"] is app
     assert captured["served"] is True

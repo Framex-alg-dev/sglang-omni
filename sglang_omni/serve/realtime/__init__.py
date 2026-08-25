@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""OpenAI Realtime API (WebSocket /v1/realtime).
+"""Realtime session APIs and shared session primitives.
 
 Reference: https://developers.openai.com/api/docs/guides/realtime
 """

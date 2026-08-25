@@ -18,9 +18,9 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from sglang_omni.client import Client, GenerateRequest, Message, SamplingParams
 from sglang_omni.models.qwen3_omni.action_scoring import (
+    MAX_MICRO_BATCH_SIZE,
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
-    MAX_MICRO_BATCH_SIZE,
 )
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
     ACTION_HISTORY_INSTRUCTION,
@@ -28,21 +28,18 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     CATEGORY_CONTEXT_POLICY,
     CATEGORY_CONTEXT_POLICY_EN,
     DEFAULT_ACTION_PROMPT_LOCALE,
-    GlobalActionCatalog,
-    GlobalActionCatalogPrewarmStatus,
     UNSUPPORTED_CATEGORY_SCORE_ID,
     UNSUPPORTED_CHILD_SCORE_ID,
     UNSUPPORTED_DECISION_ID,
+    GlobalActionCatalog,
+    GlobalActionCatalogPrewarmStatus,
 )
 from sglang_omni.models.qwen3_omni.prompt_localization import (
     PROMPT_LANGUAGE_BY_LOCALE,
     localized_prompt,
 )
 from sglang_omni.preprocessing.image import prepare_image_bytes_for_wire
-from sglang_omni.serve.realtime.audio_buffer import (
-    BufferOverflow,
-    RealtimeAudioBuffer,
-)
+from sglang_omni.serve.realtime.audio_buffer import BufferOverflow, RealtimeAudioBuffer
 from sglang_omni.utils.structured_logs import (
     emit_structured_log,
     get_structured_log_writer,
@@ -242,9 +239,7 @@ def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
             "prefix_prefill_ms": float(stats.get("prefix_prefill_ms", 0.0)),
         },
         "suffix": {
-            "batch_count": int(
-                stats.get("suffix_batch_count", len(suffix_batch_ms))
-            ),
+            "batch_count": int(stats.get("suffix_batch_count", len(suffix_batch_ms))),
             "batch_sizes": list(stats.get("suffix_batch_sizes", [])),
             "batch_ms": suffix_batch_ms,
             "batch_total_ms": round(sum(suffix_batch_ms), 3),
@@ -258,10 +253,14 @@ def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_action_selection_mode(value: str | None) -> str:
     mode = (
-        value
-        or os.environ.get(ACTION_SELECTION_MODE_ENV)
-        or ACTION_SELECTION_MODE_HIERARCHICAL
-    ).strip().lower()
+        (
+            value
+            or os.environ.get(ACTION_SELECTION_MODE_ENV)
+            or ACTION_SELECTION_MODE_HIERARCHICAL
+        )
+        .strip()
+        .lower()
+    )
     if mode not in {
         ACTION_SELECTION_MODE_HIERARCHICAL,
         ACTION_SELECTION_MODE_FLAT_CHILDREN,
@@ -292,7 +291,11 @@ def _summarize_media(values: list[str]) -> list[dict[str, Any]]:
             "index": index,
             "chars": len(value),
             "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
-            "data_uri_header": value.split(",", 1)[0] if value.startswith("data:") and "," in value else None,
+            "data_uri_header": (
+                value.split(",", 1)[0]
+                if value.startswith("data:") and "," in value
+                else None
+            ),
         }
         for index, value in enumerate(values)
     ]
@@ -323,9 +326,7 @@ class SessionActionCandidate:
         if not isinstance(source_label, str) or not source_label.strip():
             raise ValueError(f"source_label must be non-empty: {candidate_id!r}")
         if not isinstance(short_definition, str) or not short_definition.strip():
-            raise ValueError(
-                f"short_definition must be non-empty: {candidate_id!r}"
-            )
+            raise ValueError(f"short_definition must be non-empty: {candidate_id!r}")
         if not isinstance(binding, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in binding.items()
         ):
@@ -447,7 +448,6 @@ class SessionActionProfile:
         return payload
 
 
-
 @dataclass(frozen=True, slots=True)
 class SessionActionCategory:
     category_id: str
@@ -467,28 +467,56 @@ class SessionActionCategory:
         if not isinstance(category_path_value, list) or not all(
             isinstance(item, str) and item.strip() for item in category_path_value
         ):
-            raise ValueError(
-                f"category_path must be a string list: {category_id!r}"
-            )
+            raise ValueError(f"category_path must be a string list: {category_id!r}")
         children = value.get("children")
         if not isinstance(category_id, str) or not category_id.strip():
             raise ValueError("category_id must be a non-empty string")
         if not isinstance(source_label, str) or not source_label.strip():
-            raise ValueError(f"category source_label must be non-empty: {category_id!r}")
+            raise ValueError(
+                f"category source_label must be non-empty: {category_id!r}"
+            )
         if not isinstance(short_definition, str) or not short_definition.strip():
-            raise ValueError(f"category short_definition must be non-empty: {category_id!r}")
+            raise ValueError(
+                f"category short_definition must be non-empty: {category_id!r}"
+            )
         if not isinstance(children, list) or not children:
-            raise ValueError(f"category children must be a non-empty list: {category_id!r}")
+            raise ValueError(
+                f"category children must be a non-empty list: {category_id!r}"
+            )
         if len(children) > MAX_ACTION_CHILDREN_PER_CATEGORY:
-            raise ValueError(f"category children must contain at most {MAX_ACTION_CHILDREN_PER_CATEGORY} items")
+            raise ValueError(
+                f"category children must contain at most {MAX_ACTION_CHILDREN_PER_CATEGORY} items"
+            )
         parsed = []
         for child in children:
             item = SessionActionCandidate.from_payload(child)
-            parsed.append(SessionActionCandidate(candidate_id=item.candidate_id, action_id=item.action_id, source_label=item.source_label, short_definition=item.short_definition, execution_binding=dict(item.execution_binding), category_id=category_id.strip()))
-        return cls(category_id=category_id.strip(), source_label=source_label.strip(), short_definition=short_definition.strip(), category_path=tuple(item.strip() for item in category_path_value), children=tuple(parsed))
+            parsed.append(
+                SessionActionCandidate(
+                    candidate_id=item.candidate_id,
+                    action_id=item.action_id,
+                    source_label=item.source_label,
+                    short_definition=item.short_definition,
+                    execution_binding=dict(item.execution_binding),
+                    category_id=category_id.strip(),
+                )
+            )
+        return cls(
+            category_id=category_id.strip(),
+            source_label=source_label.strip(),
+            short_definition=short_definition.strip(),
+            category_path=tuple(item.strip() for item in category_path_value),
+            children=tuple(parsed),
+        )
 
     def as_dict(self) -> dict[str, Any]:
-        return {"category_id": self.category_id, "source_label": self.source_label, "short_definition": self.short_definition, "category_path": list(self.category_path), "children": [item.as_dict() for item in self.children]}
+        return {
+            "category_id": self.category_id,
+            "source_label": self.source_label,
+            "short_definition": self.short_definition,
+            "category_path": list(self.category_path),
+            "children": [item.as_dict() for item in self.children],
+        }
+
 
 @dataclass(slots=True)
 class ImageFrame:
@@ -608,10 +636,9 @@ class TurnBuffer:
 class MultimodalSession:
     """Manual-turn, multimodal session for audio chunks and image frames.
 
-    This protocol deliberately lives next to, but separately from, the
-    OpenAI-compatible /v1/realtime implementation. The latter remains
-    audio/VAD compatible; this session owns explicit turn.start/commit
-    boundaries and the fixed scheme-B action catalog.
+    This session owns the ``/v1/session/realtime`` protocol, including
+    explicit ``turn.start``/``turn.commit`` boundaries and the fixed
+    scheme-B action catalog.
     """
 
     def __init__(
@@ -625,6 +652,7 @@ class MultimodalSession:
         action_category_top_k: int | None = None,
         global_action_catalog: GlobalActionCatalog | None = None,
         global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
+        allow_unregistered_protocol_actions: bool = False,
         claim_session: Callable[[str, "MultimodalSession"], None],
         release_session: Callable[[str, "MultimodalSession"], None],
         request_resource_sample: Callable[..., bool] | None = None,
@@ -632,7 +660,9 @@ class MultimodalSession:
         self.websocket = websocket
         self.client = client
         self.model_name = model_name
-        self.action_selection_mode = normalize_action_selection_mode(action_selection_mode)
+        self.action_selection_mode = normalize_action_selection_mode(
+            action_selection_mode
+        )
         self.action_micro_batch_size = normalize_action_micro_batch_size(
             action_micro_batch_size
         )
@@ -640,6 +670,7 @@ class MultimodalSession:
             action_category_top_k
         )
         self.global_action_catalog = global_action_catalog
+        self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.global_action_prewarm = (
             global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
         )
@@ -660,6 +691,7 @@ class MultimodalSession:
         self.started = False
         self.active_turn: TurnBuffer | None = None
         self.used_turn_ids: set[str] = set()
+        self.cancelled_turn_ids: set[str] = set()
         self.history: list[dict[str, Any]] = []
         self.history_audios: list[str] = []
         self.history_images: list[str] = []
@@ -719,9 +751,7 @@ class MultimodalSession:
                 try:
                     payload = json.loads(message["text"])
                 except json.JSONDecodeError as exc:
-                    await self.send_error(
-                        "invalid_request", "invalid_json", str(exc)
-                    )
+                    await self.send_error("invalid_request", "invalid_json", str(exc))
                     continue
                 if not isinstance(payload, dict):
                     await self.send_error(
@@ -741,9 +771,13 @@ class MultimodalSession:
                     )
                     break
                 except (BufferOverflow, ValueError, KeyError) as exc:
-                    session_id = self._event_context_id(payload, "session_id") or self.session_id
+                    session_id = (
+                        self._event_context_id(payload, "session_id") or self.session_id
+                    )
                     turn_id = self._event_context_id(payload, "turn_id") or (
-                        self.active_turn.turn_id if self.active_turn is not None else None
+                        self.active_turn.turn_id
+                        if self.active_turn is not None
+                        else None
                     )
                     await self.send_error(
                         "invalid_request",
@@ -753,9 +787,13 @@ class MultimodalSession:
                         turn_id=turn_id,
                     )
                 except Exception as exc:
-                    session_id = self._event_context_id(payload, "session_id") or self.session_id
+                    session_id = (
+                        self._event_context_id(payload, "session_id") or self.session_id
+                    )
                     turn_id = self._event_context_id(payload, "turn_id") or (
-                        self.active_turn.turn_id if self.active_turn is not None else None
+                        self.active_turn.turn_id
+                        if self.active_turn is not None
+                        else None
                     )
                     await self.send_error(
                         "server_error",
@@ -809,9 +847,7 @@ class MultimodalSession:
             )
         missing = sorted((required or set()) - set(value))
         if missing:
-            raise ValueError(
-                f"{name} is missing required fields: {', '.join(missing)}"
-            )
+            raise ValueError(f"{name} is missing required fields: {', '.join(missing)}")
         return value
 
     @staticmethod
@@ -878,33 +914,47 @@ class MultimodalSession:
     def _compact_action_catalog(
         self, action_config: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[str]]:
-        if self.global_action_catalog is None:
-            raise ValueError(
-                "action output requires the server global action catalog"
-            )
+        if (
+            self.global_action_catalog is None
+            and not self.allow_unregistered_protocol_actions
+        ):
+            raise ValueError("action output requires the server global action catalog")
 
         raw_fallback_ids = action_config.get("fallback_category_ids")
         if not isinstance(raw_fallback_ids, list) or not raw_fallback_ids:
-            raise ValueError(
-                "action.fallback_category_ids must be a non-empty list"
-            )
+            raise ValueError("action.fallback_category_ids must be a non-empty list")
         if len(raw_fallback_ids) > MAX_ACTION_CATEGORIES:
             raise ValueError(
                 "action.fallback_category_ids must contain at most "
                 f"{MAX_ACTION_CATEGORIES} items"
             )
         fallback_category_ids: list[str] = []
+        reserved_action_ids = {
+            UNSUPPORTED_CATEGORY_SCORE_ID,
+            UNSUPPORTED_CHILD_SCORE_ID,
+            UNSUPPORTED_DECISION_ID,
+        }
         for raw_category_id in raw_fallback_ids:
             if not isinstance(raw_category_id, str) or not raw_category_id.strip():
                 raise ValueError(
                     "action.fallback_category_ids items must be non-empty strings"
                 )
             category_id = raw_category_id.strip()
+            if self.global_action_catalog is None and (
+                category_id in reserved_action_ids or category_id == "DEV_ACTIONS"
+            ):
+                raise ValueError(
+                    "action.fallback_category_ids contains a reserved "
+                    f"development category_id: {category_id}"
+                )
             if category_id in fallback_category_ids:
                 raise ValueError(
                     "action.fallback_category_ids must not contain duplicates"
                 )
-            if category_id not in self.global_action_catalog.category_by_id:
+            if (
+                self.global_action_catalog is not None
+                and category_id not in self.global_action_catalog.category_by_id
+            ):
                 raise ValueError(
                     "action.fallback_category_ids contains unknown global "
                     f"category_id: {category_id}"
@@ -915,9 +965,7 @@ class MultimodalSession:
         if raw_allowed is None:
             raw_allowed = []
         if not isinstance(raw_allowed, list):
-            raise ValueError(
-                "action.allowed_candidates must be a list when provided"
-            )
+            raise ValueError("action.allowed_candidates must be a list when provided")
         if len(raw_allowed) > MAX_ACTION_CANDIDATES:
             raise ValueError(
                 "action.allowed_candidates must contain at most "
@@ -939,19 +987,24 @@ class MultimodalSession:
             )
             assert candidate_id is not None
             candidate_id = candidate_id.strip()
+            if self.global_action_catalog is None and (
+                candidate_id in reserved_action_ids
+                or candidate_id.startswith("DEV_NONE_")
+            ):
+                raise ValueError(
+                    "action.allowed_candidates contains a reserved "
+                    f"development candidate_id: {candidate_id}"
+                )
             if candidate_id in bindings:
-                raise ValueError(
-                    f"duplicate action candidate_id: {candidate_id}"
-                )
-            if candidate_id not in self.global_action_catalog.candidate_by_id:
-                raise ValueError(
-                    f"unknown global action candidate_id: {candidate_id}"
-                )
+                raise ValueError(f"duplicate action candidate_id: {candidate_id}")
+            if (
+                self.global_action_catalog is not None
+                and candidate_id not in self.global_action_catalog.candidate_by_id
+            ):
+                raise ValueError(f"unknown global action candidate_id: {candidate_id}")
             binding = item.get("execution_binding") or {}
             if not isinstance(binding, dict) or not all(
-                isinstance(key, str)
-                and key.strip()
-                and isinstance(binding_value, str)
+                isinstance(key, str) and key.strip() and isinstance(binding_value, str)
                 for key, binding_value in binding.items()
             ):
                 raise ValueError(
@@ -963,8 +1016,26 @@ class MultimodalSession:
                     "execution_binding must contain at most "
                     f"{MAX_EXECUTION_BINDING_CHARS} serialized characters"
                 )
+            if self.global_action_catalog is None and any(
+                not binding_value.strip() for binding_value in binding.values()
+            ):
+                raise ValueError(
+                    "execution_binding values must be non-empty strings in "
+                    "development mode"
+                )
             bindings[candidate_id] = dict(binding)
 
+        if not raw_allowed and self.global_action_catalog is None:
+            raise ValueError(
+                "action.allowed_candidates must be non-empty in development mode"
+            )
+        if self.global_action_catalog is None:
+            collisions = set(fallback_category_ids) & set(bindings)
+            if collisions:
+                raise ValueError(
+                    "development category_id and candidate_id values must be "
+                    "disjoint: " + ", ".join(sorted(collisions))
+                )
         if not raw_allowed:
             for category_id in fallback_category_ids:
                 for candidate in self.global_action_catalog.category_by_id[
@@ -977,8 +1048,50 @@ class MultimodalSession:
                 f"{MAX_ACTION_CANDIDATES} items"
             )
 
-        categories: list[dict[str, Any]] = []
-        for category in self.global_action_catalog.categories:
+        if self.global_action_catalog is None:
+            categories = [
+                {
+                    "category_id": "DEV_ACTIONS",
+                    "source_label": "Development actions",
+                    "short_definition": "Session-scoped development actions",
+                    "category_path": [],
+                    "children": [
+                        {
+                            "candidate_id": candidate_id,
+                            "action_id": candidate_id,
+                            "source_label": candidate_id,
+                            "short_definition": candidate_id,
+                            "execution_binding": binding,
+                        }
+                        for candidate_id, binding in bindings.items()
+                    ],
+                }
+            ]
+            categories.extend(
+                {
+                    "category_id": category_id,
+                    "source_label": category_id,
+                    "short_definition": "Development fallback action",
+                    "category_path": [],
+                    "children": [
+                        {
+                            "candidate_id": f"DEV_NONE_{index}",
+                            "action_id": "no_action",
+                            "source_label": "No action",
+                            "short_definition": "Keep current avatar state",
+                            "execution_binding": {},
+                        }
+                    ],
+                }
+                for index, category_id in enumerate(fallback_category_ids)
+            )
+        else:
+            categories = []
+        for category in (
+            self.global_action_catalog.categories
+            if self.global_action_catalog is not None
+            else ()
+        ):
             children = []
             for candidate in category.children:
                 if candidate.candidate_id not in bindings:
@@ -1003,9 +1116,7 @@ class MultimodalSession:
                     }
                 )
 
-        allowed_category_ids = {
-            item["category_id"] for item in categories
-        }
+        allowed_category_ids = {item["category_id"] for item in categories}
         for category_id in fallback_category_ids:
             if category_id not in allowed_category_ids:
                 raise ValueError(
@@ -1158,9 +1269,7 @@ class MultimodalSession:
         )
         include_scores = diagnostics.get("include_action_scores", False)
         if not isinstance(include_scores, bool):
-            raise ValueError(
-                "diagnostics.include_action_scores must be a boolean"
-            )
+            raise ValueError("diagnostics.include_action_scores must be a boolean")
         if include_scores and "action" not in outputs:
             raise ValueError(
                 "diagnostics.include_action_scores requires the action output"
@@ -1282,7 +1391,9 @@ class MultimodalSession:
             source = event.get("image_source")
             if source is None:
                 active_origin = (
-                    self.active_turn.turn_origin if self.active_turn is not None else None
+                    self.active_turn.turn_origin
+                    if self.active_turn is not None
+                    else None
                 )
                 source = (
                     "user_camera"
@@ -1361,10 +1472,7 @@ class MultimodalSession:
                 max_chars=MAX_TURN_ID_CHARS,
                 allow_empty=False,
             )
-            if (
-                last_action_id is not None
-                and self.global_action_catalog is not None
-            ):
+            if last_action_id is not None and self.global_action_catalog is not None:
                 known_action_ids = {
                     candidate.action_id
                     for candidate in self.global_action_catalog.candidate_by_id.values()
@@ -1504,9 +1612,7 @@ class MultimodalSession:
             if not isinstance(actual, list) or not all(
                 isinstance(item, str) for item in actual
             ):
-                raise ValueError(
-                    f"category_path must be a string list: {entity_id!r}"
-                )
+                raise ValueError(f"category_path must be a string list: {entity_id!r}")
             actual = tuple(item.strip() for item in actual)
         elif isinstance(actual, str):
             actual = actual.strip()
@@ -1753,14 +1859,10 @@ class MultimodalSession:
             if self.global_action_catalog is not None:
                 if categories:
                     categories, candidates = (
-                        self._canonicalize_global_hierarchical_catalog(
-                            raw_candidates
-                        )
+                        self._canonicalize_global_hierarchical_catalog(raw_candidates)
                     )
                 else:
-                    candidates = self._canonicalize_global_flat_catalog(
-                        raw_candidates
-                    )
+                    candidates = self._canonicalize_global_flat_catalog(raw_candidates)
             if len(candidates) > MAX_ACTION_CANDIDATES:
                 raise ValueError(
                     f"action candidates must contain at most {MAX_ACTION_CANDIDATES} children"
@@ -1792,9 +1894,7 @@ class MultimodalSession:
                             "fallback_category_ids must be a non-empty list when "
                             "hierarchical action selection is enabled"
                         )
-                known_category_ids = {
-                    item.category_id for item in categories
-                }
+                known_category_ids = {item.category_id for item in categories}
                 for raw_category_id in raw_fallback_category_ids:
                     if (
                         not isinstance(raw_category_id, str)
@@ -1936,9 +2036,7 @@ class MultimodalSession:
         self.claim_session(session_id, self)
         self.session_id = session_id
         self.protocol_version = event.get("_protocol_version")
-        self.locale = event.get(
-            "_locale", "zh-CN" if language == "zh" else "en-US"
-        )
+        self.locale = event.get("_locale", "zh-CN" if language == "zh" else "en-US")
         self.language = language
         self.modalities = modalities
         if instructions is not None:
@@ -1968,26 +2066,32 @@ class MultimodalSession:
         self.fallback_category_ids = tuple(fallback_category_ids)
         self.prewarm_child_category_ids = tuple(prewarm_child_category_ids)
         self.candidate_by_id = {x.candidate_id: x for x in candidates}
-        if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL:
+        if (
+            categories
+            and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
+        ):
             self.action_system_prompt = self._build_category_system_prompt()
         elif candidates:
             self.action_system_prompt = self._build_action_system_prompt()
         else:
             self.action_system_prompt = ""
         canonical = json.dumps(
-            ([category.as_dict() for category in categories] if categories else [x.as_dict() for x in candidates]),
+            (
+                [category.as_dict() for category in categories]
+                if categories
+                else [x.as_dict() for x in candidates]
+            ),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
         self.action_catalog_hash = (
-            "sha256:" + hashlib.sha256(canonical).hexdigest()
-            if candidates
-            else ""
+            "sha256:" + hashlib.sha256(canonical).hexdigest() if candidates else ""
         )
         mode_namespace = (
             "hierarchical"
-            if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
+            if categories
+            and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
             else "flat_children"
         )
         self.action_prefix_cache_namespace = (
@@ -2000,9 +2104,7 @@ class MultimodalSession:
             locale_prewarm = self.global_action_prewarm.for_locale(self.locale)
             self.action_prefix_prefilled = locale_prewarm.category_ready
             self.prewarmed_child_category_ids = sorted(
-                {
-                    item.category_id for item in categories
-                }
+                {item.category_id for item in categories}
                 & set(locale_prewarm.ready_child_category_ids)
             )
             if self.action_prefix_prefilled:
@@ -2024,7 +2126,10 @@ class MultimodalSession:
                     prewarm_child_category_ids,
                 )
         elif candidates and callable(prefill):
-            if categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL:
+            if (
+                categories
+                and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
+            ):
                 prefill_candidates = [
                     ActionScoreCandidate(
                         candidate_id=item.category_id,
@@ -2058,9 +2163,7 @@ class MultimodalSession:
                     self.action_prefix_cache_namespace
                 )
             if categories:
-                category_by_id = {
-                    item.category_id: item for item in categories
-                }
+                category_by_id = {item.category_id: item for item in categories}
                 for category_id in self.prewarm_child_category_ids:
                     category = category_by_id[category_id]
                     child_candidates = list(category.children)
@@ -2094,9 +2197,7 @@ class MultimodalSession:
                         3,
                     )
                     if prewarmed:
-                        self._prefilled_action_prefix_namespaces.add(
-                            child_namespace
-                        )
+                        self._prefilled_action_prefix_namespaces.add(child_namespace)
                         self.prewarmed_child_category_ids.append(category_id)
                     emit_structured_log(
                         "performance",
@@ -2121,22 +2222,15 @@ class MultimodalSession:
             "action_selection_stages": (
                 2
                 if categories
-                and self.action_selection_mode
-                == ACTION_SELECTION_MODE_HIERARCHICAL
+                and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
                 else 1
             ),
             "action_prefix_prefilled": self.action_prefix_prefilled,
             "action_profile_applied": self.action_profile is not None,
-            "action_profile_sha256": action_profile_audit[
-                "action_profile_sha256"
-            ],
-            "prewarmed_child_category_ids": list(
-                self.prewarmed_child_category_ids
-            ),
+            "action_profile_sha256": action_profile_audit["action_profile_sha256"],
+            "prewarmed_child_category_ids": list(self.prewarmed_child_category_ids),
             "fallback_category_ids": list(self.fallback_category_ids),
-            "unsupported_action_text_configured": bool(
-                self.unsupported_action_text
-            ),
+            "unsupported_action_text_configured": bool(self.unsupported_action_text),
             "unsupported_action_text_sha256": _text_audit_fields(
                 "unsupported_action_text", self.unsupported_action_text or None
             )["unsupported_action_text_sha256"],
@@ -2185,12 +2279,8 @@ class MultimodalSession:
                 "unsupported_action_text", self.unsupported_action_text or None
             ),
             **action_profile_audit,
-            requested_prewarm_child_category_ids=list(
-                self.prewarm_child_category_ids
-            ),
-            prewarmed_child_category_ids=list(
-                self.prewarmed_child_category_ids
-            ),
+            requested_prewarm_child_category_ids=list(self.prewarm_child_category_ids),
+            prewarmed_child_category_ids=list(self.prewarmed_child_category_ids),
         )
 
     async def handle_turn_start(self, event: dict[str, Any]) -> None:
@@ -2265,9 +2355,7 @@ class MultimodalSession:
                 f"audio seq must be monotonic starting at 1; expected {expected_seq}, got {seq}"
             )
         if turn.audio_chunk_count >= MAX_AUDIO_CHUNKS_PER_TURN:
-            raise ValueError(
-                f"audio chunk count exceeds {MAX_AUDIO_CHUNKS_PER_TURN}"
-            )
+            raise ValueError(f"audio chunk count exceeds {MAX_AUDIO_CHUNKS_PER_TURN}")
         turn.audio.append_b64(audio)
         turn.audio_seqs.add(seq)
         turn.audio_chunk_hashes[seq] = chunk_hash
@@ -2345,8 +2433,7 @@ class MultimodalSession:
             except Exception:
                 result = {}
             turn.prepared_image_bytes = max(
-                turn.prepared_image_bytes
-                - int(result.get("prepared_bytes", 0)),
+                turn.prepared_image_bytes - int(result.get("prepared_bytes", 0)),
                 0,
             )
         elif not task.done():
@@ -2405,9 +2492,7 @@ class MultimodalSession:
             "image_role", DEFAULT_IMAGE_ROLE_BY_ORIGIN[turn.turn_origin]
         )
         if not isinstance(image_role, str) or image_role not in IMAGE_ROLES:
-            raise ValueError(
-                "image_role must be 'user_camera' or 'avatar_state'"
-            )
+            raise ValueError("image_role must be 'user_camera' or 'avatar_state'")
         image = event.get("image")
         if not isinstance(image, str) or not image:
             raise ValueError("image must be a non-empty base64 string or data URI")
@@ -2455,9 +2540,7 @@ class MultimodalSession:
             )
             return
         if len(turn.images) >= MAX_IMAGES_PER_TURN:
-            raise ValueError(
-                f"image frame count exceeds {MAX_IMAGES_PER_TURN}"
-            )
+            raise ValueError(f"image frame count exceeds {MAX_IMAGES_PER_TURN}")
         frame = ImageFrame(
             seq=seq,
             timestamp_ms=timestamp_ms,
@@ -2498,16 +2581,24 @@ class MultimodalSession:
         )
 
     async def handle_turn_cancel(self, event: dict[str, Any]) -> None:
+        turn_id = event.get("turn_id")
+        if turn_id in self.cancelled_turn_ids:
+            return
+        if (
+            self.active_turn is None or self.active_turn.turn_id != turn_id
+        ) and turn_id in self.used_turn_ids:
+            # Completion and cancellation may cross on the wire. Preserve the
+            # first terminal state without emitting an error or second terminal.
+            return
         turn = self._require_turn(event)
         await self._cancel_active_turn(send_event=True, expected_turn=turn)
+        self.cancelled_turn_ids.add(turn.turn_id)
 
     async def handle_session_close(self, event: dict[str, Any]) -> None:
         reason = event.get("reason")
         self.closed = True
         await self._cancel_active_turn(send_event=False)
-        await self.send(
-            {"type": "session.closed", "session_id": self.session_id}
-        )
+        await self.send({"type": "session.closed", "session_id": self.session_id})
         emit_structured_log(
             "lifecycle",
             "session_closed",
@@ -2671,9 +2762,7 @@ class MultimodalSession:
             and isinstance(turn.reply_context, str)
             and turn.reply_context is not None
         ):
-            raise ValueError(
-                "provided reply and reply context are mutually exclusive"
-            )
+            raise ValueError("provided reply and reply context are mutually exclusive")
         if "avatar_state" in event:
             state = event.get("avatar_state")
             if not isinstance(state, dict):
@@ -2696,9 +2785,7 @@ class MultimodalSession:
             turn.images, key=lambda x: (x.timestamp_ms, x.seq)
         )
         current_images = [frame.data_uri for frame in current_image_frames]
-        current_image_roles = [
-            frame.image_role for frame in current_image_frames
-        ]
+        current_image_roles = [frame.image_role for frame in current_image_frames]
         current_audio_list = [current_audio] if current_audio else []
         ingest_ms = (time.perf_counter() - turn.started_at) * 1000.0
         turn.phase = TURN_PHASE_PROCESSING
@@ -2762,22 +2849,26 @@ class MultimodalSession:
                 "[SESSION_ACTION_REALTIME] turn.commit input session_id=%s turn_id=%s payload=%s",
                 self.session_id,
                 turn_id,
-                json.dumps({
-                    "text": turn.text,
-                    "avatar_state": turn.avatar_state or self.last_avatar_state,
-                    "turn_origin": turn.turn_origin,
-                    "text_role": turn.text_role,
-                    "trigger": turn.trigger,
-                    "audio_chunk_count": turn.audio_chunk_count,
-                    "image_frame_count": len(current_images),
-                    "image_roles": current_image_roles,
-                    "audio": _summarize_media(current_audio_list),
-                    "images": _summarize_media(current_images),
-                    "history_turn_count": len(self.history_turns),
-                    "candidate_count": len(self.candidates),
-                    "action_catalog_hash": self.action_catalog_hash,
-                    "global_action_catalog_hash": self.global_action_catalog_hash,
-                }, ensure_ascii=False, default=str),
+                json.dumps(
+                    {
+                        "text": turn.text,
+                        "avatar_state": turn.avatar_state or self.last_avatar_state,
+                        "turn_origin": turn.turn_origin,
+                        "text_role": turn.text_role,
+                        "trigger": turn.trigger,
+                        "audio_chunk_count": turn.audio_chunk_count,
+                        "image_frame_count": len(current_images),
+                        "image_roles": current_image_roles,
+                        "audio": _summarize_media(current_audio_list),
+                        "images": _summarize_media(current_images),
+                        "history_turn_count": len(self.history_turns),
+                        "candidate_count": len(self.candidates),
+                        "action_catalog_hash": self.action_catalog_hash,
+                        "global_action_catalog_hash": self.global_action_catalog_hash,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
             )
             action: dict[str, Any] | None = None
             scores: list[dict[str, Any]] = []
@@ -2792,9 +2883,7 @@ class MultimodalSession:
             provisional_state: ProvisionalReplyState | None = None
             provisional_discard_task: asyncio.Task[Any] | None = None
 
-            def track_branch(
-                coroutine: Any, *, name: str
-            ) -> asyncio.Task[Any]:
+            def track_branch(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
                 task = asyncio.create_task(coroutine, name=name)
                 turn.branch_tasks.add(task)
                 task.add_done_callback(turn.branch_tasks.discard)
@@ -2843,9 +2932,7 @@ class MultimodalSession:
                     )
 
             provided_reply = turn.reply_provided
-            fusion_reply = (
-                "text" in self.modalities and "action" in self.modalities
-            )
+            fusion_reply = "text" in self.modalities and "action" in self.modalities
             if fusion_reply:
                 provisional_state = await self._create_provisional_reply(
                     turn,
@@ -2913,9 +3000,7 @@ class MultimodalSession:
                         turn=turn,
                         request_base=turn.request_base,
                         on_category_selected=(
-                            on_category_selected
-                            if "text" in self.modalities
-                            else None
+                            on_category_selected if "text" in self.modalities else None
                         ),
                     ),
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
@@ -2954,8 +3039,7 @@ class MultimodalSession:
                         fallback_category_id=fallback.category_id,
                     )
                 action_unsupported = (
-                    action is not None
-                    and action.get("support_status") == "unsupported"
+                    action is not None and action.get("support_status") == "unsupported"
                 )
                 if provisional_state is not None:
                     if action_unsupported:
@@ -3001,6 +3085,7 @@ class MultimodalSession:
                     action.get("action_id") if action else None,
                 )
                 if action is not None:
+                    self._ensure_turn_processing(turn)
                     action_ready_payload: dict[str, Any] = {
                         "type": "turn.action.ready",
                         "session_id": self.session_id,
@@ -3014,9 +3099,7 @@ class MultimodalSession:
                                 "global_action_catalog_hash": self.global_action_catalog_hash,
                             }
                         )
-                    await self.send(
-                        action_ready_payload
-                    )
+                    await self.send(action_ready_payload)
                     if action_error is None:
                         self._record_action_as_executed(
                             turn=turn,
@@ -3024,19 +3107,14 @@ class MultimodalSession:
                         )
 
             action_unsupported = (
-                action is not None
-                and action.get("support_status") == "unsupported"
+                action is not None and action.get("support_status") == "unsupported"
             )
             if reply_task is not None and not action_unsupported:
                 reply_text, reply_timing = await reply_task
                 if provisional_state is not None:
-                    reply_timing = self._provisional_reply_timing(
-                        provisional_state
-                    )
+                    reply_timing = self._provisional_reply_timing(provisional_state)
             elif provisional_state is not None:
-                reply_timing = self._provisional_reply_timing(
-                    provisional_state
-                )
+                reply_timing = self._provisional_reply_timing(provisional_state)
 
             action_finished = time.perf_counter()
             if self.active_turn is not turn or turn.phase != TURN_PHASE_PROCESSING:
@@ -3046,14 +3124,10 @@ class MultimodalSession:
             if "action" in self.modalities:
                 self._persist_avatar_state(
                     turn.avatar_state,
-                    has_avatar_image=(
-                        IMAGE_ROLE_AVATAR_STATE in current_image_roles
-                    ),
+                    has_avatar_image=(IMAGE_ROLE_AVATAR_STATE in current_image_roles),
                 )
             history_reply_text = (
-                self.unsupported_action_text
-                if action_unsupported
-                else reply_text
+                self.unsupported_action_text if action_unsupported else reply_text
             )
             self._append_reply_history(
                 turn,
@@ -3063,9 +3137,7 @@ class MultimodalSession:
                 history_reply_text,
                 model_visible=not action_unsupported,
                 history_kind=(
-                    "unsupported_action_notice"
-                    if action_unsupported
-                    else "reply"
+                    "unsupported_action_notice" if action_unsupported else "reply"
                 ),
             )
             if action is not None:
@@ -3096,10 +3168,7 @@ class MultimodalSession:
                     "image_preprocessing": image_preprocess_stats,
                 },
             }
-            if (
-                self.protocol_version is not None
-                or self.modalities != ("action",)
-            ):
+            if self.protocol_version is not None or self.modalities != ("action",):
                 result["status"] = turn_status
                 result[
                     "outputs" if self.protocol_version is not None else "modalities"
@@ -3107,9 +3176,11 @@ class MultimodalSession:
                     modality: (
                         "failed"
                         if modality == "action" and action_error is not None
-                        else "suppressed"
-                        if modality == "text" and action_unsupported
-                        else "completed"
+                        else (
+                            "suppressed"
+                            if modality == "text" and action_unsupported
+                            else "completed"
+                        )
                     )
                     for modality in self.modalities
                 }
@@ -3137,9 +3208,7 @@ class MultimodalSession:
             if action is not None:
                 result["action_catalog_hash"] = self.action_catalog_hash
                 if self.global_action_catalog is not None:
-                    result["session_action_catalog_hash"] = (
-                        self.action_catalog_hash
-                    )
+                    result["session_action_catalog_hash"] = self.action_catalog_hash
                     result["global_action_catalog_hash"] = (
                         self.global_action_catalog_hash
                     )
@@ -3217,27 +3286,17 @@ class MultimodalSession:
                 reply_response_done_after_commit_ms=(reply_timing or {}).get(
                     "response_done_after_commit_ms"
                 ),
-                reply_stream_duration_ms=(reply_timing or {}).get(
-                    "stream_duration_ms"
-                ),
+                reply_stream_duration_ms=(reply_timing or {}).get("stream_duration_ms"),
                 reply_delta_count=(reply_timing or {}).get("delta_count"),
-                reply_completion_tokens=(reply_timing or {}).get(
-                    "completion_tokens"
-                ),
+                reply_completion_tokens=(reply_timing or {}).get("completion_tokens"),
                 reply_provisional=(reply_timing or {}).get("provisional"),
-                reply_provisional_status=(reply_timing or {}).get(
-                    "provisional_status"
-                ),
+                reply_provisional_status=(reply_timing or {}).get("provisional_status"),
                 reply_provisional_done_after_commit_ms=(reply_timing or {}).get(
                     "provisional_done_after_commit_ms"
                 ),
-                reply_resolution_reason=(reply_timing or {}).get(
-                    "resolution_reason"
-                ),
+                reply_resolution_reason=(reply_timing or {}).get("resolution_reason"),
                 reply_discarded_chars=(
-                    (reply_timing or {}).get("chars")
-                    if action_unsupported
-                    else 0
+                    (reply_timing or {}).get("chars") if action_unsupported else 0
                 ),
                 total_after_commit_ms=round(total_after_commit_ms, 3),
                 logger_health=get_structured_log_writer().health(),
@@ -3266,7 +3325,9 @@ class MultimodalSession:
             logger.info(
                 "[SESSION_ACTION_REALTIME] turn inference cancelled "
                 "session_id=%s turn_id=%s request_id=%s",
-                self.session_id, turn_id, turn.current_request_id,
+                self.session_id,
+                turn_id,
+                turn.current_request_id,
             )
             raise
         except Exception as exc:
@@ -3275,7 +3336,9 @@ class MultimodalSession:
                 logger.warning(
                     "[SESSION_ACTION_REALTIME] cancelled turn cleanup failed "
                     "session_id=%s turn_id=%s",
-                    self.session_id, turn_id, exc_info=True,
+                    self.session_id,
+                    turn_id,
+                    exc_info=True,
                 )
                 return
             turn_outcome = "failed"
@@ -3397,9 +3460,7 @@ class MultimodalSession:
         # Proactive turns start with an assistant message, so role changes
         # cannot reliably identify turn boundaries.
         selected_turns = (
-            self.history_turns[-MAX_ACTION_HISTORY_TURNS:]
-            if include_history
-            else []
+            self.history_turns[-MAX_ACTION_HISTORY_TURNS:] if include_history else []
         )
         selected_message_ids = {
             id(message) for turn in selected_turns for message in turn.messages
@@ -3411,7 +3472,7 @@ class MultimodalSession:
         audio_index = 0
         image_index = 0
 
-        for message in (self.history if include_history else ()):
+        for message in self.history if include_history else ():
             selected = id(message) in selected_message_ids
             content = message.get("content")
             if not selected:
@@ -3456,20 +3517,14 @@ class MultimodalSession:
                             ignored_history_avatar_image_count += 1
                         elif len(bounded_history_images) < MAX_ACTION_HISTORY_IMAGES:
                             bounded_history_images.append(media)
-                            bounded_parts.append(
-                                self._image_role_text_part(image_role)
-                            )
+                            bounded_parts.append(self._image_role_text_part(image_role))
                             bounded_parts.append({"type": "image"})
                     image_index += 1
                 else:
                     bounded_parts.append(dict(part))
             if not bounded_parts:
-                bounded_parts = [
-                    {"type": "text", "text": "（历史多媒体内容已裁剪）"}
-                ]
-            bounded_history.append(
-                {**message, "content": bounded_parts}
-            )
+                bounded_parts = [{"type": "text", "text": "（历史多媒体内容已裁剪）"}]
+            bounded_history.append({**message, "content": bounded_parts})
 
         latest_avatar_index = next(
             (
@@ -3485,9 +3540,15 @@ class MultimodalSession:
             if role != IMAGE_ROLE_AVATAR_STATE or index == latest_avatar_index
         ]
         selected_indices = eligible_indices[-MAX_ACTION_CURRENT_IMAGES:]
-        if latest_avatar_index is not None and latest_avatar_index not in selected_indices:
+        if (
+            latest_avatar_index is not None
+            and latest_avatar_index not in selected_indices
+        ):
             selected_indices = sorted(
-                [latest_avatar_index, *selected_indices[-(MAX_ACTION_CURRENT_IMAGES - 1):]]
+                [
+                    latest_avatar_index,
+                    *selected_indices[-(MAX_ACTION_CURRENT_IMAGES - 1) :],
+                ]
             )
         bounded_images = [images[index] for index in selected_indices]
         bounded_image_roles = [image_roles[index] for index in selected_indices]
@@ -3502,9 +3563,7 @@ class MultimodalSession:
             "history_turn_count": len(selected_turns),
             "history_audio_count": len(bounded_history_audios),
             "history_image_count": len(bounded_history_images),
-            "ignored_history_avatar_image_count": (
-                ignored_history_avatar_image_count
-            ),
+            "ignored_history_avatar_image_count": (ignored_history_avatar_image_count),
             "received_current_image_count": len(images),
             "scored_current_image_count": len(bounded_images),
             "truncated": truncated,
@@ -3631,12 +3690,8 @@ class MultimodalSession:
                     record_kind=record_kind,
                 )
             )
-        if (
-            user_record is not None
-            and (
-                physical_record is None
-                or user_record.turn_id != physical_record.turn_id
-            )
+        if user_record is not None and (
+            physical_record is None or user_record.turn_id != physical_record.turn_id
         ):
             parts.append(
                 self._model_action_history_record(
@@ -3867,7 +3922,9 @@ class MultimodalSession:
             modalities.append("用户音频")
         if image_roles:
             modalities.append("当前图片")
-        input_summary = "、".join(modalities) if modalities else "未提供文本、音频或图片"
+        input_summary = (
+            "、".join(modalities) if modalities else "未提供文本、音频或图片"
+        )
         text_prefix = (
             f"当前用户文本：{text.strip()}\n"
             if isinstance(text, str) and text.strip()
@@ -3899,9 +3956,7 @@ class MultimodalSession:
                 if IMAGE_ROLE_AVATAR_STATE in resolved_image_roles
                 else "unknown"
             )
-        state_instruction = self._build_avatar_state_instruction(
-            avatar_state_source
-        )
+        state_instruction = self._build_avatar_state_instruction(avatar_state_source)
         scene_constraint = (
             "The candidate must satisfy every goal, instruction, requirement, and "
             "prohibition in the proactive-scene constraints for this interaction."
@@ -3918,9 +3973,7 @@ class MultimodalSession:
         )
         if turn_origin == TURN_ORIGIN_PROACTIVE:
             trigger_text = (
-                f"Proactive trigger reason: {trigger}.\n"
-                if trigger is not None
-                else ""
+                f"Proactive trigger reason: {trigger}.\n" if trigger is not None else ""
             )
             if not isinstance(text, str) or not text.strip():
                 return (
@@ -3959,7 +4012,9 @@ class MultimodalSession:
             modalities.append("user audio")
         if resolved_image_roles:
             modalities.append("current images")
-        input_summary = ", ".join(modalities) if modalities else "no text, audio, or image"
+        input_summary = (
+            ", ".join(modalities) if modalities else "no text, audio, or image"
+        )
         text_prefix = (
             f"Current user text: {text.strip()}\n"
             if isinstance(text, str) and text.strip()
@@ -4075,9 +4130,7 @@ class MultimodalSession:
         for sentence in re.split(r"[。.!?\n]+", state_description):
             lowered = sentence.lower()
             marker_positions = [
-                lowered.find(marker)
-                for marker in markers
-                if lowered.find(marker) >= 0
+                lowered.find(marker) for marker in markers if lowered.find(marker) >= 0
             ]
             if marker_positions:
                 prohibited_parts.append(lowered[min(marker_positions) :])
@@ -4307,8 +4360,7 @@ class MultimodalSession:
                 )
             if profile.action_preferences:
                 lines.append(
-                    "动作偏好（具体动作选择的主要约束）："
-                    + profile.action_preferences
+                    "动作偏好（具体动作选择的主要约束）：" + profile.action_preferences
                 )
         else:
             if profile.category_preferences:
@@ -4350,9 +4402,7 @@ class MultimodalSession:
         )
         messages: list[Message] = []
         if self.instructions.strip():
-            messages.append(
-                Message(role="system", content=self.instructions.strip())
-            )
+            messages.append(Message(role="system", content=self.instructions.strip()))
         history_audios: list[str] = []
         history_images: list[str] = []
         visible_history_turns = [
@@ -4516,9 +4566,7 @@ class MultimodalSession:
                 return
             is_first_delta = state.first_token_ms is None
             if is_first_delta:
-                state.first_token_ms = (
-                    time.perf_counter() - state.started_at
-                ) * 1000.0
+                state.first_token_ms = (time.perf_counter() - state.started_at) * 1000.0
             state.text_parts.append(delta)
             state.delta_count += 1
             event_type = (
@@ -4547,9 +4595,7 @@ class MultimodalSession:
                     logical_request_id=turn.request_base,
                     response_id=state.response_id,
                     ttft_ms=round(state.first_token_ms, 3),
-                    first_delta_after_commit_ms=(
-                        state.first_delta_after_commit_ms
-                    ),
+                    first_delta_after_commit_ms=(state.first_delta_after_commit_ms),
                 )
 
     async def _finish_provisional_reply(
@@ -4837,17 +4883,13 @@ class MultimodalSession:
         system_prompt_audit = _text_audit_fields(
             "system_prompt", effective_system_prompt
         )
-        diagnostic_messages = [
-            message.to_dict() for message in request.messages or []
-        ]
+        diagnostic_messages = [message.to_dict() for message in request.messages or []]
         if not self.log_full_instructions:
             for message in diagnostic_messages:
                 if message.get("role") == "system":
                     message["content"] = "<redacted; see system_prompt_sha256>"
         started = (
-            provisional.started_at
-            if provisional is not None
-            else time.perf_counter()
+            provisional.started_at if provisional is not None else time.perf_counter()
         )
         first_token_ms: float | None = None
         first_delta_after_commit_ms: float | None = None
@@ -4887,9 +4929,7 @@ class MultimodalSession:
             sampling=request.sampling.to_dict(),
             output_modalities=list(request.output_modalities or []),
             current_audio=_summarize_media(audios),
-            current_images=_summarize_media(
-                [frame.data_uri for frame in turn.images]
-            ),
+            current_images=_summarize_media([frame.data_uri for frame in turn.images]),
             current_image_roles=list(image_roles),
             received_image_roles=list(image_roles),
             reply_forwarded_image_roles=list(reply_forwarded_image_roles),
@@ -4970,7 +5010,9 @@ class MultimodalSession:
                                 )
                             delta_count += 1
                             if is_first_delta:
-                                first_delta_after_commit_ms = self._after_commit_ms(turn)
+                                first_delta_after_commit_ms = self._after_commit_ms(
+                                    turn
+                                )
                                 emit_structured_log(
                                     "reply",
                                     "reply_first_token",
@@ -5023,6 +5065,7 @@ class MultimodalSession:
                     usage = result.usage.to_dict()
             reply_text = "".join(text_parts)
             total_ms = (time.perf_counter() - started) * 1000.0
+            self._ensure_turn_processing(turn)
             if provisional is None:
                 done_timing = await self._send_reply_done(
                     turn,
@@ -5053,9 +5096,7 @@ class MultimodalSession:
                 usage.get("completion_tokens") if usage is not None else None
             )
             if provisional is not None:
-                timing = self._provisional_reply_timing(
-                    provisional, total_ms=total_ms
-                )
+                timing = self._provisional_reply_timing(provisional, total_ms=total_ms)
             else:
                 timing = {
                     "source": "generated",
@@ -5135,9 +5176,7 @@ class MultimodalSession:
             else f"resp-{uuid.uuid4().hex}"
         )
         started = (
-            provisional.started_at
-            if provisional is not None
-            else time.perf_counter()
+            provisional.started_at if provisional is not None else time.perf_counter()
         )
         if provisional is not None:
             if text:
@@ -5149,9 +5188,7 @@ class MultimodalSession:
                 usage=None,
             )
             total_ms = (time.perf_counter() - started) * 1000.0
-            timing = self._provisional_reply_timing(
-                provisional, total_ms=total_ms
-            )
+            timing = self._provisional_reply_timing(provisional, total_ms=total_ms)
             emit_structured_log(
                 "reply",
                 "provided_reply_used",
@@ -5296,9 +5333,7 @@ class MultimodalSession:
         reply_text: str | None,
         *,
         model_visible: bool = True,
-        history_kind: Literal[
-            "reply", "unsupported_action_notice"
-        ] = "reply",
+        history_kind: Literal["reply", "unsupported_action_notice"] = "reply",
     ) -> None:
         if not reply_text:
             return
@@ -5473,9 +5508,7 @@ class MultimodalSession:
                     locale=self.locale,
                     language=request.language,
                     prefix_cache_namespace=request.prefix_cache_namespace,
-                    **_text_audit_fields(
-                        "system_prompt", request.system_prompt
-                    ),
+                    **_text_audit_fields("system_prompt", request.system_prompt),
                 )
         except asyncio.CancelledError:
             emit_structured_log(
@@ -5530,23 +5563,39 @@ class MultimodalSession:
         turn: TurnBuffer,
         request_base: str,
         turn_id: str | None = None,
-        on_category_selected: Callable[
-            [SessionActionCategory | None, str], None
-        ]
-        | None = None,
+        on_category_selected: (
+            Callable[[SessionActionCategory | None, str], None] | None
+        ) = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
-        if self.categories and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL:
+        if (
+            self.categories
+            and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
+        ):
             return await self._score_action_hierarchical(
-                audios, images, image_roles, text, avatar_state,
-                turn_origin=turn_origin, text_role=text_role,
-                trigger=trigger, turn_id=turn_id, turn=turn,
+                audios,
+                images,
+                image_roles,
+                text,
+                avatar_state,
+                turn_origin=turn_origin,
+                text_role=text_role,
+                trigger=trigger,
+                turn_id=turn_id,
+                turn=turn,
                 request_base=request_base,
                 on_category_selected=on_category_selected,
             )
         return await self._score_action_flat(
-            audios, images, image_roles, text, avatar_state,
-            turn_origin=turn_origin, text_role=text_role,
-            trigger=trigger, turn_id=turn_id, turn=turn,
+            audios,
+            images,
+            image_roles,
+            text,
+            avatar_state,
+            turn_origin=turn_origin,
+            text_role=text_role,
+            trigger=trigger,
+            turn_id=turn_id,
+            turn=turn,
             request_base=request_base,
         )
 
@@ -5564,14 +5613,17 @@ class MultimodalSession:
         turn: TurnBuffer,
         request_base: str,
         turn_id: str | None = None,
-        on_category_selected: Callable[
-            [SessionActionCategory | None, str], None
-        ]
-        | None = None,
+        on_category_selected: (
+            Callable[[SessionActionCategory | None, str], None] | None
+        ) = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
         (
-            action_history, action_history_audios, action_history_images,
-            action_images, action_image_roles, action_context,
+            action_history,
+            action_history_audios,
+            action_history_images,
+            action_images,
+            action_image_roles,
+            action_context,
         ) = self._build_bounded_action_context(
             audios, images, image_roles, include_history=False
         )
@@ -5580,9 +5632,7 @@ class MultimodalSession:
         action_history_images = []
         action_context.update(
             {
-                "history_policy": (
-                    "latest_reply_physical_and_user_action_facts"
-                ),
+                "history_policy": ("latest_reply_physical_and_user_action_facts"),
                 "source_history_turn_count": len(self.history_turns),
                 "history_turn_count": 1 if action_history else 0,
                 "history_audio_count": 0,
@@ -5622,7 +5672,9 @@ class MultimodalSession:
                 ),
             )
         base = self._build_turn_action_instruction(
-            text, turn_origin=turn_origin, trigger=trigger,
+            text,
+            turn_origin=turn_origin,
+            trigger=trigger,
             has_audio=bool(audios),
             image_roles=action_image_roles,
             has_current_action_id=(
@@ -5634,18 +5686,24 @@ class MultimodalSession:
             ),
         )
         common = dict(
-            model=self.model_name, language=self.language, audios=audios,
-            images=action_images, sample_rate=16000,
+            model=self.model_name,
+            language=self.language,
+            audios=audios,
+            images=action_images,
+            sample_rate=16000,
             image_roles=action_image_roles,
-            session_id=self.session_id, history=action_history,
-            stage="category", logical_request_id=request_base,
+            session_id=self.session_id,
+            history=action_history,
+            stage="category",
+            logical_request_id=request_base,
             turn_origin=turn_origin,
             text_role=text_role,
             trigger=trigger,
             action_context_cache_key=request_base,
             prefix_cache_namespace=self.action_prefix_cache_namespace,
             cache_static_system_only=self.global_action_catalog is not None,
-            history_audios=action_history_audios, history_images=action_history_images,
+            history_audios=action_history_audios,
+            history_images=action_history_images,
             avatar_state=effective_avatar_state,
         )
         category_candidates = [
@@ -5705,7 +5763,9 @@ class MultimodalSession:
             json.dumps(category_result.stats, ensure_ascii=False, default=str),
         )
         category_by_id = {item.category_id: item for item in self.categories}
-        category_ranked = sorted(category_result.scores, key=lambda item: item.mean_logprob, reverse=True)
+        category_ranked = sorted(
+            category_result.scores, key=lambda item: item.mean_logprob, reverse=True
+        )
         if not category_ranked:
             raise ValueError("category action score did not return a decision")
         category_unsupported = (
@@ -5799,9 +5859,7 @@ class MultimodalSession:
                 action.update(
                     {
                         "support_status": (
-                            "unsupported"
-                            if category_unsupported
-                            else "supported"
+                            "unsupported" if category_unsupported else "supported"
                         ),
                         "fallback_applied": category_unsupported,
                     }
@@ -5817,9 +5875,7 @@ class MultimodalSession:
                         if category_unsupported
                         else execution_category.category_id
                     ),
-                    "category_scoring_candidate_id": category_ranked[
-                        0
-                    ].candidate_id,
+                    "category_scoring_candidate_id": category_ranked[0].candidate_id,
                     "support_status": (
                         "unsupported" if category_unsupported else "supported"
                     ),
@@ -5989,30 +6045,36 @@ class MultimodalSession:
             json.dumps(child_result.stats, ensure_ascii=False, default=str),
         )
         child_by_id = {item.candidate_id: item for item in child_candidates}
-        ranked = sorted(child_result.scores, key=lambda item: item.mean_logprob, reverse=True)
+        ranked = sorted(
+            child_result.scores, key=lambda item: item.mean_logprob, reverse=True
+        )
         if not ranked:
             raise ValueError("child action score did not return a decision")
-        child_unsupported = (
-            ranked[0].candidate_id == UNSUPPORTED_CHILD_SCORE_ID
-        )
+        child_unsupported = ranked[0].candidate_id == UNSUPPORTED_CHILD_SCORE_ID
         if not child_unsupported and ranked[0].candidate_id not in child_by_id:
             raise ValueError("child action score did not return a valid candidate")
 
         def score_dict(score: Any, candidate: SessionActionCandidate) -> dict[str, Any]:
             return {
-                "candidate_id": score.candidate_id, "action_id": candidate.action_id,
-                "category_id": candidate.category_id, "source_label": candidate.source_label,
+                "candidate_id": score.candidate_id,
+                "action_id": candidate.action_id,
+                "category_id": candidate.category_id,
+                "source_label": candidate.source_label,
                 "short_definition": candidate.short_definition,
                 "execution_binding": dict(candidate.execution_binding),
                 "token_count": score.token_count,
-                "mean_logprob": score.mean_logprob, "mean_nll": score.mean_nll, "ppl": score.ppl,
-                "token_scores": [{"token_id": item.token_id, "logprob": item.logprob} for item in score.token_scores],
+                "mean_logprob": score.mean_logprob,
+                "mean_nll": score.mean_nll,
+                "ppl": score.ppl,
+                "token_scores": [
+                    {"token_id": item.token_id, "logprob": item.logprob}
+                    for item in score.token_scores
+                ],
             }
 
         scores = [
             (
-                compact_stage_score(score)
-                | {"decision": "unsupported"}
+                compact_stage_score(score) | {"decision": "unsupported"}
                 if score.candidate_id == UNSUPPORTED_CHILD_SCORE_ID
                 else score_dict(score, child_by_id[score.candidate_id])
             )
@@ -6045,57 +6107,60 @@ class MultimodalSession:
                 action.update(
                     {
                         "support_status": (
-                            "unsupported"
-                            if category_unsupported
-                            else "supported"
+                            "unsupported" if category_unsupported else "supported"
                         ),
                         "fallback_applied": category_unsupported,
                     }
                 )
-        action_context.update({
-            "selection_stages": 2,
-            "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
-            "logical_request_id": request_base,
-            "selected_category_id": execution_category.category_id,
-            "category_decision_id": (
-                UNSUPPORTED_DECISION_ID
-                if category_unsupported
-                else execution_category.category_id
-            ),
-            "category_scoring_candidate_id": category_ranked[0].candidate_id,
-            "child_decision_id": (
-                UNSUPPORTED_DECISION_ID
-                if child_unsupported
-                else ranked[0].candidate_id
-            ),
-            "child_scoring_candidate_id": ranked[0].candidate_id,
-            "support_status": action.get("support_status"),
-            "fallback_applied": action.get("fallback_applied"),
-            "selected_category_ids": selected_category_ids,
-            "category_top_k": self.action_category_top_k,
-            "state_description_excluded_category_ids": list(
-                excluded_category_ids
-            ),
-            "state_description_excluded_candidate_ids": list(
-                excluded_candidate_ids
-            ),
-            "category_scores": [compact_stage_score(score) for score in category_ranked],
-            "category_compute_ms": category_ms,
-            "child_compute_ms": child_ms,
-            "child_prefix_prefilled": child_prefix_prefilled,
-            "child_prefix_cache_namespace": child_namespace,
-            "child_catalog_prefill_ms": child_catalog_prefill_ms,
-            "action_timing_breakdown": {
+        action_context.update(
+            {
+                "selection_stages": 2,
                 "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
-                "category": _action_timing_breakdown(category_result.stats),
-                "child": _action_timing_breakdown(child_result.stats),
-                "child_catalog_prefill_ms": child_catalog_prefill_ms,
-                "total_ms": round(
-                    (time.perf_counter() - started) * 1000.0, 3
+                "logical_request_id": request_base,
+                "selected_category_id": execution_category.category_id,
+                "category_decision_id": (
+                    UNSUPPORTED_DECISION_ID
+                    if category_unsupported
+                    else execution_category.category_id
                 ),
-            },
-        })
-        return action, scores, round((time.perf_counter() - started) * 1000.0, 3), action_context
+                "category_scoring_candidate_id": category_ranked[0].candidate_id,
+                "child_decision_id": (
+                    UNSUPPORTED_DECISION_ID
+                    if child_unsupported
+                    else ranked[0].candidate_id
+                ),
+                "child_scoring_candidate_id": ranked[0].candidate_id,
+                "support_status": action.get("support_status"),
+                "fallback_applied": action.get("fallback_applied"),
+                "selected_category_ids": selected_category_ids,
+                "category_top_k": self.action_category_top_k,
+                "state_description_excluded_category_ids": list(excluded_category_ids),
+                "state_description_excluded_candidate_ids": list(
+                    excluded_candidate_ids
+                ),
+                "category_scores": [
+                    compact_stage_score(score) for score in category_ranked
+                ],
+                "category_compute_ms": category_ms,
+                "child_compute_ms": child_ms,
+                "child_prefix_prefilled": child_prefix_prefilled,
+                "child_prefix_cache_namespace": child_namespace,
+                "child_catalog_prefill_ms": child_catalog_prefill_ms,
+                "action_timing_breakdown": {
+                    "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
+                    "category": _action_timing_breakdown(category_result.stats),
+                    "child": _action_timing_breakdown(child_result.stats),
+                    "child_catalog_prefill_ms": child_catalog_prefill_ms,
+                    "total_ms": round((time.perf_counter() - started) * 1000.0, 3),
+                },
+            }
+        )
+        return (
+            action,
+            scores,
+            round((time.perf_counter() - started) * 1000.0, 3),
+            action_context,
+        )
 
     async def _score_action_flat(
         self,
@@ -6139,9 +6204,7 @@ class MultimodalSession:
                 has_current_action_id=(
                     effective_avatar_state.get("current_action_id") is not None
                 ),
-                has_state_description=(
-                    "state_description" in effective_avatar_state
-                ),
+                has_state_description=("state_description" in effective_avatar_state),
                 avatar_state_source=self._avatar_state_source(
                     effective_avatar_state, action_image_roles
                 ),
@@ -6210,7 +6273,11 @@ class MultimodalSession:
                 {
                     "candidate_id": score.candidate_id,
                     "action_id": candidate.action_id,
-                    **({"category_id": candidate.category_id} if candidate.category_id else {}),
+                    **(
+                        {"category_id": candidate.category_id}
+                        if candidate.category_id
+                        else {}
+                    ),
                     "source_label": candidate.source_label,
                     "short_definition": candidate.short_definition,
                     "execution_binding": dict(candidate.execution_binding),
@@ -6429,9 +6496,7 @@ class MultimodalSession:
     def _no_action_candidate_id(self) -> str:
         return self._no_action_candidate().candidate_id
 
-    def _format_candidate_for_prompt(
-        self, candidate: SessionActionCandidate
-    ) -> str:
+    def _format_candidate_for_prompt(self, candidate: SessionActionCandidate) -> str:
         return self._prompt(
             zh=(
                 f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
@@ -6450,9 +6515,7 @@ class MultimodalSession:
 
     def _build_category_system_prompt(self) -> str:
         if self.global_action_catalog is not None:
-            return self.global_action_catalog.category_system_prompt_for(
-                self.locale
-            )
+            return self.global_action_catalog.category_system_prompt_for(self.locale)
         if self.language == "en":
             lines = [
                 "You are a digital-character action category classifier. Select one category_id from the fixed category set.",
@@ -6536,9 +6599,7 @@ class MultimodalSession:
                 f"Selected category: category_id={selected.category_id} | category={selected.source_label} | description={selected.short_definition}"
                 for selected in categories
             )
-            lines.extend(
-                self._format_candidate_for_prompt(item) for item in candidates
-            )
+            lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
             lines.append(
                 "Select the candidate_id that best matches from the candidates in the "
                 "selected category above. Do not introduce another category or an "
@@ -6658,7 +6719,9 @@ class MultimodalSession:
             "你是数字人动作识别器。请从本次会话的固定集合中选择一个 candidate_id。",
             ACTION_HISTORY_INSTRUCTION,
         ]
-        lines.extend(self._format_candidate_for_prompt(item) for item in self.candidates)
+        lines.extend(
+            self._format_candidate_for_prompt(item) for item in self.candidates
+        )
         lines.append(
             "没有候选动作满足输入与状态约束，或需要避免冲突、重复时，选择兜底 "
             f"candidate_id={self._no_action_candidate_id()}。"
@@ -6740,7 +6803,6 @@ class MultimodalSession:
             raise ValueError("turn already committed")
         return turn
 
-
     @staticmethod
     def _event_context_id(payload: dict[str, Any], field: str) -> str | None:
         value = payload.get(field)
@@ -6752,6 +6814,11 @@ class MultimodalSession:
         event_type = payload.get("type")
         if "protocol_version" in message:
             return "unsupported_protocol_version"
+        if event_type == "session.start" and (
+            "unsupported outputs" in message
+            or "unsupported output modalities" in message
+        ):
+            return "unsupported_output"
         if "unsupported fields" in message or "missing required fields" in message:
             return "invalid_event_field"
         if (
@@ -6779,13 +6846,17 @@ class MultimodalSession:
             return "session_candidate_invalid"
         if "action_candidates" in message or "candidate" in message:
             return "session_candidate_invalid"
-        if event_type in {
-            "turn.commit",
-            "input.audio.append",
-            "input.image.append",
-            "input.text.set",
-            "turn.cancel",
-        } and "turn.start" in message:
+        if (
+            event_type
+            in {
+                "turn.commit",
+                "input.audio.append",
+                "input.image.append",
+                "input.text.set",
+                "turn.cancel",
+            }
+            and "turn.start" in message
+        ):
             return "turn_already_committed"
         if "session.start" in message:
             return "session_not_started"
@@ -6809,9 +6880,7 @@ class MultimodalSession:
             raise ValueError("modalities must not contain duplicates")
         unsupported = sorted(set(value) - SUPPORTED_MODALITIES)
         if unsupported:
-            raise ValueError(
-                "unsupported output modalities: " + ", ".join(unsupported)
-            )
+            raise ValueError("unsupported output modalities: " + ", ".join(unsupported))
         return tuple(item for item in DEFAULT_MODALITIES if item in value)
 
     @staticmethod
@@ -6847,10 +6916,7 @@ class MultimodalSession:
             await self.websocket.send_text(encoded)
             turn_id = payload.get("turn_id")
             trace_id = None
-            if (
-                self.active_turn is not None
-                and turn_id == self.active_turn.turn_id
-            ):
+            if self.active_turn is not None and turn_id == self.active_turn.turn_id:
                 trace_id = self.active_turn.trace_id
             emit_structured_log(
                 "protocol",
@@ -6919,13 +6985,17 @@ class MultimodalSessionManager:
         action_selection_mode: str | None = None,
         global_action_catalog: GlobalActionCatalog | None = None,
         global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
+        allow_unregistered_protocol_actions: bool = False,
     ) -> None:
         self.client = client
         self.model_name = model_name
-        self.action_selection_mode = normalize_action_selection_mode(action_selection_mode)
+        self.action_selection_mode = normalize_action_selection_mode(
+            action_selection_mode
+        )
         self.action_micro_batch_size = normalize_action_micro_batch_size()
         self.action_category_top_k = normalize_action_category_top_k()
         self.global_action_catalog = global_action_catalog
+        self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.global_action_prewarm = (
             global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
         )
@@ -6960,6 +7030,9 @@ class MultimodalSessionManager:
             action_category_top_k=self.action_category_top_k,
             global_action_catalog=self.global_action_catalog,
             global_action_prewarm=self.global_action_prewarm,
+            allow_unregistered_protocol_actions=(
+                self.allow_unregistered_protocol_actions
+            ),
             claim_session=self.claim,
             release_session=self.release,
             request_resource_sample=self.resource_sample_requester,
@@ -6990,17 +7063,13 @@ class MultimodalSessionManager:
             if session.started:
                 started_session_count += 1
             modality_key = "+".join(session.modalities) or "not_started"
-            modality_counts[modality_key] = (
-                modality_counts.get(modality_key, 0) + 1
-            )
+            modality_counts[modality_key] = modality_counts.get(modality_key, 0) + 1
             action_history_turn_count += len(session.history_turns)
             reply_history_turn_count += len(session.reply_history_turns)
             turn = session.active_turn
             if turn is not None:
                 active_turn_count += 1
-                turn_phase_counts[turn.phase] = (
-                    turn_phase_counts.get(turn.phase, 0) + 1
-                )
+                turn_phase_counts[turn.phase] = turn_phase_counts.get(turn.phase, 0) + 1
         return {
             "active_session_count": len(self.sessions),
             "started_session_count": started_session_count,

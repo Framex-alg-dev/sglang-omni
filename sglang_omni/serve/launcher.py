@@ -41,10 +41,6 @@ from pydantic import BaseModel
 from sglang_omni.client import Client
 from sglang_omni.config import PipelineConfig
 from sglang_omni.models.model_capabilities import get_model_capabilities
-from sglang_omni.models.qwen3_omni.global_action_catalog import (
-    load_global_action_catalog,
-    prewarm_global_action_catalog,
-)
 from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
 from sglang_omni.profiler.event_recorder import get_recorder as _get_event_recorder
 from sglang_omni.profiler.profiler_control import ProfilerControlClient
@@ -64,6 +60,16 @@ logger = logging.getLogger(__name__)
 _DEFAULT_ACTION_WARMUP_AUDIO_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "audio_encoder_warmup.wav"
 )
+
+
+def _load_production_action_catalog_support():
+    """Import action-catalog startup code only on the production path."""
+    from sglang_omni.models.qwen3_omni.global_action_catalog import (
+        load_global_action_catalog,
+        prewarm_global_action_catalog,
+    )
+
+    return load_global_action_catalog(), prewarm_global_action_catalog
 
 
 def _resolve_action_warmup_audio_path() -> str | None:
@@ -388,26 +394,9 @@ async def _run_server(
 
     This is the async entry point.  For a blocking call use :func:`launch_server`.
     """
-    # Validate the server-authoritative catalog before allocating model/GPU
-    # resources. A malformed catalog is a startup configuration error.
-    global_action_catalog = load_global_action_catalog()
-    logger.info(
-        "[GLOBAL_ACTION_CATALOG] loaded version=%s hash=%s categories=%d actions=%d",
-        global_action_catalog.catalog_version,
-        global_action_catalog.catalog_hash,
-        len(global_action_catalog.categories),
-        global_action_catalog.candidate_count,
-    )
-
-    # 0. Check port availability before loading models
-    port = _find_available_port(host, port)
-
     dev_model_config = DevRealtimeModelConfig.from_env()
     if dev_model_config.enabled:
-        if not enable_realtime:
-            raise ValueError(
-                "SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED=true requires --enable-realtime"
-            )
+        port = _find_available_port(host, port)
         await serve_dev_realtime_model(
             dev_model_config,
             host=host,
@@ -416,10 +405,25 @@ async def _run_server(
             log_level=log_level,
             allowed_local_media_path=allowed_local_media_path,
             allowed_media_domains=allowed_media_domains,
-            tts_batch_max_items=tts_batch_max_items,
         )
         return
 
+    # Validate the server-authoritative catalog before allocating model/GPU
+    # resources. The import and load stay out of the development-only path.
+    global_action_catalog, prewarm_global_action_catalog = (
+        _load_production_action_catalog_support()
+    )
+    logger.info(
+        "[GLOBAL_ACTION_CATALOG] loaded version=%s hash=%s categories=%d actions=%d",
+        global_action_catalog.catalog_version,
+        global_action_catalog.catalog_hash,
+        len(global_action_catalog.categories),
+        global_action_catalog.candidate_count,
+    )
+
+    # Keep the production startup order: validate its authoritative catalog,
+    # then check the port immediately before allocating model resources.
+    port = _find_available_port(host, port)
     mp_runner = MultiProcessPipelineRunner(pipeline_config)
     startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
     await mp_runner.start(timeout=startup_timeout)

@@ -10,7 +10,6 @@ import logging
 import uvicorn
 
 from sglang_omni.serve.openai_api import create_app
-from sglang_omni.serve.protocol import DEFAULT_TTS_BATCH_MAX_ITEMS
 from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelClient,
     DevRealtimeModelConfig,
@@ -29,7 +28,6 @@ async def serve_dev_realtime_model(
     log_level: str,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
-    tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
 ) -> None:
     """Serve the real Realtime API without constructing a model pipeline."""
     if not config.enabled:
@@ -44,11 +42,12 @@ async def serve_dev_realtime_model(
     app = create_app(
         DevRealtimeModelClient(config),
         model_name=model_name,
-        enable_realtime=True,
+        enable_realtime=False,
         allowed_local_media_path=allowed_local_media_path,
         allowed_media_domains=allowed_media_domains,
-        tts_batch_max_items=tts_batch_max_items,
         architectures=[],
+        enable_resource_monitor=False,
+        allow_unregistered_protocol_actions=True,
     )
     install_dev_model_error_handler(app)
     uvicorn_config = uvicorn.Config(
@@ -63,7 +62,9 @@ async def serve_dev_realtime_model(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run /v1/realtime with the deterministic local model substitute."
+        description=(
+            "Run /v1/session/realtime with the deterministic local model substitute."
+        )
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)

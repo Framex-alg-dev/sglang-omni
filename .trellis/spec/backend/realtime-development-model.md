@@ -1,14 +1,27 @@
-# Realtime 本地开发模型替身规范
+# Session Realtime 本地开发模型替身规范
 
-## 1. 适用范围 / 触发条件
+## 1. 适用范围与触发条件
 
-当开发者需要在没有 GPU、模型权重或 Pipeline 子进程的本地环境验证真实
-`/v1/realtime`、WebSocket、VAD、音频缓冲和文本事件链路时，才启用开发模型替身。
-该模式不是生产降级方案，不得承担 TTS、回复音频或通用 HTTP 推理能力。
+本规范用于在没有 GPU、模型权重和 Pipeline 子进程时验证唯一的 Session Realtime
+protocol v1 接口 `WS /v1/session/realtime`。替身复用正式 `MultimodalSession` 的
+协议解析、Session/Turn 状态机、输入 ACK、文本、动作、融合、取消和终态逻辑，只
+替代模型文本生成与动作评分能力。
 
-## 2. 接口签名
+该能力仅用于开发，不是生产降级路径，不实现 TTS、回复 PCM、`response.audio.*`
+或旧 `/v1/realtime` 兼容。开发 app 的外部 allowlist 必须精确为：
 
-Realtime 层只依赖以下窄接口：
+- `GET /health`；
+- `GET /v1/models`；
+- `WS /v1/session/realtime`。
+
+独立入口是 `python -m sglang_omni.serve.realtime.dev_server`。正式 launcher 仅在
+`SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED=true` 时进入相同开发分支；关闭时保持生产
+`action catalog -> port -> Pipeline runner` 顺序。
+
+## 2. 接口签名与模块边界
+
+`MultimodalSession` 对替身 client 只使用窄接口，不继承需要 Coordinator 的生产
+`Client`：
 
 ```python
 class RealtimeModelClient(Protocol):
@@ -16,96 +29,132 @@ class RealtimeModelClient(Protocol):
         self, request: GenerateRequest, *, request_id: str
     ) -> AsyncIterator[CompletionStreamChunk]: ...
 
+    async def score_action_suffixes(
+        self, request: ActionSuffixScoreRequest
+    ) -> ActionSuffixScoreResult: ...
+
     async def abort(self, request_id: str) -> AbortResult: ...
 ```
 
-启动器必须在创建 `MultiProcessPipelineRunner` 之前解析开关。启用时直接把
-`DevRealtimeModelClient` 注入 `create_app()`；关闭时继续执行原有 Pipeline 路径。
+`DevRealtimeModelClient.__getattr__` 必须抛 `AttributeError`，确保共享代码的
+`hasattr()` 能力探测符合 Python 语义。非 allowlist 路由应在传输边界拒绝，不能靠
+缺失 client 方法产生偶然 500。
 
-无模型本地调试使用独立入口，避免正式 CLI 仍需解析生产模型配置：
-
-```powershell
-python -m sglang_omni.serve.realtime.dev_server
-python scripts/realtime_fake_model_smoke.py
-```
-
-独立入口可以导入项目通用模块，但不得创建或启动 runner、coordinator、GPU stage、
-profiler 或 watcher。smoke 客户端是进程外 WebSocket 验证器，不得绕过真实
-`/v1/realtime` 会话边界。
-
-## 3. 合同
-
-环境变量均使用 `SGLANG_OMNI_DEV_FAKE_MODEL_` 前缀：
-
-| 环境变量 | 约束 |
+| 环境变量 | 合同 |
 |---|---|
-| `ENABLED` | 仅接受 `true` / `false`，默认 `false` |
-| `RESPONSE_TEXT` | 非空固定助手回复 |
-| `TRANSCRIPT_TEXT` | 非空固定用户转写 |
-| `CHUNK_SIZE` | 大于 0 的整数 |
-| `CHUNK_INTERVAL_MS` | 非负整数 |
+| `SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED` | 严格 `true`/`false`，默认 `false` |
+| `SGLANG_OMNI_DEV_FAKE_MODEL_RESPONSE_TEXT` | 非空固定回复正文 |
+| `SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_SIZE` | 正整数，按 Unicode 字符切片 |
+| `SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_INTERVAL_MS` | 非负整数 |
+| `SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID` | 可空；非空时必须是 Session 白名单中的非保留 candidate |
 
-每个 `GenerateRequest` 必须是 `stream=True`、`output_modalities=["text"]`，包含
-system/user 消息、非空 request ID，以及可解码的 Base64 音频 data URI。正文 chunk
-使用 `modality="text"`、`finish_reason=None`；最后单独输出
-`finish_reason="stop"`，不得重复正文。
+## 3. 协议与行为合同
 
-开发模式只允许 HTTP `/health`、HTTP `/v1/models` 和 WebSocket
-`/v1/realtime`。其他 HTTP 路由统一返回 501，错误类型为
-`dev_fake_model_unsupported`。完整自定义文本不得写入日志。
+第一条消息必须是 `protocol_version=1` 的 `session.start`，之后使用正式
+`turn.start`、`input.text.set`/`input.audio.append`/`input.image.append`、
+`turn.commit`、`turn.cancel`、`session.close`；替身不得增加第二套事件解析器。
+
+支持 `outputs=['text']`、`['action']`、`['text','action']`：
+
+- text：固定正文通过正式 `response.created -> response.text.delta* ->
+  response.text.done -> response.done -> turn.result` 输出，正文等于 delta 拼接；
+- action：只从已验证的 `allowed_candidates` 选择；空配置确定性选择首个合法候选；
+- text+action：走正式 provisional promotion/discard 与 action ready/result；
+- audio：当前稳定返回 `unsupported_output`，不得静默降级为 text。
+
+开发内联 action catalog 必须保留生产约束：拒绝 `A000`、`B000`、
+`UNSUPPORTED`、内部 `DEV_ACTIONS`/`DEV_NONE_*` 冲突、重复 ID、category/candidate
+交集、非法或超限 execution binding。配置 candidate 不在 child 评分白名单时明确
+失败，不得用保留 ID 绕过 unsupported/fallback 状态机。
+
+真正取消要求 `turn.cancel` 设置 cancelling，abort 活动 request，取消并等待
+reply/action/image/inference task，只发送一次 `turn.cancelled`。取消开始后不得发送
+`response.done`、`turn.action.ready` 或 `turn.result`。重复 cancel、完成与迟到
+cancel 竞争、断线和重复 teardown 必须幂等；收到 `turn.cancelled` 后可开始新 Turn。
 
 ## 4. 校验与错误矩阵
 
-| 条件 | 行为 |
+| 条件 | 稳定行为 |
 |---|---|
-| 任一环境变量非法 | uvicorn 和 Pipeline 启动前抛出 `ValueError` |
-| 开启替身但未开启 Realtime | 启动失败并说明需要 `--enable-realtime` |
-| stream、modality、messages、audio 或 request ID 非法 | 抛出稳定的开发态请求合同错误 |
-| prompt 无法区分 response/transcription pass | 明确失败，不选择默认正文 |
-| 非白名单 HTTP 路由 | HTTP 501 + `dev_fake_model_unsupported` |
-| 已知活动 request 被 abort | 尽快停止 generator，不输出 stop chunk |
-| 未知 request 被 abort | 返回稳定未命中结果，不抛随机异常 |
+| 环境布尔、整数、正文或配置 candidate 非法 | uvicorn、catalog、Pipeline 启动前 `ValueError` |
+| 第一条消息不是 v1 `session.start` | 正式协议错误，Session 不进入 started |
+| outputs 含 `audio` 或未知值 | `error.code=unsupported_output` |
+| action 缺少 fallback/allowed candidates | `session_candidate_invalid` |
+| 保留/重复/冲突 ID 或非法 binding | `session_candidate_invalid` |
+| turn ID、seq、PCM16LE 或图片非法 | 正式 `invalid_turn_id`、`invalid_sequence`、`invalid_audio`、`invalid_image` |
+| 非 allowlist HTTP | HTTP 501 + `dev_fake_model_unsupported` |
+| 旧 `/v1/realtime` 或其他 WebSocket | 不注册、不接受连接 |
+| 活动 Turn cancel | 一次 `turn.cancelled`，无后续成功终态 |
+| 重复或迟到 cancel | 保留第一个终态，不发第二终态或额外错误 |
+| 断线/session.close | 幂等取消全部任务并释放 Session |
+
+错误载荷和日志不得包含 Base64 媒体、完整固定回复、凭证或任意 traceback。
 
 ## 5. Good / Base / Bad Cases
 
-- Good：开启替身和 Realtime，发送有效 PCM 输入，经真实会话/VAD 边界收到固定
-  transcription 和 response 文本事件，全程不构造 Pipeline。
-- Base：未设置 `ENABLED`，启动器的 runner、watcher、profiler 和清理顺序与原路径一致。
-- Bad：通过前缀判断接受空 payload 或非法 Base64；或者让 `/generate` 进入生产路由后
-  因缺失 client 方法返回偶然的 HTTP 500。
+- Good：无 GPU 启动独立入口，以 text+action 建立 v1 Session；提交 Turn 后收到
+  provisional、固定文本、白名单 action 和唯一 `turn.result`；慢 Turn cancel 后只
+  收到一次 `turn.cancelled`，随后新 Turn 正常开始。
+- Base：`ENABLED=false` 时生产 launcher 仍先加载/校验 action catalog，再探测端口
+  并构造 runner；resource monitor 和生产路由默认启用。
+- Bad：自行解析一套 fake WebSocket 事件；暴露旧 `/v1/realtime`；接受保留 ID 或
+  空白 binding；cancel 后继续发送成功终态；把 WAV header 当 raw PCM16LE；在本任务
+  实现回复音频/TTS。
 
-## 6. 必需测试
+## 6. 必需测试与精确断言
 
-- 配置单测：断言默认值、严格布尔/整数、空文本和边界值。
-- client 单测：断言两种 pass、Unicode 切片、chunk 顺序、独立 stop chunk、abort。
-- 请求合同单测：断言 roles、modalities、stream、request ID 和 Base64 data URI。
-- launcher 单测：开启时 runner 构造函数不得被调用；关闭时仍调用原 runner。
-- Realtime 集成测试：使用真实 `create_app()`、TestClient/WebSocket、音频 buffer 和
-  确定性 VAD 替身，断言 transcription/response 事件顺序。
-- HTTP 边界测试：断言白名单成功，代表性 chat/generate/speech/transcription 路由为 501。
-- smoke 单测：fake WebSocket 覆盖连接、发送、严格事件顺序、delta 聚合、终态文本、
-  超时、意外关闭和非零失败退出。
-- 进程外 smoke：读取未压缩 16 kHz、单声道、PCM16、非空 WAV，只发送 raw frames
-  并追加静音触发默认 VAD；不得把 WAV header 当作输入 PCM 发送。
+- 配置：严格布尔/整数、空正文、保留 action ID、日志摘要不含正文；
+- client text：Unicode chunk 拼接等于配置正文，独立 stop chunk，abort 后无 stop；
+- client action：配置 candidate 在 child 白名单中胜出，不在白名单明确失败；
+- Session：真实 `create_app()` + TestClient/WebSocket 覆盖 text、action、融合、
+  audio unsupported、重复 Turn；
+- action：逐项断言保留/内部/重复/冲突 ID 和非法 binding 被拒绝；
+- 取消：慢流 commit 后 cancel，断言 `turn.cancelled` 恰好一次，且其后不存在
+  `response.done`、`turn.action.ready`、`turn.result`；重复/迟到 cancel 无第二终态，
+  新 Turn 可开始；
+- 路由：WebSocket 集合严格等于 `{'/v1/session/realtime'}`；HTTP 仅 health/models
+  成功，其余代表路由为 501；
+- launcher：fake 的 catalog/runner 构造器为 forbidden；disabled 顺序严格为
+  `catalog -> port -> runner`；
+- smoke：检查 ACK、`turn.committed`、delta 聚合、done/result、action 一致性、
+  cancel、乱序、timeout、服务 error、意外关闭和非零退出；WAV 必须是非空、未压缩、
+  16 kHz、单声道、PCM16，并且只发送 raw frames。
 
 ## 7. Wrong vs Correct
 
-### Wrong
+### Wrong：在资源分配后分流，或复制协议
 
 ```python
-mp_runner = MultiProcessPipelineRunner(config)
-if fake_enabled:
-    client = FakeClient()  # runner 和 GPU 路径已经被触发
+runner = MultiProcessPipelineRunner(config)
+if fake.enabled:
+    return run_fake_websocket_parser()
 ```
 
-### Correct
+### Correct：资源前分流并复用正式 Session
 
 ```python
-fake_config = DevRealtimeModelConfig.from_env()
-if fake_config.enabled:
-    return await run_dev_realtime_server(fake_config)
+fake = DevRealtimeModelConfig.from_env()
+if fake.enabled:
+    return await serve_dev_realtime_model(fake)  # create_app + MultimodalSession
 
-mp_runner = MultiProcessPipelineRunner(config)
+catalog = load_production_action_catalog()
+port = find_available_port(...)
+runner = MultiProcessPipelineRunner(config)
 ```
 
-开发替身必须在资源所有者创建前完成分流，才能保证本地模式真正不依赖模型与 GPU。
+### Wrong：cancel 只改 bookkeeping
+
+```python
+cancelled_ids.add(turn_id)
+await send({"type": "turn.cancelled"})
+```
+
+### Correct：先终止 owner，再发送唯一终态
+
+```python
+turn.phase = "cancelling"
+await abort_active_requests(turn)
+await cancel_and_join_turn_tasks(turn)
+clear_turn_resources(turn)
+await send_once({"type": "turn.cancelled", "turn_id": turn.turn_id})
+```

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Process-external smoke test for the Realtime development model server."""
+"""Process-external smoke test for the Session Realtime development server."""
 
 from __future__ import annotations
 
@@ -9,28 +9,13 @@ import base64
 import json
 import sys
 import wave
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 DEFAULT_AUDIO = Path(__file__).resolve().parents[1] / "tests/data/query_to_draw.wav"
-REQUIRED_EVENTS = (
-    "session.created",
-    "input_audio_buffer.speech_started",
-    "input_audio_buffer.speech_stopped",
-    "input_audio_buffer.committed",
-    "response.created",
-    "response.text.delta",
-    "response.text.done",
-    "response.done",
-    "conversation.item.input_audio_transcription.delta",
-    "conversation.item.input_audio_transcription.completed",
-)
 
 
 def load_pcm16_16k_mono(path: Path) -> bytes:
-    if not path.is_file():
-        raise ValueError(f"audio fixture does not exist: {path}")
     with wave.open(str(path), "rb") as audio:
         if (
             audio.getnchannels() != 1
@@ -38,100 +23,90 @@ def load_pcm16_16k_mono(path: Path) -> bytes:
             or audio.getsampwidth() != 2
             or audio.getcomptype() != "NONE"
         ):
-            raise ValueError("audio fixture must be uncompressed mono 16 kHz PCM16 WAV")
+            raise ValueError("audio must be uncompressed mono 16 kHz PCM16 WAV")
         pcm = audio.readframes(audio.getnframes())
     if not pcm:
-        raise ValueError("audio fixture must contain at least one PCM frame")
-    return pcm + b"\x00\x00" * 16000
+        raise ValueError("audio must contain at least one PCM frame")
+    return pcm
 
 
-async def receive_event(websocket: Any, *, timeout: float) -> dict[str, Any]:
-    raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
-    event = json.loads(raw)
+async def _receive(websocket: Any, timeout: float) -> dict[str, Any]:
+    event = json.loads(await asyncio.wait_for(websocket.recv(), timeout))
     if not isinstance(event, dict) or not isinstance(event.get("type"), str):
-        raise AssertionError(f"invalid Realtime event: {event!r}")
+        raise AssertionError(f"invalid event: {event!r}")
+    if event["type"] == "error":
+        raise AssertionError(f"server error: {event!r}")
     return event
 
 
-async def stream_audio(websocket: Any, pcm: bytes, *, chunk_ms: int = 200) -> None:
-    chunk_bytes = 16000 * chunk_ms // 1000 * 2
-    for offset in range(0, len(pcm), chunk_bytes):
+async def _expect(websocket: Any, event_type: str, timeout: float) -> dict[str, Any]:
+    event = await _receive(websocket, timeout)
+    if event["type"] != event_type:
+        raise AssertionError(f"expected {event_type}, got {event!r}")
+    return event
+
+
+def _session_start(mode: str) -> dict[str, Any]:
+    outputs = ["text", "action"] if mode == "fusion" else [mode]
+    event: dict[str, Any] = {
+        "type": "session.start",
+        "protocol_version": 1,
+        "session_id": f"dev-smoke-{mode}",
+        "outputs": outputs,
+        "locale": "zh-CN",
+    }
+    if "text" in outputs:
+        event["reply"] = {"instructions": "请简短回复。"}
+    if "action" in outputs:
+        event["action"] = {
+            "fallback_category_ids": ["BDEV"],
+            "allowed_candidates": [{"candidate_id": "ADEV"}],
+        }
+    if mode == "fusion":
+        event["reply"]["unsupported_action_text"] = "该动作暂不支持。"
+    return event
+
+
+async def _send_turn_input(
+    websocket: Any,
+    *,
+    turn_id: str,
+    text: str | None,
+    pcm: bytes | None,
+    timeout: float,
+) -> None:
+    await websocket.send(
+        json.dumps({"type": "turn.start", "turn_id": turn_id, "origin": "user"})
+    )
+    await _expect(websocket, "turn.started", timeout)
+    if text is not None:
+        await websocket.send(
+            json.dumps({"type": "input.text.set", "turn_id": turn_id, "text": text})
+        )
+        await _expect(websocket, "input.text.ack", timeout)
+    if pcm is not None:
         await websocket.send(
             json.dumps(
                 {
-                    "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(
-                        pcm[offset : offset + chunk_bytes]
-                    ).decode("ascii"),
+                    "type": "input.audio.append",
+                    "turn_id": turn_id,
+                    "seq": 1,
+                    "audio": base64.b64encode(pcm).decode("ascii"),
                 }
             )
         )
-
-
-def validate_events(
-    events: list[dict[str, Any]], *, response_text: str, transcript_text: str
-) -> None:
-    types = [event["type"] for event in events]
-    missing = [event_type for event_type in REQUIRED_EVENTS if event_type not in types]
-    if missing:
-        raise AssertionError(f"missing events {missing}; received {types}")
-    positions = [types.index(event_type) for event_type in REQUIRED_EVENTS]
-    if positions != sorted(positions):
-        raise AssertionError(
-            "Realtime events are out of order; expected "
-            f"{list(REQUIRED_EVENTS)}, received {types}"
-        )
-
-    response_done = next(event for event in events if event["type"] == "response.done")
-    actual_response = response_done["response"]["output"][0]["content"][0]["text"]
-    response_deltas = "".join(
-        event.get("delta", "")
-        for event in events
-        if event["type"] == "response.text.delta"
-    )
-    response_text_done = next(
-        event for event in events if event["type"] == "response.text.done"
-    ).get("text")
-    completed = next(
-        event
-        for event in events
-        if event["type"] == "conversation.item.input_audio_transcription.completed"
-    )
-    if actual_response != response_text:
-        raise AssertionError(
-            f"response mismatch: expected {response_text!r}, got {actual_response!r}"
-        )
-    if response_deltas != response_text or response_text_done != response_text:
-        raise AssertionError(
-            "response stream mismatch: "
-            f"expected {response_text!r}, deltas produced {response_deltas!r}, "
-            f"text.done produced {response_text_done!r}"
-        )
-    transcript_deltas = "".join(
-        event.get("delta", "")
-        for event in events
-        if event["type"] == "conversation.item.input_audio_transcription.delta"
-    )
-    if completed.get("transcript") != transcript_text:
-        raise AssertionError(
-            "transcription mismatch: "
-            f"expected {transcript_text!r}, got {completed.get('transcript')!r}"
-        )
-    if transcript_deltas != transcript_text:
-        raise AssertionError(
-            "transcription stream mismatch: "
-            f"expected {transcript_text!r}, deltas produced {transcript_deltas!r}"
-        )
+        await _expect(websocket, "input.audio.ack", timeout)
 
 
 async def run_smoke(
     *,
     url: str,
-    pcm: bytes,
+    mode: str,
     response_text: str,
-    transcript_text: str,
+    text: str | None,
+    pcm: bytes | None,
     timeout: float,
-    connect: Callable[..., Any] | None = None,
+    connect=None,
 ) -> list[dict[str, Any]]:
     if connect is None:
         import websockets
@@ -139,37 +114,82 @@ async def run_smoke(
         connect = websockets.connect
     events: list[dict[str, Any]] = []
     async with connect(url, open_timeout=timeout) as websocket:
-        created = await receive_event(websocket, timeout=timeout)
-        events.append(created)
-        if created["type"] != "session.created":
-            raise AssertionError(
-                f"first event must be session.created, got {created!r}"
-            )
-        await stream_audio(websocket, pcm)
-        for _ in range(300):
-            event = await receive_event(websocket, timeout=timeout)
+        await websocket.send(json.dumps(_session_start(mode)))
+        events.append(await _expect(websocket, "session.started", timeout))
+        await _send_turn_input(
+            websocket, turn_id="turn-1", text=text, pcm=pcm, timeout=timeout
+        )
+        await websocket.send(json.dumps({"type": "turn.commit", "turn_id": "turn-1"}))
+        while True:
+            event = await _receive(websocket, timeout)
             events.append(event)
-            if event["type"] == "error":
-                raise AssertionError(f"server returned error event: {event!r}")
-            if event["type"] == "conversation.item.input_audio_transcription.completed":
+            if event["type"] == "turn.result":
                 break
-        else:
-            raise AssertionError(
-                "terminal transcription event not received; events="
-                f"{[event['type'] for event in events]}"
-            )
-    validate_events(
-        events, response_text=response_text, transcript_text=transcript_text
-    )
+        _validate_turn_events(events, mode=mode, response_text=response_text)
+        # A second turn proves terminal cleanup and deterministic reuse.
+        await _send_turn_input(
+            websocket, turn_id="turn-cancel", text="取消", pcm=None, timeout=timeout
+        )
+        await websocket.send(
+            json.dumps({"type": "turn.cancel", "turn_id": "turn-cancel"})
+        )
+        while True:
+            event = await _receive(websocket, timeout)
+            events.append(event)
+            if event["type"] == "turn.cancelled":
+                break
     return events
+
+
+def _validate_turn_events(
+    events: list[dict[str, Any]], *, mode: str, response_text: str
+) -> None:
+    types = [event["type"] for event in events]
+    required = ["session.started", "turn.committed"]
+    if mode in {"text", "fusion"}:
+        required.extend(["response.text.done", "response.done"])
+    if mode in {"action", "fusion"}:
+        required.append("turn.action.ready")
+    required.append("turn.result")
+    missing = [event_type for event_type in required if event_type not in types]
+    if missing:
+        raise AssertionError(f"missing events {missing}; received {types}")
+    positions = [types.index(event_type) for event_type in required]
+    if positions != sorted(positions):
+        raise AssertionError(
+            f"events out of order: expected {required}, received {types}"
+        )
+
+    result = next(event for event in events if event["type"] == "turn.result")
+    if mode in {"text", "fusion"}:
+        deltas = "".join(
+            event.get("delta", "")
+            for event in events
+            if event["type"] == "response.text.delta"
+        )
+        done = next(event for event in events if event["type"] == "response.text.done")
+        if (
+            deltas != response_text
+            or done.get("text") != response_text
+            or result.get("reply", {}).get("text") != response_text
+        ):
+            raise AssertionError(f"text result mismatch: {events!r}")
+    if mode in {"action", "fusion"}:
+        ready = next(event for event in events if event["type"] == "turn.action.ready")
+        if (
+            ready.get("action", {}).get("candidate_id") != "ADEV"
+            or result.get("action", {}).get("candidate_id") != "ADEV"
+        ):
+            raise AssertionError(f"action result mismatch: {events!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="ws://127.0.0.1:8000/v1/realtime")
-    parser.add_argument("--audio", type=Path, default=DEFAULT_AUDIO)
-    parser.add_argument("--response-text", required=True)
-    parser.add_argument("--transcript-text", required=True)
+    parser.add_argument("--url", default="ws://127.0.0.1:8000/v1/session/realtime")
+    parser.add_argument("--mode", choices=("text", "action", "fusion"), default="text")
+    parser.add_argument("--response-text", default="这是本地开发模型返回的固定回复。")
+    parser.add_argument("--text", default="你好")
+    parser.add_argument("--audio", type=Path)
     parser.add_argument("--timeout", type=_positive_float, default=15.0)
     return parser
 
@@ -187,19 +207,17 @@ def main(argv: list[str] | None = None) -> int:
         events = asyncio.run(
             run_smoke(
                 url=args.url,
-                pcm=load_pcm16_16k_mono(args.audio),
+                mode=args.mode,
                 response_text=args.response_text,
-                transcript_text=args.transcript_text,
+                text=args.text,
+                pcm=load_pcm16_16k_mono(args.audio) if args.audio else None,
                 timeout=args.timeout,
             )
         )
     except Exception as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
-    print(
-        "PASS: Realtime fake model emitted the expected response and "
-        f"transcription ({len(events)} events)."
-    )
+    print(f"PASS: Session Realtime {args.mode} and cancel ({len(events)} events).")
     return 0
 
 

@@ -241,6 +241,8 @@ def create_app(
     architectures: list[str] | None = None,
     global_action_catalog: GlobalActionCatalog | None = None,
     global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
+    enable_resource_monitor: bool = True,
+    allow_unregistered_protocol_actions: bool = False,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -264,6 +266,10 @@ def create_app(
         admin_api_key: Optional API key for admin-control endpoints.
         tts_batch_max_items: Maximum items accepted by
             ``/v1/audio/speech/batch``.
+        enable_resource_monitor: Whether to register process/GPU resource
+            telemetry lifecycle hooks. Development substitutes disable it.
+        allow_unregistered_protocol_actions: Allow protocol-v1 action
+            whitelists without the production catalog. Development only.
 
     Returns:
         Configured FastAPI application.
@@ -327,8 +333,12 @@ def create_app(
         _register_realtime(app)
     # The manual-turn multimodal session API is part of the service contract
     # and must not depend on the legacy OpenAI Realtime switch.
-    _register_multimodal_realtime(app)
-    _register_resource_monitor(app)
+    _register_multimodal_realtime(
+        app,
+        allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
+    )
+    if enable_resource_monitor:
+        _register_resource_monitor(app)
 
     return app
 
@@ -1314,7 +1324,9 @@ def _register_realtime(app: FastAPI) -> None:
             await manager.close(session.session_id)
 
 
-def _register_multimodal_realtime(app: FastAPI) -> None:
+def _register_multimodal_realtime(
+    app: FastAPI, *, allow_unregistered_protocol_actions: bool = False
+) -> None:
     """Mount the manual-turn multimodal session WebSocket."""
     from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
 
@@ -1325,6 +1337,7 @@ def _register_multimodal_realtime(app: FastAPI) -> None:
         model_name=model_name,
         global_action_catalog=app.state.global_action_catalog,
         global_action_prewarm=app.state.global_action_prewarm,
+        allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
     )
     app.state.multimodal_realtime_manager = manager
 

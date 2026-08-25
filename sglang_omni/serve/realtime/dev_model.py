@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import os
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
@@ -13,6 +11,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Protocol
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
+from starlette.routing import WebSocketRoute
 
 from sglang_omni.client.types import (
     AbortLevel,
@@ -20,28 +19,38 @@ from sglang_omni.client.types import (
     CompletionStreamChunk,
     GenerateRequest,
 )
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionSuffixScoreRequest,
+    ActionSuffixScoreResult,
+    CandidateScore,
+    TokenScore,
+)
 
 _PREFIX = "SGLANG_OMNI_DEV_FAKE_MODEL_"
 _DEFAULT_RESPONSE_TEXT = "这是本地开发模型返回的固定回复。"
-_DEFAULT_TRANSCRIPT_TEXT = "这是本地开发模型生成的固定转写。"
 _DEFAULT_CHUNK_SIZE = 4
 _DEFAULT_CHUNK_INTERVAL_MS = 0
-_AUDIO_DATA_PREFIX = "data:audio/"
-_OCTET_STREAM_DATA_PREFIX = "data:application/octet-stream;base64,"
+_ACTION_CANDIDATE_ENV = "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID"
+_RESERVED_ACTION_IDS = frozenset({"A000", "B000", "UNSUPPORTED"})
 _SUPPORTED_HTTP_ROUTES = frozenset({"/health", "/v1/models"})
+_SUPPORTED_WEBSOCKET_ROUTES = frozenset({"/v1/session/realtime"})
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
 class RealtimeModelClient(Protocol):
-    """The narrow client contract consumed by ``RealtimeSession``."""
+    """The narrow client contract consumed by ``MultimodalSession``."""
 
     def completion_stream(
         self, request: GenerateRequest, *, request_id: str
     ) -> AsyncIterator[CompletionStreamChunk]: ...
 
     async def abort(self, request_id: str) -> AbortResult: ...
+
+    async def score_action_suffixes(
+        self, request: ActionSuffixScoreRequest
+    ) -> ActionSuffixScoreResult: ...
 
 
 class DevRealtimeModelRequestError(ValueError):
@@ -56,9 +65,9 @@ class DevRealtimeModelUnsupportedError(RuntimeError):
 class DevRealtimeModelConfig:
     enabled: bool = False
     response_text: str = _DEFAULT_RESPONSE_TEXT
-    transcript_text: str = _DEFAULT_TRANSCRIPT_TEXT
     chunk_size: int = _DEFAULT_CHUNK_SIZE
     chunk_interval_ms: int = _DEFAULT_CHUNK_INTERVAL_MS
+    action_candidate_id: str = ""
 
     @classmethod
     def from_env(
@@ -67,9 +76,6 @@ class DevRealtimeModelConfig:
         values = os.environ if environ is None else environ
         enabled = _parse_bool(values.get(f"{_PREFIX}ENABLED", "false"))
         response_text = values.get(f"{_PREFIX}RESPONSE_TEXT", _DEFAULT_RESPONSE_TEXT)
-        transcript_text = values.get(
-            f"{_PREFIX}TRANSCRIPT_TEXT", _DEFAULT_TRANSCRIPT_TEXT
-        )
         chunk_size = _parse_int(
             values.get(f"{_PREFIX}CHUNK_SIZE", str(_DEFAULT_CHUNK_SIZE)),
             name=f"{_PREFIX}CHUNK_SIZE",
@@ -85,14 +91,21 @@ class DevRealtimeModelConfig:
         )
         if not response_text:
             raise ValueError(f"{_PREFIX}RESPONSE_TEXT must not be empty")
-        if not transcript_text:
-            raise ValueError(f"{_PREFIX}TRANSCRIPT_TEXT must not be empty")
+        action_candidate_id = values.get(_ACTION_CANDIDATE_ENV, "").strip()
+        if (
+            action_candidate_id in _RESERVED_ACTION_IDS
+            or action_candidate_id.startswith("DEV_NONE_")
+        ):
+            raise ValueError(
+                f"{_ACTION_CANDIDATE_ENV} uses a reserved action identifier: "
+                f"{action_candidate_id}"
+            )
         return cls(
             enabled=enabled,
             response_text=response_text,
-            transcript_text=transcript_text,
             chunk_size=chunk_size,
             chunk_interval_ms=chunk_interval_ms,
+            action_candidate_id=action_candidate_id,
         )
 
     def log_summary(self) -> dict[str, int | bool]:
@@ -100,9 +113,9 @@ class DevRealtimeModelConfig:
         return {
             "enabled": self.enabled,
             "response_text_length": len(self.response_text),
-            "transcript_text_length": len(self.transcript_text),
             "chunk_size": self.chunk_size,
             "chunk_interval_ms": self.chunk_interval_ms,
+            "action_candidate_configured": bool(self.action_candidate_id),
         }
 
 
@@ -193,23 +206,46 @@ class DevRealtimeModelClient:
             raise DevRealtimeModelRequestError(
                 "messages must contain system and user roles"
             )
-        audios = request.metadata.get("audios")
-        if not isinstance(audios, list) or not audios:
-            raise DevRealtimeModelRequestError(
-                "metadata.audios must be a non-empty list"
-            )
-        if any(not _is_supported_audio_data_uri(audio) for audio in audios):
-            raise DevRealtimeModelRequestError(
-                "metadata.audios entries must be supported audio data URIs"
-            )
+        return self.config.response_text
 
-        prompt = "\n".join(str(message.content).lower() for message in request.messages)
-        if "transcribe the spoken audio" in prompt:
-            return self.config.transcript_text
-        if "listen to the spoken audio above and respond to it" in prompt:
-            return self.config.response_text
-        raise DevRealtimeModelRequestError(
-            "unable to classify request as response or transcription pass"
+    async def score_action_suffixes(
+        self, request: ActionSuffixScoreRequest
+    ) -> ActionSuffixScoreResult:
+        if not request.candidates:
+            raise DevRealtimeModelRequestError(
+                "action scoring candidates must not be empty"
+            )
+        candidate_ids = [candidate.candidate_id for candidate in request.candidates]
+        configured = self.config.action_candidate_id
+        selected = configured if configured in candidate_ids else candidate_ids[0]
+        if (
+            configured
+            and configured not in candidate_ids
+            and request.stage != "category"
+        ):
+            raise DevRealtimeModelRequestError(
+                "configured development action candidate is not in the "
+                f"Session whitelist: {configured}"
+            )
+        scores = []
+        for index, candidate_id in enumerate(candidate_ids):
+            logprob = -0.01 if candidate_id == selected else -1.0 - index
+            scores.append(
+                CandidateScore(
+                    candidate_id=candidate_id,
+                    token_count=1,
+                    mean_logprob=logprob,
+                    mean_nll=-logprob,
+                    ppl=1.0 if candidate_id == selected else 3.0 + index,
+                    token_scores=[TokenScore(token_id=index + 1, logprob=logprob)],
+                )
+            )
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=scores,
+            stats={"mode": "dev-fake-action"},
         )
 
     async def abort(self, request_id: str) -> AbortResult:
@@ -219,9 +255,11 @@ class DevRealtimeModelClient:
         return AbortResult(success=active, level_applied=AbortLevel.SOFT)
 
     def __getattr__(self, name: str):
-        raise DevRealtimeModelUnsupportedError(
-            f"{name} is unsupported while the Realtime development model is enabled"
-        )
+        # Preserve normal Python feature detection. Shared app infrastructure
+        # uses ``hasattr`` for optional action/resource-monitor capabilities.
+        # Unsupported external routes are rejected by the transport boundary
+        # installed below, before they can call the narrow client.
+        raise AttributeError(name)
 
 
 def install_dev_model_error_handler(app: "FastAPI") -> None:
@@ -230,6 +268,17 @@ def install_dev_model_error_handler(app: "FastAPI") -> None:
     if getattr(app.state, "dev_fake_model_errors_installed", False):
         return
     app.state.dev_fake_model_errors_installed = True
+
+    # ``create_app`` may gain new WebSocket APIs whose client contracts are
+    # broader than RealtimeSession's completion_stream/abort pair. Development
+    # mode exposes only its explicit WebSocket contract, so remove other WS
+    # routes instead of allowing them to fail after accepting a connection.
+    app.router.routes[:] = [
+        route
+        for route in app.router.routes
+        if not isinstance(route, WebSocketRoute)
+        or route.path in _SUPPORTED_WEBSOCKET_ROUTES
+    ]
 
     @app.middleware("http")
     async def reject_unsupported_http_routes(
@@ -262,24 +311,3 @@ def _unsupported_response(operation: str) -> JSONResponse:
             "type": "dev_fake_model_unsupported",
         },
     )
-
-
-def _is_supported_audio_data_uri(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    lowered = value.lower()
-    if lowered.startswith(_AUDIO_DATA_PREFIX):
-        header, separator, payload = value.partition(",")
-        if not separator or not header.lower().endswith(";base64"):
-            return False
-    elif lowered.startswith(_OCTET_STREAM_DATA_PREFIX):
-        payload = value[len(_OCTET_STREAM_DATA_PREFIX) :]
-    else:
-        return False
-    if not payload:
-        return False
-    try:
-        base64.b64decode(payload, validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    return True
