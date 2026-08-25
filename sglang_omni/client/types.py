@@ -7,6 +7,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+    ActionSuffixScoreResult,
+    CandidateScore,
+    TokenScore,
+)
+
 
 @dataclass
 class Message:

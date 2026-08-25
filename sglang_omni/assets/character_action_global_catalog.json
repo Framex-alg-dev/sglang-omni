@@ -1,0 +1,3028 @@
+{
+  "schema_version": 1,
+  "catalog_version": "v1-permanent-category-ids-r1",
+  "action_catalog_version": "v5-permanent-action-ids-r1",
+  "action_catalog_hash": "sha256:84d9be374cfa47d6023e9b020242fd3e97752a574c3219ed384af4c343752a76",
+  "categories": [
+    {
+      "category_id": "B001",
+      "source_label": "基础姿态",
+      "short_definition": "站、坐、卧、起身等基础身体姿态",
+      "category_path": [
+        "基础姿态与动作转场",
+        "基础姿态"
+      ],
+      "children": [
+        {
+          "candidate_id": "A001",
+          "action_id": "A001",
+          "source_label": "正式站立",
+          "short_definition": "双脚并拢，脊背挺直双臂自然垂放"
+        },
+        {
+          "candidate_id": "A002",
+          "action_id": "A002",
+          "source_label": "放松站立",
+          "short_definition": "单脚略微外放，肩部下沉自然放松"
+        },
+        {
+          "candidate_id": "A003",
+          "action_id": "A003",
+          "source_label": "站起",
+          "short_definition": "人物从坐姿到站立"
+        },
+        {
+          "candidate_id": "A004",
+          "action_id": "A004",
+          "source_label": "男生正坐",
+          "short_definition": "双脚并拢落地，脊背挺直双手置膝"
+        },
+        {
+          "candidate_id": "A005",
+          "action_id": "A005",
+          "source_label": "前倾坐姿",
+          "short_definition": "上半身前倾，重心前移至腰腹发力"
+        },
+        {
+          "candidate_id": "A006",
+          "action_id": "A006",
+          "source_label": "球星坐（双腿叉开弓腰双手交叉）",
+          "short_definition": "双腿大幅叉开，弓腰双手交叉抵肘抬头前视"
+        },
+        {
+          "candidate_id": "A007",
+          "action_id": "A007",
+          "source_label": "跷二郎腿坐姿",
+          "short_definition": "一腿搭于另一腿膝上，脚尖自然下垂"
+        },
+        {
+          "candidate_id": "A008",
+          "action_id": "A008",
+          "source_label": "抖腿坐姿",
+          "short_definition": "单脚脚跟离地，小腿快速上下抖动"
+        },
+        {
+          "candidate_id": "A009",
+          "action_id": "A009",
+          "source_label": "坐下",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A010",
+          "action_id": "A010",
+          "source_label": "侧卧",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A011",
+          "action_id": "A011",
+          "source_label": "坐姿躺下",
+          "short_definition": "从坐姿到躺下的动作"
+        },
+        {
+          "candidate_id": "A012",
+          "action_id": "A012",
+          "source_label": "站姿躺下",
+          "short_definition": "从站姿到躺下的动作"
+        },
+        {
+          "candidate_id": "A013",
+          "action_id": "A013",
+          "source_label": "上床睡觉",
+          "short_definition": "迈步到床边躺下盖被子"
+        },
+        {
+          "candidate_id": "A014",
+          "action_id": "A014",
+          "source_label": "睡觉",
+          "short_definition": "躺平，闭眼，呼气起伏均匀"
+        }
+      ]
+    },
+    {
+      "category_id": "B002",
+      "source_label": "重心变化",
+      "short_definition": "身体重心向各方向移动或跳跃",
+      "category_path": [
+        "基础姿态与动作转场",
+        "重心变化"
+      ],
+      "children": [
+        {
+          "candidate_id": "A015",
+          "action_id": "A015",
+          "source_label": "重心左移",
+          "short_definition": "髋部带动身体，重心缓移至左脚"
+        },
+        {
+          "candidate_id": "A016",
+          "action_id": "A016",
+          "source_label": "重心右移",
+          "short_definition": "髋部带动身体，重心缓移至右脚"
+        },
+        {
+          "candidate_id": "A017",
+          "action_id": "A017",
+          "source_label": "重心前移",
+          "short_definition": "上身微前倾，重心缓移至前脚掌"
+        },
+        {
+          "candidate_id": "A018",
+          "action_id": "A018",
+          "source_label": "重心后移",
+          "short_definition": "上身微后仰，重心缓移至脚跟"
+        },
+        {
+          "candidate_id": "A019",
+          "action_id": "A019",
+          "source_label": "跳跃",
+          "short_definition": ""
+        }
+      ]
+    },
+    {
+      "category_id": "B003",
+      "source_label": "起止与复位",
+      "short_definition": "动作开始、结束及身体部位复位",
+      "category_path": [
+        "基础姿态与动作转场",
+        "起止与复位"
+      ],
+      "children": [
+        {
+          "candidate_id": "A020",
+          "action_id": "A020",
+          "source_label": "从静止开始动作",
+          "short_definition": "身体由完全静止，缓慢启动进入动作"
+        },
+        {
+          "candidate_id": "A021",
+          "action_id": "A021",
+          "source_label": "头部回正",
+          "short_definition": "头部由偏转状态，缓慢转回正前方"
+        }
+      ]
+    },
+    {
+      "category_id": "B004",
+      "source_label": "待机动作",
+      "short_definition": "呼吸、轻晃、姿态微调等自然待机",
+      "category_path": [
+        "基础姿态与动作转场",
+        "待机动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A022",
+          "action_id": "A022",
+          "source_label": "自然呼吸起伏",
+          "short_definition": "胸腔随呼吸，缓慢均匀起伏"
+        },
+        {
+          "candidate_id": "A023",
+          "action_id": "A023",
+          "source_label": "轻微身体晃动",
+          "short_definition": "身体小幅缓慢轻晃"
+        },
+        {
+          "candidate_id": "A024",
+          "action_id": "A024",
+          "source_label": "微调坐姿",
+          "short_definition": "臀部小幅挪动，微调坐姿姿态"
+        }
+      ]
+    },
+    {
+      "category_id": "B005",
+      "source_label": "点头类",
+      "short_definition": "头部连续上下点动表示肯定",
+      "category_path": [
+        "头部与视线动作",
+        "点头类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A025",
+          "action_id": "A025",
+          "source_label": "连续点头",
+          "short_definition": "下颌连续上下点动，节奏均匀重复"
+        }
+      ]
+    },
+    {
+      "category_id": "B006",
+      "source_label": "摇头类",
+      "short_definition": "头部左右摇动表示否定或犹豫",
+      "category_path": [
+        "头部与视线动作",
+        "摇头类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A026",
+          "action_id": "A026",
+          "source_label": "连续摇头",
+          "short_definition": "头部左右连续摆动，节奏均匀重复"
+        },
+        {
+          "candidate_id": "A027",
+          "action_id": "A027",
+          "source_label": "犹豫式摇头",
+          "short_definition": "头部缓慢左右摆动，动作断续迟疑"
+        }
+      ]
+    },
+    {
+      "category_id": "B007",
+      "source_label": "俯仰类",
+      "short_definition": "头部抬起或低下的垂直转动",
+      "category_path": [
+        "头部与视线动作",
+        "俯仰类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A028",
+          "action_id": "A028",
+          "source_label": "抬头",
+          "short_definition": "下颌向上抬起，视线随之上移"
+        },
+        {
+          "candidate_id": "A029",
+          "action_id": "A029",
+          "source_label": "低头",
+          "short_definition": "下颌向下低垂，视线随之下移"
+        }
+      ]
+    },
+    {
+      "category_id": "B008",
+      "source_label": "视线类",
+      "short_definition": "主要移动眼球以改变注视方向",
+      "category_path": [
+        "头部与视线动作",
+        "视线类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A030",
+          "action_id": "A030",
+          "source_label": "看镜头",
+          "short_definition": "眼球转正，视线直视镜头方向"
+        },
+        {
+          "candidate_id": "A031",
+          "action_id": "A031",
+          "source_label": "看左侧（仅眼球）",
+          "short_definition": "眼球转动，视线投向左侧"
+        },
+        {
+          "candidate_id": "A032",
+          "action_id": "A032",
+          "source_label": "看右侧（仅眼球）",
+          "short_definition": "眼球转动，视线投向右侧"
+        },
+        {
+          "candidate_id": "A033",
+          "action_id": "A033",
+          "source_label": "看上方",
+          "short_definition": "眼球上翻，视线投向上方"
+        },
+        {
+          "candidate_id": "A034",
+          "action_id": "A034",
+          "source_label": "看下方",
+          "short_definition": "眼球下转，视线投向下方"
+        },
+        {
+          "candidate_id": "A035",
+          "action_id": "A035",
+          "source_label": "视线扫视",
+          "short_definition": "眼球快速转动，视线左右来回移动"
+        },
+        {
+          "candidate_id": "A036",
+          "action_id": "A036",
+          "source_label": "视线从物体回到镜头",
+          "short_definition": "视线由低处物体，转移抬回镜头方向"
+        }
+      ]
+    },
+    {
+      "category_id": "B009",
+      "source_label": "头眼协同",
+      "short_definition": "头部与视线同步转向目标",
+      "category_path": [
+        "头部与视线动作",
+        "头眼协同"
+      ],
+      "children": [
+        {
+          "candidate_id": "A037",
+          "action_id": "A037",
+          "source_label": "转头看左侧",
+          "short_definition": "头部与眼球同步，转向左侧注视"
+        },
+        {
+          "candidate_id": "A038",
+          "action_id": "A038",
+          "source_label": "转头看右侧",
+          "short_definition": "头部与眼球同步，转向右侧注视"
+        },
+        {
+          "candidate_id": "A039",
+          "action_id": "A039",
+          "source_label": "回头看身后",
+          "short_definition": "头部大幅转向身后看"
+        },
+        {
+          "candidate_id": "A040",
+          "action_id": "A040",
+          "source_label": "左右环视并带动头部",
+          "short_definition": "头部与眼球同步，左右缓慢巡视"
+        },
+        {
+          "candidate_id": "A041",
+          "action_id": "A041",
+          "source_label": "看向手中物品",
+          "short_definition": "头部低垂视线，投向手中物品"
+        },
+        {
+          "candidate_id": "A042",
+          "action_id": "A042",
+          "source_label": "看向屏幕指定区域",
+          "short_definition": "视线定向移动，锁定屏幕指定区域"
+        }
+      ]
+    },
+    {
+      "category_id": "B010",
+      "source_label": "基础表情",
+      "short_definition": "中性、喜怒哀惧等明确面部表情",
+      "category_path": [
+        "面部表情与口型动作",
+        "基础表情"
+      ],
+      "children": [
+        {
+          "candidate_id": "A043",
+          "action_id": "A043",
+          "source_label": "中性表情",
+          "short_definition": "面部肌肉放松，保持无明显情绪状态"
+        },
+        {
+          "candidate_id": "A044",
+          "action_id": "A044",
+          "source_label": "微笑",
+          "short_definition": "嘴角两侧上扬，眼部随之轻微上挑"
+        },
+        {
+          "candidate_id": "A045",
+          "action_id": "A045",
+          "source_label": "大笑",
+          "short_definition": "嘴部大幅张开，肩部随笑意起伏"
+        },
+        {
+          "candidate_id": "A046",
+          "action_id": "A046",
+          "source_label": "严肃",
+          "short_definition": "眉头收紧下压，嘴角平直收拢"
+        },
+        {
+          "candidate_id": "A047",
+          "action_id": "A047",
+          "source_label": "惊讶",
+          "short_definition": "眉毛快速上扬，双眼睁大嘴微张"
+        },
+        {
+          "candidate_id": "A048",
+          "action_id": "A048",
+          "source_label": "扮鬼脸",
+          "short_definition": "五官夸张挤压，吐舌歪嘴俏皮变形"
+        },
+        {
+          "candidate_id": "A049",
+          "action_id": "A049",
+          "source_label": "害怕",
+          "short_definition": "双眼瞪大后缩，眉头上挑嘴角下拉"
+        },
+        {
+          "candidate_id": "A050",
+          "action_id": "A050",
+          "source_label": "委屈",
+          "short_definition": "嘴角下撇，眉头微皱眼眶泛红"
+        },
+        {
+          "candidate_id": "A051",
+          "action_id": "A051",
+          "source_label": "愧疚",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A052",
+          "action_id": "A052",
+          "source_label": "悲伤",
+          "short_definition": "眉头内聚下垂，嘴角下拉眼神黯淡"
+        },
+        {
+          "candidate_id": "A053",
+          "action_id": "A053",
+          "source_label": "生气",
+          "short_definition": "眉头紧锁下压，鼻翼微张嘴角绷紧"
+        },
+        {
+          "candidate_id": "A054",
+          "action_id": "A054",
+          "source_label": "装可怜（低头咬唇抬眼）",
+          "short_definition": "头部低垂咬唇，眼球上抬余光示意"
+        }
+      ]
+    },
+    {
+      "category_id": "B011",
+      "source_label": "情绪反应",
+      "short_definition": "疑惑、思考、担忧、兴奋等情绪反应",
+      "category_path": [
+        "面部表情与口型动作",
+        "情绪反应"
+      ],
+      "children": [
+        {
+          "candidate_id": "A055",
+          "action_id": "A055",
+          "source_label": "表示疑惑",
+          "short_definition": "单眉上挑，嘴角微歪头部略侧"
+        },
+        {
+          "candidate_id": "A056",
+          "action_id": "A056",
+          "source_label": "单指轻抚下巴表示思考",
+          "short_definition": "眼神上移侧视，嘴唇微抿凝神，食指轻抚下巴"
+        },
+        {
+          "candidate_id": "A057",
+          "action_id": "A057",
+          "source_label": "双手交握表示思考",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A058",
+          "action_id": "A058",
+          "source_label": "表示担忧",
+          "short_definition": "眉头微蹙，嘴角下沉眼神凝重"
+        },
+        {
+          "candidate_id": "A059",
+          "action_id": "A059",
+          "source_label": "表示兴奋",
+          "short_definition": "眉眼舒展上扬，双眼瞪大，嘴角大开神采飞扬"
+        }
+      ]
+    },
+    {
+      "category_id": "B012",
+      "source_label": "口部动作",
+      "short_definition": "闭口停顿或强调发音等口部状态",
+      "category_path": [
+        "面部表情与口型动作",
+        "口部动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A060",
+          "action_id": "A060",
+          "source_label": "停顿闭口",
+          "short_definition": "双唇轻轻闭合，短暂停顿静止"
+        },
+        {
+          "candidate_id": "A061",
+          "action_id": "A061",
+          "source_label": "强调说话",
+          "short_definition": "唇部大幅张合，配合语气加重"
+        }
+      ]
+    },
+    {
+      "category_id": "B013",
+      "source_label": "眉眼动作",
+      "short_definition": "挑眉、皱眉、眨眼等眉眼细节",
+      "category_path": [
+        "面部表情与口型动作",
+        "眉眼动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A062",
+          "action_id": "A062",
+          "source_label": "挑眉",
+          "short_definition": "单侧或双侧眉毛，快速向上挑起"
+        },
+        {
+          "candidate_id": "A063",
+          "action_id": "A063",
+          "source_label": "皱眉",
+          "short_definition": "双眉向中间收拢，眉心下压聚拢"
+        },
+        {
+          "candidate_id": "A064",
+          "action_id": "A064",
+          "source_label": "眨眼",
+          "short_definition": "上下眼睑快速闭合，随即睁开"
+        }
+      ]
+    },
+    {
+      "category_id": "B014",
+      "source_label": "肩部动作",
+      "short_definition": "耸肩、展肩、收肩和叉腰等肩臂姿态",
+      "category_path": [
+        "颈肩与躯干动作",
+        "肩部动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A065",
+          "action_id": "A065",
+          "source_label": "双肩上提",
+          "short_definition": "双肩同步上耸，靠近耳侧停顿"
+        },
+        {
+          "candidate_id": "A066",
+          "action_id": "A066",
+          "source_label": "双肩放下",
+          "short_definition": "双肩由上提状态，缓慢下沉放松"
+        },
+        {
+          "candidate_id": "A067",
+          "action_id": "A067",
+          "source_label": "单侧耸肩",
+          "short_definition": "单侧肩部单独上提，另一侧保持不动"
+        },
+        {
+          "candidate_id": "A068",
+          "action_id": "A068",
+          "source_label": "双肩后展",
+          "short_definition": "双肩向后打开，肩胛骨向中挤压"
+        },
+        {
+          "candidate_id": "A069",
+          "action_id": "A069",
+          "source_label": "双肩前收",
+          "short_definition": "双肩向前内收，胸腔随之微含"
+        },
+        {
+          "candidate_id": "A070",
+          "action_id": "A070",
+          "source_label": "双臂前伸",
+          "short_definition": "双臂从下至上向前伸出"
+        },
+        {
+          "candidate_id": "A071",
+          "action_id": "A071",
+          "source_label": "双臂叉腰",
+          "short_definition": "双臂从下至上插到腰部"
+        },
+        {
+          "candidate_id": "A072",
+          "action_id": "A072",
+          "source_label": "单臂叉腰",
+          "short_definition": "单臂从下至上插到腰部"
+        }
+      ]
+    },
+    {
+      "category_id": "B015",
+      "source_label": "躯干前后动作",
+      "short_definition": "躯干前倾、后仰、探身及回正",
+      "category_path": [
+        "颈肩与躯干动作",
+        "躯干前后动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A073",
+          "action_id": "A073",
+          "source_label": "身体前倾",
+          "short_definition": "上身以髋为轴，整体向前倾斜"
+        },
+        {
+          "candidate_id": "A074",
+          "action_id": "A074",
+          "source_label": "身体后仰",
+          "short_definition": "上身以髋为轴，整体向后倾仰"
+        },
+        {
+          "candidate_id": "A075",
+          "action_id": "A075",
+          "source_label": "镜头边缘探头",
+          "short_definition": "身体自画面外侧，探头露出半张脸"
+        },
+        {
+          "candidate_id": "A076",
+          "action_id": "A076",
+          "source_label": "上身回正",
+          "short_definition": "上身由倾斜状态，缓慢转回竖直"
+        },
+        {
+          "candidate_id": "A077",
+          "action_id": "A077",
+          "source_label": "弯腰致意",
+          "short_definition": "上身以髋为轴，前弯致意后直起"
+        }
+      ]
+    },
+    {
+      "category_id": "B016",
+      "source_label": "躯干左右动作",
+      "short_definition": "躯干向左右倾斜、转动或摆动",
+      "category_path": [
+        "颈肩与躯干动作",
+        "躯干左右动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A078",
+          "action_id": "A078",
+          "source_label": "上身左倾",
+          "short_definition": "上身以腰为轴，向左侧倾斜停留"
+        },
+        {
+          "candidate_id": "A079",
+          "action_id": "A079",
+          "source_label": "上身右倾",
+          "short_definition": "上身以腰为轴，向右侧倾斜停留"
+        },
+        {
+          "candidate_id": "A080",
+          "action_id": "A080",
+          "source_label": "上身左转",
+          "short_definition": "上身以腰为轴，转向左侧停留"
+        },
+        {
+          "candidate_id": "A081",
+          "action_id": "A081",
+          "source_label": "上身右转",
+          "short_definition": "上身以腰为轴，转向右侧停留"
+        },
+        {
+          "candidate_id": "A082",
+          "action_id": "A082",
+          "source_label": "上身左右摆动",
+          "short_definition": "上身以腰为轴，左右连续摆动"
+        }
+      ]
+    },
+    {
+      "category_id": "B017",
+      "source_label": "胸腰联动",
+      "short_definition": "胸部开合与腰部侧弯的联动",
+      "category_path": [
+        "颈肩与躯干动作",
+        "胸腰联动"
+      ],
+      "children": [
+        {
+          "candidate_id": "A083",
+          "action_id": "A083",
+          "source_label": "挺胸",
+          "short_definition": "胸腔向前挺起，肩背随之舒展"
+        },
+        {
+          "candidate_id": "A084",
+          "action_id": "A084",
+          "source_label": "含胸",
+          "short_definition": "胸腔向内微收，肩背随之弓起"
+        },
+        {
+          "candidate_id": "A085",
+          "action_id": "A085",
+          "source_label": "腰部侧弯",
+          "short_definition": "上身以腰为轴，向单侧弯曲停留"
+        }
+      ]
+    },
+    {
+      "category_id": "B018",
+      "source_label": "鞠躬与礼仪",
+      "short_definition": "点头致意及不同程度的鞠躬礼仪",
+      "category_path": [
+        "颈肩与躯干动作",
+        "鞠躬与礼仪"
+      ],
+      "children": [
+        {
+          "candidate_id": "A086",
+          "action_id": "A086",
+          "source_label": "轻微点头致意",
+          "short_definition": "头部与上身同步，小幅前倾致意"
+        },
+        {
+          "candidate_id": "A087",
+          "action_id": "A087",
+          "source_label": "正式鞠躬",
+          "short_definition": "上身以髋为轴，标准角度前弯停顿，双手置于两侧"
+        },
+        {
+          "candidate_id": "A088",
+          "action_id": "A088",
+          "source_label": "致谢鞠躬",
+          "short_definition": "上身前弯致谢，双手可自然贴于身侧"
+        }
+      ]
+    },
+    {
+      "category_id": "B019",
+      "source_label": "单臂抬起",
+      "short_definition": "单侧手臂向前、侧方或上方抬起",
+      "category_path": [
+        "上肢大臂与前臂动作",
+        "单臂抬起"
+      ],
+      "children": [
+        {
+          "candidate_id": "A089",
+          "action_id": "A089",
+          "source_label": "左臂向前抬起",
+          "short_definition": "左肩发力，手臂向前平举抬起"
+        },
+        {
+          "candidate_id": "A090",
+          "action_id": "A090",
+          "source_label": "右臂向前抬起",
+          "short_definition": "右肩发力，手臂向前平举抬起"
+        },
+        {
+          "candidate_id": "A091",
+          "action_id": "A091",
+          "source_label": "左臂向侧方抬起",
+          "short_definition": "左肩发力，手臂向侧方平举抬起"
+        },
+        {
+          "candidate_id": "A092",
+          "action_id": "A092",
+          "source_label": "右臂向侧方抬起",
+          "short_definition": "右肩发力，手臂向侧方平举抬起"
+        },
+        {
+          "candidate_id": "A093",
+          "action_id": "A093",
+          "source_label": "单臂举过头顶",
+          "short_definition": "单臂由肩发力，向上伸直举过头顶"
+        },
+        {
+          "candidate_id": "A094",
+          "action_id": "A094",
+          "source_label": "学生举手",
+          "short_definition": "单臂笔直向上举起，手掌张开示意，另一只手平放至桌上。"
+        }
+      ]
+    },
+    {
+      "category_id": "B020",
+      "source_label": "双臂抬起",
+      "short_definition": "双臂同时抬起、打开、收回或交叠",
+      "category_path": [
+        "上肢大臂与前臂动作",
+        "双臂抬起"
+      ],
+      "children": [
+        {
+          "candidate_id": "A095",
+          "action_id": "A095",
+          "source_label": "双臂向前抬起",
+          "short_definition": "双肩同步发力，手臂向前平举抬起"
+        },
+        {
+          "candidate_id": "A096",
+          "action_id": "A096",
+          "source_label": "双臂举高",
+          "short_definition": "双臂由肩发力，向上伸直高举过头"
+        },
+        {
+          "candidate_id": "A097",
+          "action_id": "A097",
+          "source_label": "双臂半举",
+          "short_definition": "双臂由肩发力，向上半伸直停留于头部两侧"
+        },
+        {
+          "candidate_id": "A098",
+          "action_id": "A098",
+          "source_label": "双臂收回",
+          "short_definition": "双臂由伸展状态，屈肘收回身侧"
+        },
+        {
+          "candidate_id": "A099",
+          "action_id": "A099",
+          "source_label": "手臂交叠",
+          "short_definition": "双臂屈肘交叠，手部交叠与小腹前，一手轻靠在另一只手的手腕处。"
+        },
+        {
+          "candidate_id": "A100",
+          "action_id": "A100",
+          "source_label": "手臂打开",
+          "short_definition": "双臂由交叠状态，向外展开伸直"
+        },
+        {
+          "candidate_id": "A101",
+          "action_id": "A101",
+          "source_label": "咬手指（思考）",
+          "short_definition": "轻咬大拇指指尖凝神思考"
+        }
+      ]
+    },
+    {
+      "category_id": "B021",
+      "source_label": "手臂摆动",
+      "short_definition": "手臂随身体自然往复摆动",
+      "category_path": [
+        "上肢大臂与前臂动作",
+        "手臂摆动"
+      ],
+      "children": [
+        {
+          "candidate_id": "A102",
+          "action_id": "A102",
+          "source_label": "双臂自然摆动",
+          "short_definition": "双臂自然下垂，前后交替摆动"
+        }
+      ]
+    },
+    {
+      "category_id": "B022",
+      "source_label": "肘部动作",
+      "short_definition": "屈伸、开合或支撑等肘关节动作",
+      "category_path": [
+        "上肢大臂与前臂动作",
+        "肘部动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A103",
+          "action_id": "A103",
+          "source_label": "屈肘",
+          "short_definition": "前臂以肘为轴，向上弯曲收拢"
+        },
+        {
+          "candidate_id": "A104",
+          "action_id": "A104",
+          "source_label": "伸肘",
+          "short_definition": "前臂以肘为轴，向下伸展打直"
+        },
+        {
+          "candidate_id": "A105",
+          "action_id": "A105",
+          "source_label": "肘部向外打开",
+          "short_definition": "肘部以肩为轴，向外侧展开抬起"
+        },
+        {
+          "candidate_id": "A106",
+          "action_id": "A106",
+          "source_label": "肘部向内收",
+          "short_definition": "肘部以肩为轴，向内侧收拢贴近"
+        },
+        {
+          "candidate_id": "A107",
+          "action_id": "A107",
+          "source_label": "手肘支撑姿态",
+          "short_definition": "肘部弯曲抵于桌面，前臂承托身体"
+        }
+      ]
+    },
+    {
+      "category_id": "B023",
+      "source_label": "指向类",
+      "short_definition": "用手指明确指示自身或空间方向",
+      "category_path": [
+        "手部与手势动作",
+        "指向类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A108",
+          "action_id": "A108",
+          "source_label": "指向前方",
+          "short_definition": "单手食指伸出，手臂前伸指向"
+        },
+        {
+          "candidate_id": "A109",
+          "action_id": "A109",
+          "source_label": "指向左侧",
+          "short_definition": "单手食指伸出，手臂侧伸指向左方"
+        },
+        {
+          "candidate_id": "A110",
+          "action_id": "A110",
+          "source_label": "指向右侧",
+          "short_definition": "单手食指伸出，手臂侧伸指向右方"
+        },
+        {
+          "candidate_id": "A111",
+          "action_id": "A111",
+          "source_label": "指向上方",
+          "short_definition": "单手食指伸出，手臂上举指向上方"
+        },
+        {
+          "candidate_id": "A112",
+          "action_id": "A112",
+          "source_label": "指向下方",
+          "short_definition": "单手食指伸出，手臂下垂指向下方"
+        },
+        {
+          "candidate_id": "A113",
+          "action_id": "A113",
+          "source_label": "指向自己",
+          "short_definition": "单手食指屈臂，指尖点向自身胸口"
+        }
+      ]
+    },
+    {
+      "category_id": "B024",
+      "source_label": "展示类",
+      "short_definition": "以摊手或掌面呈现内容和范围",
+      "category_path": [
+        "手部与手势动作",
+        "展示类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A114",
+          "action_id": "A114",
+          "source_label": "单手摊开展示",
+          "short_definition": "单手手掌张开，掌心向上摊平展示"
+        },
+        {
+          "candidate_id": "A115",
+          "action_id": "A115",
+          "source_label": "双手摊开展示",
+          "short_definition": "双手手掌张开，掌心向上摊平展示"
+        },
+        {
+          "candidate_id": "A116",
+          "action_id": "A116",
+          "source_label": "手掌向上承接",
+          "short_definition": "手掌翻转朝上，微屈似托举承接"
+        },
+        {
+          "candidate_id": "A117",
+          "action_id": "A117",
+          "source_label": "手掌向前展示",
+          "short_definition": "手掌立起朝前，向外推出展示"
+        },
+        {
+          "candidate_id": "A118",
+          "action_id": "A118",
+          "source_label": "从左到右展示",
+          "short_definition": "手掌张开，由左侧匀速移向右侧"
+        },
+        {
+          "candidate_id": "A119",
+          "action_id": "A119",
+          "source_label": "从右到左展示",
+          "short_definition": "手掌张开，由右侧匀速移向左侧"
+        }
+      ]
+    },
+    {
+      "category_id": "B025",
+      "source_label": "强调类",
+      "short_definition": "用下压或握拳强化表达重点",
+      "category_path": [
+        "手部与手势动作",
+        "强调类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A120",
+          "action_id": "A120",
+          "source_label": "单手下压强调",
+          "short_definition": "单手掌心向下，短促下压后停顿"
+        },
+        {
+          "candidate_id": "A121",
+          "action_id": "A121",
+          "source_label": "双手下压强调",
+          "short_definition": "双手掌心向下，同步短促下压停顿"
+        },
+        {
+          "candidate_id": "A122",
+          "action_id": "A122",
+          "source_label": "拳头轻握强调",
+          "short_definition": "五指收拢握拳，短促轻晃示意"
+        }
+      ]
+    },
+    {
+      "category_id": "B026",
+      "source_label": "确认与反馈",
+      "short_definition": "用手掌前推表达停止或边界反馈",
+      "category_path": [
+        "手部与手势动作",
+        "确认与反馈"
+      ],
+      "children": [
+        {
+          "candidate_id": "A123",
+          "action_id": "A123",
+          "source_label": "手掌前推表示停止",
+          "short_definition": "单手立掌，向前推出并停顿定格"
+        }
+      ]
+    },
+    {
+      "category_id": "B027",
+      "source_label": "打招呼与告别",
+      "short_definition": "挥动单手或双手用于问候和告别",
+      "category_path": [
+        "手部与手势动作",
+        "打招呼与告别"
+      ],
+      "children": [
+        {
+          "candidate_id": "A124",
+          "action_id": "A124",
+          "source_label": "单手挥手",
+          "short_definition": "单手抬起举高，手掌面向外部左右摆动"
+        },
+        {
+          "candidate_id": "A125",
+          "action_id": "A125",
+          "source_label": "双手挥手",
+          "short_definition": "双手抬起举高，手掌面向外部，同步左右摆动"
+        }
+      ]
+    },
+    {
+      "category_id": "B028",
+      "source_label": "手指精细动作",
+      "short_definition": "并拢、张开、轻点、捏合等手指操作",
+      "category_path": [
+        "手部与手势动作",
+        "手指精细动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A126",
+          "action_id": "A126",
+          "source_label": "手指并拢",
+          "short_definition": "五指由张开状态，收拢并齐"
+        },
+        {
+          "candidate_id": "A127",
+          "action_id": "A127",
+          "source_label": "手指张开",
+          "short_definition": "五指由并拢状态，展开分散"
+        },
+        {
+          "candidate_id": "A128",
+          "action_id": "A128",
+          "source_label": "手指轻点",
+          "short_definition": "食指指尖发力，轻点物体或空中示意"
+        },
+        {
+          "candidate_id": "A129",
+          "action_id": "A129",
+          "source_label": "手指捏合",
+          "short_definition": "拇指与食指相对，捏合成钳状"
+        },
+        {
+          "candidate_id": "A130",
+          "action_id": "A130",
+          "source_label": "手指滑动",
+          "short_definition": "手指贴合表面，缓慢滑行移动"
+        }
+      ]
+    },
+    {
+      "category_id": "B029",
+      "source_label": "站立脚步",
+      "short_definition": "不同间距和前后落脚的站立脚位",
+      "category_path": [
+        "下肢与脚步动作",
+        "站立脚步"
+      ],
+      "children": [
+        {
+          "candidate_id": "A131",
+          "action_id": "A131",
+          "source_label": "双脚自然站立",
+          "short_definition": "双脚分开与肩同宽，自然站立"
+        },
+        {
+          "candidate_id": "A132",
+          "action_id": "A132",
+          "source_label": "双脚并拢站立",
+          "short_definition": "双脚并拢贴合，垂直站立"
+        },
+        {
+          "candidate_id": "A133",
+          "action_id": "A133",
+          "source_label": "双脚分开站立",
+          "short_definition": "双脚左右分开，稳定站立"
+        },
+        {
+          "candidate_id": "A134",
+          "action_id": "A134",
+          "source_label": "单脚前踏",
+          "short_definition": "单脚向前跨出，重心随之前移"
+        },
+        {
+          "candidate_id": "A135",
+          "action_id": "A135",
+          "source_label": "单脚后撤",
+          "short_definition": "单脚向后撤步，重心随之后移"
+        }
+      ]
+    },
+    {
+      "category_id": "B030",
+      "source_label": "行走类",
+      "short_definition": "原地踏步或向各方向连续行走",
+      "category_path": [
+        "下肢与脚步动作",
+        "行走类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A136",
+          "action_id": "A136",
+          "source_label": "原地踏步",
+          "short_definition": "双脚原地交替，上下踏动"
+        },
+        {
+          "candidate_id": "A137",
+          "action_id": "A137",
+          "source_label": "向前走",
+          "short_definition": "双脚交替迈步，身体随之前进"
+        },
+        {
+          "candidate_id": "A138",
+          "action_id": "A138",
+          "source_label": "向后退",
+          "short_definition": "双脚交替倒退，身体随之后移"
+        },
+        {
+          "candidate_id": "A139",
+          "action_id": "A139",
+          "source_label": "向左移动",
+          "short_definition": "双脚交替侧移，身体随之向左"
+        },
+        {
+          "candidate_id": "A140",
+          "action_id": "A140",
+          "source_label": "向右移动",
+          "short_definition": "双脚交替侧移，身体随之向右"
+        },
+        {
+          "candidate_id": "A141",
+          "action_id": "A141",
+          "source_label": "转身行走",
+          "short_definition": "身体转向后，双脚随即迈步前行"
+        },
+        {
+          "candidate_id": "A142",
+          "action_id": "A142",
+          "source_label": "走出画面",
+          "short_definition": "身体转向一侧，迈步走离镜头范围"
+        }
+      ]
+    },
+    {
+      "category_id": "B031",
+      "source_label": "转身类",
+      "short_definition": "身体向左、右转身或转回正面",
+      "category_path": [
+        "下肢与脚步动作",
+        "转身类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A143",
+          "action_id": "A143",
+          "source_label": "左转身",
+          "short_definition": "身体转向左侧"
+        },
+        {
+          "candidate_id": "A144",
+          "action_id": "A144",
+          "source_label": "右转身",
+          "short_definition": "身体转向右侧"
+        },
+        {
+          "candidate_id": "A145",
+          "action_id": "A145",
+          "source_label": "转回正面",
+          "short_definition": "身体由侧转状态，转回正前方"
+        }
+      ]
+    },
+    {
+      "category_id": "B032",
+      "source_label": "蹲起类",
+      "short_definition": "蹲姿与站姿之间的起身转换",
+      "category_path": [
+        "下肢与脚步动作",
+        "蹲起类"
+      ],
+      "children": [
+        {
+          "candidate_id": "A146",
+          "action_id": "A146",
+          "source_label": "从蹲姿起身",
+          "short_definition": "双膝伸直发力，身体缓慢站起"
+        }
+      ]
+    },
+    {
+      "category_id": "B033",
+      "source_label": "脚部细节",
+      "short_definition": "点脚、踮脚、轻移及脚尖转向",
+      "category_path": [
+        "下肢与脚步动作",
+        "脚部细节"
+      ],
+      "children": [
+        {
+          "candidate_id": "A147",
+          "action_id": "A147",
+          "source_label": "脚尖点地",
+          "short_definition": "单脚脚尖轻触地面，脚跟悬空"
+        },
+        {
+          "candidate_id": "A148",
+          "action_id": "A148",
+          "source_label": "踮脚",
+          "short_definition": "双脚脚跟同步抬起，以脚尖支撑"
+        },
+        {
+          "candidate_id": "A149",
+          "action_id": "A149",
+          "source_label": "脚步轻移",
+          "short_definition": "双脚小步挪动，微调站立位置"
+        },
+        {
+          "candidate_id": "A150",
+          "action_id": "A150",
+          "source_label": "脚尖转向",
+          "short_definition": "脚掌以脚跟为轴，转动改变朝向"
+        }
+      ]
+    },
+    {
+      "category_id": "B034",
+      "source_label": "欢迎与引导",
+      "short_definition": "用全身动作欢迎对象并引导方位进退",
+      "category_path": [
+        "全身动作与复合动作",
+        "欢迎与引导"
+      ],
+      "children": [
+        {
+          "candidate_id": "A151",
+          "action_id": "A151",
+          "source_label": "引导看向左侧",
+          "short_definition": "头部转向左侧，手臂同步抬起指引"
+        },
+        {
+          "candidate_id": "A152",
+          "action_id": "A152",
+          "source_label": "引导看向右侧",
+          "short_definition": "头部转向右侧，手臂同步抬起指引"
+        },
+        {
+          "candidate_id": "A153",
+          "action_id": "A153",
+          "source_label": "引导向前",
+          "short_definition": "手臂向前伸展，掌心示意前方引路"
+        },
+        {
+          "candidate_id": "A154",
+          "action_id": "A154",
+          "source_label": "引导入场",
+          "short_definition": "抬起手臂，手指从前向下来回摆动示意，引导对象进入画面"
+        },
+        {
+          "candidate_id": "A155",
+          "action_id": "A155",
+          "source_label": "引导离场",
+          "short_definition": "侧身抬手手掌朝上，向一侧画半弧示意，引导对象离开画面"
+        }
+      ]
+    },
+    {
+      "category_id": "B035",
+      "source_label": "情绪表达",
+      "short_definition": "用姿态和复合动作表达完整情绪",
+      "category_path": [
+        "全身动作与复合动作",
+        "情绪表达"
+      ],
+      "children": [
+        {
+          "candidate_id": "A156",
+          "action_id": "A156",
+          "source_label": "开心庆祝（双脚原地跳起，双手快速击掌，落地时双拳自然收回胸前）",
+          "short_definition": "双脚原地跳起，双手快速击掌落地收拳"
+        },
+        {
+          "candidate_id": "A157",
+          "action_id": "A157",
+          "source_label": "惊讶反应（双手捂住口鼻，眼睛睁大，身体瞬间向后缩，肩膀耸起）",
+          "short_definition": "双手捂住口鼻，身体瞬间后缩耸肩"
+        },
+        {
+          "candidate_id": "A158",
+          "action_id": "A158",
+          "source_label": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）",
+          "short_definition": "双手叉腰挺胸，下巴微扬目视前方"
+        },
+        {
+          "candidate_id": "A159",
+          "action_id": "A159",
+          "source_label": "遗憾（低头，双手自然垂下，或单手缓缓拍一下自己的额头，随后轻轻摇头）",
+          "short_definition": "低头双手垂落，或单手拍额后摇头"
+        },
+        {
+          "candidate_id": "A160",
+          "action_id": "A160",
+          "source_label": "鼓励（双手握拳，屈臂举在胸前，双拳交替上下小幅度敲击两次，随后双拳同时向下用力一顿，同时重重地点一下头，眼神坚定地看向前方）",
+          "short_definition": "双拳举于胸前，交替敲击后重顿点头"
+        },
+        {
+          "candidate_id": "A161",
+          "action_id": "A161",
+          "source_label": "俏皮（歪头眨眼轻颠跺脚）",
+          "short_definition": "头部歪斜眨眼，脚跟轻颠跺地示意"
+        },
+        {
+          "candidate_id": "A162",
+          "action_id": "A162",
+          "source_label": "卖萌（双手猫爪托腮歪头）",
+          "short_definition": "双手弯曲成爪，托于脸颊头部歪斜"
+        },
+        {
+          "candidate_id": "A163",
+          "action_id": "A163",
+          "source_label": "撒娇（低头身子摇晃，双手向前锤）",
+          "short_definition": "上身前后摇晃，双手交替向前挥锤"
+        },
+        {
+          "candidate_id": "A164",
+          "action_id": "A164",
+          "source_label": "娇羞（低头双手捂脸，身体左右轻晃）",
+          "short_definition": "双手捂脸低头，身体左右轻轻晃动"
+        },
+        {
+          "candidate_id": "A165",
+          "action_id": "A165",
+          "source_label": "傲娇（双臂交叉抱胸 + 扭头别过脸去 + 微微扬起下巴）",
+          "short_definition": "双臂交叉抱胸，扭头别脸下巴微扬"
+        },
+        {
+          "candidate_id": "A166",
+          "action_id": "A166",
+          "source_label": "拜托（双手合十，抬眉）",
+          "short_definition": "双手合十举于胸前，抬眉微低头恳求"
+        },
+        {
+          "candidate_id": "A167",
+          "action_id": "A167",
+          "source_label": "西式致谢（鞠躬弯腰，交叉步，单手花圈行礼仪）",
+          "short_definition": "单脚交叉后撤，弯腰致意手臂划弧"
+        },
+        {
+          "candidate_id": "A168",
+          "action_id": "A168",
+          "source_label": "跪下道歉（跪地，双手合十低头致谢）",
+          "short_definition": "单膝或双膝跪地，双手合十低头致意"
+        },
+        {
+          "candidate_id": "A169",
+          "action_id": "A169",
+          "source_label": "打哈欠（单手捂嘴身体后仰）",
+          "short_definition": "单手抬起捂嘴，身体随之向后微仰"
+        }
+      ]
+    },
+    {
+      "category_id": "B036",
+      "source_label": "舞台表现",
+      "short_definition": "舞蹈、翻腾、演奏等舞台化表演",
+      "category_path": [
+        "全身动作与复合动作",
+        "舞台表现"
+      ],
+      "children": [
+        {
+          "candidate_id": "A170",
+          "action_id": "A170",
+          "source_label": "民族舞",
+          "short_definition": "手臂舒展绕腕，步伐轻盈富有韵律"
+        },
+        {
+          "candidate_id": "A171",
+          "action_id": "A171",
+          "source_label": "现代舞",
+          "short_definition": "肢体自由延展，动作富有张力变化"
+        },
+        {
+          "candidate_id": "A172",
+          "action_id": "A172",
+          "source_label": "拉丁",
+          "short_definition": "胯部摆动明显，步伐紧凑节奏鲜明"
+        },
+        {
+          "candidate_id": "A173",
+          "action_id": "A173",
+          "source_label": "芭蕾",
+          "short_definition": "双臂圆润舒展，足尖点地姿态挺拔"
+        },
+        {
+          "candidate_id": "A174",
+          "action_id": "A174",
+          "source_label": "hiphop",
+          "short_definition": "肩胯屈伸发力，动作干脆富有律动"
+        },
+        {
+          "candidate_id": "A175",
+          "action_id": "A175",
+          "source_label": "jazz",
+          "short_definition": "肢体舒展延伸，动作利落富有张力"
+        },
+        {
+          "candidate_id": "A176",
+          "action_id": "A176",
+          "source_label": "breaking",
+          "short_definition": "地面支撑发力，身体旋转翻转展示"
+        },
+        {
+          "candidate_id": "A177",
+          "action_id": "A177",
+          "source_label": "poppin",
+          "short_definition": "肌肉瞬间收缩，形成顿点式震动效果"
+        },
+        {
+          "candidate_id": "A178",
+          "action_id": "A178",
+          "source_label": "lockin",
+          "short_definition": "动作定格锁停，配合手势夸张明显"
+        },
+        {
+          "candidate_id": "A179",
+          "action_id": "A179",
+          "source_label": "waacking",
+          "short_definition": "手臂大幅甩动，绕肩画圈富有节奏"
+        },
+        {
+          "candidate_id": "A180",
+          "action_id": "A180",
+          "source_label": "恰恰",
+          "short_definition": "胯部快速摆动，步伐轻快三步一顿"
+        },
+        {
+          "candidate_id": "A181",
+          "action_id": "A181",
+          "source_label": "踢踏",
+          "short_definition": "脚掌快速踏击地面，发出清脆节奏声"
+        },
+        {
+          "candidate_id": "A182",
+          "action_id": "A182",
+          "source_label": "桑巴",
+          "short_definition": "胯部快速抖动，步伐轻快充满活力"
+        },
+        {
+          "candidate_id": "A183",
+          "action_id": "A183",
+          "source_label": "华尔兹",
+          "short_definition": "身体旋转滑步，动作优雅流畅连贯"
+        },
+        {
+          "candidate_id": "A184",
+          "action_id": "A184",
+          "source_label": "侧翻跟头",
+          "short_definition": "双手撑地发力，身体侧向翻转一周"
+        },
+        {
+          "candidate_id": "A185",
+          "action_id": "A185",
+          "source_label": "前后翻跟头",
+          "short_definition": "身体蜷缩发力，前后翻滚一周落地"
+        },
+        {
+          "candidate_id": "A186",
+          "action_id": "A186",
+          "source_label": "转圈",
+          "short_definition": "以脚为轴发力，身体原地旋转一周"
+        },
+        {
+          "candidate_id": "A187",
+          "action_id": "A187",
+          "source_label": "奔跑追逐",
+          "short_definition": "双脚快速交替迈步，身体前倾加速奔跑"
+        },
+        {
+          "candidate_id": "A188",
+          "action_id": "A188",
+          "source_label": "弹钢琴",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A189",
+          "action_id": "A189",
+          "source_label": "弹吉他",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A190",
+          "action_id": "A190",
+          "source_label": "吹萨克斯",
+          "short_definition": ""
+        }
+      ]
+    },
+    {
+      "category_id": "B037",
+      "source_label": "屏幕交互",
+      "short_definition": "点击、滑动、缩放和切换屏幕内容",
+      "category_path": [
+        "屏幕与虚拟空间交互动作",
+        "屏幕交互"
+      ],
+      "children": [
+        {
+          "candidate_id": "A191",
+          "action_id": "A191",
+          "source_label": "点击虚拟按钮",
+          "short_definition": "单手食指伸出，向前轻点虚拟按钮位置"
+        },
+        {
+          "candidate_id": "A192",
+          "action_id": "A192",
+          "source_label": "滑动屏幕",
+          "short_definition": "单手食指触屏，横向匀速滑动"
+        },
+        {
+          "candidate_id": "A193",
+          "action_id": "A193",
+          "source_label": "放大内容",
+          "short_definition": "双指触屏，由内向外撑开滑动"
+        },
+        {
+          "candidate_id": "A194",
+          "action_id": "A194",
+          "source_label": "缩小内容",
+          "short_definition": "双指触屏，由外向内收拢滑动"
+        },
+        {
+          "candidate_id": "A195",
+          "action_id": "A195",
+          "source_label": "切换页面",
+          "short_definition": "单手食指触屏，快速左右滑动一次"
+        }
+      ]
+    },
+    {
+      "category_id": "B038",
+      "source_label": "虚拟空间操作",
+      "short_definition": "拖拽、开合、推拉虚拟面板或空间元素",
+      "category_path": [
+        "屏幕与虚拟空间交互动作",
+        "虚拟空间操作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A196",
+          "action_id": "A196",
+          "source_label": "拉开面板",
+          "short_definition": "单手抓住面板边缘，向侧方拉出"
+        },
+        {
+          "candidate_id": "A197",
+          "action_id": "A197",
+          "source_label": "推开面板",
+          "short_definition": "单手抵住面板边缘，向侧方推入"
+        },
+        {
+          "candidate_id": "A198",
+          "action_id": "A198",
+          "source_label": "拖拽元素",
+          "short_definition": "单手食指按住元素，随手移动拖行"
+        },
+        {
+          "candidate_id": "A199",
+          "action_id": "A199",
+          "source_label": "关闭元素",
+          "short_definition": "双手呈捏住动作，向一侧甩动一下"
+        },
+        {
+          "candidate_id": "A200",
+          "action_id": "A200",
+          "source_label": "环绕展示空间",
+          "short_definition": "手臂大幅展开，随身体转动环绕比划"
+        }
+      ]
+    },
+    {
+      "category_id": "B039",
+      "source_label": "拿取与取出",
+      "short_definition": "从桌面、口袋、包盒等位置取得物品",
+      "category_path": [
+        "现实物品交互动作",
+        "拿取与取出"
+      ],
+      "children": [
+        {
+          "candidate_id": "A201",
+          "action_id": "A201",
+          "source_label": "从桌面拿起物品",
+          "short_definition": "单手俯身探向桌面，抓握物品后提起"
+        },
+        {
+          "candidate_id": "A202",
+          "action_id": "A202",
+          "source_label": "从手边拿起物品",
+          "short_definition": "单手侧伸探向物品，握住后抬起"
+        },
+        {
+          "candidate_id": "A203",
+          "action_id": "A203",
+          "source_label": "从下方拿起物品",
+          "short_definition": "单手下探，抓握后拿起"
+        },
+        {
+          "candidate_id": "A204",
+          "action_id": "A204",
+          "source_label": "从左侧拿起物品",
+          "short_definition": "单手向左伸出，抓起物品"
+        },
+        {
+          "candidate_id": "A205",
+          "action_id": "A205",
+          "source_label": "从右侧拿起物品",
+          "short_definition": "单手向右伸出，抓起物品"
+        },
+        {
+          "candidate_id": "A206",
+          "action_id": "A206",
+          "source_label": "从背后取出物品",
+          "short_definition": "单手绕向身后，抓握物品后收至身前"
+        },
+        {
+          "candidate_id": "A207",
+          "action_id": "A207",
+          "source_label": "从口袋取出物品",
+          "short_definition": "单手探入口袋，捏住物品向外抽出"
+        },
+        {
+          "candidate_id": "A208",
+          "action_id": "A208",
+          "source_label": "从包中取出物品",
+          "short_definition": "单手伸入包内，抓握物品向上取出"
+        },
+        {
+          "candidate_id": "A209",
+          "action_id": "A209",
+          "source_label": "从盒子中取出物品",
+          "short_definition": "双手先开启盒盖，再伸手取出物品"
+        },
+        {
+          "candidate_id": "A210",
+          "action_id": "A210",
+          "source_label": "从架上取下物品",
+          "short_definition": "单手向上伸展，握住物品向下取下"
+        }
+      ]
+    },
+    {
+      "category_id": "B040",
+      "source_label": "持握与携带",
+      "short_definition": "持续持拿、抱夹、提拎或携带物品",
+      "category_path": [
+        "现实物品交互动作",
+        "持握与携带"
+      ],
+      "children": [
+        {
+          "candidate_id": "A211",
+          "action_id": "A211",
+          "source_label": "单手持物",
+          "short_definition": "单手握住物品中部，稳持斜前方"
+        },
+        {
+          "candidate_id": "A212",
+          "action_id": "A212",
+          "source_label": "双手持物",
+          "short_definition": "双手分持物品两侧，置于胸前稳托"
+        },
+        {
+          "candidate_id": "A213",
+          "action_id": "A213",
+          "source_label": "轻晃查看物品",
+          "short_definition": "单手握住物品，小幅缓慢前后晃动侧视查看"
+        },
+        {
+          "candidate_id": "A214",
+          "action_id": "A214",
+          "source_label": "胸前抱物",
+          "short_definition": "双臂环抱物品，收拢贴靠于胸前"
+        },
+        {
+          "candidate_id": "A215",
+          "action_id": "A215",
+          "source_label": "双臂抱住较大物品",
+          "short_definition": "双臂张开环抱，合拢固定大件物品"
+        },
+        {
+          "candidate_id": "A216",
+          "action_id": "A216",
+          "source_label": "手臂夹住物品",
+          "short_definition": "上臂内侧夹紧，将物品固定于腋下"
+        },
+        {
+          "candidate_id": "A217",
+          "action_id": "A217",
+          "source_label": "提着袋子",
+          "short_definition": "单手握住袋子提手，自然垂于身侧"
+        },
+        {
+          "candidate_id": "A218",
+          "action_id": "A218",
+          "source_label": "拎起手提箱",
+          "short_definition": "单手握住箱子提手，发力向上拎起"
+        },
+        {
+          "candidate_id": "A219",
+          "action_id": "A219",
+          "source_label": "手持长条物品",
+          "short_definition": "单手握住物品中端，抬起持稳"
+        },
+        {
+          "candidate_id": "A220",
+          "action_id": "A220",
+          "source_label": "端着托盘",
+          "short_definition": "双手掌心向上，平托盘底稳定端持"
+        },
+        {
+          "candidate_id": "A221",
+          "action_id": "A221",
+          "source_label": "拿着物品转身",
+          "short_definition": "单手持稳物品，随身体转向同步移动"
+        }
+      ]
+    },
+    {
+      "category_id": "B041",
+      "source_label": "展示与讲解",
+      "short_definition": "托举、旋转、近镜展示并讲解物品",
+      "category_path": [
+        "现实物品交互动作",
+        "展示与讲解"
+      ],
+      "children": [
+        {
+          "candidate_id": "A222",
+          "action_id": "A222",
+          "source_label": "单手托举物品",
+          "short_definition": "单手掌心朝上，将物品向前托起展示"
+        },
+        {
+          "candidate_id": "A223",
+          "action_id": "A223",
+          "source_label": "双手托举物品",
+          "short_definition": "双手掌心朝上，将物品向前托起展示"
+        },
+        {
+          "candidate_id": "A224",
+          "action_id": "A224",
+          "source_label": "双手向前展示物品",
+          "short_definition": "双手持物，手臂前伸展示于胸前高度"
+        },
+        {
+          "candidate_id": "A225",
+          "action_id": "A225",
+          "source_label": "将物品举高展示",
+          "short_definition": "单手或双手持物，向上举高过肩展示"
+        },
+        {
+          "candidate_id": "A226",
+          "action_id": "A226",
+          "source_label": "将物品靠近镜头展示",
+          "short_definition": "双手持物，手臂前伸靠近镜头方向"
+        },
+        {
+          "candidate_id": "A227",
+          "action_id": "A227",
+          "source_label": "旋转展示物品",
+          "short_definition": "单手握持物品，手腕带动小幅旋转"
+        },
+        {
+          "candidate_id": "A228",
+          "action_id": "A228",
+          "source_label": "翻转展示正反面",
+          "short_definition": "单手握持物品，手腕前后翻转露出顶部和底部"
+        },
+        {
+          "candidate_id": "A229",
+          "action_id": "A229",
+          "source_label": "指向物品细节",
+          "short_definition": "单手食指伸出，指尖点向物品局部"
+        },
+        {
+          "candidate_id": "A230",
+          "action_id": "A230",
+          "source_label": "展示物品尺寸大小",
+          "short_definition": "双手分置物品两端，比划间距展示"
+        },
+        {
+          "candidate_id": "A231",
+          "action_id": "A231",
+          "source_label": "打开包装后展示",
+          "short_definition": "双手撕拉包装，取出物品向前展示"
+        },
+        {
+          "candidate_id": "A232",
+          "action_id": "A232",
+          "source_label": "阅读稿件",
+          "short_definition": "拿起稿件开始阅读，手握稿件"
+        }
+      ]
+    },
+    {
+      "category_id": "B042",
+      "source_label": "递交与接收",
+      "short_definition": "将物品递给他人或从他人手中接过",
+      "category_path": [
+        "现实物品交互动作",
+        "递交与接收"
+      ],
+      "children": [
+        {
+          "candidate_id": "A233",
+          "action_id": "A233",
+          "source_label": "单手递出物品",
+          "short_definition": "单手握住物品，手臂前伸递出示意"
+        },
+        {
+          "candidate_id": "A234",
+          "action_id": "A234",
+          "source_label": "双手递出物品",
+          "short_definition": "双手捧住物品，手臂前伸递出示意"
+        },
+        {
+          "candidate_id": "A235",
+          "action_id": "A235",
+          "source_label": "递给左侧对象",
+          "short_definition": "单手握住物品，手臂转向左侧递出"
+        },
+        {
+          "candidate_id": "A236",
+          "action_id": "A236",
+          "source_label": "递给右侧对象",
+          "short_definition": "单手握住物品，手臂转向右侧递出"
+        },
+        {
+          "candidate_id": "A237",
+          "action_id": "A237",
+          "source_label": "递向镜头",
+          "short_definition": "单手握住物品，手臂前伸靠近镜头"
+        },
+        {
+          "candidate_id": "A238",
+          "action_id": "A238",
+          "source_label": "接过物品",
+          "short_definition": "单手伸出，握住递来物品收回身前"
+        },
+        {
+          "candidate_id": "A239",
+          "action_id": "A239",
+          "source_label": "双手接过物品",
+          "short_definition": "双手伸出，捧住递来物品收回身前"
+        },
+        {
+          "candidate_id": "A240",
+          "action_id": "A240",
+          "source_label": "接过后看向物品",
+          "short_definition": "单手接过物品，低头视线随之下移"
+        },
+        {
+          "candidate_id": "A241",
+          "action_id": "A241",
+          "source_label": "接收后展示物品",
+          "short_definition": "单手接过物品，随即抬手转向展示"
+        }
+      ]
+    },
+    {
+      "category_id": "B043",
+      "source_label": "放置与整理",
+      "short_definition": "放下、移动、摆正、排列或堆叠物品",
+      "category_path": [
+        "现实物品交互动作",
+        "放置与整理"
+      ],
+      "children": [
+        {
+          "candidate_id": "A242",
+          "action_id": "A242",
+          "source_label": "放下物品到桌面",
+          "short_definition": "单手握住物品，向下放置于桌面"
+        },
+        {
+          "candidate_id": "A243",
+          "action_id": "A243",
+          "source_label": "把物品摆正",
+          "short_definition": "单手轻扶物品，微调角度摆放端正"
+        },
+        {
+          "candidate_id": "A244",
+          "action_id": "A244",
+          "source_label": "把物品推向前方",
+          "short_definition": "单手抵住物品，向前轻推移动"
+        },
+        {
+          "candidate_id": "A245",
+          "action_id": "A245",
+          "source_label": "把物品拉近自己",
+          "short_definition": "单手抵住物品，向后轻拉靠近身体"
+        },
+        {
+          "candidate_id": "A246",
+          "action_id": "A246",
+          "source_label": "把物品移到左侧",
+          "short_definition": "单手扶住物品，向左轻推挪动"
+        },
+        {
+          "candidate_id": "A247",
+          "action_id": "A247",
+          "source_label": "把物品移到右侧",
+          "short_definition": "单手扶住物品，向右轻推挪动"
+        },
+        {
+          "candidate_id": "A248",
+          "action_id": "A248",
+          "source_label": "将物品放回架上",
+          "short_definition": "单手握住物品，向上举起放回架面"
+        },
+        {
+          "candidate_id": "A249",
+          "action_id": "A249",
+          "source_label": "将物品放入盒子",
+          "short_definition": "双手握住物品，向下放入盒内"
+        },
+        {
+          "candidate_id": "A250",
+          "action_id": "A250",
+          "source_label": "将多个物品并排摆放",
+          "short_definition": "双手逐一拿取物品，依次并排放置"
+        },
+        {
+          "candidate_id": "A251",
+          "action_id": "A251",
+          "source_label": "将物品堆叠",
+          "short_definition": "双手拿取物品，逐层向上叠放"
+        }
+      ]
+    },
+    {
+      "category_id": "B044",
+      "source_label": "隐藏与收纳",
+      "short_definition": "遮挡、藏起、收纳或重新展示物品",
+      "category_path": [
+        "现实物品交互动作",
+        "隐藏与收纳"
+      ],
+      "children": [
+        {
+          "candidate_id": "A252",
+          "action_id": "A252",
+          "source_label": "将物品藏到背后",
+          "short_definition": "单手握住物品，绕臂收至身后藏起"
+        },
+        {
+          "candidate_id": "A253",
+          "action_id": "A253",
+          "source_label": "将物品放入口袋",
+          "short_definition": "单手握住物品，塞入口袋收好"
+        },
+        {
+          "candidate_id": "A254",
+          "action_id": "A254",
+          "source_label": "将物品放入包中",
+          "short_definition": "单手握住物品，放入包内收好"
+        },
+        {
+          "candidate_id": "A255",
+          "action_id": "A255",
+          "source_label": "用手遮挡物品",
+          "short_definition": "单手掌心向下，覆盖遮挡物品上方"
+        },
+        {
+          "candidate_id": "A256",
+          "action_id": "A256",
+          "source_label": "掀开遮挡展示物品",
+          "short_definition": "单手抓住遮盖物，向上掀起露出物品"
+        },
+        {
+          "candidate_id": "A257",
+          "action_id": "A257",
+          "source_label": "把物品从镜头外拿入画面",
+          "short_definition": "单手自画面外伸入，握物移入镜头中央"
+        }
+      ]
+    },
+    {
+      "category_id": "B045",
+      "source_label": "工具与日用品使用",
+      "short_definition": "使用书写、通讯、饮用等工具和日用品",
+      "category_path": [
+        "现实物品交互动作",
+        "工具与日用品使用"
+      ],
+      "children": [
+        {
+          "candidate_id": "A258",
+          "action_id": "A258",
+          "source_label": "拿笔书写",
+          "short_definition": "单手握笔，笔尖抵纸低头书写"
+        },
+        {
+          "candidate_id": "A259",
+          "action_id": "A259",
+          "source_label": "打电话",
+          "short_definition": "手握电话侧身倾听"
+        },
+        {
+          "candidate_id": "A260",
+          "action_id": "A260",
+          "source_label": "拿笔指向内容",
+          "short_definition": "单手握笔，笔尖前伸点向内容处"
+        },
+        {
+          "candidate_id": "A261",
+          "action_id": "A261",
+          "source_label": "翻开书本",
+          "short_definition": "双手扶住封面，向两侧翻开书页"
+        },
+        {
+          "candidate_id": "A262",
+          "action_id": "A262",
+          "source_label": "翻页",
+          "short_definition": "单手捏住书角，向侧翻动一页"
+        },
+        {
+          "candidate_id": "A263",
+          "action_id": "A263",
+          "source_label": "端杯子喝水",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A264",
+          "action_id": "A264",
+          "source_label": "喝瓶装水",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A265",
+          "action_id": "A265",
+          "source_label": "喝汽水",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A266",
+          "action_id": "A266",
+          "source_label": "喝咖啡（吸管）",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A267",
+          "action_id": "A267",
+          "source_label": "拿麦克风讲话",
+          "short_definition": "单手握麦克风杆，举至口部讲话"
+        },
+        {
+          "candidate_id": "A268",
+          "action_id": "A268",
+          "source_label": "使用手机查看",
+          "short_definition": "单手握手机机身，低头注视屏幕"
+        },
+        {
+          "candidate_id": "A269",
+          "action_id": "A269",
+          "source_label": "使用手机点击",
+          "short_definition": "双手握手机机身，拇指点击屏幕"
+        },
+        {
+          "candidate_id": "A270",
+          "action_id": "A270",
+          "source_label": "拿遥控器按键",
+          "short_definition": "单手握遥控器，拇指按压按键"
+        },
+        {
+          "candidate_id": "A271",
+          "action_id": "A271",
+          "source_label": "打开伞",
+          "short_definition": "双手握伞柄，向上撑开伞面"
+        },
+        {
+          "candidate_id": "A272",
+          "action_id": "A272",
+          "source_label": "戴上耳机",
+          "short_definition": "双手握耳机两侧，扣于头部两耳"
+        },
+        {
+          "candidate_id": "A273",
+          "action_id": "A273",
+          "source_label": "敲击键盘",
+          "short_definition": "双手手指悬于键盘，交替敲击按键"
+        },
+        {
+          "candidate_id": "A274",
+          "action_id": "A274",
+          "source_label": "闻物品",
+          "short_definition": "单手举起物品，靠近鼻端轻嗅感受"
+        }
+      ]
+    },
+    {
+      "category_id": "B046",
+      "source_label": "穿戴与佩戴",
+      "short_definition": "穿脱、戴摘或调整服饰与随身配件",
+      "category_path": [
+        "现实物品交互动作",
+        "穿戴与佩戴"
+      ],
+      "children": [
+        {
+          "candidate_id": "A275",
+          "action_id": "A275",
+          "source_label": "戴帽子",
+          "short_definition": "双手握帽檐两侧，向下扣于头顶"
+        },
+        {
+          "candidate_id": "A276",
+          "action_id": "A276",
+          "source_label": "摘帽子",
+          "short_definition": "双手握帽檐两侧，向上取下帽子"
+        },
+        {
+          "candidate_id": "A277",
+          "action_id": "A277",
+          "source_label": "戴眼镜",
+          "short_definition": "双手扶镜腿，由前向后架上"
+        },
+        {
+          "candidate_id": "A278",
+          "action_id": "A278",
+          "source_label": "摘眼镜",
+          "short_definition": "双手捏住镜腿，由后向前取下"
+        },
+        {
+          "candidate_id": "A279",
+          "action_id": "A279",
+          "source_label": "眼镜戴头上",
+          "short_definition": "双手握住眼镜，向上推至头顶固定"
+        },
+        {
+          "candidate_id": "A280",
+          "action_id": "A280",
+          "source_label": "反戴帽子",
+          "short_definition": "双手握帽檐，转向后方反扣头顶"
+        },
+        {
+          "candidate_id": "A281",
+          "action_id": "A281",
+          "source_label": "戴口罩",
+          "short_definition": "双手拉住耳挂绳，向前挂上口罩"
+        },
+        {
+          "candidate_id": "A282",
+          "action_id": "A282",
+          "source_label": "摘口罩",
+          "short_definition": "单手捏住口罩，向下拉离面部"
+        },
+        {
+          "candidate_id": "A283",
+          "action_id": "A283",
+          "source_label": "背上背包",
+          "short_definition": "双手抓住背带，甩臂穿套上肩"
+        },
+        {
+          "candidate_id": "A284",
+          "action_id": "A284",
+          "source_label": "放下背包",
+          "short_definition": "单肩滑落背带，双手扶托卸下"
+        },
+        {
+          "candidate_id": "A285",
+          "action_id": "A285",
+          "source_label": "调整衣领",
+          "short_definition": "双手捏住衣领两侧，轻拉整理"
+        },
+        {
+          "candidate_id": "A286",
+          "action_id": "A286",
+          "source_label": "穿衣服",
+          "short_definition": "双手撑开衣物，手臂依次穿入袖筒"
+        },
+        {
+          "candidate_id": "A287",
+          "action_id": "A287",
+          "source_label": "脱衣服",
+          "short_definition": "双手抓住衣摆，手臂依次退出袖筒"
+        },
+        {
+          "candidate_id": "A288",
+          "action_id": "A288",
+          "source_label": "展示衣服",
+          "short_definition": "双手撑开衣物边缘，向前展示样式"
+        },
+        {
+          "candidate_id": "A289",
+          "action_id": "A289",
+          "source_label": "系围巾",
+          "short_definition": "双手绕颈交叉，收拢系紧围巾"
+        }
+      ]
+    },
+    {
+      "category_id": "B047",
+      "source_label": "物品开合与状态操作",
+      "short_definition": "开关、旋拧、按压、拉合物品部件",
+      "category_path": [
+        "现实物品交互动作",
+        "物品开合与状态操作"
+      ],
+      "children": [
+        {
+          "candidate_id": "A290",
+          "action_id": "A290",
+          "source_label": "打开盒盖",
+          "short_definition": "单手扶盒身，另一手掀起盒盖"
+        },
+        {
+          "candidate_id": "A291",
+          "action_id": "A291",
+          "source_label": "合上盒盖",
+          "short_definition": "单手扶盒身，另一手压下盒盖"
+        },
+        {
+          "candidate_id": "A292",
+          "action_id": "A292",
+          "source_label": "拧开瓶盖",
+          "short_definition": "单手握瓶身，另一手逆时针拧开"
+        },
+        {
+          "candidate_id": "A293",
+          "action_id": "A293",
+          "source_label": "拧紧瓶盖",
+          "short_definition": "单手握瓶身，另一手顺时针拧紧"
+        },
+        {
+          "candidate_id": "A294",
+          "action_id": "A294",
+          "source_label": "按下实体按钮",
+          "short_definition": "单手食指伸出，垂直下压按钮"
+        },
+        {
+          "candidate_id": "A295",
+          "action_id": "A295",
+          "source_label": "拉开抽屉",
+          "short_definition": "单手握住把手，向外水平拉出"
+        },
+        {
+          "candidate_id": "A296",
+          "action_id": "A296",
+          "source_label": "关上抽屉",
+          "short_definition": "单手推住抽屉面，向内水平推入"
+        },
+        {
+          "candidate_id": "A297",
+          "action_id": "A297",
+          "source_label": "拉开拉链",
+          "short_definition": "单手捏住拉链头，沿轨道向下拉开"
+        },
+        {
+          "candidate_id": "A298",
+          "action_id": "A298",
+          "source_label": "拉上拉链",
+          "short_definition": "单手捏住拉链头，沿轨道向上拉紧"
+        },
+        {
+          "candidate_id": "A299",
+          "action_id": "A299",
+          "source_label": "撕开包装",
+          "short_definition": "双手抓住包装两端，反向用力撕开"
+        }
+      ]
+    },
+    {
+      "category_id": "B048",
+      "source_label": "复杂物品场景",
+      "short_definition": "检查、摇晃、擦拭、扫码等复合操作",
+      "category_path": [
+        "现实物品交互动作",
+        "复杂物品场景"
+      ],
+      "children": [
+        {
+          "candidate_id": "A300",
+          "action_id": "A300",
+          "source_label": "检查物品状态（上下左右查看 ）",
+          "short_definition": "单手持物翻转，视线随之上下巡视"
+        },
+        {
+          "candidate_id": "A301",
+          "action_id": "A301",
+          "source_label": "摇晃瓶子",
+          "short_definition": "单手握瓶身，手腕小幅上下晃动"
+        },
+        {
+          "candidate_id": "A302",
+          "action_id": "A302",
+          "source_label": "擦拭物品表面",
+          "short_definition": "单手持布料，来回擦拭物体表面"
+        },
+        {
+          "candidate_id": "A303",
+          "action_id": "A303",
+          "source_label": "扫描物品条码",
+          "short_definition": "单手持物靠近扫描区，稍作停顿"
+        }
+      ]
+    },
+    {
+      "category_id": "B049",
+      "source_label": "轻量说话伴随",
+      "short_definition": "说话期间的小幅手势、前倾和呼吸",
+      "category_path": [
+        "语音伴随动作",
+        "轻量说话伴随"
+      ],
+      "children": [
+        {
+          "candidate_id": "A304",
+          "action_id": "A304",
+          "source_label": "说话时手部小幅摆动",
+          "short_definition": "唇部随语音开合，手部随语气轻摆"
+        },
+        {
+          "candidate_id": "A305",
+          "action_id": "A305",
+          "source_label": "说话时身体轻微前倾",
+          "short_definition": "唇部随语音开合，上身随之微前倾"
+        },
+        {
+          "candidate_id": "A306",
+          "action_id": "A306",
+          "source_label": "说话时自然呼吸",
+          "short_definition": "唇部随语音开合，胸腔自然起伏呼吸"
+        }
+      ]
+    },
+    {
+      "category_id": "B050",
+      "source_label": "主持播报",
+      "short_definition": "面向镜头保持正式稳定的播报姿态",
+      "category_path": [
+        "风格化与行业场景动作",
+        "主持播报"
+      ],
+      "children": [
+        {
+          "candidate_id": "A307",
+          "action_id": "A307",
+          "source_label": "新闻播报姿态",
+          "short_definition": "上身端正挺直，双手自然叠放桌前"
+        }
+      ]
+    },
+    {
+      "category_id": "B051",
+      "source_label": "电商直播",
+      "short_definition": "强调优惠、倒计时和引导下单的直播动作",
+      "category_path": [
+        "风格化与行业场景动作",
+        "电商直播"
+      ],
+      "children": [
+        {
+          "candidate_id": "A308",
+          "action_id": "A308",
+          "source_label": "强调优惠",
+          "short_definition": "手掌立起前推，配合语气加重示意"
+        },
+        {
+          "candidate_id": "A309",
+          "action_id": "A309",
+          "source_label": "引导点击",
+          "short_definition": "单手食指伸出，指向点击按钮位置"
+        },
+        {
+          "candidate_id": "A310",
+          "action_id": "A310",
+          "source_label": "倒计时提醒",
+          "short_definition": "手指依次屈伸，配合语速倒数示意"
+        },
+        {
+          "candidate_id": "A311",
+          "action_id": "A311",
+          "source_label": "促单鼓励",
+          "short_definition": "双手握拳上举快速前后晃动，短促用力催促示意"
+        }
+      ]
+    },
+    {
+      "category_id": "B052",
+      "source_label": "教育讲解",
+      "short_definition": "指向教学内容并进行分步骤讲解",
+      "category_path": [
+        "风格化与行业场景动作",
+        "教育讲解"
+      ],
+      "children": [
+        {
+          "candidate_id": "A312",
+          "action_id": "A312",
+          "source_label": "指向黑板",
+          "short_definition": "单手食指伸出，指向黑板书写位置"
+        },
+        {
+          "candidate_id": "A313",
+          "action_id": "A313",
+          "source_label": "分步骤讲解",
+          "short_definition": "单手依次比划数字，配合讲解节奏"
+        }
+      ]
+    },
+    {
+      "category_id": "B053",
+      "source_label": "导览讲解",
+      "short_definition": "指示展品和空间位置的导览动作",
+      "category_path": [
+        "风格化与行业场景动作",
+        "导览讲解"
+      ],
+      "children": [
+        {
+          "candidate_id": "A314",
+          "action_id": "A314",
+          "source_label": "指向左侧展品",
+          "short_definition": "手掌向左前侧方抬起伸出，向左侧指引"
+        },
+        {
+          "candidate_id": "A315",
+          "action_id": "A315",
+          "source_label": "指向右侧展品",
+          "short_definition": "手掌向右前侧方抬起伸出，向右侧指引"
+        },
+        {
+          "candidate_id": "A316",
+          "action_id": "A316",
+          "source_label": "介绍空间位置",
+          "short_definition": "手臂大幅展开，环绕比划空间范围"
+        }
+      ]
+    },
+    {
+      "category_id": "B054",
+      "source_label": "情感陪伴",
+      "short_definition": "用凝视、亲近或暧昧姿态表达陪伴情感",
+      "category_path": [
+        "风格化与行业场景动作",
+        "情感陪伴"
+      ],
+      "children": [
+        {
+          "candidate_id": "A317",
+          "action_id": "A317",
+          "source_label": "深情凝视",
+          "short_definition": "身体前倾，视线定向锁定，眼神柔和持续注视"
+        },
+        {
+          "candidate_id": "A318",
+          "action_id": "A318",
+          "source_label": "撩头发示好",
+          "short_definition": "单手撩起耳边发丝，随后抬头看镜头"
+        },
+        {
+          "candidate_id": "A319",
+          "action_id": "A319",
+          "source_label": "勾引手势",
+          "short_definition": "单手手心向上食指弯曲，向前勾动招引示意"
+        },
+        {
+          "candidate_id": "A320",
+          "action_id": "A320",
+          "source_label": "伸手摸摸头",
+          "short_definition": "单手抬起，轻抚对方头顶示意"
+        },
+        {
+          "candidate_id": "A321",
+          "action_id": "A321",
+          "source_label": "亲亲镜头（凑近亲吻）",
+          "short_definition": "上身前倾凑近镜头，嘟嘴做亲吻"
+        },
+        {
+          "candidate_id": "A322",
+          "action_id": "A322",
+          "source_label": "扯低领口（脱衣诱惑）",
+          "short_definition": "双手捏住领口，轻拉展示衣物细节"
+        },
+        {
+          "candidate_id": "A323",
+          "action_id": "A323",
+          "source_label": "抬头勾引",
+          "short_definition": "头部微微上扬收回，眼神上挑注视镜头"
+        },
+        {
+          "candidate_id": "A324",
+          "action_id": "A324",
+          "source_label": "轻拉衬衫露出肌肉（性感暧昧）",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A325",
+          "action_id": "A325",
+          "source_label": "掀起衣服露出肌肉（性感暧昧）",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A326",
+          "action_id": "A326",
+          "source_label": "解开衣服扣子（性感暧昧）",
+          "short_definition": ""
+        },
+        {
+          "candidate_id": "A327",
+          "action_id": "A327",
+          "source_label": "手拿鲜花刁嘴上（性感暧昧）",
+          "short_definition": ""
+        }
+      ]
+    },
+    {
+      "category_id": "B055",
+      "source_label": "赞同与确认",
+      "short_definition": "点赞、OK 等表示同意和确认的手势",
+      "category_path": [
+        "符号化手势与社交手势",
+        "赞同与确认"
+      ],
+      "children": [
+        {
+          "candidate_id": "A328",
+          "action_id": "A328",
+          "source_label": "点赞",
+          "short_definition": "手握空拳，拇指单独竖起向前"
+        },
+        {
+          "candidate_id": "A329",
+          "action_id": "A329",
+          "source_label": "双手点赞",
+          "short_definition": "双手握拳，拇指同步竖起向前"
+        },
+        {
+          "candidate_id": "A330",
+          "action_id": "A330",
+          "source_label": "OK 手势",
+          "short_definition": "拇指食指相扣成圈，其余三指展开"
+        },
+        {
+          "candidate_id": "A331",
+          "action_id": "A331",
+          "source_label": "双手 OK 手势",
+          "short_definition": "双手拇指食指相扣，同步比出圆圈"
+        },
+        {
+          "candidate_id": "A332",
+          "action_id": "A332",
+          "source_label": "OK 手势轻晃",
+          "short_definition": "手指扣圈成OK，手腕小幅左右轻晃"
+        },
+        {
+          "candidate_id": "A333",
+          "action_id": "A333",
+          "source_label": "拍胸口表示放心",
+          "short_definition": "单手掌心轻拍，落于自身胸口位置"
+        }
+      ]
+    },
+    {
+      "category_id": "B056",
+      "source_label": "拍照社交姿势",
+      "short_definition": "比耶、托脸等适合拍照的社交姿势",
+      "category_path": [
+        "符号化手势与社交手势",
+        "拍照社交姿势"
+      ],
+      "children": [
+        {
+          "candidate_id": "A334",
+          "action_id": "A334",
+          "source_label": "单手比耶",
+          "short_definition": "食指中指伸出成V，其余手指收拢"
+        },
+        {
+          "candidate_id": "A335",
+          "action_id": "A335",
+          "source_label": "双手比耶",
+          "short_definition": "双手食指中指伸出成V，举于身前"
+        },
+        {
+          "candidate_id": "A336",
+          "action_id": "A336",
+          "source_label": "脸旁比耶",
+          "short_definition": "单手比出V字，抬至脸颊一侧"
+        },
+        {
+          "candidate_id": "A337",
+          "action_id": "A337",
+          "source_label": "双手脸旁比耶",
+          "short_definition": "双手比出V字，分置脸颊两侧"
+        },
+        {
+          "candidate_id": "A338",
+          "action_id": "A338",
+          "source_label": "比耶轻摆",
+          "short_definition": "手指比出V字，手腕小幅左右摆动"
+        },
+        {
+          "candidate_id": "A339",
+          "action_id": "A339",
+          "source_label": "手托脸颊",
+          "short_definition": "单手屈肘抬起，掌心轻托脸颊侧面"
+        },
+        {
+          "candidate_id": "A340",
+          "action_id": "A340",
+          "source_label": "双手托腮",
+          "short_definition": "双手屈肘抬起，掌心分托脸颊两侧"
+        }
+      ]
+    },
+    {
+      "category_id": "B057",
+      "source_label": "爱心亲密表达",
+      "short_definition": "比心、飞吻等表达爱意和亲密的手势",
+      "category_path": [
+        "符号化手势与社交手势",
+        "爱心亲密表达"
+      ],
+      "children": [
+        {
+          "candidate_id": "A341",
+          "action_id": "A341",
+          "source_label": "单手指心",
+          "short_definition": "拇指食指屈折，指尖点向掌心成心"
+        },
+        {
+          "candidate_id": "A342",
+          "action_id": "A342",
+          "source_label": "双手指心",
+          "short_definition": "双手拇指食指交叉，比出迷你爱心"
+        },
+        {
+          "candidate_id": "A343",
+          "action_id": "A343",
+          "source_label": "双手比心",
+          "short_definition": "双手弯曲相扣，比出完整爱心形状"
+        },
+        {
+          "candidate_id": "A344",
+          "action_id": "A344",
+          "source_label": "头顶大爱心",
+          "short_definition": "双臂高举过头，弯曲相扣比出爱心"
+        },
+        {
+          "candidate_id": "A345",
+          "action_id": "A345",
+          "source_label": "胸前爱心",
+          "short_definition": "双手交叉相叠，置于胸前比出爱心"
+        },
+        {
+          "candidate_id": "A346",
+          "action_id": "A346",
+          "source_label": "单手飞吻",
+          "short_definition": "指尖轻触唇边，随即向前扬手抛出"
+        },
+        {
+          "candidate_id": "A347",
+          "action_id": "A347",
+          "source_label": "双手送心（双手比心向前推）",
+          "short_definition": "双手比心置于胸前，向前推送出去"
+        }
+      ]
+    },
+    {
+      "category_id": "B058",
+      "source_label": "礼仪与感谢",
+      "short_definition": "合十、抱拳、敬礼等问候感谢礼仪",
+      "category_path": [
+        "符号化手势与社交手势",
+        "礼仪与感谢"
+      ],
+      "children": [
+        {
+          "candidate_id": "A348",
+          "action_id": "A348",
+          "source_label": "合十感谢",
+          "short_definition": "双手掌心相合，置于胸前微微俯首"
+        },
+        {
+          "candidate_id": "A349",
+          "action_id": "A349",
+          "source_label": "抱拳",
+          "short_definition": "单手握拳，另一手包覆抱于胸前"
+        },
+        {
+          "candidate_id": "A350",
+          "action_id": "A350",
+          "source_label": "敬礼",
+          "short_definition": "单手四指并拢，抬至眉梢停留"
+        },
+        {
+          "candidate_id": "A351",
+          "action_id": "A351",
+          "source_label": "鞠躬合手（泰式问好）",
+          "short_definition": "双手合十置胸前，同时躬身致意"
+        }
+      ]
+    },
+    {
+      "category_id": "B059",
+      "source_label": "鼓励与庆祝",
+      "short_definition": "鼓掌、握拳、欢呼等鼓励庆祝动作",
+      "category_path": [
+        "符号化手势与社交手势",
+        "鼓励与庆祝"
+      ],
+      "children": [
+        {
+          "candidate_id": "A352",
+          "action_id": "A352",
+          "source_label": "鼓掌",
+          "short_definition": "双手掌心相对，交替拍击发声"
+        },
+        {
+          "candidate_id": "A353",
+          "action_id": "A353",
+          "source_label": "握拳加油",
+          "short_definition": "单手握拳前举，手臂短促用力挥动"
+        },
+        {
+          "candidate_id": "A354",
+          "action_id": "A354",
+          "source_label": "双拳加油",
+          "short_definition": "双手握拳前举，同步短促用力挥动"
+        },
+        {
+          "candidate_id": "A355",
+          "action_id": "A355",
+          "source_label": "振臂欢呼",
+          "short_definition": "双臂高举过头，用力挥舞欢呼庆祝"
+        },
+        {
+          "candidate_id": "A356",
+          "action_id": "A356",
+          "source_label": "跟镜头击掌",
+          "short_definition": "单手掌心朝前，向镜头方向拍击"
+        },
+        {
+          "candidate_id": "A357",
+          "action_id": "A357",
+          "source_label": "胜利挥拳（举起手臂摇晃拳头）",
+          "short_definition": "单臂高举握拳，手臂上下摇晃"
+        }
+      ]
+    },
+    {
+      "category_id": "B060",
+      "source_label": "否定与边界",
+      "short_definition": "摆手、交叉或抱胸表示拒绝和边界",
+      "category_path": [
+        "符号化手势与社交手势",
+        "否定与边界"
+      ],
+      "children": [
+        {
+          "candidate_id": "A358",
+          "action_id": "A358",
+          "source_label": "单手摆手拒绝",
+          "short_definition": "单手立起，左右快速摆动示意"
+        },
+        {
+          "candidate_id": "A359",
+          "action_id": "A359",
+          "source_label": "双手摆手拒绝",
+          "short_definition": "双手立起，同步左右快速摆动"
+        },
+        {
+          "candidate_id": "A360",
+          "action_id": "A360",
+          "source_label": "双手交叉拒绝",
+          "short_definition": "双臂交叉成叉，置于胸前定格"
+        },
+        {
+          "candidate_id": "A361",
+          "action_id": "A361",
+          "source_label": "食指左右摇摆否定",
+          "short_definition": "食指伸出，左右摇摆表示不可"
+        },
+        {
+          "candidate_id": "A362",
+          "action_id": "A362",
+          "source_label": "双臂交叉抱胸",
+          "short_definition": "双臂屈肘交叠，环抱于胸前"
+        }
+      ]
+    },
+    {
+      "category_id": "B061",
+      "source_label": "请求与引导",
+      "short_definition": "招手或伸手邀请他人靠近和行动",
+      "category_path": [
+        "符号化手势与社交手势",
+        "请求与引导"
+      ],
+      "children": [
+        {
+          "candidate_id": "A363",
+          "action_id": "A363",
+          "source_label": "招手靠近",
+          "short_definition": "单手掌心向上，反复向内弯卷招手示意"
+        },
+        {
+          "candidate_id": "A364",
+          "action_id": "A364",
+          "source_label": "单手邀请",
+          "short_definition": "单手掌心向上，侧摆示意方向"
+        },
+        {
+          "candidate_id": "A365",
+          "action_id": "A365",
+          "source_label": "双手邀请",
+          "short_definition": "双手掌心向上，向外展开邀请示意"
+        }
+      ]
+    },
+    {
+      "category_id": "B062",
+      "source_label": "静音与注意",
+      "short_definition": "嘘声、侧耳或指耳提示安静与倾听",
+      "category_path": [
+        "符号化手势与社交手势",
+        "静音与注意"
+      ],
+      "children": [
+        {
+          "candidate_id": "A366",
+          "action_id": "A366",
+          "source_label": "嘘",
+          "short_definition": "单手食指竖起，轻抵嘴唇示意安静"
+        },
+        {
+          "candidate_id": "A367",
+          "action_id": "A367",
+          "source_label": "指向耳朵请听",
+          "short_definition": "单手食指指尖点向耳侧"
+        },
+        {
+          "candidate_id": "A368",
+          "action_id": "A368",
+          "source_label": "侧耳倾听",
+          "short_definition": "单手掌心贴耳，头部略微偏侧"
+        },
+        {
+          "candidate_id": "A369",
+          "action_id": "A369",
+          "source_label": "手指轻敲太阳穴",
+          "short_definition": "单手食指屈伸，轻敲太阳穴位置"
+        }
+      ]
+    },
+    {
+      "category_id": "B063",
+      "source_label": "数字常用手型",
+      "short_definition": "用标准手型表示零至十的数字",
+      "category_path": [
+        "符号化手势与社交手势",
+        "数字常用手型"
+      ],
+      "children": [
+        {
+          "candidate_id": "A370",
+          "action_id": "A370",
+          "source_label": "数字零手势",
+          "short_definition": "拇指食指相扣成圈，比出数字零"
+        },
+        {
+          "candidate_id": "A371",
+          "action_id": "A371",
+          "source_label": "数字一手势",
+          "short_definition": "单手食指独立伸出，比出数字一"
+        },
+        {
+          "candidate_id": "A372",
+          "action_id": "A372",
+          "source_label": "数字二手势",
+          "short_definition": "食指中指伸出，比出数字二"
+        },
+        {
+          "candidate_id": "A373",
+          "action_id": "A373",
+          "source_label": "数字三手势",
+          "short_definition": "食指中指无名指伸出，比出数字三"
+        },
+        {
+          "candidate_id": "A374",
+          "action_id": "A374",
+          "source_label": "数字四手势",
+          "short_definition": "四指并拢伸出，拇指内扣比出四"
+        },
+        {
+          "candidate_id": "A375",
+          "action_id": "A375",
+          "source_label": "数字五手势",
+          "short_definition": "五指全部张开，比出数字五"
+        },
+        {
+          "candidate_id": "A376",
+          "action_id": "A376",
+          "source_label": "数字六手势",
+          "short_definition": "拇指小指伸出，其余三指收拢"
+        },
+        {
+          "candidate_id": "A377",
+          "action_id": "A377",
+          "source_label": "数字七手势",
+          "short_definition": "拇指食指中指捏合，比出数字七"
+        },
+        {
+          "candidate_id": "A378",
+          "action_id": "A378",
+          "source_label": "数字八手势",
+          "short_definition": "拇指食指成L形，比出数字八"
+        },
+        {
+          "candidate_id": "A379",
+          "action_id": "A379",
+          "source_label": "数字九手势",
+          "short_definition": "食指弯曲成钩，比出数字九"
+        },
+        {
+          "candidate_id": "A380",
+          "action_id": "A380",
+          "source_label": "数字十手势",
+          "short_definition": "双手握拳笔触食指交叉，比出数字十"
+        }
+      ]
+    },
+    {
+      "category_id": "B064",
+      "source_label": "趣味状态表达",
+      "short_definition": "无奈、惊讶、拥抱、耸肩等趣味反应",
+      "category_path": [
+        "符号化手势与社交手势",
+        "趣味状态表达"
+      ],
+      "children": [
+        {
+          "candidate_id": "A381",
+          "action_id": "A381",
+          "source_label": "捂脸无奈",
+          "short_definition": "单手或双手掌心覆面，头部微低"
+        },
+        {
+          "candidate_id": "A382",
+          "action_id": "A382",
+          "source_label": "捂嘴惊讶",
+          "short_definition": "单手掌心捂住嘴部，眼睛同步睁大"
+        },
+        {
+          "candidate_id": "A383",
+          "action_id": "A383",
+          "source_label": "摊手无奈",
+          "short_definition": "双手掌心向上摊开，肩部略耸"
+        },
+        {
+          "candidate_id": "A384",
+          "action_id": "A384",
+          "source_label": "双手抱头惊讶",
+          "short_definition": "双手抱住头部两侧，身体略微后缩"
+        },
+        {
+          "candidate_id": "A385",
+          "action_id": "A385",
+          "source_label": "爱的抱抱张开双臂",
+          "short_definition": "双臂大幅展开，做出拥抱迎接姿态"
+        },
+        {
+          "candidate_id": "A386",
+          "action_id": "A386",
+          "source_label": "耸肩摊手",
+          "short_definition": "双肩上耸，双手同步摊开示意"
+        }
+      ]
+    }
+  ]
+}

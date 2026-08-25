@@ -1,0 +1,37 @@
+# Qwen3-Omni single-GPU text + action profile.
+#
+# Select the physical card outside this file:
+#   CUDA_VISIBLE_DEVICES=<physical_gpu> sgl-omni serve \
+#     --config <profile.yaml>
+#
+# Realtime output is limited to text and action. The text-only Qwen pipeline
+# still accepts audio/image input, but does not load Talker AR or Code2Wav.
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-single-gpu
+model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
+
+runtime_overrides:
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 60000
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 60000
+      resources:
+        # Includes Thinker weights, Radix KV cache and runtime workspaces.
+        # Keep headroom for encoders and parallel Category/reply prefill.
+        total_gpu_memory_fraction: 0.78

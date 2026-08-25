@@ -28,19 +28,19 @@ def test_config_manager_parses_dotted_fraction_overrides_as_numbers() -> None:
     manager = ConfigManager(Qwen3OmniSpeechColocatedPipelineConfig(model_path="dummy"))
     extra_args = manager.parse_extra_args(
         [
-            "--stages.1.runtime.resources.total-gpu-memory-fraction",
+            "--stages.image_encoder.runtime.resources.total-gpu-memory-fraction",
             "0.05",
-            "--stages.2.runtime.resources.total-gpu-memory-fraction",
+            "--stages.audio_encoder.runtime.resources.total-gpu-memory-fraction",
             "0.05",
-            "--stages.4.runtime.resources.total-gpu-memory-fraction",
+            "--stages.thinker.runtime.resources.total-gpu-memory-fraction",
             "0.35",
-            "--stages.4.runtime.sglang-server-args.mem-fraction-static",
+            "--stages.thinker.runtime.sglang-server-args.mem-fraction-static",
             "0.35",
-            "--stages.6.runtime.resources.total-gpu-memory-fraction",
+            "--stages.talker_ar.runtime.resources.total-gpu-memory-fraction",
             "0.35",
-            "--stages.6.runtime.sglang-server-args.mem-fraction-static",
+            "--stages.talker_ar.runtime.sglang-server-args.mem-fraction-static",
             "0.35",
-            "--stages.7.runtime.resources.total-gpu-memory-fraction",
+            "--stages.code2wav.runtime.resources.total-gpu-memory-fraction",
             "0.05",
         ]
     )
@@ -183,6 +183,7 @@ def test_qwen3_omni_mmsu_example_config_uses_text_pipeline() -> None:
         "audio_encoder",
         "mm_aggregate",
         "thinker",
+        "action_score",
         "decode",
     ]
     assert {stage.process for stage in config.stages} == {"pipeline"}

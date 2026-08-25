@@ -482,6 +482,24 @@ def _apply_model_worker_backend_policy(
         and effective_quantization == "fp8"
         and has_moe
         and moe_runner_backend == "auto"
+        and _is_sm120_device()
+    ):
+        # SGLang 0.5.16 advertises CUTLASS FP8 MoE for SM120, but the
+        # installed sgl-kernel wheel has no fp8_blockwise_scaled_grouped_mm
+        # implementation for compute capability 12.0. Use Triton until the
+        # native SM120 grouped kernel is available.
+        override_server_args(
+            server_args,
+            "sglang-omni-qwen3-backend-policy",
+            moe_runner_backend="triton",
+        )
+        moe_runner_backend = server_args.moe_runner_backend
+
+    if (
+        is_qwen3_omni_arch
+        and effective_quantization == "fp8"
+        and has_moe
+        and moe_runner_backend == "auto"
         and has_native_fp8_block_quant
         and _is_fp8_cutlass_moe_supported()
     ):
@@ -572,6 +590,19 @@ def _is_h20_device() -> bool:
         if not torch.cuda.is_available():
             return False
         return bool(re.search(r"\bH20\b", torch.cuda.get_device_name(0)))
+    except Exception:
+        return False
+
+
+def _is_sm120_device() -> bool:
+    """True when the visible CUDA device is compute capability 12.0."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+        major, minor = torch.cuda.get_device_capability(0)
+        return (major, minor) == (12, 0)
     except Exception:
         return False
 

@@ -14,11 +14,13 @@ Provides the following endpoints:
 - GET  /v1/fs/file           — Download a file
 - GET  /health               — Health check
 - WS   /v1/realtime          — OpenAI-compatible Realtime API (when enabled)
+- WS   /v1/session/realtime  — manual-turn multimodal session API
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import json
 import logging
@@ -57,6 +59,14 @@ from sglang_omni.client import (
     Message,
     SamplingParams,
 )
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+)
+from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    GlobalActionCatalog,
+    GlobalActionCatalogPrewarmStatus,
+)
 from sglang_omni.client.audio import (
     DEFAULT_SAMPLE_RATE,
     apply_speed,
@@ -73,6 +83,8 @@ from sglang_omni.serve.protocol import (
     DEFAULT_TTS_BATCH_MAX_ITEMS,
     AdminRequestBase,
     ChatCompletionAudio,
+    ActionScoreRequest,
+    ActionScoreResponse,
     ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -110,6 +122,12 @@ from sglang_omni.serve.speech_errors import (
     openai_error_payload,
     speech_error_response,
 )
+from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
+from sglang_omni.utils.resource_monitor import (
+    PeriodicResourceMonitor,
+    resource_log_interval_s,
+)
+from sglang_omni.utils.structured_logs import get_structured_log_writer
 from sglang_omni.serve.speech_service import SpeechRequestValidator
 from sglang_omni.serve.speech_voices import MAX_VOICE_UPLOAD_BYTES, SpeakerSampleStore
 from sglang_omni.serve.speech_ws import SpeechWebSocketSession
@@ -221,6 +239,8 @@ def create_app(
     admin_api_key: str | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
     architectures: list[str] | None = None,
+    global_action_catalog: GlobalActionCatalog | None = None,
+    global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -267,6 +287,10 @@ def create_app(
     app.state.model_name = model_name or "sglang-omni"
     app.state.architectures = [a for a in (architectures or []) if a]
     app.state.realtime_enabled = enable_realtime
+    app.state.global_action_catalog = global_action_catalog
+    app.state.global_action_prewarm = (
+        global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
+    )
     app.state.speaker_sample_store = SpeakerSampleStore()
     app.state.speech_service = SpeechRequestValidator(
         default_model=app.state.model_name,
@@ -290,7 +314,9 @@ def create_app(
     _register_health(app)
     _register_models(app)
     _register_admin(app, resolved_key)
+    register_realtime_debug_routes(app, resolved_key)
     _register_chat_completions(app)
+    _register_action_scores(app)
     _register_voices(app)
     _register_generate(app)
     _register_speech(app)
@@ -299,6 +325,10 @@ def create_app(
     _register_transcriptions(app)
     if enable_realtime:
         _register_realtime(app)
+    # The manual-turn multimodal session API is part of the service contract
+    # and must not depend on the legacy OpenAI Realtime switch.
+    _register_multimodal_realtime(app)
+    _register_resource_monitor(app)
 
     return app
 
@@ -422,6 +452,71 @@ def _register_health(app: FastAPI) -> None:
             },
             status_code=status_code,
         )
+
+
+def _register_resource_monitor(app: FastAPI) -> None:
+    interval_s = resource_log_interval_s()
+    app.state.resource_monitor = None
+    if interval_s <= 0:
+        return
+
+    def application_snapshot() -> dict[str, Any]:
+        manager = getattr(app.state, "multimodal_realtime_manager", None)
+        session_load = (
+            manager.load_snapshot()
+            if manager is not None and hasattr(manager, "load_snapshot")
+            else {}
+        )
+        client: Client = app.state.client
+        action_load = (
+            client.action_scoring_load()
+            if hasattr(client, "action_scoring_load")
+            else {}
+        )
+        return {
+            "model": app.state.model_name,
+            "session_realtime": session_load,
+            "action_scoring": action_load,
+            "structured_log_writer": get_structured_log_writer().health(),
+        }
+
+    monitor = PeriodicResourceMonitor(
+        interval_s,
+        application_snapshot=application_snapshot,
+    )
+    app.state.resource_monitor = monitor
+    manager = getattr(app.state, "multimodal_realtime_manager", None)
+    if manager is not None and hasattr(manager, "set_resource_sample_requester"):
+        manager.set_resource_sample_requester(monitor.request_sample)
+
+    async def start_resource_monitor() -> None:
+        monitor.start()
+
+    async def stop_resource_monitor() -> None:
+        if manager is not None and hasattr(
+            manager, "set_resource_sample_requester"
+        ):
+            manager.set_resource_sample_requester(None)
+        await monitor.stop()
+
+    # FastAPI 0.141 removed application-level lifecycle compatibility methods.
+    # Some SGLang startup paths also wrap ``router`` in another FastAPI app, so
+    # resolve the actual APIRouter instead of assuming a single wrapper layer.
+    lifecycle_router: Any = app
+    seen: set[int] = set()
+    while not (
+        hasattr(lifecycle_router, "on_startup")
+        and hasattr(lifecycle_router, "on_shutdown")
+    ):
+        object_id = id(lifecycle_router)
+        if object_id in seen:
+            raise RuntimeError("unable to resolve FastAPI lifecycle router")
+        seen.add(object_id)
+        lifecycle_router = getattr(lifecycle_router, "router", None)
+        if lifecycle_router is None:
+            raise RuntimeError("unable to resolve FastAPI lifecycle router")
+    lifecycle_router.on_startup.append(start_resource_monitor)
+    lifecycle_router.on_shutdown.append(stop_resource_monitor)
 
 
 def _register_models(app: FastAPI) -> None:
@@ -1219,6 +1314,27 @@ def _register_realtime(app: FastAPI) -> None:
             await manager.close(session.session_id)
 
 
+def _register_multimodal_realtime(app: FastAPI) -> None:
+    """Mount the manual-turn multimodal session WebSocket."""
+    from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
+
+    client: Client = app.state.client
+    model_name: str = app.state.model_name
+    manager = MultimodalSessionManager(
+        client=client,
+        model_name=model_name,
+        global_action_catalog=app.state.global_action_catalog,
+        global_action_prewarm=app.state.global_action_prewarm,
+    )
+    app.state.multimodal_realtime_manager = manager
+
+    @app.websocket("/v1/session/realtime")
+    async def multimodal_realtime(websocket: WebSocket) -> None:
+        await websocket.accept()
+        session = manager.create(websocket)
+        await session.run()
+
+
 def _register_speech(app: FastAPI) -> None:
     @app.post("/v1/audio/speech")
     async def create_speech(request: Request) -> Response:
@@ -1870,3 +1986,56 @@ def build_transcription_generate_request(
         output_modalities=["text"],
         metadata=metadata,
     )
+
+
+def _register_action_scores(app: FastAPI) -> None:
+    @app.post("/v1/action-scores", response_model=ActionScoreResponse)
+    async def action_scores(req: ActionScoreRequest) -> JSONResponse:
+        client: Client = app.state.client
+        scoring_request = ActionSuffixScoreRequest(
+            request_id=req.request_id,
+            model=req.model,
+            prefix=req.prefix,
+            system_prompt=req.system_prompt,
+            language=req.language,
+            candidates=[
+                ActionScoreCandidate(
+                    candidate_id=item.candidate_id,
+                    suffix=item.suffix,
+                    action_id=item.action_id,
+                    execution_binding=dict(item.execution_binding),
+                )
+                for item in req.candidates
+            ],
+            audios=list(req.audios),
+            images=list(req.images),
+            sample_rate=req.sample_rate,
+            micro_batch_size=req.micro_batch_size,
+            session_id=req.session_id,
+            history=[message.model_dump(exclude_none=True) for message in req.history],
+            history_audios=list(req.history_audios),
+            history_images=list(req.history_images),
+            avatar_state=dict(req.avatar_state),
+        )
+        action_compute_started = time.perf_counter()
+        try:
+            result = await client.score_action_suffixes(scoring_request)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="action scoring timed out") from exc
+        except ClientError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        action_compute_ms = (time.perf_counter() - action_compute_started) * 1000.0
+        return JSONResponse(
+            content=ActionScoreResponse(
+                request_id=result.request_id,
+                model=result.model,
+                prefix_cached=result.prefix_cached,
+                stats=dict(result.stats),
+                timing={
+                    "server_action_compute_ms": round(action_compute_ms, 3),
+                },
+                scores=[dataclasses.asdict(score) for score in result.scores],
+            ).model_dump()
+        )

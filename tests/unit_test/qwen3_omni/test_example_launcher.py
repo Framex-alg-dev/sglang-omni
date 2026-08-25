@@ -57,7 +57,7 @@ def test_qwen_speech_help_preserves_topology_contract():
     assert "Tensor-parallel size for the thinker stage" in help_text
     assert "exactly that many GPU ids" in help_text
     assert "Defaults to on for the disaggregated topology" in help_text
-    assert "must be >= MIN_PARTIAL_START_CHUNKS (3)" in help_text
+    assert "must be >= MIN_PARTIAL_START_CHUNKS (1)" in help_text
     assert "All GPU stage flags must point to the same device" in help_text
 
 
@@ -448,8 +448,8 @@ def test_partial_start_disabled_does_not_propagate_subfloor_min_chunks(
 
 
 def test_partial_start_min_chunks_rejects_below_floor(mock_launch_server):
-    args = _make_args(enable_partial_start=True, partial_start_min_chunks=2)
-    with pytest.raises(ValueError, match="partial-start-min-chunks must be >= 3"):
+    args = _make_args(enable_partial_start=True, partial_start_min_chunks=0)
+    with pytest.raises(ValueError, match="partial-start-min-chunks must be >= 1"):
         _launch_speech_server(args)
 
     mock_launch_server.assert_not_called()

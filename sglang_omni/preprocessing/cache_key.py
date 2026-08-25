@@ -172,6 +172,19 @@ def hash_media_item(item: Any) -> str | None:
 
     Returns None for unsupported types (caller should skip caching).
     """
+    if (
+        isinstance(item, dict)
+        and item.get("_type") == "sglang_omni.prepared_image.rgb.v1"
+        and isinstance(item.get("width"), int)
+        and isinstance(item.get("height"), int)
+        and isinstance(item.get("pixel_sha256"), str)
+    ):
+        return (
+            "prepared-image:RGB:"
+            f"{item['width']}x{item['height']}:"
+            f"{item['pixel_sha256']}"
+        )
+
     # File path or URL
     if isinstance(item, (str, Path)):
         s = str(item)

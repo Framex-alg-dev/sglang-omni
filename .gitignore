@@ -36,7 +36,6 @@ output.wav
 .DS_Store
 Thumbs.db
 .ruff_cache/
-uv.lock
 results/
 .humanize/
 .benchmark-data/
@@ -47,3 +46,10 @@ benchmarks/eval/*.edit.lock
 asr_seedtts_results.json
 .claude/*
 !.claude/skills/
+
+tests/data/actions/
+
+logs/*
+!logs/.gitkeep
+
+deploy/sglang-omni-18001.service

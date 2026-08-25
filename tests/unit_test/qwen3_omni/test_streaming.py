@@ -192,6 +192,75 @@ def test_qwen_thinker_stream_builder_keeps_talker_when_modalities_missing():
     assert [msg.target for msg in messages] == ["decode", "talker_ar"]
 
 
+def test_action_prefix_logprobs_fall_back_to_next_token_logits():
+    output_processor = SGLangOutputProcessor()
+    req_data = SGLangARRequestData(
+        action_scoring_role="prefix",
+        req=SimpleNamespace(
+            logprob=SimpleNamespace(token_ids_logprob=[1, 3]),
+        ),
+    )
+    scheduler_output = SchedulerOutput(
+        requests=[SchedulerRequest(request_id="prefix", data=req_data)],
+        batch_data=SimpleNamespace(reqs=[req_data.req]),
+    )
+    model_output = SimpleNamespace(
+        next_token_ids=torch.tensor([0]),
+        logits_output=SimpleNamespace(
+            input_token_ids_logprobs_val=None,
+            input_token_ids_logprobs_idx=None,
+            next_token_token_ids_logprobs_val=None,
+            next_token_token_ids_logprobs_idx=None,
+            next_token_logits=torch.tensor([[0.0, 1.0, 2.0, 3.0]]),
+        ),
+    )
+
+    outputs = output_processor.process(model_output, scheduler_output)
+
+    expected = torch.log_softmax(model_output.logits_output.next_token_logits[0], dim=-1)
+    assert outputs["prefix"].extra == {
+        "action_prefix_token_logprobs": {
+            1: pytest.approx(float(expected[1])),
+            3: pytest.approx(float(expected[3])),
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["input_token_ids_logprobs_val", "input_token_ids_logprobs_idx"],
+)
+def test_action_prefix_logprobs_still_fail_without_any_fallback(field_name):
+    output_processor = SGLangOutputProcessor()
+    req_data = SGLangARRequestData(
+        action_scoring_role="prefix",
+        req=SimpleNamespace(
+            logprob=SimpleNamespace(token_ids_logprob=[1]),
+        ),
+    )
+    logits_output = SimpleNamespace(
+        input_token_ids_logprobs_val=None,
+        input_token_ids_logprobs_idx=None,
+        next_token_token_ids_logprobs_val=None,
+        next_token_token_ids_logprobs_idx=None,
+        next_token_logits=None,
+    )
+    setattr(logits_output, field_name, None)
+    scheduler_output = SchedulerOutput(
+        requests=[SchedulerRequest(request_id="prefix", data=req_data)],
+        batch_data=SimpleNamespace(reqs=[req_data.req]),
+    )
+
+    with pytest.raises(RuntimeError, match="prefix selected-token logprobs"):
+        output_processor.process(
+            SimpleNamespace(
+                next_token_ids=torch.tensor([0]),
+                logits_output=logits_output,
+            ),
+            scheduler_output,
+        )
+
+
 def test_qwen_hidden_states_skip_only_explicit_text_output_requests():
     output_processor = SGLangOutputProcessor(
         capture_hidden=True,

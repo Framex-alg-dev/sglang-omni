@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import logging
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +14,13 @@ from typing import Any
 import torch
 import xxhash
 
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+    build_multimodal_cache_identity,
+    tokenize_suffixes,
+    validate_action_suffix_request,
+)
 from sglang_omni.models.qwen3_omni.components.talker_prefill import TalkerPrefillBuilder
 from sglang_omni.models.qwen3_omni.payload_types import (
     Qwen3OmniPipelineState,
@@ -34,6 +44,8 @@ DECODE_STAGE = "decode"
 TALKER_STAGE = "talker_ar"
 CODE2WAV_STAGE = "code2wav"
 MM_AGGREGATE_STAGE = "mm_aggregate"
+ACTION_SCORE_STAGE = "action_score"
+ACTION_SCORE_TASK = "action_suffix_scoring"
 
 # Note(Chenchen Hong): PyTorch sampling_seed must fit a positive int32.
 MAX_INT32_POSITIVE = 0x7FFFFFFF
@@ -46,6 +58,19 @@ def _resolve_seed(params: dict[str, Any]) -> int | None:
         if value is not None:
             return int(value)
     return None
+
+
+def is_action_scoring_request(request_or_payload: OmniRequest | StagePayload | None) -> bool:
+    request = (
+        request_or_payload.request
+        if isinstance(request_or_payload, StagePayload)
+        else request_or_payload
+    )
+    return bool(
+        request is not None
+        and isinstance(request.metadata, dict)
+        and request.metadata.get("task") == ACTION_SCORE_TASK
+    )
 
 
 def output_modalities(request: OmniRequest | None) -> set[str] | None:
@@ -81,6 +106,8 @@ def should_generate_audio_output(
 def resolve_thinker_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
+    if is_action_scoring_request(output):
+        return ACTION_SCORE_STAGE
     del request_id, output
     return DECODE_STAGE
 
@@ -89,6 +116,8 @@ def resolve_mm_aggregate_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
     del request_id
+    if is_action_scoring_request(output):
+        return THINKER_STAGE
     if should_generate_audio_output(output):
         return [THINKER_STAGE, TALKER_STAGE]
     return THINKER_STAGE
@@ -98,12 +127,16 @@ def resolve_thinker_stream_done_targets(
     request_id: str, output: StagePayload
 ) -> list[str]:
     del request_id
+    if is_action_scoring_request(output):
+        return []
     if should_generate_audio_output(output):
         return [TALKER_STAGE, DECODE_STAGE]
     return [DECODE_STAGE]
 
 
 def resolve_terminal_stages(request: OmniRequest) -> list[str]:
+    if is_action_scoring_request(request):
+        return [ACTION_SCORE_STAGE]
     if should_generate_audio_output(request):
         return [DECODE_STAGE, CODE2WAV_STAGE]
     return [DECODE_STAGE]
@@ -130,6 +163,29 @@ def resolve_mm_aggregate_wait_sources(
         return None
     state = Qwen3OmniPipelineState.from_dict(payload.data)
     return ["preprocessing", *_active_encoder_stages(state.encoder_inputs)]
+
+
+def project_thinker_to_action_score(payload: StagePayload) -> StagePayload:
+    """Project the scheduler-produced score as the terminal response payload."""
+    # The action-aware Thinker result adapter already converts the scheduler
+    # data into the public score dictionary.  Keep this branch explicit so the
+    # terminal stage never attempts to decode or run speech generation.
+    if isinstance(payload.data, dict) and "scores" in payload.data:
+        return payload
+
+    # Keep a compatibility path for payloads produced by older adapters that
+    # stored the result in the regular pipeline state.
+    state = Qwen3OmniPipelineState.from_dict(payload.data)
+    thinker_out = state.thinker_out if isinstance(state.thinker_out, dict) else {}
+    extra = thinker_out.get("extra_model_outputs", {})
+    result = extra.get("action_scoring_result") if isinstance(extra, dict) else None
+    if not isinstance(result, dict):
+        raise RuntimeError("Thinker did not produce an action scoring result")
+    return StagePayload(
+        request_id=payload.request_id,
+        request=payload.request,
+        data=result,
+    )
 
 
 def project_thinker_to_decode(payload: StagePayload) -> StagePayload:
@@ -607,6 +663,9 @@ def build_sglang_thinker_request(
         origin_input_text="",
         origin_input_ids=input_ids_list,
         sampling_params=sampling_params,
+        return_logprob=bool(
+            params.get("return_logprob") or isinstance(params.get("action_scoring"), dict)
+        ),
         vocab_size=vocab_size,
     )
     req.tokenizer = tokenizer
@@ -641,7 +700,315 @@ def build_sglang_thinker_request(
         req=req,
     )
     data.return_logprob = bool(params.get("return_logprob"))
+    action_spec = params.get("action_scoring")
+    if isinstance(action_spec, dict):
+        return _prepare_action_scoring_request(
+            data,
+            state=state,
+            action_spec=action_spec,
+            tokenizer=tokenizer,
+            vocab_size=vocab_size,
+            thinker_config=thinker_config,
+            request_id=rid,
+        )
     return data
+
+
+def _extend_action_mrope_positions(positions: Any, suffix_len: int) -> Any:
+    """Extend text-only M-RoPE positions for a candidate suffix.
+
+    The shared multimodal prefix keeps its three rotary axes.  Candidate
+    tokens are ordinary text, so each axis advances from the last prefix
+    position.  Keeping this explicit prevents candidate requests from
+    silently reusing a shorter position tensor than their input IDs.
+    """
+    if positions is None or suffix_len <= 0:
+        return positions
+    if not isinstance(positions, torch.Tensor) or positions.shape[-1] == 0:
+        return positions
+    steps = torch.arange(1, suffix_len + 1, dtype=positions.dtype, device=positions.device)
+    shape = [1] * (positions.ndim - 1) + [suffix_len]
+    increments = steps.reshape(shape)
+    return torch.cat([positions, positions[..., -1:] + increments], dim=-1)
+
+
+def _resolve_action_terminal_token_id(tokenizer: Any) -> int:
+    """Resolve the ChatML assistant-turn terminator used by Qwen3-Omni."""
+    token_id = None
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert):
+        token_id = convert("<|im_end|>")
+        if token_id == getattr(tokenizer, "unk_token_id", None):
+            token_id = None
+    if token_id is None:
+        token_id = getattr(tokenizer, "eos_token_id", None)
+    if token_id is None or int(token_id) < 0:
+        raise ValueError("tokenizer does not define an <|im_end|>/EOS token")
+    return int(token_id)
+
+
+def _prepare_action_scoring_request(
+    prefix_data: SGLangARRequestData,
+    *,
+    state: Qwen3OmniPipelineState,
+    action_spec: dict[str, Any],
+    tokenizer: Any,
+    vocab_size: int,
+    thinker_config: Any,
+    request_id: str,
+) -> SGLangARRequestData:
+    """Expand one logical action request into a prefix Req and candidate Reqs."""
+    from sglang.srt.managers.schedule_batch import Req
+
+    server_build_started = time.perf_counter()
+    raw_candidates = action_spec.get("candidates")
+    if not isinstance(raw_candidates, list) or not raw_candidates:
+        raise ValueError("action_scoring.candidates must be a non-empty list")
+    candidates = [
+        item if isinstance(item, ActionScoreCandidate) else ActionScoreCandidate(
+            candidate_id=str(item["candidate_id"]),
+            suffix=str(item["suffix"]),
+            action_id=item.get("action_id"),
+            execution_binding=dict(item.get("execution_binding") or {}),
+        )
+        for item in raw_candidates
+    ]
+    prefix_ids = tuple(int(x) for x in prefix_data.input_ids.tolist())
+    prompt_text = str((state.prompt or {}).get("prompt_text") or "")
+    raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
+    audios = raw_inputs.get("audios") or raw_inputs.get("audio") or []
+    images = raw_inputs.get("images") or []
+    validate_action_suffix_request(
+        ActionSuffixScoreRequest(
+            request_id=request_id,
+            model=request_id,
+            prefix=prompt_text or "action scoring prefix",
+            language=str(action_spec.get("language", "zh")),
+            candidates=candidates,
+            audios=list(audios) if isinstance(audios, list) else [str(audios)],
+            images=list(images) if isinstance(images, list) else [str(images)],
+            sample_rate=int(action_spec.get("sample_rate", 16000)),
+            micro_batch_size=int(action_spec.get("micro_batch_size", 64)),
+        )
+    )
+    prompt_text = str((state.prompt or {}).get("prompt_text") or "")
+    special_token_ids = tuple(
+        int(value)
+        for value in (
+            getattr(tokenizer, "bos_token_id", None),
+            getattr(tokenizer, "eos_token_id", None),
+            getattr(tokenizer, "pad_token_id", None),
+        )
+        if value is not None
+    )
+    terminal_token_id = _resolve_action_terminal_token_id(tokenizer)
+    if prompt_text:
+        tokenizations = tokenize_suffixes(
+            tokenizer,
+            prompt_text,
+            candidates,
+            prefix_token_ids=prefix_ids,
+            special_token_ids=special_token_ids,
+            terminal_token_id=terminal_token_id,
+            suffix_only=(
+                action_spec.get("suffix_tokenization_mode") == "short_id"
+            ),
+        )
+        suffix_ids = [item.suffix_token_ids for item in tokenizations]
+    else:
+        suffix_ids = [
+            (
+                *tuple(int(x) for x in tokenizer.encode(item.suffix, add_special_tokens=False)),
+                terminal_token_id,
+            )
+            for item in candidates
+        ]
+    if any(not item for item in suffix_ids):
+        raise ValueError("all action suffixes must contain at least one token")
+
+    raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
+    audios = raw_inputs.get("audios") or raw_inputs.get("audio") or []
+    images = raw_inputs.get("images") or []
+    cache_key, cache_digest = build_multimodal_cache_identity(
+        prefix_token_ids=prefix_ids,
+        audios=list(audios) if isinstance(audios, list) else [str(audios)],
+        images=list(images) if isinstance(images, list) else [str(images)],
+        request_scope=request_id,
+    )
+    cache_namespace = action_spec.get("prefix_cache_namespace")
+    if isinstance(cache_namespace, str) and cache_namespace.strip():
+        cache_key = f"qwen3-omni-action-catalog:{cache_namespace.strip()}"
+        cache_digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:16]
+    cache_prefix_token_count = action_spec.get("cache_prefix_token_count")
+    prompt_cache = (state.prompt or {}).get("action_scoring_cache")
+    if (
+        (not isinstance(cache_prefix_token_count, int) or cache_prefix_token_count <= 0)
+        and isinstance(prompt_cache, dict)
+    ):
+        cache_prefix_token_count = prompt_cache.get("cache_prefix_token_count")
+    if not isinstance(cache_prefix_token_count, int) or cache_prefix_token_count <= 0:
+        cache_prefix_token_count = None
+    if cache_prefix_token_count is None:
+        static_prompt = action_spec.get("static_system_prompt")
+        if isinstance(static_prompt, str) and static_prompt.strip():
+            static_ids = tokenizer.apply_chat_template(
+                [{"role": "system", "content": static_prompt}],
+                add_generation_prompt=False,
+                tokenize=True,
+            )
+            if hasattr(static_ids, "tolist"):
+                static_ids = static_ids.tolist()
+            if static_ids and isinstance(static_ids[0], list):
+                static_ids = static_ids[0]
+            static_ids = tuple(int(value) for value in (static_ids or []))
+            if static_ids and tuple(prefix_ids[: len(static_ids)]) == static_ids:
+                cache_prefix_token_count = len(static_ids)
+    if cache_prefix_token_count is not None:
+        cache_prefix_token_count = min(cache_prefix_token_count, len(prefix_ids))
+    else:
+        cache_prefix_token_count = len(prefix_ids)
+    prefix_req = prefix_data.req
+    prefix_req.extra_key = cache_key
+    prefix_positions = None
+    if prefix_req.multimodal_inputs is not None:
+        prefix_positions = getattr(prefix_req.multimodal_inputs, "mrope_positions", None)
+    dummy_id = getattr(tokenizer, "pad_token_id", None)
+    if dummy_id is None:
+        dummy_id = getattr(tokenizer, "eos_token_id", None)
+    dummy_id = int(dummy_id if dummy_id is not None else 0)
+    prefix_req.origin_input_ids = list(prefix_ids) + [dummy_id]
+    prefix_req.origin_input_ids_unpadded = prefix_req.origin_input_ids
+    prefix_data.input_ids = torch.tensor(prefix_req.origin_input_ids, dtype=torch.long)
+    prefix_data.attention_mask = torch.ones_like(prefix_data.input_ids)
+    if prefix_positions is not None:
+        prefix_req.multimodal_inputs.mrope_positions = torch.cat(
+            [prefix_positions, prefix_positions[..., -1:] + 1], dim=-1
+        )
+    first_token_ids = sorted({int(ids[0]) for ids in suffix_ids})
+    # SGLang stores token-id probes under Req.logprob. Keeping this on the
+    # request logprob object lets ForwardBatch.init_new carry the probes into
+    # the prefill-only logits path.
+    prefix_req.logprob.token_ids_logprob = first_token_ids
+    prefix_req.return_logprob = True
+    # Bound the parent radix-cache match at the reusable prefix boundary.
+    prefix_req.logprob_start_len = cache_prefix_token_count
+    prefix_data.action_scoring_role = "prefix"
+    prefix_data.action_scoring_parent = prefix_data
+    prefix_data.action_scoring_candidate_id = None
+    prefix_data.action_scoring_plan = {
+        "candidate_ids": [item.candidate_id for item in candidates],
+        "candidate_suffix_ids": {
+            item.candidate_id: tuple(ids)
+            for item, ids in zip(candidates, suffix_ids, strict=True)
+        },
+        "terminal_token_id": terminal_token_id,
+        # Candidate Req objects are built lazily after the shared prefix
+        # terminalizes. Keeping only suffix ids here avoids materializing
+        # N full prefix+suffix token arrays before the prefix can enter the
+        # scheduler.
+        "candidate_data": [],
+        "candidate_tokenizer": tokenizer,
+        "candidate_vocab_size": vocab_size,
+        "candidate_prefix_positions": prefix_positions,
+        "prefix_token_count": len(prefix_ids),
+        "cache_prefix_token_count": cache_prefix_token_count,
+        "cache_key": cache_key,
+        "cache_digest": cache_digest,
+        "micro_batch_size": int(action_spec.get("micro_batch_size", 64)),
+        "prefix_cached": False,
+        "prefix_physical_prefill_chunk_count": 0,
+        "started_at": float(action_spec.get("client_started_at", time.perf_counter())),
+        "client_request_build_ms": float(action_spec.get("client_build_ms", 0.0)),
+        "server_build_started_at": server_build_started,
+        "server_request_build_ms": 0.0,
+        "scheduler_queue_entered_at": None,
+        "scheduler_wait_ms": 0.0,
+        "prefix_scheduler_started_at": None,
+        "prefix_prefill_ms": 0.0,
+        "suffix_batch_queue_wait_ms": [],
+        "suffix_batch_scheduler_started_at": None,
+        "candidate_prefix_recompute_tokens": {},
+    }
+
+    prefix_data.return_logprob = True
+    prefix_data.action_scoring_plan["server_request_build_ms"] = (
+        time.perf_counter() - server_build_started
+    ) * 1000.0
+    prefix_data.action_scoring_plan["server_build_finished_at"] = time.perf_counter()
+    return prefix_data
+
+
+def build_action_scoring_candidate_data(
+    prefix_data: SGLangARRequestData,
+    candidate_id: str,
+) -> SGLangARRequestData:
+    """Materialize one candidate Req from an already-built shared prefix.
+
+    The prefix request is intentionally admitted before this function is
+    called. This keeps large flat candidate catalogs from blocking the shared
+    prefix request on CPU-side construction.
+    """
+    from sglang.srt.managers.schedule_batch import MultimodalInputs, Req
+
+    plan = prefix_data.action_scoring_plan
+    if not isinstance(plan, dict):
+        raise RuntimeError("action scoring prefix has no execution plan")
+    suffix_map = plan.get("candidate_suffix_ids")
+    if not isinstance(suffix_map, dict) or candidate_id not in suffix_map:
+        raise KeyError(f"unknown action scoring candidate: {candidate_id}")
+    suffix = tuple(int(value) for value in suffix_map[candidate_id])
+    prefix_token_count = int(plan["prefix_token_count"])
+    prefix_req = prefix_data.req
+    origin_ids = list(prefix_req.origin_input_ids)
+    if len(origin_ids) < prefix_token_count:
+        raise RuntimeError("action scoring prefix request is shorter than its token count")
+    prefix_ids = tuple(int(value) for value in origin_ids[:prefix_token_count])
+    full_ids = torch.tensor(prefix_ids + suffix, dtype=torch.long)
+    sampling_params = copy.copy(prefix_req.sampling_params)
+    candidate_req = Req(
+        rid=f"{prefix_req.rid}::candidate::{candidate_id}",
+        origin_input_text="",
+        origin_input_ids=full_ids.tolist(),
+        sampling_params=sampling_params,
+        return_logprob=True,
+        vocab_size=int(plan["candidate_vocab_size"]),
+    )
+    candidate_req.tokenizer = plan["candidate_tokenizer"]
+    candidate_req.extra_key = plan["cache_key"]
+    candidate_req.return_logprob = True
+    candidate_req.logprob_start_len = len(prefix_ids)
+    candidate_req.omni_model_inputs = (
+        dict(prefix_req.omni_model_inputs)
+        if prefix_req.omni_model_inputs is not None
+        else None
+    )
+    candidate_req._omni_consumed = None
+    candidate_req._action_scoring_role = "candidate"
+    prefix_positions = plan.get("candidate_prefix_positions")
+    if prefix_positions is not None:
+        candidate_req.multimodal_inputs = MultimodalInputs(mm_items=[])
+        candidate_req.multimodal_inputs.mrope_positions = _extend_action_mrope_positions(
+            prefix_positions, len(suffix)
+        )
+        candidate_req.multimodal_inputs.mrope_position_delta = getattr(
+            prefix_req.multimodal_inputs, "mrope_position_delta", None
+        )
+    else:
+        candidate_req.multimodal_inputs = None
+    candidate_data = SGLangARRequestData(
+        input_ids=full_ids,
+        model_inputs=dict(prefix_data.model_inputs),
+        max_new_tokens=0,
+        temperature=0.0,
+        output_ids=candidate_req.output_ids,
+        req=candidate_req,
+        stage_payload=prefix_data.stage_payload,
+        action_scoring_role="candidate",
+        action_scoring_parent=prefix_data,
+        action_scoring_candidate_id=candidate_id,
+    )
+    candidate_data.return_logprob = True
+    return candidate_data
 
 
 def build_sglang_talker_request(
@@ -955,6 +1322,15 @@ def make_thinker_scheduler_adapters(
 
     def result_adapter(data: SGLangARRequestData) -> StagePayload:
         payload = data.stage_payload
+        if is_action_scoring_request(payload):
+            result = data.extra_model_outputs.get("action_scoring_result")
+            if not isinstance(result, dict):
+                raise RuntimeError("action scoring result is missing")
+            return StagePayload(
+                request_id=payload.request_id,
+                request=payload.request,
+                data=result,
+            )
         state = Qwen3OmniPipelineState.from_dict(payload.data)
         apply_thinker_result(state, stage_name=stage_name, result=data)
         return StagePayload(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,9 @@ from PIL import Image, UnidentifiedImageError
 
 from .base import MediaIO, _is_url
 from .cache_key import compute_media_cache_key
+
+
+PREPARED_IMAGE_WIRE_TYPE = "sglang_omni.prepared_image.rgb.v1"
 
 
 def load_image_path(path: str | Path) -> Image.Image:
@@ -55,6 +59,60 @@ class ImageMediaIO(MediaIO[Image.Image]):
             return Image.open(filepath).convert(self.image_mode)
         except UnidentifiedImageError as e:
             raise ValueError(f"Failed to identify image: {e}") from e
+
+
+def is_prepared_image_wire(value: Any) -> bool:
+    """Return whether ``value`` is a valid msgpack-safe prepared RGB image."""
+    if not isinstance(value, dict) or value.get("_type") != PREPARED_IMAGE_WIRE_TYPE:
+        return False
+    width = value.get("width")
+    height = value.get("height")
+    pixels = value.get("pixel_bytes")
+    source_sha256 = value.get("source_sha256")
+    pixel_sha256 = value.get("pixel_sha256")
+    if (
+        not isinstance(width, int)
+        or isinstance(width, bool)
+        or width <= 0
+        or not isinstance(height, int)
+        or isinstance(height, bool)
+        or height <= 0
+        or not isinstance(pixels, bytes)
+        or len(pixels) != width * height * 3
+    ):
+        return False
+    return all(
+        isinstance(digest, str)
+        and len(digest) == 64
+        and all(char in "0123456789abcdef" for char in digest)
+        for digest in (source_sha256, pixel_sha256)
+    )
+
+
+def prepare_image_bytes_for_wire(data: bytes) -> dict[str, Any]:
+    """Decode compressed image bytes before inference into a wire envelope."""
+    image = ImageMediaIO(image_mode="RGB").load_bytes(data)
+    image.load()
+    pixels = image.tobytes()
+    return {
+        "_type": PREPARED_IMAGE_WIRE_TYPE,
+        "width": int(image.width),
+        "height": int(image.height),
+        "pixel_bytes": pixels,
+        "source_sha256": hashlib.sha256(data).hexdigest(),
+        "pixel_sha256": hashlib.sha256(pixels).hexdigest(),
+    }
+
+
+def load_prepared_image_wire(value: dict[str, Any]) -> Image.Image:
+    """Reconstruct a PIL image from a validated prepared-image envelope."""
+    if not is_prepared_image_wire(value):
+        raise ValueError("invalid prepared image wire payload")
+    return Image.frombytes(
+        "RGB",
+        (int(value["width"]), int(value["height"])),
+        value["pixel_bytes"],
+    )
 
 
 def compute_image_cache_key(images: Any) -> str | None:
@@ -100,6 +158,9 @@ async def ensure_image_list_async(
 
     # First pass: identify URL items and create coroutines
     for idx, item in enumerate(items):
+        if is_prepared_image_wire(item):
+            normalized.append(load_prepared_image_wire(item))
+            continue
         if isinstance(item, (str, Path)):
             if _is_url(item):
                 # Create coroutine for async URL fetching

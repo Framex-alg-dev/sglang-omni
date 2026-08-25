@@ -59,6 +59,8 @@ Additional model guides, including experimental and research-oriented paths, are
 - [MOSS-Transcribe-Diarize cookbook](https://sgl-project.github.io/sglang-omni/cookbook/moss_transcribe_diarize.html)
 - [Omni router](https://sgl-project.github.io/sglang-omni/basic_usage/omni_router.html)
 - [Developer reference](https://sgl-project.github.io/sglang-omni/developer_reference/main.html)
+- [Session Realtime 客户端接入：文本回复与数字人动作](./docs/developer_reference/action_inference/realtime_reply_action_client_guide.md)
+- [Realtime Session 调试页面：Prompt 与端到端耗时](./docs/developer_reference/action_inference/realtime_session_debug.md)
 
 ## Community & Support
 

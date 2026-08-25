@@ -50,7 +50,7 @@ def test_default_speech_topology_stays_disaggregated() -> None:
     code2wav = _stage(config, "code2wav")
     code2wav_args = resolve_stage_factory_args(code2wav, config)
 
-    assert len(config.stages) == 8
+    assert len(config.stages) == 9
     assert _stage(config, "thinker").gpu == 0
     assert _stage(config, "talker_ar").gpu == 1
     assert code2wav.gpu == 1
@@ -68,6 +68,7 @@ def test_default_speech_topology_stays_disaggregated() -> None:
         "audio_encoder": "audio_encoder",
         "mm_aggregate": "mm_aggregate",
         "thinker": "thinker",
+        "action_score": "thinker",
         "decode": "decode",
         "talker_ar": "talker_ar",
         "code2wav": "code2wav",

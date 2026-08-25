@@ -16,6 +16,9 @@ from sglang_omni.preprocessing.resource_connector import (
     resolve_allowed_local_media_path,
 )
 from sglang_omni.serve.protocol import DEFAULT_TTS_BATCH_MAX_ITEMS
+from sglang_omni.utils.blackwell_kernel_configs import (
+    install_blackwell_kernel_configs_if_available,
+)
 from sglang_omni.utils.gpu_compat import should_disable_custom_all_reduce_for_gpus
 
 logger = logging.getLogger(__name__)
@@ -1353,6 +1356,9 @@ def serve(
         merged_config,
         talker_partial_start=talker_partial_start,
     )
+
+    if type(merged_config).__name__.startswith("Qwen3Omni"):
+        install_blackwell_kernel_configs_if_available()
 
     if _should_print_merged_config(colocate=colocate, log_level=log_level):
         _print_merged_config(merged_config)

@@ -69,6 +69,13 @@ Supported Models
 
 .. toctree::
    :maxdepth: 1
+   :caption: Operations
+
+   operations/environment.md
+
+
+.. toctree::
+   :maxdepth: 1
    :caption: Cookbook
 
    cookbook/higgs_tts.md
@@ -118,3 +125,16 @@ Supported Models
    developer_reference/reference_encode_service.md
    developer_reference/profiler.md
    developer_reference/rl_admin_control.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Action Inference
+
+   developer_reference/action_inference/action_inference_scheme_summary.md
+   developer_reference/action_inference/multimodal_session_realtime.md
+   developer_reference/action_inference/action_suffix_scoring.md
+   developer_reference/action_inference/action_token_mapping.md
+   developer_reference/action_inference/action_hierarchical_optimization.md
+   developer_reference/action_inference/action_batch_benchmark.md
+   developer_reference/action_inference/action_latency_history.md
+   developer_reference/action_inference/action_inference_change_history.md

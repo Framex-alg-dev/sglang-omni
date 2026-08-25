@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Realtime Session 调试</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #121a2d;
+      --panel-2: #182238;
+      --line: #2a3650;
+      --text: #e8edf8;
+      --muted: #98a5bd;
+      --accent: #6ee7c7;
+      --blue: #76a9ff;
+      --warn: #ffc66d;
+      --bad: #ff7b8b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top right, #172341 0, var(--bg) 34rem);
+      color: var(--text);
+      font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1500px, calc(100% - 32px)); margin: 28px auto 80px; }
+    h1 { margin: 0 0 4px; font-size: 26px; }
+    h2, h3, h4 { margin: 0; }
+    .muted { color: var(--muted); }
+    .query {
+      display: grid;
+      grid-template-columns: minmax(220px, 2fr) minmax(180px, 1fr) auto;
+      gap: 10px;
+      margin: 22px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(18, 26, 45, .92);
+    }
+    input, button {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #0e1628;
+      color: var(--text);
+      padding: 9px 12px;
+      font: inherit;
+    }
+    button { cursor: pointer; background: #1d6d61; border-color: #2b897b; font-weight: 650; }
+    button:hover { filter: brightness(1.12); }
+    button.copy { min-height: 28px; padding: 3px 9px; font-size: 12px; background: #26334d; }
+    .summary { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .metric, .turn {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(18, 26, 45, .94);
+    }
+    .metric { padding: 13px 15px; }
+    .metric strong { display: block; margin-top: 4px; font-size: 17px; color: var(--accent); overflow-wrap: anywhere; }
+    .turn { margin: 13px 0; overflow: hidden; }
+    .turn-head { padding: 16px 18px; display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; border-bottom: 1px solid var(--line); }
+    .turn-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+    .badge { padding: 3px 8px; border-radius: 999px; background: #24314a; color: #cbd6e9; white-space: nowrap; }
+    .badge.good { background: #174b43; color: #aaf4dc; }
+    .badge.warn { background: #57431c; color: #ffe0a3; }
+    .turn-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 14px; }
+    .column { min-width: 0; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); padding: 14px; }
+    .section-title { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+    .reply-text { white-space: pre-wrap; padding: 10px; border-radius: 8px; background: #0e1628; min-height: 42px; overflow-wrap: anywhere; }
+    .action-result { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+    .action-result div { background: #0e1628; border-radius: 8px; padding: 9px; overflow-wrap: anywhere; }
+    details { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 9px; }
+    summary { cursor: pointer; color: var(--blue); font-weight: 650; }
+    .prompt-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 10px 0 6px; }
+    pre {
+      margin: 0;
+      max-height: 520px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #090f1d;
+      border: 1px solid #25314a;
+      border-radius: 8px;
+      padding: 11px;
+      color: #d7dfef;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .error { border: 1px solid #753b48; background: #321a24; color: #ffc3cb; border-radius: 10px; padding: 12px; margin: 12px 0; white-space: pre-wrap; }
+    .hidden { display: none !important; }
+    .loading { padding: 22px; text-align: center; color: var(--muted); }
+    @media (max-width: 900px) {
+      .query, .turn-body { grid-template-columns: 1fr; }
+      .summary { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .turn-head { flex-direction: column; }
+      .badges { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Realtime Session 调试</h1>
+  <div class="muted">按 Session ID 聚合回复、动作 Prompt 与端到端耗时。页面只读取结构化日志。</div>
+  <form id="query" class="query">
+    <input id="session-id" autocomplete="off" placeholder="Session ID，例如 sess_9958c06b" required>
+    <input id="admin-token" type="password" autocomplete="off" placeholder="Admin Bearer Token（未配置可留空）">
+    <button type="submit">查询 Session</button>
+  </form>
+  <div id="error" class="error hidden"></div>
+  <div id="loading" class="loading hidden">正在扫描并聚合日志…</div>
+  <section id="result" class="hidden">
+    <div id="summary" class="summary"></div>
+    <div id="turns"></div>
+  </section>
+</main>
+<script>
+  const $ = (selector) => document.querySelector(selector);
+  const form = $('#query');
+  const sessionInput = $('#session-id');
+  const tokenInput = $('#admin-token');
+  const result = $('#result');
+  const summary = $('#summary');
+  const turns = $('#turns');
+  const errorBox = $('#error');
+  const loading = $('#loading');
+
+  function node(tag, className, text) {
+    const item = document.createElement(tag);
+    if (className) item.className = className;
+    if (text !== undefined && text !== null) item.textContent = String(text);
+    return item;
+  }
+
+  function value(value, fallback = '—') {
+    return value === undefined || value === null || value === '' ? fallback : value;
+  }
+
+  function ms(valueMs) {
+    return valueMs === undefined || valueMs === null ? '—' : `${Number(valueMs).toFixed(1)} ms`;
+  }
+
+  function addMetric(label, metricValue) {
+    const card = node('div', 'metric');
+    card.append(node('span', 'muted', label), node('strong', '', value(metricValue)));
+    summary.append(card);
+  }
+
+  function copyable(title, content) {
+    const wrap = node('div');
+    const head = node('div', 'prompt-head');
+    head.append(node('strong', '', title));
+    const copy = node('button', 'copy', '复制');
+    copy.type = 'button';
+    copy.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(content || '');
+      copy.textContent = '已复制';
+      setTimeout(() => copy.textContent = '复制', 1000);
+    });
+    head.append(copy);
+    const pre = node('pre', '', content || '（无）');
+    wrap.append(head, pre);
+    return wrap;
+  }
+
+  function promptDetails(title, prompt, kind) {
+    const details = node('details');
+    const available = prompt && prompt.available;
+    details.append(node('summary', '', `${title}${available ? '' : '（未执行）'}`));
+    if (!prompt) {
+      details.append(node('div', 'muted', '日志中没有记录该 Prompt。'));
+      return details;
+    }
+    if (!available) {
+      const reason = prompt.reason === 'provided_reply'
+        ? '客户端直接提供回复，本轮没有发起回复模型推理。下面是会话配置的 instructions，仅供核对，本轮未应用。'
+        : '日志中没有可用的回复 Prompt。';
+      details.append(node('p', 'muted', reason));
+      if (prompt.configured_system_prompt) {
+        details.append(copyable('配置的回复 instructions', prompt.configured_system_prompt));
+      }
+      return details;
+    }
+    if (kind === 'action' && prompt.rendered_prompt) {
+      details.append(copyable(`模型最终渲染 Prompt${prompt.prompt_tokens ? ` · ${prompt.prompt_tokens} tokens` : ''}`, prompt.rendered_prompt));
+    }
+    if (prompt.system_prompt) details.append(copyable('System Prompt', prompt.system_prompt));
+    if (prompt.dynamic_prompt) details.append(copyable('动态 Prompt', prompt.dynamic_prompt));
+    if (prompt.messages && prompt.messages.length) {
+      details.append(copyable('Messages', JSON.stringify(prompt.messages, null, 2)));
+    }
+    if (kind === 'action' && prompt.avatar_state) {
+      details.append(copyable('本轮数字人状态', JSON.stringify(prompt.avatar_state, null, 2)));
+    }
+    if (kind === 'action' && prompt.scores && prompt.scores.length) {
+      const ranked = [...prompt.scores]
+        .sort((a, b) => Number(a.ppl ?? Infinity) - Number(b.ppl ?? Infinity))
+        .slice(0, 12)
+        .map((item, index) => ({rank: index + 1, candidate_id: item.candidate_id, ppl: item.ppl, mean_logprob: item.mean_logprob}));
+      details.append(copyable('PPL Top 12', JSON.stringify(ranked, null, 2)));
+    }
+    return details;
+  }
+
+  function badge(text, style = '') {
+    return node('span', `badge ${style}`.trim(), text);
+  }
+
+  function renderTurn(turn, index) {
+    const article = node('article', 'turn');
+    const head = node('div', 'turn-head');
+    const left = node('div');
+    const title = node('div', 'turn-title');
+    title.append(node('h3', '', `#${index + 1} ${turn.turn_id}`));
+    title.append(badge(value(turn.origin)), badge(value(turn.trigger)));
+    left.append(title, node('div', 'muted', value(turn.committed_at || turn.started_at)));
+    const timings = node('div', 'badges');
+    timings.append(
+      badge(`回复首包 ${ms(turn.reply.first_delta_after_commit_ms)}`, turn.reply.first_delta_after_commit_ms === null ? 'warn' : 'good'),
+      badge(`最终动作 ${ms(turn.action.ready_after_commit_ms)}`, turn.action.ready_after_commit_ms === null ? 'warn' : 'good'),
+      badge(`Category ${ms(turn.action.category_compute_ms)}`),
+      badge(`Child ${ms(turn.action.child_compute_ms)}`),
+      badge(value(turn.status), turn.status === 'completed' ? 'good' : 'warn')
+    );
+    head.append(left, timings);
+
+    const body = node('div', 'turn-body');
+    const reply = node('section', 'column');
+    const replyTitle = node('div', 'section-title');
+    replyTitle.append(node('h4', '', '回复'), badge(value(turn.reply.source)));
+    reply.append(replyTitle);
+    const replyText = turn.reply.text === '' ? '（空文本）' : value(turn.reply.text, '（未记录）');
+    reply.append(node('div', 'reply-text', replyText));
+    reply.append(promptDetails('回复 Prompt', turn.reply.prompt, 'reply'));
+
+    const action = node('section', 'column');
+    const actionTitle = node('div', 'section-title');
+    actionTitle.append(node('h4', '', '动作'), badge(value(turn.action.support_status), turn.action.support_status === 'supported' ? 'good' : 'warn'));
+    action.append(actionTitle);
+    const actionResult = node('div', 'action-result');
+    actionResult.append(
+      node('div', '', `类别\n${value(turn.action.category_id)} · ${value(turn.action.category_label)}`),
+      node('div', '', `动作\n${value(turn.action.candidate_id)} / ${value(turn.action.action_id)} · ${value(turn.action.source_label)}`)
+    );
+    action.append(actionResult);
+    action.append(promptDetails('Category Prompt', turn.action.category_prompt, 'action'));
+    action.append(promptDetails('Child Prompt', turn.action.child_prompt, 'action'));
+    if (turn.errors && turn.errors.length) {
+      action.append(copyable('错误与警告', JSON.stringify(turn.errors, null, 2)));
+    }
+    body.append(reply, action);
+    article.append(head, body);
+    return article;
+  }
+
+  async function loadSession(sessionId) {
+    errorBox.classList.add('hidden');
+    result.classList.add('hidden');
+    loading.classList.remove('hidden');
+    const headers = {};
+    if (tokenInput.value.trim()) headers.Authorization = `Bearer ${tokenInput.value.trim()}`;
+    try {
+      const response = await fetch(`/debug/realtime/api/session/${encodeURIComponent(sessionId)}`, {headers});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+      history.replaceState(null, '', `/debug/realtime?session_id=${encodeURIComponent(sessionId)}`);
+      summary.replaceChildren();
+      turns.replaceChildren();
+      addMetric('Session ID', data.session.session_id);
+      addMetric('Turn 数量', data.turns.length);
+      addMetric('Locale', data.session.locale);
+      addMetric('Modalities', (data.session.modalities || []).join(', '));
+      addMetric('动作候选', `${value(data.session.action_category_count, 0)} 类 / ${value(data.session.action_candidate_count, 0)} 个`);
+      data.turns.forEach((turn, index) => turns.append(renderTurn(turn, index)));
+      result.classList.remove('hidden');
+    } catch (error) {
+      errorBox.textContent = error.message || String(error);
+      errorBox.classList.remove('hidden');
+    } finally {
+      loading.classList.add('hidden');
+    }
+  }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const sessionId = sessionInput.value.trim();
+    if (sessionId) loadSession(sessionId);
+  });
+
+  const initialSession = new URLSearchParams(location.search).get('session_id');
+  if (initialSession) {
+    sessionInput.value = initialSession;
+    loadSession(initialSession);
+  }
+</script>
+</body>
+</html>
