@@ -30,6 +30,6 @@
     "sglang_omni/cli/serve.py",
     "tests/unit_test/qwen3_omni/test_multimodal_session.py"
   ],
-  "notes": "任务规划文档与对外评审材料统一使用中文。现有设计稿是需求来源，不替代 Trellis 的 prd/design/implement 产物。实施前必须先完成并归档 08-25-realtime-fake-model；该前置任务不包含 TTS 迁移。",
+  "notes": "任务规划文档与对外评审材料统一使用中文。现有设计稿是需求来源，不替代 Trellis 的 prd/design/implement 产物。08-25-realtime-fake-model 已完成并归档。TTS provider 参考实现位于 ref/tts_migration_reference；迁移后连接必须归外部 MultimodalSession 所有，首次 audio Turn 延迟建立，同 voice 跨 Turn 复用，取消或异常后关闭。",
   "meta": {}
 }

@@ -4,13 +4,16 @@
 
 在唯一的 `/v1/session/realtime` 协议版本 1 中增加 `audio` 输出能力。客户端在 `session.start.outputs` 中声明 `audio` 后，本服务继续向客户端流式返回模型正文，同时把正文 Delta 流式送入远程 TTS，并将 TTS PCM 音频通过同一条外部 WebSocket 返回。
 
-TTS 是否启用由 Session 输出合同决定，不使用 `--realtime-tts-enabled` 或同义环境变量。服务部署配置只负责 TTS provider 地址、voice、超时和队列限制。
+TTS 是否启用只由客户端 `session.start.outputs` 决定，不读取其他请求字段，不使用
+`--realtime-tts-enabled`、环境变量或服务端默认值改变启用状态。服务部署配置只负责
+TTS provider 地址、voice、超时和队列限制，不能主动开启 TTS。
 
 ## 已确认决策
 
 - 旧 `/v1/realtime`、旧 VAD 自动提交和旧事件不兼容、不保留。
 - 支持组合：`["text"]`、`["text","audio"]`、`["action"]`、`["text","action"]`、`["text","audio","action"]`。
-- `audio` 依赖 text；拒绝 `["audio"]` 和 `["audio","action"]`。
+- 请求 audio 时必须同时请求 text；允许 text+audio，拒绝 `["audio"]` 和
+  `["audio","action"]`。数据方向是模型 text delta -> TTS -> audio delta。
 - 文本继续使用 `response.text.*`；新增 `response.audio.delta/done`，不使用 `response.audio_transcript.*`。
 - `turn.cancel` 真正取消模型、TTS 和 action 工作，终态为一次 `turn.cancelled`。
 - 设计与实现以已合并的 Session Realtime/action 分支为基线。
@@ -19,8 +22,12 @@ TTS 是否启用由 Session 输出合同决定，不使用 `--realtime-tts-enabl
 
 ### R1：可扩展输出能力模型
 
-- 在 Session 协议的单一输出解析器中加入 `audio`，生成 `text_enabled`、`audio_enabled`、`action_enabled`。
-- 校验非空、去重、已知类型和 `audio -> text` 依赖。
+- `session.start.outputs` 是是否启用 text、audio、action 的唯一事实来源；禁止环境变量、
+  CLI 参数、provider 配置、voice 是否存在或历史 Session 状态隐式开启 TTS。
+- 在 Session 协议的单一 outputs 解析器中加入 `audio`，生成仅供内部使用的
+  `text_enabled`、`audio_enabled`、`action_enabled`；这些字段只能由当前
+  `session.start.outputs` 推导，不能成为第二套控制入口。
+- 校验非空、去重和已知类型；当 outputs 包含 `audio` 时必须同时包含 `text`。
 - `session.started.outputs` 回显规范化结果。
 - 所有业务分支读取能力对象，不得散落硬编码组合。
 - 未包含 audio 时不得创建 TTS Turn、连接 provider 或改变现有 text/action 事件。
@@ -56,7 +63,13 @@ turn.result
 
 ### R4：TTS 流式并发与背压
 
-- 每个外部 Session 可复用一个内部 TTS WebSocket，但同一连接只允许一个 reader 和一个活动 TTS Turn。
+- 每个外部 Session 创建且只创建一个 TTS synthesizer/连接管理器；连接管理器归
+  `MultimodalSession` 所有，禁止挂在 app 全局、模型 client 或单个 Turn 上。
+- `session.start` 含 audio 时只校验配置并创建管理器，不立即联网；第一个 audio Turn
+  延迟建立内部 TTS WebSocket，后续 Turn 在 voice 相同且连接健康时复用该连接。
+- 同一连接只允许一个 reader 和一个活动 TTS Turn；现有 Session 单活动 Turn 约束是
+  第一层保护，adapter 内部仍须用锁串行化 borrow/synthesize，防止未来调用方破坏合同。
+- voice 改变时先关闭旧连接再创建新连接；连接进入 Broken 后不得复用。
 - 模型 Delta 进入有界队列；发送 TTS 与接收音频并发运行，禁止先缓存完整文本。
 - 首包音频允许在模型 text done 前外发。
 - 任何 reader、sender、模型或外部发送失败都由同一个 Turn owner 收敛，不能产生孤儿任务。
@@ -68,14 +81,24 @@ turn.result
 - provisional promoted 后，复用同一 response/TTS Turn 并按序释放缓冲音频；标记 `replayed_from_provisional=true` 的文本不得重复送入 TTS。
 - provisional discarded 时取消对应 TTS Turn并清空缓冲；不允许音频泄漏到正式 response。
 - unsupported action 使用现有 `client_prerecorded_audio` 业务结果时，不调用在线 TTS，也不发送在线 audio delta。
+- provisional 阶段收到业务端 `turn.cancel` 时不得等待 action 判定完成，必须立即进入
+ 统一取消流程，停止 provisional 模型/TTS/action 任务并丢弃所有未外发音频。
 
 ### R6：真正取消与关闭
 
-- `turn.cancel` 使当前 Turn token 失效，取消模型、action、TTS sender/reader 和缓冲任务。
-- 尝试向内部 TTS 发送 cancel；连接状态不可信时关闭连接。
-- 清空未外发 provisional 音频，发送一次 `turn.cancelled`。
+- 业务端通过外部 `/v1/session/realtime` WebSocket 发送 `{"type":"turn.cancel",
+  "turn_id":"..."}` 后，本服务必须立即处理，沿用新合并分支已有的真正取消 owner，
+  不得忽略、延迟到生成结束或只做旧回复标记。
+- `turn.cancel` 使当前 Turn token 失效，并强制取消模型、action、TTS sender/reader、
+  文本队列、音频接收和 provisional 缓冲任务。
+- 尝试向内部 TTS 发送 `{"type":"response.cancel"}`；取消后连接只有在 provider 明确
+  回到 Ready 且无迟到事件时才允许复用，首版为降低串流串包风险，活动 TTS Turn
+  取消后一律关闭该连接，并在下一个 audio Turn 延迟重建。
+- 清空未外发 provisional 音频；待模型/action/TTS 任务收敛后，向业务端只发送一次
+  `turn.cancelled`。
 - 取消后不得发送 response/audio done 或 turn result；迟到上游事件必须丢弃。
-- `session.close`、WebSocket 断开和服务关闭执行幂等 teardown。
+- `session.close`、外部 WebSocket 断开和服务关闭由 `MultimodalSession` 调用连接管理器
+  `close()`，执行幂等 teardown；正常 Turn 完成不得关闭健康连接。
 
 ### R7：错误合同
 
@@ -114,4 +137,6 @@ turn.result
 - [ ] text+audio+action 的 provisional 音频只在 promoted 后外发，discarded 不泄漏。
 - [ ] `turn.cancel` 真正停止全部分支并只产生 `turn.cancelled`。
 - [ ] TTS 协议错误、超时和失败没有任务/连接泄漏，也不静默降级。
+- [ ] 同一 Session 的两个顺序 audio Turn 在 voice 不变时只建立一次 provider
+  WebSocket；不同 Session 不共享连接，取消/错误后下一 Turn 建立新连接。
 - [ ] 无 GPU 本地集成、相关 pytest、格式和静态检查通过。

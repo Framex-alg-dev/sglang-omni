@@ -4,3 +4,5 @@
 {"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "约束 session/turn/response 关联日志及文本、PCM、凭证脱敏"}
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "约束异步并发、背压、资源所有权、测试和生产路径兼容"}
 {"file": ".trellis/spec/backend/realtime-development-model.md", "reason": "复用无 GPU fake model 与进程外 smoke 的前置测试合同"}
+{"file": "ref/tts_migration_reference/README.md", "reason": "迁移来源说明、Session 级 synthesizer、连接复用和关闭规则"}
+{"file": ".trellis/tasks/08-24-realtime-embedded-tts/research/tts_reference_analysis.md", "reason": "ref 代码的迁移结论、Session 级连接所有权、兼容差异和验证矩阵"}

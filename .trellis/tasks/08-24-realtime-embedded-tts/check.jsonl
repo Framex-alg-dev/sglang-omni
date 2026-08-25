@@ -2,3 +2,5 @@
 {"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "复核关联字段、日志量和敏感数据脱敏"}
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核异步生命周期、背压、测试覆盖和 disabled 路径"}
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核 outputs、事件、provider 和下游消费端的跨层合同"}
+{"file": "ref/tts_migration_reference/README.md", "reason": "复核移植后是否保留 Session 级连接所有权、复用与关闭规则"}
+{"file": ".trellis/tasks/08-24-realtime-embedded-tts/research/tts_reference_analysis.md", "reason": "复核单 reader、串行 Turn、连接复用、兼容修正和资源收敛"}

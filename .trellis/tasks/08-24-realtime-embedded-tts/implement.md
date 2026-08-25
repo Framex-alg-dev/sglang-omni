@@ -2,13 +2,15 @@
 
 ## 前置门：新接口 fake model
 
-- [ ] `08-25-realtime-fake-model` 已完成并归档。
-- [ ] 无 GPU 环境可通过 `/v1/session/realtime` 验证 text/action/text+action、重复 Turn 和真正取消。
-- [ ] 旧 `/v1/realtime` 开发代码和 smoke 已删除。
+- [x] `08-25-realtime-fake-model` 已完成并归档。
+- [x] 无 GPU 环境可通过 `/v1/session/realtime` 验证 text/action/text+action、重复 Turn 和真正取消。
+- [x] 旧 `/v1/realtime` 开发代码和 smoke 已删除。
 - [ ] 开始本任务前创建精确本地 checkpoint，不 push。
 
 ## 阶段 A：锁定 Session 输出合同
 
+- [ ] 把 `session.start.outputs` 设为 text/audio/action 能力的唯一控制源；删除或拒绝任何
+  环境变量、CLI、provider readiness 或默认值对 TTS 启用状态的影响。
 - [ ] 在现有协议解析器中加入 audio 和集中 `SessionOutputCapabilities`。
 - [ ] 实现五种允许组合与两种拒绝组合的表驱动测试。
 - [ ] `session.started.outputs` 回显规范化值。
@@ -23,19 +25,26 @@
 - [ ] 删除/禁止 TTS enabled 参数；audio Session 才校验 provider readiness。
 - [ ] 实现可编程 fake TTS WebSocket server。
 - [ ] 覆盖 ready、delta、done、cancel、错误和连接复用协议。
+- [ ] 锁定 provider 协议：建连等待 `session.created`，输入使用
+  `input_text_buffer.append/commit`，取消使用 `response.cancel`，完整 Turn 以
+  `response.done` 为准；`response.audio.done` 仅作提示。
 - [ ] 日志脱敏测试。
 
 验证：adapter 单测，不启动模型、GPU 或外网。
 
 ## 阶段 C：EmbeddedTTSTurn
 
-- [ ] 实现单 reader 的内部 WebSocket 连接状态机。
+- [ ] 实现 Session-owned、首次 audio Turn 延迟建连的单 reader WebSocket 状态机。
+- [ ] 实现同 Session/同 voice 跨 Turn 复用；voice 变化重建；不同 Session 绝不共享。
+- [ ] 使用 Python 3.10 兼容的 timeout/cancel 机制，不直接复制 `asyncio.timeout`。
 - [ ] 实现有界文本 queue、并发 sender/reader 和一次 commit。
 - [ ] 严格解码音频事件、Base64 与 done 顺序。
-- [ ] 实现 cancel、Broken 连接关闭和幂等 teardown。
+- [ ] 实现 cancel 后强制丢弃连接、Broken 连接关闭、Session close/断线幂等 teardown；
+  正常 Turn 完成保留 Ready 连接。
 - [ ] 添加 connect/ready/send/first-audio/turn timeout。
 
-验证：正常、慢服务、背压、非法协议、提前关闭、无 done、重复 done、取消。
+验证：正常、慢服务、背压、非法协议、提前关闭、无 done、重复 done、取消、同 Session
+两 Turn 仅一次 connect、跨 Session 两次 connect、voice 改变/取消后重连。
 
 ## 阶段 D：普通 text+audio 编排
 
@@ -60,7 +69,10 @@
 
 ## 阶段 F：真正取消与错误收敛
 
-- [ ] `turn.cancel` 竞争安全地取消 model/action/TTS 全部任务。
+- [ ] 复用新合并分支的 `turn.cancel` handler/terminal owner，把 TTS sender、reader、
+  queue 等待者和 provisional buffer 纳入同一取消集合。
+- [ ] 收到业务端 `turn.cancel` 后立即失效 token，向 provider 尽力发送内部
+  `response.cancel`，并关闭连接；不得等待模型/TTS 正常结束。
 - [ ] 只发送一次 `turn.cancelled`，取消后无其他终态。
 - [ ] session.close、断线、服务关闭幂等清理。
 - [ ] 实现 fail_turn 错误矩阵及 partial/failed 输出状态。
