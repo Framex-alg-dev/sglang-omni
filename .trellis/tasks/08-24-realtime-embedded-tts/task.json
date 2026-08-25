@@ -3,7 +3,7 @@
   "name": "realtime-embedded-tts",
   "title": "Realtime 多模态回复内嵌流式 TTS",
   "description": "为 /v1/session/realtime 增加 outputs=audio 能力，将模型文本流式送入远程 TTS并返回可关联的文本与 PCM 音频；不请求 audio 时保持现有 text/action 行为。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": "feature",
   "scope": "sglang_omni/serve/realtime, serving config, tests, docs",
   "package": "backend",

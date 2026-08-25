@@ -48,6 +48,7 @@ from sglang_omni.serve.openai_api import create_app
 from sglang_omni.serve.protocol import DEFAULT_TTS_BATCH_MAX_ITEMS
 from sglang_omni.serve.realtime.dev_model import DevRealtimeModelConfig
 from sglang_omni.serve.realtime.dev_server import serve_dev_realtime_model
+from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
 from sglang_omni.utils.gpu_compat import apply_gpu_compat_env_defaults
 from sglang_omni.utils.gpu_memory import (
     GpuDeviceInfo,
@@ -101,6 +102,7 @@ def _resolve_action_warmup_audio_path() -> str | None:
         )
         return None
     return str(path)
+
 
 # ---------------------------------------------------------------------------
 # Built-in pipeline registry
@@ -389,11 +391,43 @@ async def _run_server(
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
+    realtime_tts_url: str | None = None,
+    realtime_tts_voice: str | None = None,
+    realtime_tts_connect_timeout_seconds: float = 10.0,
+    realtime_tts_ready_timeout_seconds: float = 10.0,
+    realtime_tts_send_timeout_seconds: float = 10.0,
+    realtime_tts_first_audio_timeout_seconds: float = 10.0,
+    realtime_tts_turn_timeout_seconds: float = 30.0,
+    realtime_tts_text_queue_max_chunks: int = 64,
+    realtime_tts_max_audio_chunk_bytes: int = 1024 * 1024,
+    realtime_tts_max_turn_audio_bytes: int = 32 * 1024 * 1024,
+    realtime_tts_provisional_audio_max_bytes: int = 8 * 1024 * 1024,
+    realtime_tts_provisional_audio_max_milliseconds: int = 10000,
 ) -> None:
     """Start the pipeline and run the OpenAI server.
 
     This is the async entry point.  For a blocking call use :func:`launch_server`.
     """
+    embedded_tts_config = (
+        EmbeddedTTSConfig(
+            url=realtime_tts_url,
+            voice=realtime_tts_voice,
+            connect_timeout_seconds=realtime_tts_connect_timeout_seconds,
+            ready_timeout_seconds=realtime_tts_ready_timeout_seconds,
+            send_timeout_seconds=realtime_tts_send_timeout_seconds,
+            first_audio_timeout_seconds=realtime_tts_first_audio_timeout_seconds,
+            turn_timeout_seconds=realtime_tts_turn_timeout_seconds,
+            text_queue_max_chunks=realtime_tts_text_queue_max_chunks,
+            max_audio_chunk_bytes=realtime_tts_max_audio_chunk_bytes,
+            max_turn_audio_bytes=realtime_tts_max_turn_audio_bytes,
+            provisional_audio_max_bytes=realtime_tts_provisional_audio_max_bytes,
+            provisional_audio_max_milliseconds=(
+                realtime_tts_provisional_audio_max_milliseconds
+            ),
+        )
+        if realtime_tts_url and realtime_tts_voice
+        else None
+    )
     dev_model_config = DevRealtimeModelConfig.from_env()
     if dev_model_config.enabled:
         port = _find_available_port(host, port)
@@ -405,6 +439,7 @@ async def _run_server(
             log_level=log_level,
             allowed_local_media_path=allowed_local_media_path,
             allowed_media_domains=allowed_media_domains,
+            embedded_tts_config=embedded_tts_config,
         )
         return
 
@@ -462,22 +497,18 @@ async def _run_server(
                 warmup_results[prompt_language] = await client.warmup_action_score(
                     model=model_name or pipeline_config.name,
                     category_count=int(
-                        os.environ.get(
-                            "SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60"
-                        )
+                        os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60")
                     ),
                     child_count=int(
-                        os.environ.get(
-                            "SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8"
-                        )
+                        os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8")
                     ),
                     selection_mode=os.environ.get(
                         "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
-                    ).strip().lower(),
+                    )
+                    .strip()
+                    .lower(),
                     timeout_s=float(
-                        os.environ.get(
-                            "SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30"
-                        )
+                        os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
                     ),
                     audio_path=_resolve_action_warmup_audio_path(),
                     language=prompt_language,
@@ -513,6 +544,7 @@ async def _run_server(
             architectures=[pipeline_config.architecture],
             global_action_catalog=global_action_catalog,
             global_action_prewarm=global_action_prewarm,
+            embedded_tts_config=embedded_tts_config,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
         profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)
@@ -583,6 +615,18 @@ def launch_server(
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
+    realtime_tts_url: str | None = None,
+    realtime_tts_voice: str | None = None,
+    realtime_tts_connect_timeout_seconds: float = 10.0,
+    realtime_tts_ready_timeout_seconds: float = 10.0,
+    realtime_tts_send_timeout_seconds: float = 10.0,
+    realtime_tts_first_audio_timeout_seconds: float = 10.0,
+    realtime_tts_turn_timeout_seconds: float = 30.0,
+    realtime_tts_text_queue_max_chunks: int = 64,
+    realtime_tts_max_audio_chunk_bytes: int = 1024 * 1024,
+    realtime_tts_max_turn_audio_bytes: int = 32 * 1024 * 1024,
+    realtime_tts_provisional_audio_max_bytes: int = 8 * 1024 * 1024,
+    realtime_tts_provisional_audio_max_milliseconds: int = 10000,
 ) -> None:
     """Blocking helper: start the pipeline and OpenAI-compatible server.
 
@@ -616,5 +660,23 @@ def launch_server(
             allowed_local_media_path=allowed_local_media_path,
             allowed_media_domains=allowed_media_domains,
             tts_batch_max_items=tts_batch_max_items,
+            realtime_tts_url=realtime_tts_url,
+            realtime_tts_voice=realtime_tts_voice,
+            realtime_tts_connect_timeout_seconds=(realtime_tts_connect_timeout_seconds),
+            realtime_tts_ready_timeout_seconds=realtime_tts_ready_timeout_seconds,
+            realtime_tts_send_timeout_seconds=realtime_tts_send_timeout_seconds,
+            realtime_tts_first_audio_timeout_seconds=(
+                realtime_tts_first_audio_timeout_seconds
+            ),
+            realtime_tts_turn_timeout_seconds=realtime_tts_turn_timeout_seconds,
+            realtime_tts_text_queue_max_chunks=realtime_tts_text_queue_max_chunks,
+            realtime_tts_max_audio_chunk_bytes=realtime_tts_max_audio_chunk_bytes,
+            realtime_tts_max_turn_audio_bytes=realtime_tts_max_turn_audio_bytes,
+            realtime_tts_provisional_audio_max_bytes=(
+                realtime_tts_provisional_audio_max_bytes
+            ),
+            realtime_tts_provisional_audio_max_milliseconds=(
+                realtime_tts_provisional_audio_max_milliseconds
+            ),
         )
     )

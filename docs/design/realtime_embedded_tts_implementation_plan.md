@@ -1,41 +1,44 @@
-# `/v1/session/realtime` 内嵌流式 TTS 修改计划
+# `/v1/session/realtime` 内嵌流式 TTS 实现说明与后续计划
 
-## 1. 背景与目标
+## 1. 背景、目标与边界
 
-SGLang-Omni 是数字人后端依赖的多模态推理服务。数字人后端通过 WebSocket 提交用户文本、音频和图片，本服务生成回复文本和动作。目标是在模型仍只生成文本的前提下，将回复正文实时送入远程 TTS，并在同一条 WebSocket 上同时返回文字和 PCM 音频。
+SGLang-Omni 是数字人后端依赖的多模态推理服务。数字人后端向本服务提交用户文本、音频和图片，
+本服务调用多模态模型生成回复文本并按需判断动作。本次改动在模型仍生成文本的前提下，把正文实时
+送入远程 TTS，再将 PCM 音频通过同一条业务 WebSocket 返回。
 
-本方案全面采用已合并分支提供的协议版本 1：
+当前只支持协议版本 1 的接口：
 
 ```text
-ws://<host>:<port>/v1/session/realtime
+WS /v1/session/realtime
 ```
 
-旧 `/v1/realtime`、旧 VAD 自动提交、`input_audio_buffer.*`、`response.audio_transcript.*` 和 `response.cancel` 均不再兼容。
+本文后续提到的所有业务事件均属于该接口。业务端取消使用 `turn.cancel`；本服务向 TTS provider
+取消使用内部 `response.cancel`，两者属于不同连接和协议层。
 
-## 2. 端到端目标链路
+本次不包含音频转码、重采样、WAV 封装、播放器逻辑，也不修改数字人后端动作执行和预录音频管理。
+
+## 2. 端到端链路
 
 ### 2.1 请求从谁发给谁
 
-1. 数字人后端与 SGLang-Omni 建立 `/v1/session/realtime` WebSocket。
-2. 数字人后端发送 `session.start`，通过 `outputs` 声明该 Session 需要 text、audio、action 中的哪些能力。
-3. SGLang-Omni 校验协议版本、Session ID、输出组合、角色配置、动作白名单和输入音频格式，返回 `session.started`。
-4. 数字人后端发送 `turn.start`，随后按需发送：
-   - `input.text.set`；
-   - `input.audio.append`（Base64 PCM16LE）；
-   - `input.image.append`（用户摄像头或数字人当前画面）。
-5. 数字人后端发送 `turn.commit`。SGLang-Omni 冻结输入并返回 `turn.committed`。
+1. 数字人后端连接 `WS /v1/session/realtime`。
+2. 数字人后端发送 `session.start`，通过 `outputs` 声明本 Session 的输出能力。
+3. 本服务校验协议、Session ID、outputs、回复配置和动作白名单，返回 `session.started`。
+4. 数字人后端发送 `turn.start`，再按需发送 `input.text.set`、`input.audio.append`、
+   `input.image.append`。
+5. 数字人后端发送 `turn.commit`；本服务冻结 Turn 输入并返回 `turn.committed`。
 
 ### 2.2 回复从谁返回给谁
 
-1. SGLang-Omni 将冻结后的输入交给多模态模型，模型流式返回回复文本。
-2. SGLang-Omni 将文本 Delta 通过 `response.text.delta` 返回数字人后端。
-3. 如果 Session outputs 包含 audio，SGLang-Omni 同时把同一正文 Delta 发送给远程 TTS。
-4. 远程 TTS 把 Base64 PCM 音频 Delta 返回 SGLang-Omni。
-5. SGLang-Omni 校验后通过 `response.audio.delta` 立即转发给数字人后端。
-6. 模型正文结束后，SGLang-Omni 发送 `response.text.done` 并向 TTS commit。
-7. TTS 尾音频结束后，SGLang-Omni 发送 `response.audio.done`。
-8. text/audio 回复分支全部完成后发送 `response.done`。
-9. action（如请求）和回复分支都终止后发送唯一 Turn 终态 `turn.result`。
+1. 本服务把冻结输入交给多模态模型，模型流式返回正文 Delta。
+2. 本服务通过 `response.text.delta` 把正文返回数字人后端。
+3. 若 outputs 包含 audio，本服务同时把正文 Delta 按序放入有界 TTS 输入队列。
+4. 远程 TTS 返回 PCM；本服务校验 JSON、事件顺序和 Base64，再通过
+   `response.audio.delta` 返回数字人后端。
+5. 模型 EOF 后，本服务发送 `response.text.done` 并向 TTS 恰好 commit 一次。
+6. TTS 尾音频结束后，本服务发送 `response.audio.done`。
+7. text/audio 都完成后发送 `response.done`；action 分支也收敛后发送唯一 Turn 终态
+   `turn.result`。
 
 ```text
 数字人后端       SGLang-Omni          多模态模型          远程 TTS
@@ -48,26 +51,30 @@ ws://<host>:<port>/v1/session/realtime
     | turn.committed  |                    |                 |
     |<----------------|                    |                 |
     |                 |<--- text delta ----|                 |
-    | text.delta      |---- text append -------------------->|
+    | text.delta      |---- append ------------------------->|
     |<----------------|                    |                 |
-    |                 |<------------------------- audio -----|
+    |                 |<------------------------- PCM delta -|
     | audio.delta     |                    |                 |
     |<----------------|                    |                 |
     |                 |<--- text EOF ------|                 |
-    | text.done       |---- text commit -------------------->|
+    | text.done       |---- commit ------------------------->|
     |<----------------|                    |                 |
-    |                 |<--------------------- tail audio -----|
+    |                 |<-------------------------- tail PCM -|
     | audio.done      |                    |                 |
     | response.done   |                    |                 |
     | turn.result     |                    |                 |
     |<----------------|                    |                 |
 ```
 
-## 3. outputs 是唯一 TTS 启用合同
+首个 audio delta 可以早于 text done，二者可以交错；成功终态满足
+`response.text.done < response.audio.done < response.done < turn.result`。
 
-暂定支持：
+## 3. outputs 是唯一启用源
 
-| outputs | 文本 | 在线 TTS 音频 | 动作 |
+TTS 是否参与某个 Session，只由第一条 `session.start.outputs` 决定。provider URL、voice 和超时
+配置不能隐式启用 TTS，也没有 `--realtime-tts-enabled` 或 TTS enabled 环境变量。
+
+| `session.start.outputs` | 文本 | 在线 TTS | 动作 |
 |---|---:|---:|---:|
 | `["text"]` | 是 | 否 | 否 |
 | `["text","audio"]` | 是 | 是 | 否 |
@@ -75,26 +82,14 @@ ws://<host>:<port>/v1/session/realtime
 | `["text","action"]` | 是 | 否 | 是 |
 | `["text","audio","action"]` | 是 | 是 | 是 |
 
-拒绝 `["audio"]` 和 `["audio","action"]`，因为在线音频来源于模型正文。
+拒绝 `["audio"]` 和 `["audio","action"]`，因为在线音频来源是模型正文；空数组、重复项、未知值
+和空白值也会被拒绝。集中 `SessionOutputCapabilities` 推导 text/audio/action 能力，
+`session.started.outputs` 回显规范化顺序。
 
-实现必须用集中能力模型解析 outputs，并生成 `text_enabled/audio_enabled/action_enabled`。不得在多个 handler 中硬编码组合。后续新增 video、viseme 等输出时，只扩展输出注册表、依赖图和表驱动测试。
+不包含 audio 的 Session 不创建 TTS manager/Turn、不连接 provider、不产生音频事件。服务启动时
+允许缺少 TTS 配置，只有包含 audio 的 `session.start` 才会稳定失败。
 
-不增加 `--realtime-tts-enabled` 或环境变量开关。TTS URL、voice、凭证、超时和队列上限仍属于服务部署配置，但它们不能决定某个 Session 是否需要 audio。
-
-运维回滚方式是客户端从 outputs 移除 audio。若 provider 故障需要全局熔断，可增加只拒绝新 audio Session 的运维状态，但不能静默把已请求 audio 的 Session 降级为 text-only。
-
-## 4. 外部事件合同
-
-### 4.1 文本
-
-沿用现有：
-
-- `response.created`；
-- `response.text.delta`；
-- `response.text.done`；
-- `response.done`。
-
-### 4.2 音频
+## 4. 外部音频事件合同
 
 ```json
 {
@@ -112,109 +107,127 @@ ws://<host>:<port>/v1/session/realtime
 }
 ```
 
-`response.audio.done` 使用相同关联字段和最终 seq，不重复正文或音频。业务后端依赖事件 `type` 区分文字和音频，使用 session_id、turn_id、response_id 关联同一轮。
+数字人后端通过事件 `type` 区分文字和音频，用 `session_id + turn_id + response_id` 关联同一回复；
+seq 在一个 response 内从 1 单调递增。PCM 只校验和转发，不转码、不重采样、不添加 WAV header。
 
-`response.done` 等待 text/audio；`turn.result.outputs` 增加 audio 状态：
+`response.audio.done` 携带相同关联 ID 和最终 seq，不重复音频。成功 Turn 的
+`turn.result.outputs` 分别报告请求分支的状态；未真实完成 audio 时不能标记为 completed。
 
-```json
-{
-  "outputs": {
-    "text": "completed",
-    "audio": "completed",
-    "action": "completed"
-  }
-}
+## 5. 普通 text+audio
+
+1. 正式 `response.created` 后启动 TTS Turn，provider WebSocket 仍按需延迟建立。
+2. 模型 Delta 先成为正式 text delta，再进入有界 TTS 文本队列，队列满时自然背压。
+3. TTS sender/reader 并发，PCM 到达后立即按 seq 外发。
+4. 模型 EOF 产生 text done，迭代器结束驱动唯一一次 provider commit。
+5. provider 完成 audio done 和 response done 后，本服务依次发送外部 audio done、response done、
+   turn result。
+6. 模型或 TTS 任一侧失败会立即取消另一侧；即使模型永久暂停，TTS 失败也会立即 abort 模型，
+   不等待下一个模型 Delta。
+
+## 6. text+audio+action provisional
+
+1. provisional 文本实时送 TTS，每段只发送一次。
+2. promotion 判定前，PCM 只进入按当前 Turn/response 隔离的有界缓冲，绝不外发。
+3. promoted 后先完成 provisional resolved 和正式 response 边界，再按 seq 释放缓冲；后续 PCM 实时
+   外发。
+4. `replayed_from_provisional=true` 的正式文本只用于重放和归档，不再次送 TTS。
+5. discarded 时立即取消 TTS、清空缓冲、关闭当前 provider 连接，不泄漏在线音频。
+6. unsupported action 走 `client_prerecorded_audio` 时也不外发在线 TTS 音频。
+7. provisional PCM 受最大字节和 PCM 时长双重限制，溢出会使 Turn 失败并关闭连接。
+
+## 7. TTS WebSocket 生命周期
+
+每个外部 `MultimodalSession` 独占一个 `EmbeddedTTSConnection`，不同 Session 不共享连接。
+
+```text
+Session 建立
+  -> outputs 含 audio：校验配置并创建 manager（尚未联网）
+  -> 首个 audio Turn：lazy connect，等待 provider session.created
+  -> 正常 Turn 完成：连接回到 Ready，供同 Session/同 voice 下一 Turn 复用
+  -> voice 改变：关闭旧连接，再建立新连接
+  -> cancel/timeout/protocol error：尽力发 response.cancel，关闭不可信连接
+  -> 下一 audio Turn：重新 lazy connect
+  -> session.close/业务 WebSocket 断开：幂等释放 manager 和连接
 ```
 
-## 5. 内部 TTS 连接
+同一 provider 连接只允许一个 reader 和一个活动 TTS Turn。正常完成保留健康连接；取消或异常后
+保守关闭，以免旧 Turn 的迟到音频污染下一 Turn。
 
-建议新增 `sglang_omni/serve/realtime/embedded_tts.py`：
+provider 协议：建连等待 `session.created`；文本使用 `input_text_buffer.append`；正文结束使用
+`input_text_buffer.commit`；取消使用 `response.cancel`；完整成功必须收到 audio done 后的
+response done。
 
-- `EmbeddedTTSConfig`：provider 配置和脱敏摘要；
-- `EmbeddedTTSConnection`：连接、ready、单 reader、关闭和复用；
-- `EmbeddedTTSTurn`：文本队列、sender/reader、commit、cancel、音频缓冲；
-- provider decoder：严格验证 JSON、事件顺序和 Base64。
+## 8. 真正取消与错误策略
 
-文本队列和 provisional 音频缓冲必须有界。sender 与 reader 并发执行，确保首音频可以在模型正文结束前到达。一个内部连接只能有一个活动 Turn 和一个 reader；异常完成后关闭不可信连接。
-
-## 6. text+audio+action 融合
-
-已合并的新接口会在 action 判断前生成 provisional reply：
-
-1. provisional text 立即送 TTS；
-2. TTS 音频暂存在服务内，不能发送给数字人后端；
-3. provisional promoted 后，先完成正式 response promotion，再释放音频缓冲并继续实时转发；
-4. 正式重放中 `replayed_from_provisional=true` 的文本只用于显示和归档，不再次送 TTS；
-5. provisional discarded 时取消 TTS、清空缓冲，不能泄漏任何在线音频；
-6. action unsupported 使用客户端预录音频时，不调用在线 TTS。
-
-必须限制 provisional 缓冲的最大字节数或时长。溢出按当前 Turn 失败处理，不允许无限内存增长。
-
-## 7. 真正取消
-
-数字人后端发送：
+业务端发送：
 
 ```json
 {"type":"turn.cancel","turn_id":"turn-001"}
 ```
 
-SGLang-Omni 必须：
+本服务立即使 Turn token 失效，统一取消模型、action、TTS producer/sender/reader、队列等待者和
+provisional PCM 缓冲；向 provider 尽力发送内部 `response.cancel` 后关闭连接。收敛后只发送一次
+`turn.cancelled`。取消后不再发送该 Turn 的 text/audio done、response done 或 turn result，迟到
+事件被丢弃。
 
-1. 原子标记当前 Turn cancelling；
-2. 取消模型、action、TTS sender/reader；
-3. 清空未外发 provisional 音频；
-4. 尝试发送内部 TTS cancel，连接不可信则关闭；
-5. 等待资源收敛；
-6. 只发送一次 `turn.cancelled`。
+首版采用 `fail_turn`，不会把明确请求 audio 的 Session 静默降级为 text-only：
 
-取消后不再发送 `response.done`、`turn.action.ready` 或 `turn.result`。正常完成与取消竞争时使用单一 terminal owner；迟到事件按 generation token 丢弃。客户端收到 `turn.cancelled` 后才能开始新 Turn。
-
-## 8. 错误策略
-
-首版使用 `fail_turn`，不静默降级：客户端明确请求 audio 时，TTS 失败不能伪装成 text-only 成功。
-
-| 故障 | 处理 |
+| 故障 | 当前行为 |
 |---|---|
 | outputs 非法 | Session 协议错误 |
-| provider 未配置 | audio Session 建立失败 |
-| 建连/ready/send/首音频/总超时 | 当前 Turn 失败，关闭连接 |
-| 非法 Base64、乱序、重复 done | protocol error，关闭连接 |
-| 模型失败 | 取消 TTS，Turn failed |
-| action 部分失败 | 沿用现有 partial，并分别报告输出状态 |
-| 外部 WebSocket 断开 | 不再发事件，清理全部任务 |
+| audio Session 缺少 provider 配置 | Session 建立失败 |
+| connect/ready/send/首音频/总超时 | Turn 失败并关闭连接 |
+| 非法 JSON/Base64、乱序、重复 done、提前关闭 | protocol error，Turn 失败并关闭连接 |
+| 模型失败 | 取消 TTS，Turn 失败 |
+| TTS 失败且模型暂停 | 立即 abort 模型，Turn 失败 |
+| 外部断线或 `session.close` | 不再发事件，幂等释放 Session 资源 |
 
-## 9. 本地开发前置任务
+## 9. 部署配置
 
-先把模型替身迁移到 `/v1/session/realtime`：
+生产装配支持 provider URL、voice、connect/ready/send/first-audio/turn timeout、文本队列最大 chunk、
+单音频块和单 Turn 最大字节、provisional 最大字节和最大 PCM 时长。`websockets` 最低版本为 13。
 
-- 无 GPU/Pipeline 启动真实 Session/Turn 状态机；
-- 固定 text、固定 action、融合 provisional；
-- `turn.cancel` 真正取消；
-- TTS 实施前明确拒绝 audio；
-- 进程外 smoke 覆盖 text/action/text+action。
+这些参数描述如何连接 provider，不是 enabled 开关。日志不得包含 provider URL 凭证、完整正文、
+Base64 或 PCM。当前已有稳定错误和关联 ID，完整延迟、buffer、失败、取消 metrics 尚未实现。
 
-完成 TTS 后，同一 smoke 扩展 text+audio 和 text+audio+action，从而无需每轮 Docker/服务器联调即可验证大部分协议与生命周期。
+## 10. Windows 本地进程外验证
 
-## 10. 分阶段实施
+无需 GPU、真实模型、外网或 Docker，使用三个 PowerShell 终端：
 
-1. 锁定 outputs 能力模型和无 audio 基线。
-2. 实现 provider 配置与 fake TTS server。
-3. 实现 `EmbeddedTTSTurn` 连接、并发、背压和协议校验。
-4. 接入普通 text+audio 事件与终态。
-5. 接入 action provisional 缓冲、promotion/discard。
-6. 接入真正取消、断线和错误竞争。
-7. 完成本地进程外测试、Linux 测试、Docker 和数字人联调。
-8. 更新正式客户端指南、观测和回滚说明。
+```powershell
+# 终端 1：fake TTS provider
+.venv\Scripts\python.exe scripts\realtime_fake_tts_provider.py --host 127.0.0.1 --port 8765
 
-## 11. 验收清单
+# 终端 2：fake model Session Realtime 服务
+$env:SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED='true'
+$env:SGLANG_OMNI_DEV_FAKE_MODEL_RESPONSE_TEXT='这是本地 TTS smoke 固定回复'
+$env:SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_INTERVAL_MS='20'
+.venv\Scripts\python.exe -m sglang_omni.serve.realtime.dev_server `
+  --host 127.0.0.1 --port 8000 `
+  --realtime-tts-url ws://127.0.0.1:8765 `
+  --realtime-tts-voice smoke
 
-- [ ] 旧 `/v1/realtime` 和旧事件名已从本方案与实现移除。
-- [ ] 五种 outputs 允许组合与两种拒绝组合有表驱动测试。
-- [ ] 不请求 audio 时没有 TTS 连接、任务、事件和行为变化。
-- [ ] text/audio Delta 真正并发，关联 ID 与 seq 正确。
-- [ ] text done、audio done、response done、turn result 顺序正确。
-- [ ] provisional 音频 promoted 前不外发，discarded 后不泄漏。
-- [ ] `turn.cancel` 真正停止所有分支并只发送 `turn.cancelled`。
-- [ ] provider 错误和超时不静默降级、无资源泄漏。
-- [ ] fake、本地、Linux 完整测试和数字人联调通过。
-- [ ] 日志和指标不泄露正文、音频或凭证。
+# 终端 3：普通与 provisional
+.venv\Scripts\python.exe scripts\realtime_fake_model_smoke.py `
+  --mode text-audio --response-text '这是本地 TTS smoke 固定回复'
+.venv\Scripts\python.exe scripts\realtime_fake_model_smoke.py `
+  --mode fusion-audio --response-text '这是本地 TTS smoke 固定回复'
+```
+
+停止当前验证：在终端 1、终端 2 分别按 `Ctrl+C`。省略两个 `--realtime-tts-*` 参数表示下次启动
+不配置 provider；某个 Session 不需要音频时，从其 outputs 移除 audio。
+
+本地已实际通过两种进程外 smoke。Linux 完整依赖、真实 provider、Docker 和数字人后端仍待验证。
+
+## 11. 完成情况与后续计划
+
+已完成 outputs 能力解析、Session-owned adapter、连接复用、普通 text+audio、triple provisional、
+真正取消、错误收敛、fake provider、自动化测试和 Windows 进程外 smoke。
+
+待完成：
+
+- Linux/服务器完整 pytest、pre-commit 和类型检查；
+- 真实 provider 的网络、首包、尾包和超时验证；
+- Docker 与数字人后端联调五种 outputs、取消、断线和回滚；
+- 正式延迟、buffer、失败和取消指标及脱敏日志；
+- 依据真实联调结果补充正式客户端接入指南。

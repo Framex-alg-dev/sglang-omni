@@ -8,6 +8,7 @@ import asyncio
 import base64
 import json
 import sys
+import time
 import wave
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,14 @@ async def _expect(websocket: Any, event_type: str, timeout: float) -> dict[str, 
 
 
 def _session_start(mode: str) -> dict[str, Any]:
-    outputs = ["text", "action"] if mode == "fusion" else [mode]
+    outputs_by_mode = {
+        "text": ["text"],
+        "action": ["action"],
+        "fusion": ["text", "action"],
+        "text-audio": ["text", "audio"],
+        "fusion-audio": ["text", "audio", "action"],
+    }
+    outputs = outputs_by_mode[mode]
     event: dict[str, Any] = {
         "type": "session.start",
         "protocol_version": 1,
@@ -62,7 +70,7 @@ def _session_start(mode: str) -> dict[str, Any]:
             "fallback_category_ids": ["BDEV"],
             "allowed_candidates": [{"candidate_id": "ADEV"}],
         }
-    if mode == "fusion":
+    if "action" in outputs and "text" in outputs:
         event["reply"]["unsupported_action_text"] = "该动作暂不支持。"
     return event
 
@@ -126,10 +134,14 @@ async def run_smoke(
             if event["type"] == "turn.result":
                 break
         _validate_turn_events(events, mode=mode, response_text=response_text)
-        # A second turn proves terminal cleanup and deterministic reuse.
+        # A committed second turn exercises cancellation and late-terminal cleanup.
         await _send_turn_input(
             websocket, turn_id="turn-cancel", text="取消", pcm=None, timeout=timeout
         )
+        await websocket.send(
+            json.dumps({"type": "turn.commit", "turn_id": "turn-cancel"})
+        )
+        events.append(await _expect(websocket, "turn.committed", timeout))
         await websocket.send(
             json.dumps({"type": "turn.cancel", "turn_id": "turn-cancel"})
         )
@@ -138,6 +150,24 @@ async def run_smoke(
             events.append(event)
             if event["type"] == "turn.cancelled":
                 break
+        grace_deadline = time.monotonic() + min(timeout, 0.2)
+        while True:
+            remaining = grace_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                late_event = await _receive(websocket, remaining)
+            except asyncio.TimeoutError:
+                break
+            if late_event.get("turn_id") == "turn-cancel" and late_event["type"] in {
+                "response.text.done",
+                "response.audio.done",
+                "response.done",
+                "turn.result",
+            }:
+                raise AssertionError(
+                    f"late terminal event after turn.cancelled: {late_event!r}"
+                )
     return events
 
 
@@ -146,11 +176,25 @@ def _validate_turn_events(
 ) -> None:
     types = [event["type"] for event in events]
     required = ["session.started", "turn.committed"]
-    if mode in {"text", "fusion"}:
-        required.extend(
-            ["response.created", "response.text.done", "response.done"]
+    has_text = mode in {"text", "fusion", "text-audio", "fusion-audio"}
+    has_audio = mode in {"text-audio", "fusion-audio"}
+    has_action = mode in {"action", "fusion", "fusion-audio"}
+    expected_outputs = [
+        output
+        for output, enabled in (
+            ("text", has_text),
+            ("audio", has_audio),
+            ("action", has_action),
         )
-    if mode in {"action", "fusion"}:
+        if enabled
+    ]
+    if has_audio and events[0].get("outputs") != expected_outputs:
+        raise AssertionError(f"session outputs mismatch: {events[0]!r}")
+    if has_text:
+        required.extend(["response.created", "response.text.done", "response.done"])
+    if has_audio:
+        required.extend(["response.audio.delta", "response.audio.done"])
+    if has_action:
         required.append("turn.action.ready")
     required.append("turn.result")
     missing = [event_type for event_type in required if event_type not in types]
@@ -160,7 +204,7 @@ def _validate_turn_events(
         ("session.started", "turn.committed"),
         ("turn.committed", "turn.result"),
     ]
-    if mode in {"text", "fusion"}:
+    if has_text:
         order_constraints.extend(
             [
                 ("turn.committed", "response.created"),
@@ -169,7 +213,15 @@ def _validate_turn_events(
                 ("response.done", "turn.result"),
             ]
         )
-    if mode in {"action", "fusion"}:
+    if has_audio:
+        order_constraints.extend(
+            [
+                ("response.created", "response.audio.delta"),
+                ("response.audio.delta", "response.audio.done"),
+                ("response.audio.done", "response.done"),
+            ]
+        )
+    if has_action:
         order_constraints.extend(
             [
                 ("turn.committed", "turn.action.ready"),
@@ -185,7 +237,7 @@ def _validate_turn_events(
         raise AssertionError(
             f"events out of order: violated {violated}; received {types}"
         )
-    if mode in {"text", "fusion"}:
+    if has_text:
         created_at = types.index("response.created")
         text_done_at = types.index("response.text.done")
         misplaced_deltas = [
@@ -201,7 +253,15 @@ def _validate_turn_events(
             )
 
     result = next(event for event in events if event["type"] == "turn.result")
-    if mode in {"text", "fusion"}:
+    session_id = events[0].get("session_id")
+    if has_audio and (
+        result.get("session_id") != session_id
+        or result.get("turn_id") != "turn-1"
+        or result.get("status") != "completed"
+        or result.get("outputs") != {output: "completed" for output in expected_outputs}
+    ):
+        raise AssertionError(f"turn result terminal mismatch: {result!r}")
+    if has_text:
         deltas = "".join(
             event.get("delta", "")
             for event in events
@@ -214,7 +274,69 @@ def _validate_turn_events(
             or result.get("reply", {}).get("text") != response_text
         ):
             raise AssertionError(f"text result mismatch: {events!r}")
-    if mode in {"action", "fusion"}:
+    if has_audio:
+        created = next(event for event in events if event["type"] == "response.created")
+        response = created.get("response")
+        response_id = response.get("id") if isinstance(response, dict) else None
+        if not response_id or any(
+            created.get(key) != value
+            for key, value in {"session_id": session_id, "turn_id": "turn-1"}.items()
+        ):
+            raise AssertionError(f"response correlation mismatch: {created!r}")
+        audio_events = [
+            event for event in events if event["type"] == "response.audio.delta"
+        ]
+        if [event.get("seq") for event in audio_events] != list(
+            range(1, len(audio_events) + 1)
+        ):
+            raise AssertionError(f"audio seq is not monotonic: {audio_events!r}")
+        for event in audio_events:
+            if (
+                event.get("session_id") != session_id
+                or event.get("turn_id") != "turn-1"
+                or event.get("response_id") != response_id
+            ):
+                raise AssertionError(f"audio correlation mismatch: {event!r}")
+            try:
+                pcm = base64.b64decode(event.get("delta", ""), validate=True)
+            except ValueError as exc:
+                raise AssertionError("audio delta is not valid base64") from exc
+            if not pcm or len(pcm) % 2:
+                raise AssertionError("audio delta is not non-empty PCM16LE")
+            if event.get("audio") != {
+                "format": "pcm16le",
+                "sample_rate_hz": 24000,
+                "channels": 1,
+            }:
+                raise AssertionError(f"audio format mismatch: {event!r}")
+        audio_done = next(
+            event for event in events if event["type"] == "response.audio.done"
+        )
+        if any(
+            audio_done.get(key) != value
+            for key, value in {
+                "session_id": session_id,
+                "turn_id": "turn-1",
+                "response_id": response_id,
+                "seq": len(audio_events),
+            }.items()
+        ):
+            raise AssertionError(f"audio done correlation mismatch: {audio_done!r}")
+        response_done = next(
+            event for event in events if event["type"] == "response.done"
+        )
+        done_response = response_done.get("response")
+        if (
+            response_done.get("session_id") != session_id
+            or response_done.get("turn_id") != "turn-1"
+            or not isinstance(done_response, dict)
+            or done_response.get("id") != response_id
+            or done_response.get("status") != "completed"
+        ):
+            raise AssertionError(
+                f"response done correlation mismatch: {response_done!r}"
+            )
+    if has_action:
         ready = next(event for event in events if event["type"] == "turn.action.ready")
         if (
             ready.get("action", {}).get("candidate_id") != "ADEV"
@@ -226,7 +348,11 @@ def _validate_turn_events(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="ws://127.0.0.1:8000/v1/session/realtime")
-    parser.add_argument("--mode", choices=("text", "action", "fusion"), default="text")
+    parser.add_argument(
+        "--mode",
+        choices=("text", "action", "fusion", "text-audio", "fusion-audio"),
+        default="text",
+    )
     parser.add_argument("--response-text", default="这是本地开发模型返回的固定回复。")
     parser.add_argument("--text", default="你好")
     parser.add_argument("--audio", type=Path)

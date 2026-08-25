@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import asyncio
 import json
 import wave
 from pathlib import Path
@@ -16,7 +17,12 @@ class FakeWebSocket:
         self.sent: list[dict] = []
 
     async def recv(self) -> str:
-        return json.dumps(next(self.events))
+        try:
+            event = next(self.events)
+        except StopIteration:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        return json.dumps(event)
 
     async def send(self, payload: str) -> None:
         self.sent.append(json.loads(payload))
@@ -48,6 +54,7 @@ async def test_text_smoke_uses_session_protocol_and_cancel() -> None:
             {"type": "turn.result", "reply": {"text": "固定回复"}},
             {"type": "turn.started"},
             {"type": "input.text.ack"},
+            {"type": "turn.committed"},
             {"type": "turn.cancelled"},
         ]
     )
@@ -81,6 +88,79 @@ def test_parser_defaults_to_session_realtime() -> None:
     args = smoke.build_parser().parse_args([])
     assert args.url.endswith("/v1/session/realtime")
     assert args.mode == "text"
+
+
+def _text_audio_events(*, seq: int = 1) -> list[dict]:
+    return [
+        {
+            "type": "session.started",
+            "session_id": "dev-smoke-text-audio",
+            "outputs": ["text", "audio"],
+        },
+        {"type": "turn.committed", "turn_id": "turn-1"},
+        {
+            "type": "response.created",
+            "session_id": "dev-smoke-text-audio",
+            "turn_id": "turn-1",
+            "response": {"id": "response-1"},
+        },
+        {"type": "response.text.delta", "delta": "reply"},
+        {
+            "type": "response.audio.delta",
+            "session_id": "dev-smoke-text-audio",
+            "turn_id": "turn-1",
+            "response_id": "response-1",
+            "seq": seq,
+            "delta": "AQI=",
+            "audio": {
+                "format": "pcm16le",
+                "sample_rate_hz": 24000,
+                "channels": 1,
+            },
+        },
+        {"type": "response.text.done", "text": "reply"},
+        {
+            "type": "response.audio.done",
+            "session_id": "dev-smoke-text-audio",
+            "turn_id": "turn-1",
+            "response_id": "response-1",
+            "seq": 1,
+        },
+        {
+            "type": "response.done",
+            "session_id": "dev-smoke-text-audio",
+            "turn_id": "turn-1",
+            "response": {"id": "response-1", "status": "completed"},
+        },
+        {
+            "type": "turn.result",
+            "session_id": "dev-smoke-text-audio",
+            "turn_id": "turn-1",
+            "status": "completed",
+            "outputs": {"text": "completed", "audio": "completed"},
+            "reply": {"text": "reply"},
+        },
+    ]
+
+
+def test_text_audio_validation_checks_pcm_sequence_and_correlation() -> None:
+    smoke._validate_turn_events(
+        _text_audio_events(), mode="text-audio", response_text="reply"
+    )
+
+
+def test_text_audio_validation_rejects_wrong_audio_sequence() -> None:
+    with pytest.raises(AssertionError, match="audio seq"):
+        smoke._validate_turn_events(
+            _text_audio_events(seq=2), mode="text-audio", response_text="reply"
+        )
+
+
+def test_text_audio_validation_rejects_incomplete_terminal_status() -> None:
+    events = _text_audio_events()
+    events[-1]["outputs"]["audio"] = "failed"
+    with pytest.raises(AssertionError, match="turn result terminal"):
+        smoke._validate_turn_events(events, mode="text-audio", response_text="reply")
 
 
 def test_parser_rejects_non_positive_timeout() -> None:
@@ -139,9 +219,7 @@ def test_fusion_rejects_text_delta_after_text_done() -> None:
     ]
 
     with pytest.raises(AssertionError, match="out of order"):
-        smoke._validate_turn_events(
-            events, mode="fusion", response_text="固定回复"
-        )
+        smoke._validate_turn_events(events, mode="fusion", response_text="固定回复")
 
 
 def test_audio_loader_rejects_empty_wav(tmp_path: Path) -> None:

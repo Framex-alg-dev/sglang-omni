@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from typing import Any, Callable
 
 import uvicorn
 from fastapi import FastAPI, WebSocket
@@ -16,12 +17,19 @@ from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelConfig,
     install_dev_model_error_handler,
 )
+from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
 from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
 
 logger = logging.getLogger(__name__)
 
 
-def create_dev_app(client: DevRealtimeModelClient, *, model_name: str) -> FastAPI:
+def create_dev_app(
+    client: DevRealtimeModelClient,
+    *,
+    model_name: str,
+    embedded_tts_config: EmbeddedTTSConfig | None = None,
+    embedded_tts_connector: Callable[..., Any] | None = None,
+) -> FastAPI:
     """Build the narrow fake-model app without importing production services."""
     app = FastAPI(title="sglang-omni Realtime development model", version="0.1.0")
     app.state.client = client
@@ -30,6 +38,8 @@ def create_dev_app(client: DevRealtimeModelClient, *, model_name: str) -> FastAP
         client=client,
         model_name=model_name,
         allow_unregistered_protocol_actions=True,
+        embedded_tts_config=embedded_tts_config,
+        embedded_tts_connector=embedded_tts_connector,
     )
     app.state.multimodal_realtime_manager = manager
 
@@ -80,6 +90,7 @@ async def serve_dev_realtime_model(
     log_level: str,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
+    embedded_tts_config: EmbeddedTTSConfig | None = None,
 ) -> None:
     """Serve the real Realtime API without constructing a model pipeline."""
     if not config.enabled:
@@ -92,7 +103,11 @@ async def serve_dev_realtime_model(
         config.log_summary(),
     )
     del allowed_local_media_path, allowed_media_domains
-    app = create_dev_app(DevRealtimeModelClient(config), model_name=model_name)
+    app = create_dev_app(
+        DevRealtimeModelClient(config),
+        model_name=model_name,
+        embedded_tts_config=embedded_tts_config,
+    )
     uvicorn_config = uvicorn.Config(
         app,
         host=host,
@@ -112,6 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--model-name", default="dev-realtime-model")
+    parser.add_argument("--realtime-tts-url")
+    parser.add_argument("--realtime-tts-voice")
     parser.add_argument(
         "--log-level",
         choices=("debug", "info", "warning", "error", "critical"),
@@ -122,6 +139,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if bool(args.realtime_tts_url) != bool(args.realtime_tts_voice):
+        raise ValueError(
+            "--realtime-tts-url and --realtime-tts-voice must be provided together"
+        )
+    embedded_tts_config = (
+        EmbeddedTTSConfig(url=args.realtime_tts_url, voice=args.realtime_tts_voice)
+        if args.realtime_tts_url
+        else None
+    )
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -133,6 +159,7 @@ def main(argv: list[str] | None = None) -> None:
             port=args.port,
             model_name=args.model_name,
             log_level=args.log_level,
+            embedded_tts_config=embedded_tts_config,
         )
     )
 

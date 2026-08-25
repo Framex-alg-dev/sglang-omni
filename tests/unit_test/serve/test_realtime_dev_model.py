@@ -16,6 +16,7 @@ from sglang_omni.serve.realtime.dev_model import (
     DevRealtimeModelRequestError,
 )
 from sglang_omni.serve.realtime.dev_server import create_dev_app
+from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
 
 
 def _request() -> GenerateRequest:
@@ -141,6 +142,41 @@ def test_audio_output_is_explicitly_unsupported() -> None:
         event = ws.receive_json()
         assert event["type"] == "error"
         assert event["error"]["code"] == "unsupported_output"
+
+
+def test_text_audio_session_echoes_outputs_without_connecting_tts() -> None:
+    connect_calls: list[str] = []
+
+    def connector(url: str, **kwargs: object) -> object:
+        del kwargs
+        connect_calls.append(url)
+        raise AssertionError("session.start must not connect to the TTS provider")
+
+    client = DevRealtimeModelClient(DevRealtimeModelConfig(enabled=True))
+    app = create_dev_app(
+        client,
+        model_name="dev-realtime-model",
+        embedded_tts_config=EmbeddedTTSConfig(
+            url="ws://tts.local/realtime", voice="test-voice"
+        ),
+        embedded_tts_connector=connector,
+    )
+    with TestClient(app).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(_session_start(["audio", "text"]))
+        started = ws.receive_json()
+        assert started["type"] == "session.started"
+        assert started["outputs"] == ["text", "audio"]
+        ws.send_json({"type": "session.close", "reason": "test_complete"})
+        assert ws.receive_json()["type"] == "session.closed"
+    assert connect_calls == []
+
+
+def test_text_audio_session_requires_provider_configuration() -> None:
+    with TestClient(_dev_app()).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(_session_start(["text", "audio"]))
+        event = ws.receive_json()
+        assert event["type"] == "error"
+        assert event["error"]["code"] == "tts_provider_not_configured"
 
 
 @pytest.mark.parametrize(

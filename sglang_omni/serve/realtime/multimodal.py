@@ -40,6 +40,14 @@ from sglang_omni.models.qwen3_omni.prompt_localization import (
 )
 from sglang_omni.preprocessing.image import prepare_image_bytes_for_wire
 from sglang_omni.serve.realtime.audio_buffer import BufferOverflow, RealtimeAudioBuffer
+from sglang_omni.serve.realtime.embedded_tts import (
+    EmbeddedTTSConfig,
+    EmbeddedTTSConnection,
+)
+from sglang_omni.serve.realtime.output_capabilities import (
+    DEFAULT_OUTPUTS,
+    SessionOutputCapabilities,
+)
 from sglang_omni.utils.structured_logs import (
     emit_structured_log,
     get_structured_log_writer,
@@ -599,6 +607,7 @@ class ProvisionalReplyState:
     official_done: bool = False
     task: asyncio.Task[tuple[str, dict[str, Any]]] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    tts_state: ReplyTTSState | None = None
 
 
 @dataclass(slots=True)
@@ -636,6 +645,19 @@ class TurnBuffer:
     provisional_reply: ProvisionalReplyState | None = None
 
 
+@dataclass(slots=True)
+class ReplyTTSState:
+    response_id: str
+    text_queue: asyncio.Queue[str | None]
+    allow_commit: asyncio.Event
+    task: asyncio.Task[Any]
+    next_audio_seq: int = 1
+    input_finished: bool = False
+    provisional: ProvisionalReplyState | None = None
+    buffered_audio: list[bytes] = field(default_factory=list)
+    buffered_audio_bytes: int = 0
+
+
 class MultimodalSession:
     """Manual-turn, multimodal session for audio chunks and image frames.
 
@@ -659,6 +681,8 @@ class MultimodalSession:
         claim_session: Callable[[str, "MultimodalSession"], None],
         release_session: Callable[[str, "MultimodalSession"], None],
         request_resource_sample: Callable[..., bool] | None = None,
+        embedded_tts_config: EmbeddedTTSConfig | None = None,
+        embedded_tts_connector: Callable[..., Any] | None = None,
     ) -> None:
         self.websocket = websocket
         self.client = client
@@ -674,6 +698,8 @@ class MultimodalSession:
         )
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
+        self.embedded_tts_config = embedded_tts_config
+        self.embedded_tts_connector = embedded_tts_connector
         self.global_action_prewarm = (
             global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
         )
@@ -690,6 +716,10 @@ class MultimodalSession:
         self.unsupported_action_text = ""
         self.action_profile: SessionActionProfile | None = None
         self.modalities: tuple[str, ...] = DEFAULT_MODALITIES
+        self.output_capabilities = SessionOutputCapabilities.parse(
+            list(DEFAULT_OUTPUTS)
+        )
+        self.embedded_tts: EmbeddedTTSConnection | None = None
         self.closed = False
         self.started = False
         self.active_turn: TurnBuffer | None = None
@@ -808,6 +838,8 @@ class MultimodalSession:
         finally:
             self.closed = True
             await self._cancel_active_turn(send_event=False)
+            if self.embedded_tts is not None:
+                await self.embedded_tts.close()
             if self.session_id is not None:
                 self.release_session(self.session_id, self)
             await self._close_websocket()
@@ -1771,7 +1803,16 @@ class MultimodalSession:
         session_id = event.get("session_id")
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("session_id must be a non-empty string")
-        modalities = self._normalize_modalities(event.get("modalities"))
+        if event.get("_protocol_version") is not None:
+            output_capabilities = SessionOutputCapabilities.parse(
+                event.get("modalities")
+            )
+            modalities = output_capabilities.outputs
+        else:
+            modalities = self._normalize_modalities(event.get("modalities"))
+            output_capabilities = SessionOutputCapabilities.parse(list(modalities))
+        if output_capabilities.audio_enabled and self.embedded_tts_config is None:
+            raise ValueError("embedded TTS provider is not configured")
         raw_instructions = event.get("instructions")
         raw_unsupported_action_text = event.get(
             "_unsupported_action_text", event.get("unsupported_action_text")
@@ -2042,6 +2083,17 @@ class MultimodalSession:
         self.locale = event.get("_locale", "zh-CN" if language == "zh" else "en-US")
         self.language = language
         self.modalities = modalities
+        self.output_capabilities = output_capabilities
+        if output_capabilities.audio_enabled:
+            tts_kwargs: dict[str, Any] = {}
+            if self.embedded_tts_connector is not None:
+                tts_kwargs["connector"] = self.embedded_tts_connector
+            assert self.embedded_tts_config is not None
+            self.embedded_tts = EmbeddedTTSConnection(
+                self.embedded_tts_config,
+                session_id=session_id.strip(),
+                **tts_kwargs,
+            )
         if instructions is not None:
             self.instructions = instructions
         if raw_unsupported_action_text is not None:
@@ -2601,6 +2653,8 @@ class MultimodalSession:
         reason = event.get("reason")
         self.closed = True
         await self._cancel_active_turn(send_event=False)
+        if self.embedded_tts is not None:
+            await self.embedded_tts.close()
         await self.send({"type": "session.closed", "session_id": self.session_id})
         emit_structured_log(
             "lifecycle",
@@ -2662,6 +2716,8 @@ class MultimodalSession:
                             request_id,
                             result,
                         )
+            if self.embedded_tts is not None:
+                await self.embedded_tts.cancel_active_turn()
             branch_tasks = [task for task in turn.branch_tasks if not task.done()]
             for branch_task in branch_tasks:
                 branch_task.cancel()
@@ -4609,6 +4665,8 @@ class MultimodalSession:
         finish_reason: str,
         usage: dict[str, Any] | None,
     ) -> dict[str, float | None]:
+        should_send_official_done = False
+        was_pending = False
         async with state.lock:
             state.completed = True
             state.finish_reason = finish_reason
@@ -4620,6 +4678,7 @@ class MultimodalSession:
                     "response_done_after_commit_ms": None,
                 }
             if state.status == "pending":
+                was_pending = True
                 await self.send(
                     {
                         "type": "response.provisional.text.done",
@@ -4631,21 +4690,34 @@ class MultimodalSession:
                     }
                 )
                 state.provisional_done_after_commit_ms = self._after_commit_ms(turn)
-                return {
-                    "text_done_after_commit_ms": (
-                        state.provisional_done_after_commit_ms
-                    ),
-                    "response_done_after_commit_ms": None,
-                }
-            done_timing = await self._send_reply_done(
-                turn,
-                response_id=state.response_id,
-                text=text,
-                source=state.source,
-                finish_reason=finish_reason,
-                usage=usage,
-                provisional_id=state.response_id,
-            )
+            elif not state.official_done:
+                state.official_done = True
+                should_send_official_done = True
+        if was_pending:
+            if state.tts_state is not None:
+                await self._finish_reply_tts(state.tts_state)
+            return {
+                "text_done_after_commit_ms": state.provisional_done_after_commit_ms,
+                "response_done_after_commit_ms": None,
+            }
+        if not should_send_official_done:
+            return {
+                "text_done_after_commit_ms": state.official_text_done_after_commit_ms,
+                "response_done_after_commit_ms": (
+                    state.official_response_done_after_commit_ms
+                ),
+            }
+        done_timing = await self._send_reply_done(
+            turn,
+            response_id=state.response_id,
+            text=text,
+            source=state.source,
+            finish_reason=finish_reason,
+            usage=usage,
+            provisional_id=state.response_id,
+            tts_state=state.tts_state,
+        )
+        async with state.lock:
             state.official_done = True
             state.official_text_done_after_commit_ms = done_timing[
                 "text_done_after_commit_ms"
@@ -4711,6 +4783,8 @@ class MultimodalSession:
         turn: TurnBuffer,
         state: ProvisionalReplyState,
     ) -> None:
+        should_send_done = False
+        buffered_text = ""
         async with state.lock:
             if state.status != "pending":
                 return
@@ -4755,23 +4829,14 @@ class MultimodalSession:
                         "replayed_from_provisional": True,
                     }
                 )
-            if state.completed:
-                done_timing = await self._send_reply_done(
-                    turn,
-                    response_id=state.response_id,
-                    text=buffered_text,
-                    source=state.source,
-                    finish_reason=state.finish_reason,
-                    usage=state.usage,
-                    provisional_id=state.response_id,
-                )
+            if state.tts_state is not None:
+                for chunk in state.tts_state.buffered_audio:
+                    await self._send_reply_audio_delta(turn, state.tts_state, chunk)
+                state.tts_state.buffered_audio.clear()
+                state.tts_state.buffered_audio_bytes = 0
+            if state.completed and not state.official_done:
                 state.official_done = True
-                state.official_text_done_after_commit_ms = done_timing[
-                    "text_done_after_commit_ms"
-                ]
-                state.official_response_done_after_commit_ms = done_timing[
-                    "response_done_after_commit_ms"
-                ]
+                should_send_done = True
             emit_structured_log(
                 "reply",
                 "provisional_reply_resolved",
@@ -4786,6 +4851,24 @@ class MultimodalSession:
                 delta_count=state.delta_count,
                 resolved_after_commit_ms=self._after_commit_ms(turn),
             )
+        if should_send_done:
+            done_timing = await self._send_reply_done(
+                turn,
+                response_id=state.response_id,
+                text=buffered_text,
+                source=state.source,
+                finish_reason=state.finish_reason,
+                usage=state.usage,
+                provisional_id=state.response_id,
+                tts_state=state.tts_state,
+            )
+            async with state.lock:
+                state.official_text_done_after_commit_ms = done_timing[
+                    "text_done_after_commit_ms"
+                ]
+                state.official_response_done_after_commit_ms = done_timing[
+                    "response_done_after_commit_ms"
+                ]
 
     async def _discard_provisional_reply(
         self,
@@ -4801,6 +4884,10 @@ class MultimodalSession:
                 return
             state.status = "discarded"
             state.resolution_reason = reason
+            tts_state = state.tts_state
+            if tts_state is not None:
+                tts_state.buffered_audio.clear()
+                tts_state.buffered_audio_bytes = 0
             if send_event:
                 await self.send(
                     {
@@ -4828,6 +4915,7 @@ class MultimodalSession:
                 delta_count=state.delta_count,
                 resolved_after_commit_ms=self._after_commit_ms(turn),
             )
+        await self._abort_reply_tts(tts_state)
         if abort_request and state.request_id is not None:
             abort = getattr(self.client, "abort", None)
             if callable(abort):
@@ -4846,6 +4934,173 @@ class MultimodalSession:
             if not state.task.done():
                 state.task.cancel()
             await asyncio.gather(state.task, return_exceptions=True)
+
+    def _start_reply_tts(
+        self,
+        turn: TurnBuffer,
+        *,
+        response_id: str,
+        provisional: ProvisionalReplyState | None = None,
+    ) -> ReplyTTSState | None:
+        if not self.output_capabilities.audio_enabled:
+            return None
+        if self.embedded_tts is None or self.embedded_tts_config is None:
+            raise RuntimeError("embedded TTS is unavailable for an audio Session")
+
+        text_queue: asyncio.Queue[str | None] = asyncio.Queue(
+            maxsize=self.embedded_tts_config.text_queue_max_chunks
+        )
+        allow_commit = asyncio.Event()
+        state_holder: dict[str, ReplyTTSState] = {}
+
+        async def text_chunks():
+            while True:
+                chunk = await text_queue.get()
+                if chunk is None:
+                    await allow_commit.wait()
+                    return
+                yield chunk
+
+        async def audio_sink(chunk: bytes) -> None:
+            self._ensure_turn_processing(turn)
+            state = state_holder["state"]
+            if state.provisional is not None:
+                async with state.provisional.lock:
+                    if state.provisional.status == "discarded":
+                        return
+                    if state.provisional.status == "pending":
+                        buffered_audio_bytes = state.buffered_audio_bytes + len(chunk)
+                        buffered_audio_milliseconds = (
+                            buffered_audio_bytes * 1000 / (24000 * 1 * 2)
+                        )
+                        if (
+                            buffered_audio_milliseconds
+                            > self.embedded_tts_config.provisional_audio_max_milliseconds
+                        ):
+                            raise RuntimeError(
+                                "provisional TTS audio duration exceeds configured limit"
+                            )
+                        if (
+                            buffered_audio_bytes
+                            > self.embedded_tts_config.provisional_audio_max_bytes
+                        ):
+                            raise RuntimeError(
+                                "provisional TTS audio exceeds configured buffer limit"
+                            )
+                        state.buffered_audio.append(chunk)
+                        state.buffered_audio_bytes = buffered_audio_bytes
+                        return
+                    await self._send_reply_audio_delta(turn, state, chunk)
+                    return
+            await self._send_reply_audio_delta(turn, state, chunk)
+
+        task = asyncio.create_task(
+            self.embedded_tts.synthesize_streaming(
+                turn_id=turn.turn_id,
+                text_chunks=text_chunks(),
+                audio_sink=audio_sink,
+            ),
+            name=f"session-embedded-tts-{self.session_id}-{turn.turn_id}",
+        )
+        state = ReplyTTSState(
+            response_id=response_id,
+            text_queue=text_queue,
+            allow_commit=allow_commit,
+            task=task,
+            provisional=provisional,
+        )
+        state_holder["state"] = state
+        if provisional is not None:
+            provisional.tts_state = state
+        turn.branch_tasks.add(task)
+        task.add_done_callback(turn.branch_tasks.discard)
+        return state
+
+    async def _send_reply_audio_delta(
+        self, turn: TurnBuffer, state: ReplyTTSState, chunk: bytes
+    ) -> None:
+        self._ensure_turn_processing(turn)
+        seq = state.next_audio_seq
+        state.next_audio_seq += 1
+        await self.send(
+            {
+                "type": "response.audio.delta",
+                "session_id": self.session_id,
+                "turn_id": turn.turn_id,
+                "response_id": state.response_id,
+                "seq": seq,
+                "delta": base64.b64encode(chunk).decode("ascii"),
+                "audio": {
+                    "format": "pcm16le",
+                    "sample_rate_hz": 24000,
+                    "channels": 1,
+                },
+            }
+        )
+
+    async def _enqueue_reply_tts_text(
+        self, state: ReplyTTSState | None, text: str
+    ) -> None:
+        if state is None or not text:
+            return
+        await self._put_reply_tts_queue(state, text)
+
+    @staticmethod
+    async def _put_reply_tts_queue(state: ReplyTTSState, value: str | None) -> None:
+        if state.task.done():
+            await state.task
+        put_task = asyncio.create_task(state.text_queue.put(value))
+        done, _ = await asyncio.wait(
+            {put_task, state.task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if state.task in done:
+            if not put_task.done():
+                put_task.cancel()
+            await asyncio.gather(put_task, return_exceptions=True)
+            await state.task
+        await put_task
+
+    async def _abort_reply_tts(self, state: ReplyTTSState | None) -> None:
+        if state is None or state.task.done():
+            return
+        if self.embedded_tts is not None:
+            await self.embedded_tts.cancel_active_turn()
+        if not state.task.done():
+            state.task.cancel()
+        await asyncio.gather(state.task, return_exceptions=True)
+
+    async def _finish_reply_tts(self, state: ReplyTTSState) -> None:
+        if not state.input_finished:
+            await self._put_reply_tts_queue(state, None)
+            state.input_finished = True
+            state.allow_commit.set()
+        await state.task
+
+    async def _next_reply_chunk(
+        self,
+        stream: Any,
+        *,
+        tts_state: ReplyTTSState | None,
+        request_id: str,
+    ) -> Any:
+        next_task = asyncio.create_task(
+            anext(stream), name=f"session-reply-next:{request_id}"
+        )
+        if tts_state is None:
+            return await next_task
+        done, _ = await asyncio.wait(
+            {next_task, tts_state.task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if tts_state.task in done:
+            if not next_task.done():
+                next_task.cancel()
+            await asyncio.gather(next_task, return_exceptions=True)
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(abort(request_id), return_exceptions=True)
+            await tts_state.task
+            raise RuntimeError("embedded TTS completed before model text EOF")
+        return await next_task
 
     async def _run_generated_reply(
         self,
@@ -4900,6 +5155,7 @@ class MultimodalSession:
         text_parts: list[str] = []
         finish_reason = "stop"
         usage: dict[str, Any] | None = None
+        tts_state: ReplyTTSState | None = None
         emit_structured_log(
             "diagnostic",
             "reply_logical_input",
@@ -4967,6 +5223,9 @@ class MultimodalSession:
             created_after_commit_ms = self._after_commit_ms(turn)
         else:
             created_after_commit_ms = provisional.created_after_commit_ms
+        tts_state = self._start_reply_tts(
+            turn, response_id=response_id, provisional=provisional
+        )
         self._register_turn_request(turn, request_id)
         emit_structured_log(
             "reply",
@@ -4988,7 +5247,16 @@ class MultimodalSession:
             if callable(completion_stream):
                 stream = completion_stream(request, request_id=request_id)
                 async with aclosing(stream):
-                    async for chunk in stream:
+                    iterator = stream.__aiter__()
+                    while True:
+                        try:
+                            chunk = await self._next_reply_chunk(
+                                iterator,
+                                tts_state=tts_state,
+                                request_id=request_id,
+                            )
+                        except StopAsyncIteration:
+                            break
                         self._ensure_turn_processing(turn)
                         if chunk.modality == "text" and chunk.text:
                             is_first_delta = first_token_ms is None
@@ -5007,9 +5275,15 @@ class MultimodalSession:
                                         "delta": chunk.text,
                                     }
                                 )
+                                await self._enqueue_reply_tts_text(
+                                    tts_state, chunk.text
+                                )
                             else:
                                 await self._send_provisional_reply_delta(
                                     turn, provisional, chunk.text
+                                )
+                                await self._enqueue_reply_tts_text(
+                                    tts_state, chunk.text
                                 )
                             delta_count += 1
                             if is_first_delta:
@@ -5047,10 +5321,12 @@ class MultimodalSession:
                                 "delta": result.text,
                             }
                         )
+                        await self._enqueue_reply_tts_text(tts_state, result.text)
                     else:
                         await self._send_provisional_reply_delta(
                             turn, provisional, result.text
                         )
+                        await self._enqueue_reply_tts_text(tts_state, result.text)
                     delta_count = 1
                     first_delta_after_commit_ms = self._after_commit_ms(turn)
                     emit_structured_log(
@@ -5077,6 +5353,7 @@ class MultimodalSession:
                     source="generated",
                     finish_reason=finish_reason,
                     usage=usage,
+                    tts_state=tts_state,
                 )
             else:
                 done_timing = await self._finish_provisional_reply(
@@ -5163,6 +5440,7 @@ class MultimodalSession:
             )
             raise
         finally:
+            await self._abort_reply_tts(tts_state)
             self._unregister_turn_request(turn, request_id)
 
     async def _run_provided_reply(
@@ -5181,15 +5459,23 @@ class MultimodalSession:
         started = (
             provisional.started_at if provisional is not None else time.perf_counter()
         )
+        tts_state: ReplyTTSState | None = None
         if provisional is not None:
+            tts_state = self._start_reply_tts(
+                turn, response_id=response_id, provisional=provisional
+            )
             if text:
                 await self._send_provisional_reply_delta(turn, provisional, text)
-            await self._finish_provisional_reply(
-                turn,
-                provisional,
-                finish_reason="provided",
-                usage=None,
-            )
+                await self._enqueue_reply_tts_text(tts_state, text)
+            try:
+                await self._finish_provisional_reply(
+                    turn,
+                    provisional,
+                    finish_reason="provided",
+                    usage=None,
+                )
+            finally:
+                await self._abort_reply_tts(tts_state)
             total_ms = (time.perf_counter() - started) * 1000.0
             timing = self._provisional_reply_timing(provisional, total_ms=total_ms)
             emit_structured_log(
@@ -5230,15 +5516,21 @@ class MultimodalSession:
                 "delta": text,
             }
         )
+        tts_state = self._start_reply_tts(turn, response_id=response_id)
+        await self._enqueue_reply_tts_text(tts_state, text)
         first_delta_after_commit_ms = self._after_commit_ms(turn)
-        done_timing = await self._send_reply_done(
-            turn,
-            response_id=response_id,
-            text=text,
-            source="provided",
-            finish_reason="provided",
-            usage=None,
-        )
+        try:
+            done_timing = await self._send_reply_done(
+                turn,
+                response_id=response_id,
+                text=text,
+                source="provided",
+                finish_reason="provided",
+                usage=None,
+                tts_state=tts_state,
+            )
+        finally:
+            await self._abort_reply_tts(tts_state)
         total_ms = (time.perf_counter() - started) * 1000.0
         text_done_after_commit_ms = done_timing["text_done_after_commit_ms"]
         timing = {
@@ -5291,6 +5583,7 @@ class MultimodalSession:
         finish_reason: str,
         usage: dict[str, Any] | None,
         provisional_id: str | None = None,
+        tts_state: ReplyTTSState | None = None,
     ) -> dict[str, float | None]:
         text_done_payload: dict[str, Any] = {
             "type": "response.text.done",
@@ -5303,6 +5596,23 @@ class MultimodalSession:
             text_done_payload["provisional_id"] = provisional_id
         await self.send(text_done_payload)
         text_done_after_commit_ms = self._after_commit_ms(turn)
+        if tts_state is not None:
+            await self._finish_reply_tts(tts_state)
+            self._ensure_turn_processing(turn)
+            await self.send(
+                {
+                    "type": "response.audio.done",
+                    "session_id": self.session_id,
+                    "turn_id": turn.turn_id,
+                    "response_id": response_id,
+                    "seq": tts_state.next_audio_seq - 1,
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24000,
+                        "channels": 1,
+                    },
+                }
+            )
         response: dict[str, Any] = {
             "id": response_id,
             "status": "completed",
@@ -6820,8 +7130,11 @@ class MultimodalSession:
         if event_type == "session.start" and (
             "unsupported outputs" in message
             or "unsupported output modalities" in message
+            or "audio output requires" in message
         ):
             return "unsupported_output"
+        if "embedded tts provider is not configured" in message:
+            return "tts_provider_not_configured"
         if "unsupported fields" in message or "missing required fields" in message:
             return "invalid_event_field"
         if (
@@ -6888,18 +7201,7 @@ class MultimodalSession:
 
     @staticmethod
     def _normalize_outputs(value: Any) -> tuple[str, ...]:
-        if value is None:
-            return DEFAULT_MODALITIES
-        if not isinstance(value, list) or not value:
-            raise ValueError("outputs must be a non-empty list")
-        if not all(isinstance(item, str) for item in value):
-            raise ValueError("outputs entries must be strings")
-        if len(set(value)) != len(value):
-            raise ValueError("outputs must not contain duplicates")
-        unsupported = sorted(set(value) - SUPPORTED_MODALITIES)
-        if unsupported:
-            raise ValueError("unsupported outputs: " + ", ".join(unsupported))
-        return tuple(item for item in DEFAULT_MODALITIES if item in value)
+        return SessionOutputCapabilities.parse(value).outputs
 
     @staticmethod
     def _nonnegative_int(value: Any, name: str) -> int:
@@ -6989,6 +7291,8 @@ class MultimodalSessionManager:
         global_action_catalog: GlobalActionCatalog | None = None,
         global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
         allow_unregistered_protocol_actions: bool = False,
+        embedded_tts_config: EmbeddedTTSConfig | None = None,
+        embedded_tts_connector: Callable[..., Any] | None = None,
     ) -> None:
         self.client = client
         self.model_name = model_name
@@ -6999,6 +7303,8 @@ class MultimodalSessionManager:
         self.action_category_top_k = normalize_action_category_top_k()
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
+        self.embedded_tts_config = embedded_tts_config
+        self.embedded_tts_connector = embedded_tts_connector
         self.global_action_prewarm = (
             global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
         )
@@ -7036,6 +7342,8 @@ class MultimodalSessionManager:
             allow_unregistered_protocol_actions=(
                 self.allow_unregistered_protocol_actions
             ),
+            embedded_tts_config=self.embedded_tts_config,
+            embedded_tts_connector=self.embedded_tts_connector,
             claim_session=self.claim,
             release_session=self.release,
             request_resource_sample=self.resource_sample_requester,

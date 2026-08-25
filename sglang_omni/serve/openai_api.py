@@ -61,6 +61,7 @@ from sglang_omni.client.types import (
 
 if TYPE_CHECKING:
     from sglang_omni.client.client import Client
+    from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
@@ -245,6 +246,7 @@ def create_app(
     global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
     enable_resource_monitor: bool = True,
     allow_unregistered_protocol_actions: bool = False,
+    embedded_tts_config: EmbeddedTTSConfig | None = None,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -299,6 +301,7 @@ def create_app(
     app.state.global_action_prewarm = (
         global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
     )
+    app.state.embedded_tts_config = embedded_tts_config
     app.state.speaker_sample_store = SpeakerSampleStore()
     app.state.speech_service = SpeechRequestValidator(
         default_model=app.state.model_name,
@@ -1340,6 +1343,7 @@ def _register_multimodal_realtime(
         global_action_catalog=app.state.global_action_catalog,
         global_action_prewarm=app.state.global_action_prewarm,
         allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
+        embedded_tts_config=app.state.embedded_tts_config,
     )
     app.state.multimodal_realtime_manager = manager
 

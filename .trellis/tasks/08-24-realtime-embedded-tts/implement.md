@@ -82,25 +82,46 @@
 
 ## 阶段 G：本地与服务器验证
 
-- [ ] 扩展 fake model smoke 支持 text+audio 和 text+audio+action。
-- [ ] 运行真实 FastAPI + fake model + fake TTS 进程外测试。
-- [ ] 验证事件关联、seq、Base64 PCM 和完整终态。
+- [x] 扩展 fake model smoke 支持 text+audio 和 text+audio+action。
+- [x] 运行真实 FastAPI + fake model + fake TTS 进程外测试。
+- [x] 验证事件关联、seq、Base64 PCM 和完整终态，以及取消后无迟到成功终态。
 - [ ] 在 Linux/服务器完整依赖环境运行相关 pytest、pre-commit 和类型检查。
 - [ ] Docker 联调数字人后端，确认 outputs 移除 audio 即可回滚且不会重复 TTS。
 
+Windows 本地手工验证使用三个终端：
+
+```powershell
+# 终端 1：启动 fake TTS provider
+.venv\Scripts\python.exe scripts\realtime_fake_tts_provider.py --host 127.0.0.1 --port 8765
+
+# 终端 2：启动 fake model Realtime 服务；TTS 仍只由 session.start.outputs 控制
+$env:SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED='true'
+$env:SGLANG_OMNI_DEV_FAKE_MODEL_RESPONSE_TEXT='这是本地 TTS smoke 固定回复'
+$env:SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_INTERVAL_MS='20'
+.venv\Scripts\python.exe -m sglang_omni.serve.realtime.dev_server --host 127.0.0.1 --port 8000 --realtime-tts-url ws://127.0.0.1:8765 --realtime-tts-voice smoke
+
+# 终端 3：分别验证普通音频回复和 action 融合音频回复
+.venv\Scripts\python.exe scripts\realtime_fake_model_smoke.py --mode text-audio --response-text '这是本地 TTS smoke 固定回复'
+.venv\Scripts\python.exe scripts\realtime_fake_model_smoke.py --mode fusion-audio --response-text '这是本地 TTS smoke 固定回复'
+```
+
+终止当前验证进程：在终端 1 和终端 2 分别按 `Ctrl+C`。这只停止当前进程；若下次启动不希望配置
+provider，省略 `--realtime-tts-url` 和 `--realtime-tts-voice` 即可。是否请求音频始终由
+`session.start.outputs` 决定，不存在 TTS enabled 开关。
+
 ## 阶段 H：文档与观测
 
-- [ ] 更新组长交流设计文档和正式客户端接入指南。
-- [ ] 给出五种 outputs 示例、audio event schema、取消和错误处理。
+- [x] 更新组长交流设计文档和任务复盘报告；正式客户端接入指南待服务器联调后补充。
+- [x] 给出五种 outputs 示例、audio event schema、取消和错误处理。
 - [ ] 增加延迟、buffer、失败、取消指标与脱敏日志。
-- [ ] 删除旧接口、旧开关、旧事件名和 no-op cancel 描述。
+- [x] 从本任务设计文档中删除旧接口、旧开关、旧事件名和 no-op cancel 描述。
 
 ## 最终验收
 
-- [ ] outputs 能力解析集中且便于扩展。
-- [ ] audio 未请求时无 TTS 连接、任务、事件和延迟回归。
-- [ ] audio 请求时文本/音频真正并发，完成顺序正确。
-- [ ] provisional 音频不提前播放且不泄漏。
-- [ ] turn.cancel 真正取消并幂等终止。
-- [ ] 错误不静默降级，资源无泄漏。
+- [x] outputs 能力解析集中且便于扩展。
+- [x] audio 未请求时无 TTS 连接、任务、事件和延迟回归。
+- [x] audio 请求时文本/音频真正并发，完成顺序正确。
+- [x] provisional 音频不提前播放且不泄漏。
+- [x] turn.cancel 真正取消并幂等终止。
+- [x] 错误不静默降级，资源无泄漏。
 - [ ] fake、本地、Linux 完整测试与文档通过。
