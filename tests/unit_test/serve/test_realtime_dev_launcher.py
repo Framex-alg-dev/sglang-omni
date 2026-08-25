@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
+
+from sglang_omni.serve.realtime.dev_model import DevRealtimeModelConfig
 
 
 @pytest.mark.asyncio
@@ -15,25 +16,16 @@ async def test_enabled_dev_model_bypasses_pipeline_runner(monkeypatch) -> None:
         def __init__(self, pipeline_config) -> None:
             raise AssertionError("development mode must not construct a pipeline")
 
-    app = object()
-    serve = AsyncMock(return_value=None)
     captured: dict[str, object] = {}
 
-    def fake_create_app(client, **kwargs):
-        captured["client"] = client
+    async def fake_serve(config, **kwargs):
+        captured["config"] = config
         captured["kwargs"] = kwargs
-        return app
 
     monkeypatch.setenv("SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED", "true")
     monkeypatch.setattr(launcher, "_find_available_port", lambda host, port: port)
     monkeypatch.setattr(launcher, "MultiProcessPipelineRunner", ForbiddenRunner)
-    monkeypatch.setattr(launcher, "create_app", fake_create_app)
-    monkeypatch.setattr(
-        launcher,
-        "install_dev_model_error_handler",
-        lambda installed_app: captured.setdefault("error_handler_app", installed_app),
-    )
-    monkeypatch.setattr(launcher.uvicorn.Server, "serve", serve)
+    monkeypatch.setattr(launcher, "serve_dev_realtime_model", fake_serve)
 
     await launcher._run_server(
         SimpleNamespace(name="fake-pipeline"),
@@ -41,11 +33,8 @@ async def test_enabled_dev_model_bypasses_pipeline_runner(monkeypatch) -> None:
         enable_realtime=True,
     )
 
-    serve.assert_awaited_once()
-    assert captured["client"].health()["running"] is True
-    assert captured["kwargs"]["enable_realtime"] is True
+    assert captured["config"].enabled is True
     assert captured["kwargs"]["model_name"] == "fake-pipeline"
-    assert captured["error_handler_app"] is app
 
 
 @pytest.mark.asyncio
@@ -76,3 +65,59 @@ async def test_disabled_dev_model_keeps_pipeline_path(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="production pipeline marker"):
         await launcher._run_server(config)
     assert constructed == [config]
+
+
+@pytest.mark.asyncio
+async def test_standalone_dev_server_wires_real_app_without_pipeline(
+    monkeypatch,
+) -> None:
+    from sglang_omni.serve.realtime import dev_server
+
+    app = object()
+    captured: dict[str, object] = {}
+
+    def fake_create_app(client, **kwargs):
+        captured["client"] = client
+        captured["kwargs"] = kwargs
+        return app
+
+    class FakeServer:
+        def __init__(self, config) -> None:
+            captured["uvicorn_config"] = config
+
+        async def serve(self) -> None:
+            captured["served"] = True
+
+    monkeypatch.setattr(dev_server, "create_app", fake_create_app)
+    monkeypatch.setattr(
+        dev_server,
+        "install_dev_model_error_handler",
+        lambda installed_app: captured.setdefault("error_handler_app", installed_app),
+    )
+    monkeypatch.setattr(dev_server.uvicorn, "Server", FakeServer)
+    await dev_server.serve_dev_realtime_model(
+        DevRealtimeModelConfig(enabled=True),
+        host="127.0.0.1",
+        port=8123,
+        model_name="dev-model",
+        log_level="info",
+    )
+    assert captured["client"].health()["running"] is True
+    assert captured["kwargs"]["enable_realtime"] is True
+    assert captured["kwargs"]["model_name"] == "dev-model"
+    assert captured["error_handler_app"] is app
+    assert captured["served"] is True
+
+
+@pytest.mark.asyncio
+async def test_standalone_dev_server_requires_enabled_switch() -> None:
+    from sglang_omni.serve.realtime.dev_server import serve_dev_realtime_model
+
+    with pytest.raises(ValueError, match="must be true"):
+        await serve_dev_realtime_model(
+            DevRealtimeModelConfig(enabled=False),
+            host="127.0.0.1",
+            port=8123,
+            model_name="dev-model",
+            log_level="info",
+        )
