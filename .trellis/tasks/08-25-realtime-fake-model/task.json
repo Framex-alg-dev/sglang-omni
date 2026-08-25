@@ -3,7 +3,7 @@
   "name": "realtime-fake-model",
   "title": "Realtime 本地开发模型替身",
   "description": "通过环境变量启用无需 Pipeline/GPU 的 Realtime 模型替身，校验请求并按固定节奏输出文本，供内嵌 TTS 迁移前进行本地链路调试。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": "feature",
   "scope": "Realtime local development launcher and model-client substitute; no TTS integration",
   "package": "backend",

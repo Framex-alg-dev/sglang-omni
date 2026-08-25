@@ -45,6 +45,11 @@ from sglang_omni.profiler.event_recorder import get_recorder as _get_event_recor
 from sglang_omni.profiler.profiler_control import ProfilerControlClient
 from sglang_omni.serve.openai_api import create_app
 from sglang_omni.serve.protocol import DEFAULT_TTS_BATCH_MAX_ITEMS
+from sglang_omni.serve.realtime.dev_model import (
+    DevRealtimeModelClient,
+    DevRealtimeModelConfig,
+    install_dev_model_error_handler,
+)
 from sglang_omni.utils.gpu_compat import apply_gpu_compat_env_defaults
 from sglang_omni.utils.gpu_memory import (
     GpuDeviceInfo,
@@ -349,6 +354,21 @@ async def _run_server(
     # 0. Check port availability before loading models
     port = _find_available_port(host, port)
 
+    dev_model_config = DevRealtimeModelConfig.from_env()
+    if dev_model_config.enabled:
+        await _run_dev_realtime_server(
+            dev_model_config,
+            host=host,
+            port=port,
+            model_name=model_name or pipeline_config.name,
+            log_level=log_level,
+            enable_realtime=enable_realtime,
+            allowed_local_media_path=allowed_local_media_path,
+            allowed_media_domains=allowed_media_domains,
+            tts_batch_max_items=tts_batch_max_items,
+        )
+        return
+
     mp_runner = MultiProcessPipelineRunner(pipeline_config)
     startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
     await mp_runner.start(timeout=startup_timeout)
@@ -417,6 +437,47 @@ async def _run_server(
         logger.info("Shutting down pipeline …")
         await mp_runner.stop()
         logger.info("Pipeline stopped.")
+
+
+async def _run_dev_realtime_server(
+    dev_model_config: DevRealtimeModelConfig,
+    *,
+    host: str,
+    port: int,
+    model_name: str,
+    log_level: str,
+    enable_realtime: bool,
+    allowed_local_media_path: str | None,
+    allowed_media_domains: list[str] | None,
+    tts_batch_max_items: int,
+) -> None:
+    if not enable_realtime:
+        raise ValueError(
+            "SGLANG_OMNI_DEV_FAKE_MODEL_ENABLED=true requires --enable-realtime"
+        )
+    logger.warning(
+        "DEV FAKE REALTIME MODEL ENABLED: pipeline and model loading are bypassed; %s",
+        dev_model_config.log_summary(),
+    )
+    client = DevRealtimeModelClient(dev_model_config)
+    app = create_app(
+        client,
+        model_name=model_name,
+        enable_realtime=True,
+        allowed_local_media_path=allowed_local_media_path,
+        allowed_media_domains=allowed_media_domains,
+        tts_batch_max_items=tts_batch_max_items,
+        architectures=[],
+    )
+    install_dev_model_error_handler(app)
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level=log_level,
+        timeout_keep_alive=120,
+    )
+    await uvicorn.Server(config).serve()
 
 
 async def _serve_with_failure_watch(
