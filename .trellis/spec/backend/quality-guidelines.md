@@ -23,3 +23,15 @@ Cover the happy path plus relevant validation, timeout, cancellation, disconnect
 Run narrow affected tests first, then neighboring suites. Before handoff, run `pre-commit run --all-files` when feasible or at minimum relevant pytest targets and formatting checks.
 
 Review package boundaries, error mapping, lifecycle cleanup, streaming terminal events, bounded/safe logs, backward-compatible configuration threading, and observable test coverage. Avoid bare `except`, silent broad exception handling, unowned fire-and-forget tasks, unbounded streaming buffers, `print`/debug breakpoints, and model downloads in ordinary control-plane unit tests.
+
+## Pre-Implementation Git Checkpoint
+
+Every Trellis task must have a local Git checkpoint after its planning artifacts are reviewed and before `task.py start` changes the task to `in_progress`.
+
+- Commit only the reviewed task directory and other explicitly approved paths belonging to that task.
+- List unrelated or unrecognized dirty files separately and leave them untouched.
+- Obtain one confirmation for the exact commit message and file set before staging.
+- Do not push, amend, stash, reset, clean, or use broad staging such as `git add .` for this checkpoint.
+- Verify the checkpoint commit exists before implementation begins. If task changes overlap unrelated work and cannot be isolated, stop rather than creating an unsafe archive.
+
+This checkpoint is a recoverable planning baseline. It does not replace the normal implementation, quality-check, final commit, archive, and journal steps.

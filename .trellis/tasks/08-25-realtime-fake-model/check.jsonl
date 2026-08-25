@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "检查包边界与规范覆盖"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查错误合同与资源清理"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检查日志安全与运行态标记"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查测试、异步生命周期和正式路径回归"}

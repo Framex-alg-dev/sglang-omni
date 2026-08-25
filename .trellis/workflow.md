@@ -184,7 +184,7 @@ Complex task: ask the user if you can create a Trellis task and enter the planni
 - 1.1 Requirement exploration `[required · repeatable]` (`prd.md`; complex tasks also need `design.md` + `implement.md`)
 - 1.2 Research `[optional · repeatable]`
 - 1.3 Configure context `[required · once]` — Claude Code, Cursor, OpenCode, Codex, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Grok, Kimi Code (sub-agent-dispatch platforms only; inline platforms skip)
-- 1.4 Activate task `[required · once]` (review gate, then `task.py start`; status → in_progress)
+- 1.4 Archive planning and activate task `[required · once]` (review gate, local Git checkpoint, then `task.py start`; status → in_progress)
 - 1.5 Completion criteria
 
 <!-- Per-turn breadcrumb: shown throughout Phase 1 (status='planning') -->
@@ -194,6 +194,7 @@ Load `trellis-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start.
+After the user approves the final plan, create a task-scoped local Git checkpoint before `task.py start`; never mix unrelated dirty files and never push as part of this gate.
 [/workflow-state:planning]
 
 <!-- Per-turn breadcrumb: shown throughout Phase 1 when codex.dispatch_mode=inline.
@@ -207,6 +208,7 @@ Load `trellis-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
+After the user approves the final plan, create a task-scoped local Git checkpoint before `task.py start`; never mix unrelated dirty files and never push as part of this gate.
 [/workflow-state:planning-inline]
 
 ### Phase 2: Execute
@@ -433,9 +435,16 @@ Skip this step. Context is loaded directly by the `trellis-before-dev` skill in 
 
 [/codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
 
-#### 1.4 Activate task `[required · once]`
+#### 1.4 Archive planning and activate task `[required · once]`
 
-After artifact review, flip the task status to `in_progress`:
+After artifact review and explicit user approval, create a local Git checkpoint before flipping the task to `in_progress`.
+
+1. Inspect `git status --porcelain` and classify dirty paths into this task versus unrelated/user-owned work.
+2. Draft one task-scoped checkpoint commit containing the reviewed planning artifacts and any other already-approved changes that belong to this task. Do not include unrelated dirty paths.
+3. Present the commit message and exact path list once and obtain confirmation. Approval of the planning summary does not implicitly approve an unknown file set.
+4. Run `git add <exact task paths>` and `git commit`. Do not amend, tag, push, stash, reset, or clean unrelated work.
+5. Verify the checkpoint commit exists and task-scoped paths are clean. If files overlap another task or cannot be isolated safely, stop and ask the user instead of starting implementation.
+6. Only then run:
 
 ```bash
 python ./.trellis/scripts/task.py start <task-dir>
@@ -443,7 +452,9 @@ python ./.trellis/scripts/task.py start <task-dir>
 
 For lightweight tasks, `prd.md` can be enough. For complex tasks, `prd.md`, `design.md`, and `implement.md` must exist and be reviewed before start. On sub-agent-dispatch platforms, `implement.jsonl` and `check.jsonl` must both have real curated entries before start. Runtime consumers tolerate missing or seed-only manifests for compatibility, but that tolerance is not a planning-ready state.
 
-After this command succeeds, the breadcrumb auto-switches to `[workflow-state:in_progress]`, and the rest of Phase 2 / 3 follows.
+The checkpoint is a pre-implementation rollback baseline, not the task's final implementation commit. After `task.py start`, task metadata may become dirty again; that is expected and will be included in the normal Phase 3 commit/archive flow.
+
+After `task.py start` succeeds, the breadcrumb auto-switches to `[workflow-state:in_progress]`, and the rest of Phase 2 / 3 follows.
 
 If `task.py start` errors with a session-identity message (no context key from hook input, `TRELLIS_CONTEXT_ID`, or platform-native session env), follow the hint in the error to set up session identity, then retry.
 
@@ -453,6 +464,7 @@ If `task.py start` errors with a session-identity message (no context key from h
 |------|:---:|
 | `prd.md` exists | ✅ |
 | User confirms task should enter implementation | ✅ |
+| Reviewed task planning has a local Git checkpoint commit | ✅ |
 | `task.py start` has been run (status = in_progress) | ✅ |
 | `research/` has artifacts (complex tasks) | recommended |
 | `design.md` exists (complex tasks) | ✅ |
