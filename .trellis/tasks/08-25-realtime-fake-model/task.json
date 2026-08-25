@@ -1,9 +1,9 @@
 {
   "id": "realtime-fake-model",
   "name": "realtime-fake-model",
-  "title": "Realtime 本地开发模型替身",
-  "description": "通过环境变量启用无需 Pipeline/GPU 的 Realtime 模型替身，校验请求并按固定节奏输出文本，供内嵌 TTS 迁移前进行本地链路调试。",
-  "status": "in_progress",
+  "title": "Session Realtime 本地开发模型替身",
+  "description": "为 /v1/session/realtime 提供无需 Pipeline/GPU 的确定性 text/action 模型替身、真正取消和进程外 smoke，作为 outputs 驱动内嵌 TTS 的前置任务。",
+  "status": "planning",
   "dev_type": "feature",
   "scope": "Realtime local development launcher and model-client substitute; no TTS integration",
   "package": "backend",
@@ -23,11 +23,12 @@
   "relatedFiles": [
     "sglang_omni/serve/launcher.py",
     "sglang_omni/serve/openai_api.py",
-    "sglang_omni/serve/realtime/session.py",
+    "sglang_omni/serve/realtime/multimodal.py",
     "sglang_omni/client/types.py",
     "examples/launchers/qwen3_omni.py",
+    "tests/unit_test/qwen3_omni/test_multimodal_session.py",
     "tests/unit_test/serve/"
   ],
-  "notes": "这是 08-24-realtime-embedded-tts 的前置任务。只提供开发态模型替身和本地启动路径，不实现任何 TTS client、TTS 事件或音频合成逻辑。",
+  "notes": "这是 08-24-realtime-embedded-tts 的前置任务。全面采用协议版本 1 的 /v1/session/realtime；只提供开发态 text/action 模型替身和本地启动路径，不实现 TTS 或 audio 输出。",
   "meta": {}
 }

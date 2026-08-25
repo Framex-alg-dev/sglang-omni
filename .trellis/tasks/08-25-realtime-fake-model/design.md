@@ -1,75 +1,63 @@
-# Realtime 本地开发模型替身：技术设计
+# Session Realtime 本地开发模型替身：技术设计
 
-## 1. 替换位置
-
-替身位于 serving 与 Pipeline 的边界，而不是模型包内部：
+## 1. 边界
 
 ```text
-真实模式：launch_server -> MultiProcessPipelineRunner -> Client -> create_app
-开发模式：launch_server -> DevRealtimeModelClient ----------> create_app
+生产：launcher -> action catalog -> Pipeline -> Client -> create_app -> MultimodalSession
+开发：dev_server / launcher fake branch -> DevSessionModelClient -> create_app -> MultimodalSession
 ```
 
-环境变量在 `_run_server()` 入口解析；开发模式在实例化 `MultiProcessPipelineRunner` 前进入独立开发启动分支。这样保留真实 FastAPI、Realtime、VAD 和 WebSocket 链路，同时完全绕过模型和 GPU。
+替身位于 `MultimodalSession` 与生产 Client/Pipeline 的边界。外部协议解析、Session/Turn 状态机、媒体 ACK、provisional、取消和终态继续使用正式实现；替身只提供确定性的模型与动作结果。
 
-## 2. 模块边界
+## 2. 路由与能力
 
-建议新增：
+开发 app 使用显式 allowlist：
+
+- HTTP：`/health`、`/v1/models`；
+- WebSocket：`/v1/session/realtime`。
+
+共享 `create_app()` 后续新增路由不会自动进入开发模式。旧 `/v1/realtime` 必须移除。生产模式默认注册所有正式路由和 resource monitor。
+
+输出组合由正式 Session 的统一能力解析器校验。本任务支持 text、action、text+action；audio 暂时返回明确错误。TTS 任务将扩展同一解析器，而不是在 fake client 中增加独立开关。
+
+## 3. 窄 client
+
+从 `MultimodalSession` 的实际调用点提取 Protocol：文本生成保留 `completion_stream()`，动作路径提供最小的固定 action scoring/结果能力，并让 `hasattr()` 探测保持标准 Python 语义。Protocol 不继承需要 Coordinator 的生产 `Client`。
+
+固定动作只能从 Session 已验证白名单选择，并复用服务端全局目录解析 category/action 元数据。配置 candidate 非法时失败；不在替身中复制目录结构。
+
+## 4. 数据流
 
 ```text
-sglang_omni/serve/realtime/dev_model.py
+client session.start(outputs)
+  -> 正式协议校验与 Session 建立
+client turn.start + input.* + turn.commit
+  -> MultimodalSession 冻结 Turn
+  -> DevSessionModelClient 固定 text/action
+  -> 正式 provisional/response/action/turn.result 事件
 ```
 
-包含：
+text+action 必须走正式 provisional promotion/discard 分支，从而为后续 audio 缓冲测试提供真实骨架。
 
-- `DevRealtimeModelConfig`：严格解析环境变量；
-- `DevRealtimeModelClient`：实现 Realtime 所需的 `completion_stream()`、`abort()`；
-- 请求分类与校验；
-- 固定文本 chunk 状态机。
+## 5. 取消与清理
 
-不继承真实 `Client`，因为它必须持有 `Coordinator`。应为 Realtime 引入窄 client Protocol，避免开发替身假装支持整个 Client API。
+Turn owner 持有文本、动作和发送任务。`turn.cancel` 设置终态 token，取消任务并等待清理，然后发送一次 `turn.cancelled`。迟到结果在发送边界按 token 丢弃。`session.close`、断线和重复 teardown 都必须幂等。
 
-## 3. 状态机
+## 6. 启动兼容
 
-```text
-Idle -> Validating(request) -> Streaming(request_id, chunk_index) -> Finished
-                    |                         |
-                    +-> Failed               +-> Aborted
-```
+- 独立 dev server 不解析模型配置，不加载 action catalog、resource monitor 或 GPU/Pipeline 资源。
+- launcher fake 分支在生产 action catalog 的懒导入之前返回。
+- disabled 分支维持合并后的 `catalog -> port -> runner` 顺序。
 
-单次调用是独立 async generator：先完成全部合同校验，再按 Unicode 字符切片配置文本；每段按 interval 等待后返回 `CompletionStreamChunk`；最后返回单独的 stop chunk。
+## 7. 测试结构
 
-response/transcription 分类依据 `build_response_request()` 和 `build_transcription_request()` 的稳定 prompt 特征，集中在一个函数并有单测。未来 prompt 改动必须同步分类测试，不能静默选择默认输出。
+- client 单测：配置、固定 chunk、固定 action、取消；
+- Session 集成：真实 `create_app()` + TestClient/WebSocket，覆盖三种输出；
+- 路由测试：开发 allowlist 精确等于目标集合；
+- launcher 测试：fake 不加载 catalog/runner，disabled 顺序不变；
+- 进程外 smoke：真实端口和协议事件；
+- 所有测试禁止模型下载、GPU 和网络 provider。
 
-## 4. 启动与生命周期
+## 8. 迁移与回滚
 
-开发模式仍使用 uvicorn 和 `create_app()`，但不创建 runner、coordinator、profiler control 或 pipeline failure watcher。服务退出时只清理 Realtime sessions。
-
-若完整 app 暴露其他端点，替身 client 对不支持操作返回明确的开发态 unsupported 错误。文档声明开发模式只保证 `/health`、`/v1/models` 和 `/v1/realtime`。
-
-正式模式的 runner 启动、watcher 和 finally stop 应尽量保持原结构，通过早期分支隔离开发路径。
-
-## 5. 环境变量与防误用
-
-统一使用 `SGLANG_OMNI_DEV_FAKE_MODEL_` 前缀。enabled 默认 false，只有明确真值才能启用。启动时以 warning 显示：
-
-```text
-DEV FAKE REALTIME MODEL ENABLED: pipeline and model loading are bypassed
-```
-
-只记录响应字符数、chunk size 和 interval，不记录完整配置文本。服务器联调和生产部署必须移除 enabled 或设为 false。
-
-## 6. 错误合同
-
-| 条件 | 行为 |
-|---|---|
-| 环境变量非法 | uvicorn/Pipeline 启动前失败 |
-| request 非 streaming/text-only | 开发态合同错误 |
-| 缺少 audio metadata/messages | 开发态合同错误 |
-| 无法判断 pass | 开发态合同错误，不使用默认分支 |
-| abort 已知 request | 标记取消，generator 尽快结束 |
-| abort 未知 request | 返回稳定未命中结果，不产生随机异常 |
-
-## 7. 与 TTS 任务的关系
-
-本任务完成后，TTS 任务可以在开发模式下继续使用真实 `/v1/realtime`，把确定性的文本 Delta 接到 fake/real TTS。模型替身自身永远不输出音频，也不感知 TTS 是否启用。
-
+删除旧接口专用测试、smoke 事件和文档，不保留双协议兼容层。回滚开发替身只需关闭 fake 环境变量；生产 `/v1/session/realtime` 不受影响。

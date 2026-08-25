@@ -1,50 +1,56 @@
-# Realtime 本地开发模型替身：实施计划
+# Session Realtime 本地开发模型替身：实施计划
 
-## 阶段 0：实施前本地 Git 存档
+## 阶段 0：重新规划与本地存档
 
-- [ ] 用户批准本任务最终规划。
-- [ ] 仅暂存本任务目录和明确属于本任务的已确认文件，不混入 TTS 任务或其他未提交文档。
-- [ ] 展示提交信息与精确文件列表并获得确认。
-- [ ] 创建本地 checkpoint commit，不 push；确认成功后才执行 `task.py start`。
+- [ ] 用户审核并批准本次协议迁移后的 PRD、design 和 implement。
+- [ ] 不提交当前基于旧 `/v1/realtime` 的未完成适配；实施时按新设计替换。
+- [ ] 创建精确的本地 checkpoint，不包含 TTS 文档和其他用户文件，不 push。
 
-## 阶段 1：配置与状态机
+## 阶段 1：协议与路由迁移
 
-- [ ] 实现严格的环境变量 config 与脱敏摘要。
-- [ ] 实现窄 client Protocol 和 `DevRealtimeModelClient`。
-- [ ] 实现 GenerateRequest 校验、pass 分类、固定 chunk 输出和 stop chunk。
-- [ ] 实现 abort bookkeeping 和 async generator 清理。
-- [ ] 单测覆盖所有合法/非法状态，不启动 FastAPI 或 Pipeline。
+- [ ] 开发路由从 `/v1/realtime` 改为唯一 `/v1/session/realtime`。
+- [ ] 删除旧 RealtimeSession/VAD/transcription pass 专用开发测试与 smoke 逻辑。
+- [ ] 复用正式 outputs 校验；本阶段允许 text/action/text+action，明确拒绝 audio。
+- [ ] 开发模式关闭 resource monitor，并拒绝所有非 allowlist HTTP/WS。
 
-验证：运行新增 dev model 单元测试；检查所有 chunk 拼接严格等于配置文本。
+验证：路由集合、协议版本、非法 outputs 和旧路径回归测试。
 
-## 阶段 2：无 Pipeline 启动分支
+## 阶段 2：固定模型与动作能力
 
-- [ ] 在 `_run_server()` 创建 runner 前解析 enabled。
-- [ ] 提取必要的共享 uvicorn serving 辅助函数，避免复制整段生命周期代码。
-- [ ] 开发模式直接构造 client + app；不创建 runner、coordinator、profiler 或 watcher。
-- [ ] 正式模式保持当前启动与清理顺序。
-- [ ] 测试启用/关闭两条分支的构造调用和资源清理。
+- [ ] 从 `MultimodalSession` 调用点提取窄 client Protocol。
+- [ ] 固定文本按配置分块输出，保持 request ID、stop 和取消语义。
+- [ ] 固定动作从已验证 Session 白名单确定性选择。
+- [ ] text+action 复用正式 provisional promoted/discarded 状态机。
+- [ ] `turn.cancel` 真正取消所有活动任务并只产生 `turn.cancelled`。
 
-验证：用构造时抛错的 runner fake 证明开发模式完全未触碰 Pipeline。
+验证：client 单测和真实 Session WebSocket 集成测试。
 
-## 阶段 3：本地 Realtime 集成
+## 阶段 3：启动路径
 
-- [ ] 使用真实 `create_app()` 和 TestClient/WebSocket 测试完整会话。
-- [ ] 输入测试 PCM 并触发 VAD，断言固定 response 和 transcription 事件顺序。
-- [ ] 验证请求校验看到 audio metadata、messages 和 text-only modality。
-- [ ] 验证 WebSocket 断开清理和重复 turn 的确定性。
-- [ ] 验证不支持端点返回明确错误。
+- [ ] 独立 dev server 无模型配置启动新接口。
+- [ ] launcher fake 分支发生在 action catalog、runner、GPU、warmup、profiler 和 watcher 之前。
+- [ ] disabled 分支保持 `catalog -> port -> runner` 生产顺序。
+- [ ] 生命周期与重复关闭幂等。
 
-## 阶段 4：中文文档
+验证：构造即失败的生产依赖证明 fake 路径未触达资源。
 
-- [ ] 增加环境变量示例、启动命令、测试音频用法和关闭方式。
-- [ ] 明确“仅用于开发、不是 TTS 迁移、服务器联调前关闭”。
-- [ ] 在 TTS 任务中将本任务列为前置质量门。
+## 阶段 4：进程外 smoke
+
+- [ ] 重写脚本为 `session.start/turn.start/input.* /turn.commit`。
+- [ ] 覆盖 text、action、text+action、重复 Turn 和真正取消。
+- [ ] 校验 ACK、delta、action ready、response done 和 turn result。
+- [ ] 超时、乱序、服务 error 和意外关闭非零退出。
+
+## 阶段 5：中文文档
+
+- [ ] 更新独立启动命令、outputs 示例、测试输入和成功输出。
+- [ ] 明确旧接口废弃、本阶段 audio 未实现、TTS 由后续任务增加。
+- [ ] 更新 TTS 前置质量门。
 
 ## 最终检查
 
-- [ ] 无 GPU、模型和 Pipeline 也能完成 Realtime 固定文本回路。
-- [ ] disabled 路径零行为变化。
-- [ ] 没有新增 TTS、PCM 或音频回复逻辑。
-- [ ] 环境变量、错误、日志和异步生命周期符合 backend spec。
-- [ ] 相关 pytest 与 pre-commit 检查通过。
+- [ ] 无 GPU/Pipeline 完成新 Session/Turn 固定结果回路。
+- [ ] 三种非 audio 输出模式与取消均可验证。
+- [ ] 生产启动路径和新 action 功能无回归。
+- [ ] 代码中无旧 `/v1/realtime` 开发兼容和 TTS 实现。
+- [ ] 相关 pytest、格式和静态检查通过；平台依赖阻塞有明确记录。
