@@ -16,7 +16,7 @@
 - `category_total_ms`：hierarchical 模式类别阶段总耗时
 - `child_total_ms`：hierarchical 模式具体动作阶段总耗时
 - `queue_wait_ms`：请求进入调度器后等待 GPU 执行的时间
-- `prefix_tokens` / `cached_prefix_tokens`：共享 prefix 的 token 数及命中 KV cache 的 token 数
+- `prefix_tokens` / `cached_prefix_tokens`：共享 prefix 的 token 数，以及候选 suffix 请求复用该共享 prefix 的 token 数；该字段不表示共享 prefix 本身全部来自启动预热
 - `candidate_recompute_tokens`：候选计算阶段重新计算的 prefix token 数
 - `batches`：候选 suffix 被拆分执行的批次
 
@@ -149,7 +149,7 @@ P5 合成请求的类别阶段为约 122–140 ms、子动作阶段为约 95–9
 | P4，21:53:53 | 659 | 45 | 6849 | 64×5+10 | 延迟构造 + short ID |
 | P4，21:53:54 | 673 | 45 | 6912 | 64×5+10 | 延迟构造 + short ID |
 
-P4 的日志显示 `cached_prefix_tokens == prefix_tokens`，`candidate_recompute_tokens == 0`。这说明 prefix KV cache 已命中；其余耗时主要来自六批短 suffix 的实际评分和少量调度开销。
+P4 的日志显示 `cached_prefix_tokens == prefix_tokens`，`candidate_recompute_tokens == 0`。这说明候选 suffix 请求复用了本次评分请求已经计算出的共享 prefix，没有为每个候选重新计算 prefix；它不表示共享 prefix 本身全部来自启动预热。其余耗时主要来自六批短 suffix 的实际评分和少量调度开销。
 
 ### 5.2 hierarchical
 
@@ -167,15 +167,177 @@ P4 的日志显示 `cached_prefix_tokens == prefix_tokens`，`candidate_recomput
 | 22:10:43 | 322.5 | 181.6 | 42.0 | 129.4 | 39.6 | 约 60 + 2 |
 | 22:10:56 | 291.6 | 172.3 | 42.6 | 115.5 | 20.2 | 约 60 + 2 |
 
-以上 hierarchical 请求的类别和子动作阶段均命中 prefix cache，候选 prefix 重算为 0；两阶段仍必须串行，因此它的总耗时不会像 flat short ID 那样只包含一个评分阶段。
+以上 hierarchical 请求的类别和子动作阶段中，候选 suffix 均复用了各自评分请求的共享 prefix，候选 prefix 重算为 0；Category 和 Child 的共享 prefix 仍分别执行 Prefill。两阶段必须串行，因此它的总耗时不会像 flat short ID 那样只包含一个评分阶段。
 
 ## 6. 结论
 
 1. **最大收益来自 suffix 表示和请求构造方式的共同变化。** 单独做延迟构造只将约 5 秒降到约 4.1 秒；加入短 `candidate_id` suffix 后降到约 0.67 秒。
 2. **hierarchical 的优势来自缩小候选集合。** 它需要类别评分和子动作评分两次，但每阶段候选较少，所以实际稳定耗时约 0.27–0.33 秒。
-3. **KV cache 复用已经生效。** 新路径中 `cached_prefix_tokens == prefix_tokens` 且 `candidate_recompute_tokens == 0`，因此后续优化重点不是重复计算 prefix，而是减少候选批次、改善调度和降低多模态前处理开销。
+3. **候选级 KV cache 复用已经生效，但动态 Prefix Prefill 仍是主要开销。** 新路径中 `cached_prefix_tokens == prefix_tokens` 且 `candidate_recompute_tokens == 0`，只说明同一评分请求内的候选 suffix 不会重复计算共享 prefix。每个 Turn 的 Category 和 Child 仍分别对包含动态上下文的完整共享 prefix 执行 Prefill，启动预热只覆盖静态 System Prompt。
 4. **首个 turn 需要单独看。** P6 首个 turn 的 378.8 ms 类别 queue wait 明显高于后续 40–58 ms，符合首次请求预热/调度抖动特征；不能用首个 turn 代表稳定态性能。
 5. **当前比较仍有实验限制。** P0/P2/P3/P4/P5/P6 的媒体、历史长度、候选目录和服务状态不是严格相同，文档中的阶段关联用于定位优化方向，不替代固定输入下的正式 benchmark。
+
+## 7. 2026-08-25 性能回归与待处理优化
+
+状态：**历史基线，已由第 8 节取代**。本节记录 2026-08-25 当时实现和 `logs/realtime/2026-08-25/21/` 结构化日志中的性能基线，供后续优化与回归对比。这里的数据来自当时的回复与动作融合链路，不与 P0–P6 的旧实验条件直接横向比较。
+
+### 7.1 当前基线
+
+| 指标 | 当前结果 |
+|---|---:|
+| Category 平均耗时 | 约 430 ms |
+| Child 平均耗时 | 约 239 ms |
+| 动作就绪平均耗时 | 约 672 ms |
+| 动作就绪 P50 | 约 682 ms |
+| 动作就绪最大值 | 约 731 ms |
+
+客户端需要同时拿到文本首包和最终动作后才能进入下一阶段，因此当前实际可推进屏障主要由动作就绪耗时决定。
+
+代表性阶段拆分如下：
+
+| 阶段 | Prefix Token | Prefix Prefill | 候选 suffix 评分 | 说明 |
+|---|---:|---:|---:|---|
+| Category | 约 5,000 | 约 229 ms | 约 129 ms | 64 个真实类别加 `B000` 时共有 65 个评分候选 |
+| Child | 约 2,400 | 约 164 ms | 约 46 ms | 候选数量较少，但仍需单独计算完整 Child Prefix |
+
+Category 完成后才能确定 Child 候选集合，当前两阶段串行执行，所以动作就绪耗时基本等于 Category、Child 及少量编排开销之和。
+
+### 7.2 `prefix_cached` 的准确含义
+
+当前调度器先计算一次共享 Prefix，再分批构造和执行候选 suffix。`prefix_cached=true` 的判定条件是每个候选 suffix 的 `candidate_cached_tokens` 均覆盖本次请求的 `prefix_token_count`。因此它只能证明：
+
+- 候选 suffix 复用了本次评分请求已经计算出的共享 Prefix；
+- 候选之间没有重复 Prefill 相同 Prefix；
+- `candidate_prefix_recompute_tokens=0` 时，候选阶段没有重新计算 Prefix Token。
+
+它不能证明启动时的全局预热覆盖了当前 Turn 的完整 Prefix。全局目录模式使用 `cache_static_system_only=True`，启动时只预热 Category 和 Child 的静态 System Prompt；当前音频或文本、`state_description`、`action_profile`、本次会话允许的类别和动作、默认动作类别、图片及结构化状态等动态内容仍需在每个 Turn 中参与 Prefix Prefill。跨 Turn 回复和动作历史现已从动作评分上下文移除。
+
+### 7.3 主要耗时原因
+
+1. **动态 Prefix 每轮重复 Prefill。** Category 和 Child 都会带入人设、允许范围、当前状态和约束；其中部分内容在会话内固定，部分规则在静态和动态 Prompt 中重复出现。跨 Turn 历史已移除，但其余动态内容仍需优化。
+2. **Category 与 Child 不共享模型 KV。** 当前 `context_cache_status=hit` 主要体现 Child 复用了音频、图片等预处理结果；Child 仍使用自己的 System Prompt 和动态 Prompt，重新执行约 2.4k Token 的 Prefix Prefill。
+3. **当时的 65 个 Category 产生尾批。** 默认 `micro_batch_size=64` 时，64 个真实类别加 `B000` 被拆成 `[64, 1]` 两批。当前目录已变为 52 个评分候选并能单批完成，因此该问题和 64→128 的调优建议已经失效。
+4. **provisional 回复与 Category 竞争同一 GPU。** 用户 Turn 中两者并行可以提前回复首包、尽早启动临时 TTS，但也会竞争 Thinker 计算资源，使 Category 延迟增加；这是回复 TTFT 与动作就绪耗时之间的权衡。
+5. **动作 Prompt 持续增长。** 最近增加了社交事件、自我介绍、对话反馈、左右坐标、显式动作优先和不支持动作等规则。静态部分会被预热，但会增加缓存占用；动态部分的重复会直接增加每轮 Prefill。
+
+### 7.4 下午处理清单
+
+| # | 待办 | 实施要点 | 状态 |
+|---:|---|---|---|
+| 1 | 动态 Prompt 去重 | 跨 Turn 动作历史已移除；继续合并重复的 `B000`/`A000`、`state_description` 和人设优先级规则，每项语义只保留一个权威定义 | 进行中 |
+| 2 | 会话固定前缀缓存 | 将 `action_profile`、允许类别、默认动作类别等会话内固定内容划入稳定缓存边界，Turn 内只追加变化部分 | 待处理 |
+| 3 | 调度策略对比 | 对比 Category 优先调度与现有 provisional 并行策略，量化回复 TTFT 和动作就绪耗时的取舍 | 待处理 |
+| 4 | micro-batch 实测 | 在同一固定输入下对比 64 和 128，确认消除 `[64, 1]` 尾批后的净收益和显存影响 | 待处理 |
+| 5 | Category/Child KV 续接 | 评估可共享的公共 Prefix 或可续接 KV，使 Child 复用当前 Turn 的模型 KV，而不只复用媒体编码 | 待处理 |
+| 6 | 确定性 Child 快路径 | 定义只有一个真实候选或无需比较时跳过完整 Child PPL 的安全条件，并保留不支持动作判断的正确性 | 待处理 |
+
+### 7.5 统一验证指标
+
+每项优化必须使用相同输入和候选目录进行前后对比，并至少记录：
+
+- Category/Child 的 `prefix_token_count`、`prefix_prefill_ms`；
+- `suffix_batch_count`、`suffix_batch_sizes`、`suffix_batch_ms`；
+- provisional 与正式回复的文本首包 TTFT；
+- 动作就绪 P50、P95；
+- GPU 利用率、显存占用、功耗，以及同卡竞争时的峰值；
+- `context_cache_status`、`prefix_cached` 和 `candidate_prefix_recompute_tokens`，并按本节定义解释。
+
+## 8. 2026-08-27 动作就绪延迟优化计划
+
+状态：**待实施**。本节基于 `sess_fc1c4bae` 的结构化日志和当前实现，记录在尽量不影响回复首包与动作准确率的前提下继续压缩动作就绪时间的实施方案。
+
+### 8.1 当前基线与目标
+
+稳定用户 Turn 的当前基线为：
+
+| 指标 | 当前结果 | 验收目标 |
+|---|---:|---:|
+| 回复首包 P50 | 约 108 ms | 相对基线回归不超过 5 ms |
+| 回复首包 P95 | 约 184 ms | 相对基线回归不超过 10 ms |
+| Category 平均耗时 | 约 297 ms | 按阶段记录，不单独设硬门槛 |
+| Child 平均耗时 | 约 146 ms | 按阶段记录，不单独设硬门槛 |
+| 动作就绪 P50 | 约 452 ms | 不高于 400 ms |
+| 动作就绪 P95 | 约 587 ms | 不高于 450 ms |
+| `action_finished` 动作就绪 | 约 2.6 ms | P50 不高于 5 ms |
+
+当前 Category 有 52 个评分候选，在 `micro_batch_size=64` 下已经单批完成；不再通过增大 micro-batch 解决历史上的 `[64, 1]` 尾批。`action_finished` 已跳过 Category 和 Child 评分，也不是本轮优化对象。
+
+本次采用平衡策略：继续让 provisional 回复与 Category 并行，不通过延迟文本首包来换取动作速度；普通业务类别继续保留 Child PPL 和 `A000` 拒识能力。
+
+### 8.2 分阶段实施
+
+#### 阶段一：合并并发音频编码
+
+- 为回复与 Category 的并发音频编码增加 singleflight：相同音频和预处理参数只编码一次，其他请求等待并复用结果。
+- 缓存键必须包含音频内容、采样参数和预处理配置；失败和取消必须唤醒所有等待者。
+- 回复和动作图片继续按角色隔离，只复用内容和用途完全一致的媒体。
+- 预计减少 15–35 ms；保持 provisional 回复与 Category 的现有并发关系。
+
+#### 阶段二：建立会话固定动作前缀缓存
+
+将动作上下文拆成三层：
+
+1. 全局固定：通用动作规则和全局目录版本；
+2. 会话固定：语言、`action_profile`、允许类别、允许动作和兜底类别；
+3. 本轮动态：当前音频、文本、图片、姿态、`state_description` 和指代锚点。
+
+`session.start` 预填 Category、B001 和 B002 的会话固定前缀；普通 Child 第一次使用时按需预填，每个 Session 最多保留最近 8 个 Child 前缀。缓存命名空间包含 Session ID、语言、目录 Hash 和 Prompt Hash。Session 结束、失败或取消后必须释放对应引用，不得缓存跨 Turn 用户音频、图片、文本或状态。
+
+#### 阶段三：复用 Category 到 Child 的本轮模型 KV
+
+Category 和 Child 使用完全相同的公共前缀：
+
+```text
+通用动作规则
+→ 会话动作人设
+→ 当前状态与主动约束
+→ 当前数字人图片
+→ 当前用户音频和文本
+```
+
+Category 在公共前缀后追加允许类别、`B000` 规则和类别输出要求；Child 追加已选类别、具体候选、`A000` 规则和动作输出要求。B001 的回复首句只属于 Child 分支。
+
+Category 完成后，Child 直接续用该 Turn 的公共前缀 KV。临时 KV 必须在 Child 完成、取消或失败后释放。该阶段预计减少 Child Prefix Prefill 的 50–75 ms，同时继续复用现有媒体编码结果。
+
+#### 阶段四：候选后缀 Trie 评分
+
+前三个阶段完成后，如果动作就绪 P50 仍高于 400 ms，再实施本阶段：
+
+- 将候选 ID 的 Token 序列构造成 Trie，共同 Token 前缀只计算一次；
+- 保持每个候选原有的 mean NLL/PPL 定义，不改变候选范围和最终决策规则；
+- 新旧评分器的 mean log-prob 绝对误差不得超过 `1e-5`，Top-1 必须一致；
+- 新评分器异常时自动回退到现有批量评分器。
+
+预计额外减少 20–40 ms。该优化不能替代 `B000/A000`，也不能以关键词硬路由代替模型评分。
+
+### 8.3 开关、观测与回滚
+
+增加以下内部特性开关，初始默认关闭，不改变 WebSocket 公开协议：
+
+- `SGLANG_OMNI_ACTION_SESSION_PREFIX_CACHE_ENABLED`
+- `SGLANG_OMNI_ACTION_SHARED_TURN_KV_ENABLED`
+- `SGLANG_OMNI_ACTION_SUFFIX_TRIE_ENABLED`
+
+结构化日志需要补充：
+
+- 全局、会话和本轮未缓存 Prefix Token 数；
+- 会话固定前缀及 Category/Child 公共 KV 命中状态；
+- 音频 singleflight 命中、等待和失败状态；
+- Trie 唯一节点数、原始候选 Token 数和复用率；
+- 各阶段显存、GPU 利用率、调度等待和释放结果。
+
+任一阶段出现准确率回归、缓存污染、显存持续增长或延迟未改善时，只关闭对应内部开关，不回滚其他已验证阶段。
+
+### 8.4 测试与发布顺序
+
+- 使用固定候选、固定音频和固定图片执行 2 个预热 Turn 加至少 30 个正式 Turn，统计回复 TTFT、Category/Child Prefill、suffix 评分和动作就绪 P50/P95。
+- 验证 concurrent audio singleflight 只执行一次编码，并覆盖失败、取消和不同采样参数不得复用的场景。
+- 验证不同 Session、语言、目录 Hash、Prompt Hash 和 `action_profile` 之间不能复用错误 KV；Session 结束后缓存可回收。
+- 验证 Category 和 Child 的公共 Token 边界完全一致，Child 能实际命中本轮 KV，B001 回复前缀仍只进入 Child。
+- 回归 `reply_action_quality_cases.md`、`B000/A000`、B001/B002、明确动作、委婉动作、社交事件、自我介绍和“刚刚那个动作”指代。
+- 先在 GPU6 依次开启音频复用、会话缓存和公共 KV；指标和准确率通过后再部署 GPU7。Trie 仅在前三项未达到 400 ms 目标时启用。
+
+本计划只修改 `sglang-omni` 的缓存、调度和评分实现，不修改 `D_video_call`、动作目录、客户端事件或字段。
 
 相关实现和算法说明：
 
@@ -185,4 +347,4 @@ P4 的日志显示 `cached_prefix_tokens == prefix_tokens`，`candidate_recomput
 - [候选请求构造实现](../../../sglang_omni/models/qwen3_omni/request_builders.py)
 - [动作评分实现](../../../sglang_omni/models/qwen3_omni/action_scoring.py)
 
-最后一次记录的服务端口为 `18001`；本记录只描述成功动作推理 turn，不包含失败、取消或尚未完成的请求。
+P0–P6 最后一次旧记录的服务端口为 `18001`；第 7 节按结构化日志统计，不以监听端口作为筛选条件。本文只描述成功动作推理 turn，不包含失败、取消或尚未完成的请求。

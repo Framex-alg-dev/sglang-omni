@@ -21,8 +21,6 @@
 
 ~~~text
 当前 turn 音频、图片、文本、数字人状态
-        +
-session 最近历史和动作历史
         │
         ▼
 category 阶段
@@ -211,7 +209,7 @@ Category prefix；`session.start` 提交的类别白名单用于构造实际 PPL
 - 音频、图片和视频派生音频的 cache identity 保持一致；
 - category 和 child 的文本 prompt 仍分别构造，因为两者的 system prompt 不同。
 
-这项优化复用的是同一 turn 的当前媒体和精简动作历史，不是把 category 文本 prompt 直接
+这项优化复用的是同一 turn 的当前媒体，不是把 category 文本 prompt 直接
 复制成 child prompt，因此不会改变两阶段各自的类别与动作选择规则。
 
 日志中可观察：
@@ -391,7 +389,8 @@ turn ingest
 服务端不自动压缩 category 的 source_label 和 short_definition。如果存在重复路径或冗余文本，建议由外部动作目录生成阶段完成：
 
 - 保留能区分类别的最短描述；
-- 保证 category_id 和 child_id 全局唯一；
+- 保证 `category_id` 与动作实体 ID 的命名空间互不冲突；同一动作实体可作为成员出现在多个
+  类别中，但其 `candidate_id → action_id` 映射必须一致，且同一类别内不得重复；
 - 固定排序；
 - 重新计算 catalog hash；
 - 用准确率测试确认压缩没有引入类别混淆。
@@ -411,7 +410,7 @@ turn ingest
 - 音频和图片占位符数量与媒体数组一致；
 - 当前 turn 用户输入位于最新位置；
 - 最新 turn 不伪造 assistant 回复；
-- 动作历史进入后续 turn；
+- 跨 Turn 回复和动作历史不进入动作评分；
 - 不触发普通回复生成链路。
 
 ## 8. 验证方式

@@ -137,4 +137,5 @@ Supported Models
    developer_reference/action_inference/action_hierarchical_optimization.md
    developer_reference/action_inference/action_batch_benchmark.md
    developer_reference/action_inference/action_latency_history.md
+   developer_reference/action_inference/reply_action_quality_cases.md
    developer_reference/action_inference/action_inference_change_history.md

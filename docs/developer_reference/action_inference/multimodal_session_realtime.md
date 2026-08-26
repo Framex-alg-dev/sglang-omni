@@ -53,10 +53,14 @@ action-only 与融合模式使用同一个两阶段动作选择逻辑：
 - `input.image.append`，`image_source=user_camera`：用户和环境画面；
 - `input.image.append`，`image_source=avatar_current`：数字人当前画面；
 - `input.text.set`：可选用户文本；
-- `turn.commit.action.last_executed_action_id`：上一个已执行候选 ID；
+- `turn.commit.action.last_executed_action_id`：兼容字段；服务端仍接受并校验，但不再用于动作
+  Prompt 或动作选择，客户端应省略；
 - `turn.commit.avatar_state`：数字人当前结构化状态。
 
 主动 Turn 可以在 `turn.commit.action.guidance` 中提供当前场景的临时动作目标和禁止项。
+
+Category 和 Child 只使用本轮输入、当前数字人图片与当前结构化状态，不读取上一动作 ID、
+动作名称、回复历史或跨轮动作历史。动画过渡和复位由动画引擎负责。
 
 ## 图片语义
 
@@ -64,7 +68,8 @@ action-only 与融合模式使用同一个两阶段动作选择逻辑：
 - `avatar_current` 用于理解数字人景别、当前姿态、外观和可交互物体；
 - 两类图片不得混用；
 - 仅头肩或半身构图时，Category Prompt 会避免下肢、位移或全身大幅移动类别；
-- 依赖物体交互的类别只有在数字人当前画面存在对应物体时才应选择。
+- Category 不以物体是否出现在数字人当前画面中作为选择物体交互类别的前置条件；用户明确
+  指定的交互物体是否与候选动作匹配，由 Child 阶段判断。
 
 ## 动作结果
 

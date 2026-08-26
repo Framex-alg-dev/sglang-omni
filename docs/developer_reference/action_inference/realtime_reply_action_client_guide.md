@@ -79,19 +79,19 @@
   "action": {
     "category_guidance": "优先自然反馈和低打扰类别。",
     "candidate_guidance": "避免夸张舞蹈、快速位移和不符合当前构图的动作。",
-    "fallback_category_ids": ["B008"],
+    "fallback_category_ids": ["B002"],
     "allowed_candidates": [
       {
-        "candidate_id": "A124",
+        "candidate_id": "A002",
+        "execution_binding": {"asset_id": "motion_present_single"}
+      },
+      {
+        "candidate_id": "A043",
+        "execution_binding": {"asset_id": "motion_idle_adjust_seated"}
+      },
+      {
+        "candidate_id": "A288",
         "execution_binding": {"asset_id": "motion_wave_single"}
-      },
-      {
-        "candidate_id": "A125",
-        "execution_binding": {"asset_id": "motion_wave_double"}
-      },
-      {
-        "candidate_id": "A071",
-        "execution_binding": {"asset_id": "motion_idle_breathing"}
       }
     ]
   },
@@ -146,7 +146,23 @@
 四个可选字符串字段，仅供动作推理使用。`reply.instructions` 最长 32768 字符，是回复模型
 唯一的 System Prompt 来源；服务端不会拼接 `character_profile`，也不会添加默认或兜底 Prompt。
 客户端如需人设、语言、输出格式或缺省行为，必须完整写入 `reply.instructions`。未传入时，
-回复 System Prompt 为空。动作 guidance 和人设单字段最长 2048 字符。
+回复 System Prompt 为空。`character_profile.role` 最长 5000 字符；其他动作
+guidance 和人设单字段最长 2048 字符。完整动作人设序列化后仍不得超过 8192
+字符。为减少 Category 和 Child 的每轮 Prefill 开销，客户端仍应优先传递精简的
+角色定位，并将完整回复人设保留在 `reply.instructions`。
+
+客户端需要数字人在自我介绍时使用姓名、角色定位或与用户的关系，必须把这些信息及使用规则
+完整写入 `reply.instructions`。服务端不会从动作人设推导或补写关系。可直接加入以下通用约束：
+
+```text
+用户要求你介绍自己时，应优先使用人设中明确提供的姓名、角色定位和与用户的关系进行自然、
+完整的自我介绍，不能只回复问候语。只能使用人设明确提供的信息；不得自行补充恋人、伴侣、
+朋友或其他关系。用户要求介绍产品、知识、地点或第三方人物时，应直接介绍对应对象，不要改为
+介绍自己。
+```
+
+例如，只有客户端明确提供“姓名：安娜；与用户的关系：专属恋人”时，模型才可以回复类似
+“你好呀，我是安娜，你的专属恋人”。未提供该关系时，不得生成“专属恋人”。
 
 当 `outputs` 同时包含 `text` 和 `action` 时，`reply.unsupported_action_text` 必填，必须是
 1～2048 字符的非空字符串；其他输出组合不得传入。客户端应提前为当前角色生成与该文本
@@ -161,7 +177,7 @@
 
 ```json
 {
-  "candidate_id": "A124",
+  "candidate_id": "A288",
   "execution_binding": {"asset_id": "motion_wave_single"}
 }
 ```
@@ -174,12 +190,46 @@
 - 显式传入非空白名单时，每个兜底类别下必须至少包含一个可执行动作；
 - 服务端只会评分和返回白名单内候选，不会越界选择全局目录中的其他动作。
 
+全局目录中的类别与动作是多对多关系。同一个 `candidate_id/action_id` 对可以同时出现在系统
+伴随类别和普通业务类别中，表示同一执行动作在不同选择场景下的类别成员关系；各类别可以为
+它提供不同的场景化名称或说明。重复引用必须保持 `candidate_id → action_id` 映射一致，同一
+类别内不得重复。客户端的 `allowed_candidates` 仍按动作 ID 去重传一次，服务端会展开该动作
+在当前全局目录中的全部类别成员关系。
+
+当前目录使用两个由语义标签识别的系统伴随类别，客户端不能只上传业务动作：
+
+- `reply_accompaniment`（当前目录为 `B001`）：数字人实际有非空回复文本时，Child 根据
+  回复首句选择语言表达伴随动作；
+- `silent_accompaniment`（当前目录为 `B002`）：回复为空、生成失败或本轮无需说话时，选择
+  静默低扰动作。
+
+`text+action` Session 必须同时提供这两个类别下的真实候选；`action-only` Session 至少提供
+静默伴随类别。`fallback_category_ids[0]` 必须是静默伴随类别，回复伴随类别不得出现在
+fallback 数组中。系统类别不参与 `A000` 拒识：其中至少要有一个真实动作可执行。
+
+Category 先与 provisional 回复并行判断。若 Category 初选了上述任一系统类别，服务端会等待
+首个非空回复 delta 或回复终态，并按实际结果在两个系统类别之间校正：有文本使用回复伴随，
+无文本或失败使用静默伴随。出现非空 delta 后最多再等待 100 ms 获取完整首句；注入 Child 的
+回复前缀最多 256 字符。明确动作、社交反应及主动场景指定动作仍使用普通业务类别，不等待
+回复前缀，也不会被系统类别覆盖。
+
+#### 方向动作坐标约定
+
+动作目录及服务端结果中的未限定“左/右”均采用数字人自身的身体坐标。例如 A031「看左侧」和
+A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自身左臂。数字人正面面对用户时，
+自身左侧通常显示在用户屏幕右侧，这是正确表现；客户端不得因为画面镜像而交换候选 ID、
+`action_id` 或动作名称。
+
+只有用户明确指定“屏幕左侧”“画面右侧”“我的左边”等参照系时，才按该参照系理解目标，
+并映射到数字人实际需要执行的自身方向。客户端调试界面和日志应使用“数字人自身左/右”描述
+动作；判断资源绑定是否反向时应检查骨骼或身体实际运动方向，不能只看屏幕左右。
+
 `UNSUPPORTED` 是服务端在 Category/Child 推理中使用的非执行型判断值；内部评分 ID 分别为
 `B000` 和 `A000`。三者均为服务端保留值，客户端不得把它们加入类别目录或
 `allowed_candidates`。当用户请求不受支持时，服务端进入
 `fallback_category_ids[0]`，并从该类别的 Session 白名单中选择真实可执行动作。
 
-可以配置多个兜底类别，例如 `["B008", "B009"]`。Category 正常判断仍可根据语义选择其中
+可以配置多个兜底类别，例如 `["B002", "B003"]`。Category 正常判断仍可根据语义选择其中
 任一类别；只有 `UNSUPPORTED`、Child 推理失败等兜底路径按数组优先级使用第一个类别。
 因此第一个类别应当在任何场景下都安全、可执行，且其中第一个白名单动作应适合作为推理
 异常时的确定性默认动作。
@@ -198,11 +248,11 @@
   "outputs": ["text", "action"],
   "locale": "zh-CN",
   "action_candidate_count": 3,
-  "action_category_count": 2,
+  "action_category_count": 3,
   "session_action_catalog_hash": "sha256:...",
   "global_action_catalog_hash": "sha256:...",
   "global_action_catalog_version": "...",
-  "fallback_category_ids": ["B008"],
+  "fallback_category_ids": ["B002"],
   "action_prefix_prefilled": true,
   "unsupported_action_text_configured": true,
   "unsupported_action_text_sha256": "sha256:..."
@@ -316,8 +366,9 @@
 - `user_camera` 仍可进入动作推理；
 - `avatar_current` 只进入动作推理，每个 Turn 最多使用时间最新的一张，不进入回复或动作历史；
 - Category 与 Child 使用同一张当前数字人图片，并复用相同的图片编码结果；
-- 当前 Turn 没有 `user_camera` 时，回复模型会收到“未提供用户摄像头画面”的事实，不能声称
-  看见用户或根据用户外观判断状态；
+- 当前 Turn 没有 `user_camera` 时，回复模型会收到“未提供用户摄像头画面”的事实；只有用户
+  明确询问用户本人或用户环境中的可见内容时才说明没有可用画面，不会把数字人的靠近镜头、
+  面向镜头或看向镜头等动作请求解释为询问是否看见用户；
 - 如果业务需要回答数字人当前姿势或状态，客户端应通过 `turn.commit.reply.context` 提供
   可信文本描述，不应依赖 `avatar_current` 图片进入回复模型。
 
@@ -346,7 +397,6 @@
   "type": "turn.commit",
   "turn_id": "turn-user-001",
   "reply": {"context": "当前在公开展厅，回复保持简短。"},
-  "action": {"last_executed_action_id": "A015"},
   "avatar_state": {"pose": "standing", "gaze": "camera"}
 }
 ```
@@ -359,8 +409,7 @@
   "turn_id": "turn-proactive-001",
   "reply": {"context": "用户刚刚回到镜头前，自然欢迎用户。"},
   "action": {
-    "last_executed_action_id": "A015",
-    "guidance": "选择轻量欢迎动作，避免重复上一动作。"
+    "guidance": "选择轻量欢迎动作，幅度适中。"
   },
   "avatar_state": {"pose": "standing"}
 }
@@ -374,7 +423,6 @@
   "turn_id": "turn-proactive-002",
   "reply": {"provided_text": "欢迎回来。"},
   "action": {
-    "last_executed_action_id": "A015",
     "guidance": "选择自然欢迎动作。"
   }
 }
@@ -393,24 +441,40 @@
 空字符串表示“客户端明确提供空回复”；缺省或 `null` 表示“需要服务端生成回复”。
 `reply.provided_text` 与 `reply.context` 互斥。
 
+#### `action_finished` 的严格静默路由
+
+`origin=proactive` 且 `trigger_type=action_finished` 是协议定义的无声视觉延续场景。融合会话
+必须传 `reply.provided_text=""`，不得传 `reply.context`；action-only 会话省略 `reply`。
+非空 `provided_text`、缺少必需的空 `provided_text` 或出现 `reply.context` 都会使该 Turn
+被拒绝。
+
+该触发类型不执行 Category PPL，而是按 `silent_accompaniment` 语义标签直接进入当前目录的
+静默低扰伴随类别（当前为 B002）。服务端在当前可用的真实候选中均匀随机选择，并排除上一次
+`action_finished` 选择的候选以避免连续重复；只有过滤后仅剩该候选时才允许重复。该路径同时
+跳过 Child PPL。`action.guidance` 只能过滤 B002 内不符合当前状态的候选，不能切换到其他类别；
+不得传上一动作 ID，也不需要由客户端要求避免重复或依据上一动作衔接。客户端应只
+提供当前 `pose`、手部/持物状态及最多一张最新 `avatar_current` 画面，动画过渡和复位由播放
+引擎负责。
+
 ### 6.4 commit 字段
 
 | 字段 | 作用 |
 |---|---|
 | `reply.context` | 当前 Turn 的临时回复背景或约束，最长 8192 字符 |
 | `reply.provided_text` | proactive Turn 的最终回复；空字符串表示明确静默 |
-| `action.last_executed_action_id` | 客户端确认的数字人当前实际动作 `action_id`，用于姿态衔接，必须存在于全局目录 |
+| `action.last_executed_action_id` | 已弃用的兼容字段；仍接受并校验目录 ID，但不进入动作 Prompt 或影响动作选择，客户端应省略 |
 | `action.guidance` | 当前 proactive Turn 的临时动作指引，最长 8192 字符 |
 | `avatar_state` | 当前数字人的结构化状态，序列化后最多 16384 字符 |
 
-`avatar_state` 不允许再包含 `current_action_id` 或 `state_description`。它们已经分别替换为
-`action.last_executed_action_id` 和 `action.guidance`。
+`avatar_state` 不允许包含旧字段 `current_action_id` 或 `state_description`。前者已经移除且不需要
+替代字段；后者改为 `action.guidance`。`avatar_state` 继续传递本轮当前的 `pose`、手中物体、
+视线等结构化状态，并可与本轮 `avatar_current` 图片同时使用。
 
-主动 Turn 提供 `action.guidance` 时，服务端会将其标准化为本轮内部
+除 `action_finished` 的强制静默路由外，主动 Turn 提供 `action.guidance` 时，服务端会将其标准化为本轮内部
 `state_description`，并在 Category 和 Child Prompt 中作为最高优先级动作约束。其明确
-给出的动作目标、要求和禁止项高于会话级人设与动作偏好、主动触发原因、待播文本、历史
-动作、默认动作类别和其他通用选择规则。默认动作类别仅在不冲突且没有更具体动作目标时
-使用。该字段不会扩展本次会话允许的类别或动作集合；客户端应确保允许的候选中至少存在
+给出的动作目标、要求和禁止项高于会话级人设与动作偏好、主动触发原因、待播文本、
+系统伴随类别、执行兜底规则和其他通用选择规则。系统伴随类别仅在不冲突且没有更具体动作目标时
+使用；执行兜底列表只用于不支持或失败后的实际执行。该字段不会扩展本次会话允许的类别或动作集合；客户端应确保允许的候选中至少存在
 能够满足约束的动作，避免构造无可行候选的互斥条件。服务端会对“禁止、不得、避免、
 must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁止语义直接匹配的类别或
 具体动作不会进入本轮 PPL 候选集合；其他偏好和自然语言目标仍由模型判断。
@@ -501,9 +565,9 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
   "session_id": "session-20260822-001",
   "turn_id": "turn-user-001",
   "action": {
-    "candidate_id": "A124",
-    "action_id": "A124",
-    "category_id": "B027",
+    "candidate_id": "A288",
+    "action_id": "A288",
+    "category_id": "B032",
     "execution_binding": {"asset_id": "motion_wave_single"},
     "execute": true,
     "support_status": "supported",
@@ -534,9 +598,9 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
     "source": "generated"
   },
   "action": {
-    "candidate_id": "A124",
-    "action_id": "A124",
-    "category_id": "B027",
+    "candidate_id": "A288",
+    "action_id": "A288",
+    "category_id": "B032",
     "execution_binding": {"asset_id": "motion_wave_single"},
     "execute": true
   },
@@ -555,9 +619,9 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
   "outputs": {"text": "completed", "action": "failed"},
   "reply": {"text": "你好呀。", "source": "generated"},
   "action": {
-    "candidate_id": "A071",
-    "action_id": "A071",
-    "category_id": "B008",
+    "candidate_id": "A043",
+    "action_id": "A043",
+    "category_id": "B002",
     "execute": true,
     "support_status": "unknown",
     "fallback_applied": true
@@ -572,7 +636,8 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
 
 动作识别为不支持时，`status` 仍为 `completed`，但动作包含
 `support_status="unsupported"`、`fallback_applied=true`，实际 `category_id` 为本 Session
-配置的最高优先级兜底类别。示例中的 B008 只是客户端配置结果，不是服务端写死值。
+配置的最高优先级静默伴随类别。当前目录中的 B002 由 `silent_accompaniment` 语义标签识别，
+服务端路由逻辑不写死该 ID。
 
 融合模式的不支持结果如下。此时没有正式文本，也没有 `reply.text`：
 
@@ -589,9 +654,9 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
     "recorded_in_history": true
   },
   "action": {
-    "candidate_id": "A071",
-    "action_id": "A071",
-    "category_id": "B008",
+    "candidate_id": "A043",
+    "action_id": "A043",
+    "category_id": "B002",
     "execute": true,
     "support_status": "unsupported",
     "fallback_applied": true
@@ -680,7 +745,8 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
 - `reply_context` 改为 `reply.context`；主动固定回复改为 `reply.provided_text`；
 - 服务端不会自动把上一动作事实加入回复；若客户端确认用户正在询问历史动作，应在本轮
   `reply.context` 中显式传入需要回答的动作事实；普通 Turn 不要传入该信息；
-- `avatar_state.current_action_id` 改为 `action.last_executed_action_id`；
+- 删除 `avatar_state.current_action_id`，无需替代字段；兼容字段
+  `action.last_executed_action_id` 不再影响动作推理；
 - `avatar_state.state_description` 改为 `action.guidance`；
 - 解析 `session.started.outputs` 和 `turn.result.outputs`；
 - 支持 `response.provisional.*` 状态机：临时 delta 仅生成并缓存 TTS，`promoted` 后播放，

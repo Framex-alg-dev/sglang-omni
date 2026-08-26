@@ -24,7 +24,8 @@ B051 -> [33, 15, 20, 16]
 - 单 token 解码后与原字符串完全一致；
 - 不是 BOS、EOS、PAD 或其他特殊 token；
 - 无前后空白且符合配置的 ID 正则；
-- category_id 与 child candidate_id 在同一池中全局唯一。
+- `category_id` 与 child `candidate_id` 在同一 ID 池中互不冲突；一个 `candidate_id` 可以作为
+  同一动作实体被多个类别引用，但不能映射到不同 `action_id`。
 
 默认策略使用 `[A-Z]{2}`，并排除 `token_id < 3000` 的高频片段。当前部署
 tokenizer 中共有 484 个可用 ID。现有 canonical catalog 生成 65 个类别和

@@ -27,7 +27,7 @@
   "action": {
     "category_guidance": "...",
     "candidate_guidance": "...",
-    "fallback_category_ids": ["B008"],
+    "fallback_category_ids": ["B002"],
     "allowed_candidates": []
   }
 }
@@ -62,6 +62,15 @@
 6. 只将展开后的 Session 类别和动作交给 PPL 评分；
 7. 将 Session 私有 `execution_binding` 原样带入结果；自动展开时该字段为空对象。
 
+全局目录通过语义标签声明两个系统类别，服务端逻辑不依赖固定 ID：
+
+- `reply_accompaniment`：实际回复非空时，根据最多 256 字符的回复首句/前缀选择表达伴随动作；
+- `silent_accompaniment`：回复为空、失败或无需回复时选择静默低扰动作。
+
+融合 Session 必须同时提供两类真实候选，action-only Session 至少提供静默类；静默类必须是
+`fallback_category_ids[0]`，回复伴随类不得作为 unsupported fallback。两个系统类别的静态
+Child Prompt、运行时请求和启动预热都不加入 `A000`。
+
 全局 Category/Child 静态前缀跨 Session 共用；Session 白名单和偏好仍是私有动态数据，
 不得写入全局共享状态。
 
@@ -80,7 +89,7 @@
 |---|---|---|
 | `reply.context` | 回复 | 当前 Turn |
 | `reply.provided_text` | 回复，同时可作为动作语义上下文 | 当前 proactive Turn |
-| `action.last_executed_action_id` | 动作衔接 | 当前 Turn |
+| `action.last_executed_action_id` | 兼容字段；接受并校验，但动作推理忽略 | 当前 Turn |
 | `action.guidance` | 动作 | 当前 proactive Turn |
 | `avatar_state` | 动作状态理解 | 当前 Turn/按现有状态策略持久化 |
 
@@ -92,14 +101,13 @@
 动作上下文缓存键，复用图片编码结果。没有 `user_camera` 的 Turn 会向回复模型明确声明用户
 画面缺失。如需回复数字人当前姿势，客户端通过 `reply.context` 提供可信文本状态。
 
-动作衔接状态与用户指代使用两条独立记录：
+Category 和 Child 使用当前 Turn 隔离上下文：当前用户文本或音频、当前图片、当前结构化状态、
+会话动作人设和偏好、允许候选及主动场景约束。它们不接收跨 Turn 回复历史、上一动作 ID、
+动作名称或动作历史。服务端可以为日志和诊断保留动作事实，但不会把这些事实交给动作模型。
 
-- `action.last_executed_action_id` 及服务端最近一次动作表示数字人当前实际动作状态，只用于姿态衔接；
-- 服务端另行保留最近一次由用户输入触发的动作。用户说“刚刚那个动作”“再做一次”等指代时，
-  优先指向该用户触发动作，后续 `proactive` 动作不会覆盖它；仅在没有用户触发动作记录时，
-  才回退到当前实际动作状态。
-
-该区分完全由服务端维护，不新增客户端协议字段。
+因此，“刚刚那个动作”“再做一次”等依赖历史动作的指代不再由服务端动作历史自动解析。
+客户端若需要支持此能力，应先根据自身已确认的执行记录把请求解析为明确动作目标；在增加专用
+协议字段前，不要通过 `last_executed_action_id` 隐式影响模型。
 
 ## 主动 Turn 的回复选择
 
@@ -120,7 +128,10 @@ turn.commit
   ├─ 临时回复流（生成回复或 provided reply）
   └─ Category 评分
        ├─ B000：丢弃临时回复 → 兜底真实动作
-       └─ 普通类别：启动 Child 评分
+       ├─ 系统伴随类别：按实际回复是否非空校正类别
+       │    ├─ 有文本：回复伴随 Child 使用首句/前缀
+       │    └─ 空文本或失败：静默伴随 Child
+       └─ 普通业务类别：立即启动 Child 评分，不等待回复
             ├─ A000：丢弃临时回复 → 兜底真实动作
             └─ 普通动作：提升同一临时回复为正式回复
 
@@ -136,7 +147,8 @@ turn.commit
 Category 使用内部 `B000`、非兜底 Child 使用内部 `A000` 评分非执行型判断
 `UNSUPPORTED`。Category 返回它时直接把
 动作分支路由到 `fallback_category_ids[0]`；普通 Child 返回它时使用该类别的默认动作。
-兜底类别的 Child 不加入 `UNSUPPORTED`，必须选择一个真实动作。以上情况都返回真实可执行
+系统伴随类别的 Child 不加入 `UNSUPPORTED`，必须选择一个真实动作。普通业务类别继续保留
+`A000`。以上情况都返回真实可执行
 动作，并标记 `support_status=unsupported`、`fallback_applied=true`。
 
 Category 或 Child 返回不支持时，不发送标准回复流，`turn.result.outputs.text=suppressed`，
@@ -157,10 +169,9 @@ Category 或 Child 返回不支持时，不发送标准回复流，`turn.result.
 - Turn 终态：`turn.result`、顶层 `error` 或 `turn.cancelled`；
 - text-only、action-only 和融合模式统一在 `turn.result` 返回 `status` 与 `outputs`。
 
-成功推理的动作暂时视为已执行，写入 Session 动作事实，供后续 Turn 处理动作衔接和诊断；
-Child 失败不覆盖上一条成功动作事实。服务端不会把该事实自动注入回复 Prompt，以免普通
-回复复述或误报上一动作。若客户端确认用户正在询问历史动作，应通过本轮 `reply.context`
-显式提供需要回答的动作事实。
+成功推理的动作暂时视为已执行并写入 Session 动作事实，仅供日志和诊断；Child 失败不覆盖
+上一条成功动作事实。该事实不会进入回复 Prompt 或动作 Prompt。若客户端确认用户正在询问
+历史动作，应通过本轮 `reply.context` 显式提供需要回答的动作事实。
 
 对于只有身体动作指令、没有同时提出语言问题或交流内容的用户输入，是否输出空文本或
 简短回应，以及动作复述、长度和结束条件，全部由客户端在 `reply.instructions` 中定义。

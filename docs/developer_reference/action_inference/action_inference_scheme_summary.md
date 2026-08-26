@@ -42,13 +42,21 @@ Category PPL 在类别与 B000（UNSUPPORTED）中评分，选 Top-1
 Child PPL 在类别动作与 A000（UNSUPPORTED）中评分
 ```
 
-所有 Session 必须通过 `action.fallback_category_ids` 配置至少一个兜底类别，并在每个兜底
-类别下提供至少一个白名单动作。Category 的 `B000` 和 Child 的 `A000` 都映射为
+所有 Action Session 必须通过 `action.fallback_category_ids` 配置至少一个兜底类别。当前全局
+目录以语义标签声明“语言表达伴随”和“静默低扰伴随”两个系统类别：融合 Session 必须同时
+提供两类真实候选，action-only Session 至少提供静默类；静默类必须是首个 fallback，语言
+表达伴随类不能作为 unsupported fallback。Category 的 `B000` 和普通业务 Child 的 `A000`
+都映射为
 `UNSUPPORTED`；其中 `B000` 只判断目标语义类别是否存在，不能用于判断类别内具体动作；
 `A000` 只在类别已选定、但该类别下的 Session 具体动作无法满足明确请求时使用。它们只是
 推理判断，不是目录动作。任一阶段选择
 它时，服务端进入数组中的最高优先级类别并返回真实动作，`execute=true`，同时标记
 `support_status=unsupported`、`fallback_applied=true`。
+
+系统伴随类别不加入 `A000`。Category 初选任一系统类别后，服务端根据 provisional 回复的
+实际结果做双向校正：非空回复进入语言表达伴随 Child，并把首句或最多 256 字符前缀作为主要
+动作依据；空回复、回复失败或无需回复进入静默低扰 Child。明确动作、社交反应和主动场景指定
+动作仍走普通业务类别，不等待回复前缀。
 
 ## 上下文和 Prompt 隔离
 
@@ -68,21 +76,25 @@ Child PPL 在类别动作与 A000（UNSUPPORTED）中评分
 
 ## 融合时序
 
-Category 选出后，回复生成与 Child 动作评分并行。回复不等待 Child，因此 Child 失败不会
-阻塞或改写已成功的回复；最终以 `status=partial`、`outputs.action=failed` 返回动作错误。
+回复生成与 Category 并行。普通业务类别选出后立即启动 Child；仅当 Category 选中系统伴随
+类别时，动作分支等待首个非空回复 delta 或回复终态，并在首个 delta 后最多再等待 100 ms
+补齐首句。回复不等待 Child，因此 Child 失败不会阻塞或改写已成功的回复；最终以
+`status=partial`、`outputs.action=failed` 返回动作错误。
 
 客户端主动提供 `reply.provided_text` 时，服务不再生成回复。空字符串是明确的静默回复，
 不会被误判为缺省。
 
 ## 历史与动作事实
 
-成功动作选择暂时视为实际执行，保存为 Session 动作事实。后续 Turn 可以：
+成功动作选择暂时视为实际执行并保存为 Session 动作事实，但该记录仅用于日志、调试和审计。
+Category 和 Child 不读取跨 Turn 回复历史、上一动作 ID、动作名称或动作历史；动作衔接、复位
+和重复动作的平滑处理由动画引擎负责。当前数字人图片以及 `pose`、手中物体等当前结构化状态
+仍可进入本轮动作推理。
 
-- 回答“上一个动作是什么”；
-- 理解“再做一次刚才的动作”；
-- 结合 `action.last_executed_action_id`（上一动作结果的 `action_id`）做动作衔接和重复判断。
-
-Child 失败或取消的 Turn 不覆盖上一条成功动作事实。
+若用户询问“上一个动作是什么”，客户端应通过本轮 `reply.context` 提供已确认事实。若要支持
+“再做一次刚才的动作”，客户端应把自身已确认的执行记录解析为明确动作目标；当前兼容字段
+`action.last_executed_action_id` 不再影响动作选择。Child 失败或取消仍不会覆盖诊断记录中的
+上一条成功动作事实。
 
 ## 结果
 
