@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Session Realtime TTS 手工测试</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #f5f6f8;
+        color: #1d2433;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+
+      main {
+        width: min(820px, 100%);
+        margin: 0 auto;
+        padding: 24px;
+        border: 1px solid #d9dee8;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 8px 28px rgb(25 37 58 / 8%);
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+
+      .hint {
+        margin: 0 0 22px;
+        color: #657084;
+      }
+
+      label {
+        display: block;
+        margin: 16px 0 6px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea,
+      button {
+        font: inherit;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #c9d0dc;
+        border-radius: 7px;
+      }
+
+      textarea {
+        min-height: 84px;
+        resize: vertical;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      button {
+        padding: 9px 16px;
+        border: 0;
+        border-radius: 7px;
+        background: #1769e0;
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #576275;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .status {
+        margin-top: 18px;
+        padding: 10px 12px;
+        border-radius: 7px;
+        background: #eef3fb;
+      }
+
+      .status.error {
+        background: #fff0f0;
+        color: #a12626;
+      }
+
+      .panel {
+        margin-top: 18px;
+        padding: 14px;
+        border: 1px solid #e0e4ec;
+        border-radius: 8px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 17px;
+      }
+
+      #replyText {
+        min-height: 48px;
+        white-space: pre-wrap;
+      }
+
+      audio {
+        width: 100%;
+        margin-top: 10px;
+      }
+
+      #eventLog {
+        height: 210px;
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+        color: #d8e1f0;
+        background: #172033;
+        padding: 12px;
+        border-radius: 7px;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Session Realtime TTS 手工测试</h1>
+      <p class="hint">连接本地 fake model，收齐真实 TTS PCM 后再播放。</p>
+
+      <label for="wsUrl">WebSocket 地址</label>
+      <input
+        id="wsUrl"
+        value="ws://127.0.0.1:18080/v1/session/realtime"
+        spellcheck="false"
+      />
+
+      <div class="actions">
+        <button id="connectButton" type="button">连接</button>
+        <button id="disconnectButton" class="secondary" type="button" disabled>
+          断开
+        </button>
+      </div>
+
+      <label for="inputText">测试输入</label>
+      <textarea id="inputText">请回复这段固定文本。</textarea>
+      <div class="actions">
+        <button id="sendButton" type="button" disabled>发送并合成</button>
+      </div>
+
+      <div id="status" class="status">状态：未连接</div>
+
+      <section class="panel">
+        <h2>文本回复</h2>
+        <div id="replyText">暂无</div>
+      </section>
+
+      <section class="panel">
+        <h2>完整音频</h2>
+        <div id="audioSummary">未收到音频</div>
+        <audio id="audioPlayer" controls></audio>
+      </section>
+
+      <section class="panel">
+        <h2>事件日志</h2>
+        <pre id="eventLog"></pre>
+      </section>
+    </main>
+
+    <script>
+      "use strict";
+
+      const wsUrl = document.querySelector("#wsUrl");
+      const connectButton = document.querySelector("#connectButton");
+      const disconnectButton = document.querySelector("#disconnectButton");
+      const sendButton = document.querySelector("#sendButton");
+      const inputText = document.querySelector("#inputText");
+      const statusBox = document.querySelector("#status");
+      const replyText = document.querySelector("#replyText");
+      const audioSummary = document.querySelector("#audioSummary");
+      const audioPlayer = document.querySelector("#audioPlayer");
+      const eventLog = document.querySelector("#eventLog");
+
+      let socket = null;
+      let state = "disconnected";
+      let sessionId = null;
+      let activeTurnId = null;
+      let responseText = "";
+      let audioChunks = [];
+      let audioBytes = 0;
+      let expectedAudioSeq = 1;
+      let audioFormat = null;
+      let audioObjectUrl = null;
+      const waiters = new Map();
+
+      function setStatus(message, isError = false) {
+        statusBox.textContent = `状态：${message}`;
+        statusBox.classList.toggle("error", isError);
+      }
+
+      function log(message) {
+        const now = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+        const lines = eventLog.textContent
+          ? eventLog.textContent.split("\n")
+          : [];
+        lines.push(`${now} ${message}`);
+        eventLog.textContent = lines.slice(-200).join("\n");
+        eventLog.scrollTop = eventLog.scrollHeight;
+      }
+
+      function updateButtons() {
+        const connected = socket && socket.readyState === WebSocket.OPEN;
+        connectButton.disabled = state !== "disconnected";
+        disconnectButton.disabled = !connected;
+        sendButton.disabled = state !== "ready";
+        wsUrl.disabled = state !== "disconnected";
+      }
+
+      function rejectAllWaiters(error) {
+        for (const queue of waiters.values()) {
+          for (const waiter of queue) {
+            clearTimeout(waiter.timer);
+            waiter.reject(error);
+          }
+        }
+        waiters.clear();
+      }
+
+      function waitForEvent(type, timeoutMs = 10000) {
+        return new Promise((resolve, reject) => {
+          const queue = waiters.get(type) || [];
+          const waiter = { resolve, reject, timer: null };
+          waiter.timer = setTimeout(() => {
+            const current = waiters.get(type) || [];
+            waiters.set(
+              type,
+              current.filter((item) => item !== waiter),
+            );
+            reject(new Error(`等待 ${type} 超时`));
+          }, timeoutMs);
+          queue.push(waiter);
+          waiters.set(type, queue);
+        });
+      }
+
+      function resolveWaiter(event) {
+        const queue = waiters.get(event.type);
+        if (!queue || queue.length === 0) {
+          return;
+        }
+        const waiter = queue.shift();
+        clearTimeout(waiter.timer);
+        waiter.resolve(event);
+        if (queue.length === 0) {
+          waiters.delete(event.type);
+        }
+      }
+
+      function sendJson(payload) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          throw new Error("WebSocket 未连接");
+        }
+        socket.send(JSON.stringify(payload));
+        log(`发送 ${payload.type}`);
+      }
+
+      async function sendAndWait(payload, expectedType, timeoutMs = 10000) {
+        const pending = waitForEvent(expectedType, timeoutMs);
+        sendJson(payload);
+        return pending;
+      }
+
+      function decodeBase64(base64Value) {
+        const binary = atob(base64Value);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes;
+      }
+
+      function writeAscii(view, offset, value) {
+        for (let index = 0; index < value.length; index += 1) {
+          view.setUint8(offset + index, value.charCodeAt(index));
+        }
+      }
+
+      function createWavHeader(dataLength, sampleRate, channels) {
+        const bytesPerSample = 2;
+        const blockAlign = channels * bytesPerSample;
+        const view = new DataView(new ArrayBuffer(44));
+        writeAscii(view, 0, "RIFF");
+        view.setUint32(4, 36 + dataLength, true);
+        writeAscii(view, 8, "WAVE");
+        writeAscii(view, 12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, channels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, 16, true);
+        writeAscii(view, 36, "data");
+        view.setUint32(40, dataLength, true);
+        return view.buffer;
+      }
+
+      function resetTurnOutput() {
+        responseText = "";
+        replyText.textContent = "等待回复…";
+        audioChunks = [];
+        audioBytes = 0;
+        expectedAudioSeq = 1;
+        audioFormat = null;
+        audioSummary.textContent = "等待音频…";
+        audioPlayer.removeAttribute("src");
+        audioPlayer.load();
+        if (audioObjectUrl) {
+          URL.revokeObjectURL(audioObjectUrl);
+          audioObjectUrl = null;
+        }
+      }
+
+      function finalizeAudio() {
+        if (audioBytes === 0 || audioChunks.length === 0) {
+          throw new Error("response.audio.done 前未收到音频块");
+        }
+        const format = audioFormat || {
+          format: "pcm16le",
+          sample_rate_hz: 24000,
+          channels: 1,
+        };
+        if (format.format !== "pcm16le") {
+          throw new Error(`不支持的音频格式：${format.format}`);
+        }
+        const durationSeconds =
+          audioBytes / (format.sample_rate_hz * format.channels * 2);
+        const header = createWavHeader(
+          audioBytes,
+          format.sample_rate_hz,
+          format.channels,
+        );
+        const wav = new Blob([header, ...audioChunks], { type: "audio/wav" });
+        audioObjectUrl = URL.createObjectURL(wav);
+        audioPlayer.src = audioObjectUrl;
+        audioSummary.textContent =
+          `${audioChunks.length} 块，${audioBytes} 字节，` +
+          `${durationSeconds.toFixed(2)} 秒，已可播放`;
+        log(
+          `WAV 已生成 chunks=${audioChunks.length} bytes=${audioBytes} ` +
+            `duration=${durationSeconds.toFixed(2)}s`,
+        );
+      }
+
+      function handleEvent(event) {
+        resolveWaiter(event);
+
+        switch (event.type) {
+          case "session.started":
+          case "turn.started":
+          case "input.text.ack":
+          case "turn.committed":
+          case "response.created":
+          case "response.text.done":
+          case "response.done":
+            log(`收到 ${event.type}`);
+            break;
+
+          case "response.text.delta":
+            if (typeof event.delta === "string") {
+              responseText += event.delta;
+              replyText.textContent = responseText;
+              log(`收到 response.text.delta chars=${event.delta.length}`);
+            }
+            break;
+
+          case "response.audio.delta": {
+            if (!Number.isInteger(event.seq) || event.seq !== expectedAudioSeq) {
+              throw new Error(
+                `音频 seq 不连续：期望 ${expectedAudioSeq}，实际 ${event.seq}`,
+              );
+            }
+            if (typeof event.delta !== "string" || event.delta.length === 0) {
+              throw new Error(`音频 seq=${event.seq} 的 delta 为空`);
+            }
+            const chunk = decodeBase64(event.delta);
+            if (chunk.length === 0) {
+              throw new Error(`音频 seq=${event.seq} 解码后为空`);
+            }
+            if (event.audio) {
+              audioFormat = event.audio;
+            }
+            audioChunks.push(chunk);
+            audioBytes += chunk.length;
+            expectedAudioSeq += 1;
+            audioSummary.textContent =
+              `正在接收：${audioChunks.length} 块，${audioBytes} 字节`;
+            log(`收到 response.audio.delta seq=${event.seq} bytes=${chunk.length}`);
+            break;
+          }
+
+          case "response.audio.done":
+            log(`收到 response.audio.done last_seq=${event.seq ?? "?"}`);
+            finalizeAudio();
+            break;
+
+          case "turn.result":
+            log(`收到 turn.result status=${event.status ?? "unknown"}`);
+            activeTurnId = null;
+            state = "ready";
+            setStatus(
+              event.status === "completed"
+                ? "本轮完成，可播放音频"
+                : `本轮结束：${event.status ?? "unknown"}`,
+              event.status !== "completed",
+            );
+            updateButtons();
+            break;
+
+          case "error":
+            throw new Error(
+              event.error?.message || JSON.stringify(event.error || event),
+            );
+
+          default:
+            log(`收到 ${event.type}`);
+        }
+      }
+
+      function fail(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`错误 ${message}`);
+        setStatus(message, true);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          state = "ready";
+        } else {
+          state = "disconnected";
+        }
+        updateButtons();
+      }
+
+      async function connectSession() {
+        state = "connecting";
+        updateButtons();
+        setStatus("正在连接…");
+        eventLog.textContent = "";
+        sessionId = `browser-${Date.now()}`;
+
+        try {
+          socket = new WebSocket(wsUrl.value.trim());
+          socket.addEventListener("message", (message) => {
+            try {
+              const event = JSON.parse(message.data);
+              if (!event || typeof event.type !== "string") {
+                throw new Error("收到无效服务端事件");
+              }
+              handleEvent(event);
+            } catch (error) {
+              fail(error);
+            }
+          });
+          socket.addEventListener("close", (event) => {
+            log(`WebSocket 已断开 code=${event.code}`);
+            rejectAllWaiters(new Error("WebSocket 已断开"));
+            socket = null;
+            activeTurnId = null;
+            state = "disconnected";
+            setStatus("WebSocket 已断开", event.code !== 1000);
+            updateButtons();
+          });
+          socket.addEventListener("error", () => {
+            fail(new Error("WebSocket 连接错误"));
+          });
+
+          await new Promise((resolve, reject) => {
+            socket.addEventListener("open", resolve, { once: true });
+            socket.addEventListener(
+              "error",
+              () => reject(new Error("WebSocket 建连失败")),
+              { once: true },
+            );
+          });
+          log("WebSocket 已连接");
+          await sendAndWait(
+            {
+              type: "session.start",
+              protocol_version: 1,
+              session_id: sessionId,
+              outputs: ["text", "audio"],
+              locale: "zh-CN",
+              reply: { instructions: "请简短回复。" },
+            },
+            "session.started",
+          );
+          state = "ready";
+          setStatus("已连接，可发送");
+          updateButtons();
+        } catch (error) {
+          fail(error);
+          if (socket && socket.readyState < WebSocket.CLOSING) {
+            socket.close();
+          }
+        }
+      }
+
+      async function sendTurn() {
+        const text = inputText.value.trim();
+        if (!text) {
+          fail(new Error("测试输入不能为空"));
+          return;
+        }
+        state = "generating";
+        updateButtons();
+        resetTurnOutput();
+        activeTurnId = `turn-${Date.now()}`;
+        setStatus("正在生成文本和音频…");
+
+        try {
+          await sendAndWait(
+            { type: "turn.start", turn_id: activeTurnId, origin: "user" },
+            "turn.started",
+          );
+          await sendAndWait(
+            { type: "input.text.set", turn_id: activeTurnId, text },
+            "input.text.ack",
+          );
+          await sendAndWait(
+            { type: "turn.commit", turn_id: activeTurnId },
+            "turn.committed",
+          );
+          log("请求已提交，等待回复");
+        } catch (error) {
+          fail(error);
+        }
+      }
+
+      connectButton.addEventListener("click", connectSession);
+      disconnectButton.addEventListener("click", () => {
+        if (socket) {
+          socket.close(1000, "manual test closed");
+        }
+      });
+      sendButton.addEventListener("click", sendTurn);
+      window.addEventListener("beforeunload", () => {
+        if (socket) {
+          socket.close();
+        }
+        if (audioObjectUrl) {
+          URL.revokeObjectURL(audioObjectUrl);
+        }
+      });
+
+      updateButtons();
+    </script>
+  </body>
+</html>
