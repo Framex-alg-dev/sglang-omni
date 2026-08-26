@@ -93,12 +93,12 @@ def test_builtin_catalog_exposes_forward_approach_category_semantics() -> None:
         )
 
 
-def test_builtin_catalog_exposes_self_introduction_and_greeting_semantics() -> None:
+def test_builtin_catalog_exposes_self_introduction_category_semantics() -> None:
     catalog = load_global_action_catalog()
     greeting_category = next(
         category
         for category in catalog.categories
-        if "greeting" in category.semantic_tags
+        if category.source_label == "打招呼与告别"
     )
     single_hand = next(
         child for child in greeting_category.children if child.source_label == "单手挥手"
@@ -127,24 +127,10 @@ def test_builtin_catalog_exposes_self_introduction_and_greeting_semantics() -> N
         "introducing a product, knowledge, a place, a third party"
         in english_category
     )
-    assert "优先选择自然、克制、日常的单手问候候选" in chinese_child
-    assert (
-        "prefer a natural, restrained, everyday one-handed greeting"
-        in english_child
-    )
     assert single_hand.short_definition in chinese_child
     assert both_hands.short_definition in english_child
-    non_greeting_category = next(
-        category
-        for category in catalog.categories
-        if "greeting" not in category.semantic_tags
-    )
-    assert "单手问候候选" not in catalog.child_system_prompt_for(
-        "zh-CN", non_greeting_category.category_id
-    )
-    assert "one-handed greeting" not in catalog.child_system_prompt_for(
-        "en-US", non_greeting_category.category_id
-    )
+    assert "单手问候候选" not in chinese_child
+    assert "one-handed greeting" not in english_child
 
 
 def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None:
@@ -174,25 +160,17 @@ def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None
     assert "不是关键词匹配规则" in chinese_child
 
 
-def test_builtin_catalog_uses_semantic_tags_instead_of_fixed_category_ids() -> None:
+def test_builtin_catalog_does_not_require_ordinary_category_semantic_tags() -> None:
     catalog = load_global_action_catalog()
-    lower_body_category_ids = [
-        category.category_id
-        for category in catalog.categories
-        if "lower_body_motion" in category.semantic_tags
-    ]
-
-    assert lower_body_category_ids == ["B039", "B040", "B041", "B042", "B043"]
     chinese = catalog.category_system_prompt_for("zh-CN")
     english = catalog.category_system_prompt_for("en-US")
-    assert (
-        "本目录中要求下肢、位移或全身大幅移动的类别为："
-        + "、".join(lower_body_category_ids)
-    ) in chinese
-    assert (
-        "the lower-body movement categories are: "
-        + ", ".join(lower_body_category_ids)
-    ) in english
+    assert all(
+        not category.semantic_tags
+        for category in catalog.categories
+        if category.category_id in {"B032", "B039", "B040", "B041", "B042", "B043"}
+    )
+    assert "本目录中要求下肢、位移或全身大幅移动的类别为：" not in chinese
+    assert "the lower-body movement categories are:" not in english
     assert "B033-B037" not in chinese
 
 
@@ -328,7 +306,6 @@ def _catalog_payload() -> dict:
                 "source_label": "问候",
                 "short_definition": "问候动作",
                 "category_path": ["社交", "问候"],
-                "semantic_tags": ["greeting"],
                 "children": [
                     {
                         "candidate_id": "A001",
@@ -572,19 +549,19 @@ def test_global_catalog_category_path_is_optional(tmp_path, path_value) -> None:
     assert catalog.categories[0].category_path == ()
 
 
-def test_global_catalog_semantic_tags_are_optional_and_drive_prompt_rules(
+def test_global_catalog_semantic_tags_are_optional_and_preserved(
     tmp_path,
 ) -> None:
     payload = _catalog_payload()
     payload["categories"][0].pop("semantic_tags", None)
+    payload["categories"][1]["semantic_tags"] = ["client_defined"]
 
     catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
 
     assert catalog.categories[0].semantic_tags == frozenset()
-    greeting = catalog.category_by_id["B001"]
-    assert greeting.semantic_tags == frozenset({"greeting"})
-    assert "单手问候候选" in catalog.child_system_prompt_for("zh-CN", "B001")
-    assert "单手问候候选" not in catalog.child_system_prompt_for("zh-CN", "B008")
+    client_category = catalog.category_by_id["B001"]
+    assert client_category.semantic_tags == frozenset({"client_defined"})
+    assert "单手问候候选" not in catalog.child_system_prompt_for("zh-CN", "B001")
 
 
 def test_global_catalog_allows_one_action_in_multiple_categories(tmp_path) -> None:
@@ -670,7 +647,7 @@ def test_global_catalog_rejects_duplicate_system_semantic_tag_owner(
         ),
         (
             lambda payload: payload["categories"][1].update(
-                semantic_tags=["greeting", "greeting"]
+                semantic_tags=["client_defined", "client_defined"]
             ),
             "semantic_tags must not contain duplicates",
         ),

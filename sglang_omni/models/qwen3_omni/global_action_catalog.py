@@ -36,8 +36,6 @@ UNSUPPORTED_DECISION_ID = "UNSUPPORTED"
 UNSUPPORTED_CATEGORY_SCORE_ID = "B000"
 UNSUPPORTED_CHILD_SCORE_ID = "A000"
 UNSUPPORTED_SOURCE_LABEL = "不支持的动作"
-CATEGORY_SEMANTIC_TAG_GREETING = "greeting"
-CATEGORY_SEMANTIC_TAG_LOWER_BODY_MOTION = "lower_body_motion"
 CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT = "reply_accompaniment"
 CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT = "silent_accompaniment"
 EXCLUSIVE_CATEGORY_SEMANTIC_TAGS = frozenset(
@@ -283,20 +281,6 @@ DIRECTION_REFERENCE_POLICY_EN = (
     "character-relative candidate that physically moves toward it."
 )
 
-
-GREETING_CHILD_POLICY = (
-    "用于问候、告别或建立身份关系时，如果用户没有明确指定单手、双手或热情程度，优先选择"
-    "自然、克制、日常的单手问候候选。只有用户明确要求双手，或上下文清楚表达热烈欢迎、"
-    "强烈兴奋等高强度语气时，才优先选择双手问候候选。"
-)
-
-GREETING_CHILD_POLICY_EN = (
-    "For greetings, farewells, or establishing identity and relationship, prefer a natural, "
-    "restrained, everyday one-handed greeting when the user does not specify one or both hands "
-    "or an enthusiasm level. Prefer a two-handed greeting only when the user explicitly requests "
-    "both hands or the context clearly calls for an enthusiastic welcome or similarly intense "
-    "expression."
-)
 
 REPLY_ACCOMPANIMENT_CHILD_POLICY = (
     "本类别只用于数字人实际有非空回复文本时的语言表达伴随动作。具体动作选择必须以动态上下文中"
@@ -808,11 +792,6 @@ def build_category_system_prompt(
     locale: str = "zh-CN",
 ) -> str:
     locale = _normalize_prompt_locale(locale)
-    lower_body_category_ids = tuple(
-        category.category_id
-        for category in categories
-        if CATEGORY_SEMANTIC_TAG_LOWER_BODY_MOTION in category.semantic_tags
-    )
     reply_accompaniment_ids = tuple(
         category.category_id
         for category in categories
@@ -825,12 +804,6 @@ def build_category_system_prompt(
     )
     if locale == "en-US":
         context_policy = CATEGORY_CONTEXT_POLICY_EN
-        if lower_body_category_ids:
-            context_policy += (
-                " In this catalog, the lower-body movement categories are: "
-                + ", ".join(lower_body_category_ids)
-                + "."
-            )
         if reply_accompaniment_ids and silent_accompaniment_ids:
             context_policy += (
                 " System accompanying-action routing uses these categories: non-empty actual "
@@ -858,12 +831,6 @@ def build_category_system_prompt(
         )
         return "\n".join(lines)
     context_policy = CATEGORY_CONTEXT_POLICY
-    if lower_body_category_ids:
-        context_policy += (
-            "本目录中要求下肢、位移或全身大幅移动的类别为："
-            + "、".join(lower_body_category_ids)
-            + "。"
-        )
     if reply_accompaniment_ids and silent_accompaniment_ids:
         context_policy += (
             "系统伴随动作按以下条件路由：数字人实际有非空回复文本时选择 "
@@ -910,8 +877,6 @@ def build_child_system_prompt(
             lines.append(REPLY_ACCOMPANIMENT_CHILD_POLICY_EN)
         else:
             lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY_EN)
-        if CATEGORY_SEMANTIC_TAG_GREETING in category.semantic_tags:
-            lines.append(GREETING_CHILD_POLICY_EN)
         lines.extend(
             f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.short_definition}"
             for item in category.children
@@ -935,8 +900,6 @@ def build_child_system_prompt(
         lines.append(REPLY_ACCOMPANIMENT_CHILD_POLICY)
     else:
         lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY)
-    if CATEGORY_SEMANTIC_TAG_GREETING in category.semantic_tags:
-        lines.append(GREETING_CHILD_POLICY)
     lines.extend(
         f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.short_definition}"
         for item in category.children

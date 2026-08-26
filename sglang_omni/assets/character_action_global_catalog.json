@@ -1728,9 +1728,6 @@
       "category_id": "B032",
       "source_label": "打招呼与告别",
       "short_definition": "覆盖打招呼、告别、自我介绍、说明身份及初次建立关系；用于手势互动。",
-      "semantic_tags": [
-        "greeting"
-      ],
       "category_path": [
         "手部与手势动作",
         "打招呼与告别"
@@ -2336,9 +2333,6 @@
       "category_id": "B039",
       "source_label": "站立脚步",
       "short_definition": "站立时调整双脚间距、脚尖朝向或单次踏步，动作后保持或回到站姿；用于站立换位、准备移动或姿态微调。",
-      "semantic_tags": [
-        "lower_body_motion"
-      ],
       "category_path": [
         "下肢与脚步动作",
         "站立脚步"
@@ -2392,9 +2386,6 @@
       "category_id": "B040",
       "source_label": "行走类",
       "short_definition": "双脚交替迈步形成连续行进节律，可前进、后退、侧移或原地踏步；用于走路、靠近、离开或移动位置。",
-      "semantic_tags": [
-        "lower_body_motion"
-      ],
       "category_path": [
         "下肢与脚步动作",
         "行走类"
@@ -2460,9 +2451,6 @@
       "category_id": "B041",
       "source_label": "转身类",
       "short_definition": "以单脚或双脚为轴带动全身左右转向，完成后停住且无连续行进位移；用于转身回应、改变朝向或回避。",
-      "semantic_tags": [
-        "lower_body_motion"
-      ],
       "category_path": [
         "下肢与脚步动作",
         "转身类"
@@ -2486,9 +2474,6 @@
       "category_id": "B042",
       "source_label": "蹲起类",
       "short_definition": "膝关节大幅屈伸使臀部升降，完成站立与蹲姿转换或保持蹲姿；用于下蹲取物、躲避、蓄力或休息。",
-      "semantic_tags": [
-        "lower_body_motion"
-      ],
       "category_path": [
         "下肢与脚步动作",
         "蹲起类"
@@ -2524,9 +2509,6 @@
       "category_id": "B043",
       "source_label": "脚部细节",
       "short_definition": "脚踝、脚掌或脚尖局部轻触、抬跟、转向或微调，不带髋部大幅运动；用于调整站姿、试探地面或节奏点动。",
-      "semantic_tags": [
-        "lower_body_motion"
-      ],
       "category_path": [
         "下肢与脚步动作",
         "脚部细节"
