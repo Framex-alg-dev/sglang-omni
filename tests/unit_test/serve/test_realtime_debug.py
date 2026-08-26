@@ -33,6 +33,9 @@ def _record(event: str, timestamp_ms: int, **fields) -> dict:
     return {
         "timestamp": f"2026-08-24T16:00:00.{timestamp_ms % 1000:03d}+08:00",
         "timestamp_unix_ms": timestamp_ms,
+        "timestamp_unix_ns": timestamp_ms * 1_000_000,
+        "monotonic_ns": timestamp_ms * 1_000_000,
+        "pid": fields.pop("pid", 1),
         "event": event,
         "level": "info",
         "session_id": "sess_debug_1",
@@ -181,9 +184,7 @@ def _fixture_logs(root: Path) -> None:
                         "messages": [{"role": "user", "content": "hello"}],
                         "metadata": {
                             "session_id": "sess_debug_1",
-                            "avatar_state": {
-                                "state_description": "选择欢迎动作"
-                            },
+                            "avatar_state": {"state_description": "选择欢迎动作"},
                         },
                     },
                 ),
@@ -219,9 +220,7 @@ def test_load_realtime_session_debug_aggregates_turn_prompts_and_timing(
 ) -> None:
     _fixture_logs(tmp_path)
 
-    result = load_realtime_session_debug(
-        "sess_debug_1", log_root=tmp_path
-    )
+    result = load_realtime_session_debug("sess_debug_1", log_root=tmp_path)
 
     assert result is not None
     assert result["session"]["locale"] == "zh-CN"
@@ -242,12 +241,42 @@ def test_load_realtime_session_debug_aggregates_turn_prompts_and_timing(
     assert turn["action"]["category_prompt"]["rendered_prompt"] == (
         "rendered category prompt"
     )
-    assert turn["action"]["category_prompt"]["scores"][0][
-        "candidate_id"
-    ] == "B027"
-    assert turn["action"]["child_prompt"]["dynamic_prompt"] == (
-        "child dynamic"
-    )
+    assert turn["action"]["category_prompt"]["scores"][0]["candidate_id"] == "B027"
+    assert turn["action"]["child_prompt"]["dynamic_prompt"] == ("child dynamic")
+
+
+def test_debug_derives_monotonic_tts_timeline_and_rejects_cross_process(
+    tmp_path: Path,
+) -> None:
+    events = [
+        _record("turn_commit_received", 1_000, turn_id="turn_debug_1"),
+        _record("reply_first_token", 1_030, turn_id="turn_debug_1"),
+        _record("tts_first_append_sent", 1_050, turn_id="turn_debug_1"),
+        _record("tts_first_audio_received", 1_100, turn_id="turn_debug_1"),
+        _record("response_first_audio_delta_sent", 1_105, turn_id="turn_debug_1"),
+        _record("tts_playable_250ms_ready", 1_250, turn_id="turn_debug_1"),
+        _record("response_done_sent", 1_300, turn_id="turn_debug_1"),
+        _record("turn_completed", 1_320, turn_id="turn_debug_1"),
+    ]
+    _write(tmp_path, "performance_api_1_000.jsonl", events)
+
+    result = load_realtime_session_debug("sess_debug_1", log_root=tmp_path)
+
+    assert result is not None
+    timing = result["turns"][0]["timing"]
+    assert timing["commit_to_first_text_ms"] == 30
+    assert timing["first_text_to_tts_append_ms"] == 20
+    assert timing["tts_first_audio_ms"] == 50
+    assert timing["commit_to_first_audio_ms"] == 105
+    assert timing["commit_to_playable_250ms"] == 250
+    assert timing["response_total_ms"] == 300
+    assert timing["turn_total_ms"] == 320
+
+    events[3]["pid"] = 2
+    _write(tmp_path, "performance_api_2_000.jsonl", [events[3]])
+    result = load_realtime_session_debug("sess_debug_1", log_root=tmp_path)
+    assert result is not None
+    assert result["turns"][0]["timing"]["tts_first_audio_ms"] is None
 
 
 @pytest.mark.parametrize("session_id", ["", "../logs", "has space", "x" * 129])
@@ -264,15 +293,11 @@ async def test_realtime_debug_routes_render_page_and_enforce_admin_auth(
 ) -> None:
     _fixture_logs(tmp_path)
     monkeypatch.setenv(REALTIME_LOG_DIR_ENV, str(tmp_path))
-    fixture_result = load_realtime_session_debug(
-        "sess_debug_1", log_root=tmp_path
-    )
+    fixture_result = load_realtime_session_debug("sess_debug_1", log_root=tmp_path)
     monkeypatch.setattr(
         realtime_debug,
         "load_realtime_session_debug",
-        lambda session_id: fixture_result
-        if session_id == "sess_debug_1"
-        else None,
+        lambda session_id: fixture_result if session_id == "sess_debug_1" else None,
     )
 
     async def _run_inline(function, *args):
@@ -284,16 +309,12 @@ async def test_realtime_debug_routes_render_page_and_enforce_admin_auth(
     app = FastAPI()
     register_realtime_debug_routes(app, "secret")
     transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as client:
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         page = await client.get("/debug/realtime")
         assert page.status_code == 200
         assert "Realtime Session 调试" in page.text
 
-        unauthorized = await client.get(
-            "/debug/realtime/api/session/sess_debug_1"
-        )
+        unauthorized = await client.get("/debug/realtime/api/session/sess_debug_1")
         assert unauthorized.status_code == 401
 
         response = await client.get(
@@ -301,6 +322,4 @@ async def test_realtime_debug_routes_render_page_and_enforce_admin_auth(
             headers={"Authorization": "Bearer secret"},
         )
         assert response.status_code == 200
-        assert response.json()["turns"][0]["action"]["candidate_id"] == (
-            "A124"
-        )
+        assert response.json()["turns"][0]["action"]["candidate_id"] == ("A124")

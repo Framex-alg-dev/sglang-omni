@@ -166,3 +166,46 @@ Windows 完整 launcher 测试被项目既有 Unix `fcntl` 依赖阻塞，不影
 - TTS 故障会使当前 Turn 失败，不静默降级，业务端需处理明确错误；
 - 取消或异常后保守断连重建，会增加下一 audio Turn 的建连延迟；
 - 正式延迟、buffer、失败、取消 metrics 尚未实现，当前不能声称已有完整线上可观测性。
+
+## 11. 阶段 I：服务端关键时间线
+
+结构化 JSONL schema 保留 `timestamp`、`timestamp_unix_ms`，新增：
+
+- `timestamp_unix_ns`：跨进程或与外部系统对齐的绝对时间；
+- `monotonic_ns`：同一进程内计算阶段耗时，禁止跨 PID 相减。
+
+writer 调用线程只捕获时间并执行有界 `put_nowait()`，不等待文件系统。后台线程最多聚合 100 条或
+等待 100ms，按目标小时、类型、组件、PID、分片合并写入。正常 `close()` 会 drain 已接收记录；
+队列满时丢弃日志而不反压 Realtime。健康信息包含 queue size/capacity/high-watermark、written、
+dropped、write errors、batch count、最大 batch records/bytes。
+
+可配置：
+
+| 环境变量 | 默认值 |
+|---|---:|
+| `SGLANG_OMNI_REALTIME_LOG_QUEUE_SIZE` | 8192 |
+| `SGLANG_OMNI_REALTIME_LOG_MAX_FILE_MB` | 128 |
+| `SGLANG_OMNI_REALTIME_LOG_BATCH_MAX_RECORDS` | 100 |
+| `SGLANG_OMNI_REALTIME_LOG_BATCH_MAX_DELAY_MS` | 100 |
+
+当前已覆盖服务端 WebSocket upgrade/accept（明确 `backend=production/fake`）、TTS Turn、connect、
+reuse、ready、首 append、commit、provider response、首 PCM、累计 250ms、外部首 PCM、audio done、
+response done、cancel 和 fail。默认不逐正文 Delta、逐 PCM 落盘，新增记录只包含 ID、计数、字节和
+阶段，不包含正文、媒体、URL/query、voice、headers/cookies/token。
+
+debug 汇总器使用同 PID monotonic 点派生 commit→首字、首字→TTS append、TTS 首包、
+commit→外部首音频、commit→250ms、response/turn 总耗时和 cancel 总耗时；缺点或跨 PID 时返回
+null，不使用绝对时间假装单调耗时。
+
+生产 `server_listening` 尚未记录：当前 Uvicorn 装配没有已确认且同时适用于 production/fake 的
+监听成功回调。本阶段不使用调用 `serve()` 前的时间冒充端口已监听。该点需在 Linux 集成阶段通过
+可靠 server startup hook 补齐。Windows 未执行 p99 对照压测；“默认日志 p99 增幅不超过 2%”仍是
+Linux 验证门，不是当前已通过结论。
+
+质量审查额外修正了两个时序风险：日志队列已满时，`close()` 改用独立关闭事件通知
+writer，避免为写入停止标记而无限阻塞；所有 `*_sent` 埋点均以 WebSocket 实际发送成功为
+条件，避免断线后仍记录伪成功时间。首文本外发埋点也位于 TTS 队列入队之前，不将
+TTS 背压等待混入模型到文本外发的耗时。
+
+本阶段 Windows 回归结果：相关 59 项单元测试全部通过，Black、isort、`compileall` 和
+`git diff --check` 通过；仅有项目现存的 Starlette/httpx 弃用警告。

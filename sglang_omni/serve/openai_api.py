@@ -62,14 +62,7 @@ from sglang_omni.client.types import (
 if TYPE_CHECKING:
     from sglang_omni.client.client import Client
     from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
-from sglang_omni.models.qwen3_omni.action_scoring import (
-    ActionScoreCandidate,
-    ActionSuffixScoreRequest,
-)
-from sglang_omni.models.qwen3_omni.global_action_catalog import (
-    GlobalActionCatalog,
-    GlobalActionCatalogPrewarmStatus,
-)
+
 from sglang_omni.client.audio import (
     DEFAULT_SAMPLE_RATE,
     apply_speed,
@@ -81,13 +74,21 @@ from sglang_omni.http.admin_auth import (
     resolve_admin_api_key,
 )
 from sglang_omni.http.favicon import register_favicon
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+)
+from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    GlobalActionCatalog,
+    GlobalActionCatalogPrewarmStatus,
+)
 from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
 from sglang_omni.serve.protocol import (
     DEFAULT_TTS_BATCH_MAX_ITEMS,
-    AdminRequestBase,
-    ChatCompletionAudio,
     ActionScoreRequest,
     ActionScoreResponse,
+    AdminRequestBase,
+    ChatCompletionAudio,
     ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -118,6 +119,7 @@ from sglang_omni.serve.protocol import (
     VoiceListResponse,
     WeightsCheckerRequest,
 )
+from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
 from sglang_omni.serve.speech_errors import (
     SpeechAPIError,
     bad_request,
@@ -125,16 +127,18 @@ from sglang_omni.serve.speech_errors import (
     openai_error_payload,
     speech_error_response,
 )
-from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
-from sglang_omni.utils.resource_monitor import (
-    PeriodicResourceMonitor,
-    resource_log_interval_s,
-)
-from sglang_omni.utils.structured_logs import get_structured_log_writer
 from sglang_omni.serve.speech_service import SpeechRequestValidator
 from sglang_omni.serve.speech_voices import MAX_VOICE_UPLOAD_BYTES, SpeakerSampleStore
 from sglang_omni.serve.speech_ws import SpeechWebSocketSession
 from sglang_omni.serve.transcription_adapters import resolve_adapter
+from sglang_omni.utils.resource_monitor import (
+    PeriodicResourceMonitor,
+    resource_log_interval_s,
+)
+from sglang_omni.utils.structured_logs import (
+    emit_structured_log,
+    get_structured_log_writer,
+)
 
 logger = logging.getLogger(__name__)
 STREAM_DONE_SENTINEL = "[DONE]"
@@ -508,9 +512,7 @@ def _register_resource_monitor(app: FastAPI) -> None:
         monitor.start()
 
     async def stop_resource_monitor() -> None:
-        if manager is not None and hasattr(
-            manager, "set_resource_sample_requester"
-        ):
+        if manager is not None and hasattr(manager, "set_resource_sample_requester"):
             manager.set_resource_sample_requester(None)
         await monitor.stop()
 
@@ -1349,7 +1351,19 @@ def _register_multimodal_realtime(
 
     @app.websocket("/v1/session/realtime")
     async def multimodal_realtime(websocket: WebSocket) -> None:
+        emit_structured_log(
+            "lifecycle",
+            "ws_upgrade_received",
+            backend="production",
+            route="/v1/session/realtime",
+        )
         await websocket.accept()
+        emit_structured_log(
+            "lifecycle",
+            "ws_accepted",
+            backend="production",
+            route="/v1/session/realtime",
+        )
         session = manager.create(websocket)
         await session.run()
 
@@ -2040,7 +2054,9 @@ def _register_action_scores(app: FastAPI) -> None:
         try:
             result = await client.score_action_suffixes(scoring_request)
         except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="action scoring timed out") from exc
+            raise HTTPException(
+                status_code=504, detail="action scoring timed out"
+            ) from exc
         except ClientError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:

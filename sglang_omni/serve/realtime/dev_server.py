@@ -19,6 +19,7 @@ from sglang_omni.serve.realtime.dev_model import (
 )
 from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
 from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
+from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,19 @@ def create_dev_app(
 
     @app.websocket("/v1/session/realtime")
     async def multimodal_realtime(websocket: WebSocket) -> None:
+        emit_structured_log(
+            "lifecycle",
+            "ws_upgrade_received",
+            backend="fake",
+            route="/v1/session/realtime",
+        )
         await websocket.accept()
+        emit_structured_log(
+            "lifecycle",
+            "ws_accepted",
+            backend="fake",
+            route="/v1/session/realtime",
+        )
         await manager.create(websocket).run()
 
     install_dev_model_error_handler(app)
@@ -103,10 +116,20 @@ async def serve_dev_realtime_model(
         config.log_summary(),
     )
     del allowed_local_media_path, allowed_media_domains
+    client = DevRealtimeModelClient(config)
+    emit_structured_log(
+        "lifecycle", "model_client_ready", backend="fake", model=model_name
+    )
     app = create_dev_app(
-        DevRealtimeModelClient(config),
+        client,
         model_name=model_name,
         embedded_tts_config=embedded_tts_config,
+    )
+    emit_structured_log(
+        "lifecycle",
+        "api_app_ready",
+        backend="fake",
+        realtime_enabled=True,
     )
     uvicorn_config = uvicorn.Config(
         app,

@@ -55,6 +55,7 @@ from sglang_omni.utils.gpu_memory import (
     format_bytes_gib,
     get_gpu_device_info,
 )
+from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
 
@@ -461,7 +462,27 @@ async def _run_server(
     port = _find_available_port(host, port)
     mp_runner = MultiProcessPipelineRunner(pipeline_config)
     startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
+    pipeline_started = time.monotonic()
+    emit_structured_log(
+        "lifecycle",
+        "pipeline_start_begin",
+        backend="production",
+        pipeline=pipeline_config.name,
+    )
     await mp_runner.start(timeout=startup_timeout)
+    emit_structured_log(
+        "lifecycle",
+        "pipeline_start_end",
+        backend="production",
+        pipeline=pipeline_config.name,
+        elapsed_ms=round((time.monotonic() - pipeline_started) * 1000, 3),
+    )
+    emit_structured_log(
+        "lifecycle",
+        "model_pipeline_ready",
+        backend="production",
+        pipeline=pipeline_config.name,
+    )
     coordinator = mp_runner.coordinator
 
     # Plans are resolved once inside ``mp_runner.start()`` (which applies
@@ -488,6 +509,12 @@ async def _run_server(
     try:
         cl_kwargs = client_kwargs or {}
         client = Client(coordinator, **cl_kwargs)
+        emit_structured_log(
+            "lifecycle",
+            "model_client_ready",
+            backend="production",
+            model=model_name or pipeline_config.name,
+        )
         warmup_enabled = os.environ.get(
             "SGLANG_OMNI_ACTION_WARMUP", "1"
         ).strip().lower() not in {"0", "false", "off", "no"}
@@ -545,6 +572,12 @@ async def _run_server(
             global_action_catalog=global_action_catalog,
             global_action_prewarm=global_action_prewarm,
             embedded_tts_config=embedded_tts_config,
+        )
+        emit_structured_log(
+            "lifecycle",
+            "api_app_ready",
+            backend="production",
+            realtime_enabled=enable_realtime,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
         profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)
