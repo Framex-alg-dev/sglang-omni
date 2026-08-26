@@ -179,3 +179,20 @@ Disconnected -> Connecting -> Ready -> Streaming -> Draining -> Ready
 ## 11. 观测
 
 以 session/turn/response 为关联键记录：provider connect/ready、first text queued、commit、first audio、250ms audio、last audio、response done、turn result/cancelled。日志和 metrics 不包含正文、Base64、PCM 或凭证。
+
+## 12. 已审批的时间戳观测设计
+
+详细事件表以 `research/realtime_timestamp_observability_plan.md` 为准。实现遵守以下合同：
+
+- 复用 `emit_structured_log()` 和现有按小时、类型、组件、PID 分片的 JSONL 格式；
+- 在业务边界调用线程立即捕获绝对时间和单进程 monotonic 时间，writer 排队/落盘时间不得冒充
+  事件发生时间；
+- 默认只记录关键边界、首点、关键阈值和完成汇总，不逐文本 Delta、逐 PCM 块持久化；
+- 逐 Delta/逐 PCM 只允许在显式诊断模式短时开启，且只记序号、长度、队列深度等元数据；
+- writer 使用有界非阻塞队列，并以最多 100 条或最多等待 100ms 的批次聚合写入；
+- 日志队列满时允许丢日志但不得反压 Realtime 链路，必须暴露 dropped/high-watermark/write-error；
+- 默认日志相对关闭日志的 Realtime p99 增幅目标不超过 2%；
+- 本次只实现本服务时间线，不修改数字人后端、WebSocket 握手协议或客户端连接追踪字段；
+- GPU/权重/Pipeline ready 是服务级事件，Session 只记录本 Session 校验、Action/TTS manager 等
+  资源 ready，禁止把 Session 初始化描述为每 Session 分配 GPU；
+- 禁止记录正文、Base64、PCM、图像、完整 URL/query、voice、headers、Cookie 或凭据。

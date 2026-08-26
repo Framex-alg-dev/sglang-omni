@@ -125,3 +125,29 @@ provider，省略 `--realtime-tts-url` 和 `--realtime-tts-voice` 即可。是�
 - [x] turn.cancel 真正取消并幂等终止。
 - [x] 错误不静默降级，资源无泄漏。
 - [ ] fake、本地、Linux 完整测试与文档通过。
+
+## 阶段 I：关键时间戳与非阻塞持久化（待开始）
+
+- [ ] 扩展结构化日志 schema，保留现有 `timestamp/timestamp_unix_ms`，新增
+  `timestamp_unix_ns/monotonic_ns`，锁定跨版本兼容测试。
+- [ ] 将 writer 改为有界异步批量写：最多 100 条或 100ms；按目标分片合并 bytes；正常关闭
+  drain，队列满时丢弃并统计，禁止阻塞事件循环。
+- [ ] 增加 writer batch、队列高水位、dropped、written、write error 的健康指标和单元测试。
+- [ ] 在生产 launcher/Pipeline 边界记录进程启动、Pipeline begin/end、model pipeline ready、Client
+  ready、app ready 和 server listening；fake 路径明确记录 `backend=fake`。
+- [ ] 在 `/v1/session/realtime` 记录服务端 upgrade received/accepted、Session start/validation/resources
+  ready/started、disconnect 和 cleanup；不修改客户端或数字人后端协议。
+- [ ] 记录 Turn start/ack、首输入、commit/ack、输入汇总、图像预处理和模型请求 build 边界。
+- [ ] 记录模型 submit、首 chunk、首正文、首正文外发、模型文本完成和 abort 边界；默认不逐 Delta。
+- [ ] 记录 TTS connect/ready/reuse、首文本 queue/append、commit、首 PCM、首 PCM 外发、250ms
+  可播放、stream done、audio done、cancel/failure；默认不逐 PCM。
+- [ ] 记录 Action begin/category/child/ready，以及 response done、turn result、cancel 分段和失败 owner。
+- [ ] 扩展 debug 汇总器，生成 commit→首字、首字→TTS append、TTS 首包、commit→首音频、
+  250ms 可播放、response/turn 总耗时和 cancel 总耗时。
+- [ ] 使用 fake model/fake TTS 注入固定延迟，验证派生时间误差；覆盖时钟回拨、跨进程 monotonic
+  禁止相减、队列溢出、滚动、正常 drain 和异常有界丢失。
+- [ ] 对日志关闭、默认日志、诊断日志做对照压测，默认日志的目标 Realtime p99 增幅不超过 2%。
+- [ ] 更新配置测试手册和任务报告，明确日志字段、目录、批量/丢弃语义与已知限制。
+
+验证门：相关 writer/Realtime 单测、Black/isort/compileall/diff-check；Linux 环境运行压测并保留
+原始命令、样本量、p50/p95/p99、日志 writer 健康统计。数字人后端时间线不属于本阶段实现。
