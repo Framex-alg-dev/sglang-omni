@@ -103,6 +103,11 @@ MAX_PREPARED_IMAGE_BYTES_PER_TURN = 64 * 1024 * 1024
 # scoring omits general history; its one reference-only action anchor does not
 # use this limit.
 MAX_REPLY_HISTORY_TURNS = 2
+REPLY_HISTORY_CURRENT_ONLY = "CURRENT_ONLY"
+REPLY_HISTORY_REQUIRED = "HISTORY_REQUIRED"
+REPLY_HISTORY_ROUTE_STAGE = "reply_history_route"
+REPLY_HISTORY_ROUTE_TIMEOUT_ENV = "SGLANG_OMNI_REPLY_HISTORY_ROUTE_TIMEOUT_S"
+DEFAULT_REPLY_HISTORY_ROUTE_TIMEOUT_S = 0.5
 MAX_ACTION_CURRENT_IMAGES = 8
 # Keep lightweight action facts outside multimodal history. Reply generation
 # never receives them; action scoring may receive only the latest user-triggered
@@ -681,6 +686,16 @@ class ReplyTTSState:
     buffered_audio_bytes: int = 0
     first_text_queued: bool = False
     first_audio_sent: bool = False
+
+
+@dataclass(slots=True)
+class ReplyHistoryRouteResult:
+    decision: Literal["CURRENT_ONLY", "HISTORY_REQUIRED"]
+    elapsed_ms: float = 0.0
+    confidence_margin: float | None = None
+    scores: dict[str, float] = field(default_factory=dict)
+    fallback_reason: str | None = None
+    stats: dict[str, Any] = field(default_factory=dict)
 
 
 class MultimodalSession:
@@ -3287,6 +3302,7 @@ class MultimodalSession:
             reply_task: asyncio.Task[tuple[str, dict[str, Any]]] | None = None
             provisional_state: ProvisionalReplyState | None = None
             provisional_discard_task: asyncio.Task[Any] | None = None
+            reply_history_route: ReplyHistoryRouteResult | None = None
 
             def track_branch(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
                 task = asyncio.create_task(coroutine, name=name)
@@ -3353,52 +3369,29 @@ class MultimodalSession:
                     turn,
                     source="provided" if provided_reply else "generated",
                 )
-                if provided_reply:
-                    reply_task = track_branch(
-                        self._run_provided_reply(
-                            turn,
-                            turn.text or "",
-                            provisional=provisional_state,
-                        ),
-                        name=(
-                            f"session-provisional-provided-reply-"
-                            f"{self.session_id}-{turn.turn_id}"
-                        ),
-                    )
-                else:
-                    reply_task = track_branch(
-                        self._run_generated_reply(
-                            turn,
-                            current_audio_list,
-                            prepared_current_images,
-                            current_image_roles,
-                            None,
-                            provisional=provisional_state,
-                        ),
-                        name=(
-                            f"session-provisional-reply-{self.session_id}-"
-                            f"{turn.turn_id}"
-                        ),
-                    )
-                provisional_state.task = reply_task
-            elif "text" in self.modalities and provided_reply:
-                reply_task = track_branch(
-                    self._run_provided_reply(turn, turn.text or ""),
-                    name=f"session-provided-reply-{self.session_id}-{turn.turn_id}",
-                )
-            elif "text" in self.modalities and "action" not in self.modalities:
-                reply_task = track_branch(
-                    self._run_generated_reply(
-                        turn,
-                        current_audio_list,
-                        prepared_current_images,
-                        current_image_roles,
-                        None,
+
+            reply_history_route_task: asyncio.Task[Any] | None = None
+            if (
+                "text" in self.modalities
+                and not provided_reply
+                and turn.turn_origin == TURN_ORIGIN_USER
+                and current_audio_list
+            ):
+                reply_history_route_task = track_branch(
+                    self._classify_reply_history_requirement(
+                        turn, current_audio_list
                     ),
-                    name=f"session-reply-{self.session_id}-{turn.turn_id}",
+                    name=(
+                        f"session-reply-history-route-{self.session_id}-"
+                        f"{turn.turn_id}"
+                    ),
                 )
 
+            if reply_history_route_task is not None:
+                reply_history_route = await reply_history_route_task
+
             action_task: asyncio.Task[Any] | None = None
+            action_started: float | None = None
             if "action" in self.modalities:
                 action_started = time.perf_counter()
                 emit_structured_log(
@@ -3425,11 +3418,69 @@ class MultimodalSession:
                         request_base=turn.request_base,
                         provisional_reply=provisional_state,
                         on_category_selected=(
-                            on_category_selected if "text" in self.modalities else None
+                            on_category_selected
+                            if "text" in self.modalities
+                            else None
                         ),
                     ),
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
                 )
+
+            if (
+                fusion_reply
+                and provisional_state is not None
+                and provisional_state.status == "pending"
+            ):
+                if provided_reply:
+                    reply_task = track_branch(
+                        self._run_provided_reply(
+                            turn,
+                            turn.text or "",
+                            provisional=provisional_state,
+                        ),
+                        name=(
+                            f"session-provisional-provided-reply-"
+                            f"{self.session_id}-{turn.turn_id}"
+                        ),
+                    )
+                else:
+                    reply_task = track_branch(
+                        self._run_generated_reply(
+                            turn,
+                            current_audio_list,
+                            prepared_current_images,
+                            current_image_roles,
+                            None,
+                            provisional=provisional_state,
+                            history_route=reply_history_route,
+                        ),
+                        name=(
+                            f"session-provisional-reply-{self.session_id}-"
+                            f"{turn.turn_id}"
+                        ),
+                    )
+                provisional_state.task = reply_task
+            elif "text" in self.modalities and provided_reply:
+                reply_task = track_branch(
+                    self._run_provided_reply(turn, turn.text or ""),
+                    name=f"session-provided-reply-{self.session_id}-{turn.turn_id}",
+                )
+            elif "text" in self.modalities and "action" not in self.modalities:
+                reply_task = track_branch(
+                    self._run_generated_reply(
+                        turn,
+                        current_audio_list,
+                        prepared_current_images,
+                        current_image_roles,
+                        None,
+                        history_route=reply_history_route,
+                    ),
+                    name=f"session-reply-{self.session_id}-{turn.turn_id}",
+                )
+
+            if "action" in self.modalities:
+                assert action_task is not None
+                assert action_started is not None
                 try:
                     action, scores, action_timing, action_context = await action_task
                 except Exception as exc:
@@ -3605,6 +3656,11 @@ class MultimodalSession:
                 "timing": {
                     "server_turn_ingest_ms": round(ingest_ms, 3),
                     "image_preprocessing": image_preprocess_stats,
+                    "reply_history_route_ms": (
+                        reply_history_route.elapsed_ms
+                        if reply_history_route is not None
+                        else 0.0
+                    ),
                 },
             }
             if self.protocol_version is not None or self.modalities != ("action",):
@@ -4869,6 +4925,7 @@ class MultimodalSession:
         category: SessionActionCategory | None,
         *,
         support_status: str = "supported",
+        history_route: ReplyHistoryRouteResult | None = None,
     ) -> tuple[GenerateRequest, list[str]]:
         reply_images, reply_image_roles = self._select_reply_user_camera_images(
             images, image_roles
@@ -4878,7 +4935,14 @@ class MultimodalSession:
             messages.append(Message(role="system", content=self.instructions.strip()))
         history_audios: list[str] = []
         history_images: list[str] = []
-        visible_history_turns = self._visible_reply_history_turns()
+        suppress_reply_history = (
+            history_route.decision == REPLY_HISTORY_CURRENT_ONLY
+            if history_route is not None
+            else self._suppress_reply_history_for_turn(turn, audios)
+        )
+        visible_history_turns = (
+            [] if suppress_reply_history else self._visible_reply_history_turns()
+        )
         for history_turn in visible_history_turns:
             if len(history_turn.images) != len(history_turn.image_roles):
                 raise ValueError(
@@ -4952,9 +5016,54 @@ class MultimodalSession:
                 "turn_id": turn.turn_id,
                 "logical_request_id": turn.request_base,
                 "task": "session_reply",
+                "reply_history_available_turn_count": len(
+                    self.reply_history_turns
+                ),
+                "reply_history_forwarded_turn_count": len(
+                    visible_history_turns
+                ),
+                "reply_history_suppressed_for_audio_only": (
+                    suppress_reply_history
+                ),
+                "reply_history_route_decision": (
+                    history_route.decision if history_route is not None else None
+                ),
+                "reply_history_route_ms": (
+                    history_route.elapsed_ms if history_route is not None else 0.0
+                ),
+                "reply_history_route_confidence_margin": (
+                    history_route.confidence_margin
+                    if history_route is not None
+                    else None
+                ),
+                "reply_history_route_fallback_reason": (
+                    history_route.fallback_reason
+                    if history_route is not None
+                    else None
+                ),
             },
         )
         return request, reply_image_roles
+
+    @staticmethod
+    def _suppress_reply_history_for_turn(
+        turn: TurnBuffer, audios: list[str]
+    ) -> bool:
+        """Keep audio-only user turns independent from prior reply examples.
+
+        Without a current transcript, the service cannot reliably decide
+        whether the new utterance refers to an earlier exchange. Forwarding
+        historical user audio and assistant replies in that case can make one
+        plausible response reinforce itself across otherwise unrelated turns.
+        Explicit current text remains the low-cost signal that permits history.
+        """
+        return (
+            turn.turn_origin == TURN_ORIGIN_USER
+            and bool(audios)
+            and not (
+                isinstance(turn.text, str) and bool(turn.text.strip())
+            )
+        )
 
     @staticmethod
     def _normalized_reply_text(text: str) -> str:
@@ -5809,6 +5918,7 @@ class MultimodalSession:
         *,
         support_status: str = "supported",
         provisional: ProvisionalReplyState | None = None,
+        history_route: ReplyHistoryRouteResult | None = None,
     ) -> tuple[str, dict[str, Any]]:
         self._ensure_turn_processing(turn)
         request_id = f"{turn.request_base}-reply"
@@ -5836,6 +5946,7 @@ class MultimodalSession:
             image_roles,
             category,
             support_status=support_status,
+            history_route=history_route,
         )
         emit_structured_log(
             "performance",
@@ -5917,6 +6028,24 @@ class MultimodalSession:
             ),
             user_camera_present=bool(reply_forwarded_image_roles),
             reply_history_turn_count=len(self.reply_history_turns),
+            reply_history_forwarded_turn_count=request.metadata.get(
+                "reply_history_forwarded_turn_count", 0
+            ),
+            reply_history_suppressed_for_audio_only=request.metadata.get(
+                "reply_history_suppressed_for_audio_only", False
+            ),
+            reply_history_route_decision=request.metadata.get(
+                "reply_history_route_decision"
+            ),
+            reply_history_route_ms=request.metadata.get(
+                "reply_history_route_ms", 0.0
+            ),
+            reply_history_route_confidence_margin=request.metadata.get(
+                "reply_history_route_confidence_margin"
+            ),
+            reply_history_route_fallback_reason=request.metadata.get(
+                "reply_history_route_fallback_reason"
+            ),
             last_executed_action=self._executed_action_log_fields(
                 self.last_executed_action
             ),
@@ -6733,6 +6862,207 @@ class MultimodalSession:
             self._unregister_turn_request(turn, request.request_id)
         self._ensure_turn_processing(turn)
         return result
+
+    def _reply_history_route_system_prompt(self) -> str:
+        return self._prompt(
+            zh=(
+                "你是会话上下文依赖分类器。只判断当前用户语音能否在没有任何历史"
+                "对话的情况下被独立理解并回答。若语音要求继续、重复、解释、修改或"
+                "比较先前内容，或使用‘那个’‘刚才的’‘前一个’等必须依赖先前对话"
+                "才能确定含义的指代，选择 R1。若当前语音本身包含完整问题或指令，"
+                "即使主题可能与之前相同，也选择 R0。不要回答用户的问题。"
+            ),
+            en=(
+                "You classify whether the current user audio requires prior "
+                "conversation context. Choose R1 only when the utterance asks to "
+                "continue, repeat, explain, modify, or compare prior content, or "
+                "contains a reference whose meaning cannot be resolved without the "
+                "earlier conversation. Choose R0 when the current utterance is a "
+                "complete question or instruction on its own, even if its topic may "
+                "also have appeared earlier. Do not answer the user."
+            ),
+        )
+
+    async def _classify_reply_history_requirement(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+    ) -> ReplyHistoryRouteResult:
+        """Classify an audio-only user turn before reply generation.
+
+        The request deliberately contains current audio only. R0/R1 are short,
+        symmetric score suffixes which map to the public routing decisions.
+        Any operational failure fails closed to CURRENT_ONLY so stale history
+        cannot contaminate an otherwise independent turn.
+        """
+        if turn.turn_origin != TURN_ORIGIN_USER or not audios:
+            return ReplyHistoryRouteResult(
+                decision=REPLY_HISTORY_CURRENT_ONLY,
+                fallback_reason="not_audio_user_turn",
+            )
+        request_id = f"{turn.request_base}-reply-history-route"
+        system_prompt = self._reply_history_route_system_prompt()
+        request = ActionSuffixScoreRequest(
+            request_id=request_id,
+            model=self.model_name,
+            prefix=self._prompt(zh="分类结果：", en="Classification result:"),
+            system_prompt=system_prompt,
+            current_text="",
+            output_prompt="",
+            language=self.language,
+            candidates=[
+                ActionScoreCandidate(
+                    candidate_id="R0",
+                    suffix="R0",
+                    action_id=REPLY_HISTORY_CURRENT_ONLY,
+                ),
+                ActionScoreCandidate(
+                    candidate_id="R1",
+                    suffix="R1",
+                    action_id=REPLY_HISTORY_REQUIRED,
+                ),
+            ],
+            suffix_tokenization_mode="short_id",
+            audios=audios,
+            images=[],
+            image_roles=[],
+            sample_rate=16000,
+            micro_batch_size=2,
+            session_id=self.session_id,
+            stage=REPLY_HISTORY_ROUTE_STAGE,
+            logical_request_id=turn.request_base,
+            turn_origin=turn.turn_origin,
+            text_role=turn.text_role,
+            history=[],
+            history_audios=[],
+            history_images=[],
+            prefix_cache_namespace=(
+                f"reply-history-route:v1:{self.locale}:"
+                f"{hashlib.sha256(system_prompt.encode()).hexdigest()[:16]}"
+            ),
+            cache_static_system_only=True,
+        )
+        try:
+            timeout_s = float(
+                os.environ.get(
+                    REPLY_HISTORY_ROUTE_TIMEOUT_ENV,
+                    DEFAULT_REPLY_HISTORY_ROUTE_TIMEOUT_S,
+                )
+            )
+        except (TypeError, ValueError):
+            timeout_s = DEFAULT_REPLY_HISTORY_ROUTE_TIMEOUT_S
+        timeout_s = max(0.05, timeout_s)
+        started = time.perf_counter()
+        self._register_turn_request(turn, request_id)
+        emit_structured_log(
+            "reply",
+            "reply_history_route_started",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            request_id=request_id,
+            timeout_s=timeout_s,
+            history_message_count=0,
+            history_audio_count=0,
+            current_audio_count=len(audios),
+        )
+        try:
+            result = await asyncio.wait_for(
+                self.client.score_action_suffixes(request), timeout=timeout_s
+            )
+            self._ensure_turn_processing(turn)
+            matched = {
+                score.candidate_id: float(score.mean_logprob)
+                for score in result.scores
+                if score.candidate_id in {"R0", "R1"}
+            }
+            if not matched:
+                raise ValueError("reply history route returned no R0/R1 scores")
+            ranked = sorted(matched.items(), key=lambda item: item[1], reverse=True)
+            winner = ranked[0][0]
+            decision = (
+                REPLY_HISTORY_REQUIRED
+                if winner == "R1"
+                else REPLY_HISTORY_CURRENT_ONLY
+            )
+            margin = (
+                ranked[0][1] - ranked[1][1] if len(ranked) > 1 else None
+            )
+            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            route = ReplyHistoryRouteResult(
+                decision=decision,
+                elapsed_ms=elapsed_ms,
+                confidence_margin=margin,
+                scores=matched,
+                stats=dict(result.stats),
+            )
+            audio_stage_timing = (
+                result.stats.get("pipeline_stage_timing", {}).get(
+                    "audio_encoder", {}
+                )
+            )
+            audio_encoder_cache_status = (
+                audio_stage_timing.get("cache_status")
+                if isinstance(audio_stage_timing, dict)
+                else None
+            )
+            emit_structured_log(
+                "reply",
+                "reply_history_route_completed",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                decision=decision,
+                candidate_scores=matched,
+                confidence_margin=margin,
+                classification_ms=elapsed_ms,
+                prefix_cached=result.prefix_cached,
+                audio_encoder_ms=float(result.stats.get("audio_encoder_ms", 0.0)),
+                audio_encoder_cache_status=audio_encoder_cache_status,
+                audio_encoder_cache_hit=(
+                    audio_encoder_cache_status in {"hit", "shared"}
+                    if audio_encoder_cache_status is not None
+                    else None
+                ),
+                history_available_turn_count=len(self.reply_history_turns),
+                history_forwarded_turn_count=(
+                    min(len(self.reply_history_turns), MAX_REPLY_HISTORY_TURNS)
+                    if decision == REPLY_HISTORY_REQUIRED
+                    else 0
+                ),
+            )
+            return route
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            fallback_reason = "timeout"
+        except Exception as exc:
+            fallback_reason = f"{type(exc).__name__}: {exc}"
+        finally:
+            self._unregister_turn_request(turn, request_id)
+
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        emit_structured_log(
+            "reply",
+            "reply_history_route_fallback",
+            level="warning",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            request_id=request_id,
+            decision=REPLY_HISTORY_CURRENT_ONLY,
+            classification_ms=elapsed_ms,
+            fallback_reason=fallback_reason,
+        )
+        return ReplyHistoryRouteResult(
+            decision=REPLY_HISTORY_CURRENT_ONLY,
+            elapsed_ms=elapsed_ms,
+            fallback_reason=fallback_reason,
+        )
 
     async def _score_action(
         self,

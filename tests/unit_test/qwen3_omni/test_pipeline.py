@@ -60,6 +60,74 @@ from tests.unit_test.fixtures.qwen_fakes import (
 )
 
 
+def test_audio_encoder_batch_shares_identical_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = [
+        SimpleNamespace(request_id="audio-route", request=SimpleNamespace(metadata={})),
+        SimpleNamespace(request_id="audio-reply", request=SimpleNamespace(metadata={})),
+    ]
+    states = {id(payload): SimpleNamespace(result=None) for payload in payloads}
+    requests = {
+        id(payload): SimpleNamespace(
+            skip_result=None,
+            cache_key="same-current-audio",
+            model_inputs={"input_features": torch.ones((1, 2, 3))},
+        )
+        for payload in payloads
+    }
+    model_calls = []
+
+    monkeypatch.setattr(qwen_stages, "load_state", lambda payload: states[id(payload)])
+    monkeypatch.setattr(
+        qwen_stages,
+        "build_encoder_request",
+        lambda state, *, stage_name: requests[
+            next(key for key, value in states.items() if value is state)
+        ],
+    )
+    monkeypatch.setattr(
+        qwen_stages, "_lookup_cached_encoder_output", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        qwen_stages, "_store_cached_encoder_output", lambda **kwargs: None
+    )
+    monkeypatch.setattr(qwen_stages, "_audio_request_is_batchable", lambda request: True)
+    monkeypatch.setattr(
+        qwen_stages,
+        "_normalize_audio_request_tensors",
+        lambda request: (
+            torch.ones((1, 2, 3)),
+            torch.ones((1, 2), dtype=torch.bool),
+            torch.tensor([1]),
+        ),
+    )
+    monkeypatch.setattr(qwen_stages, "_log_action_media_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(qwen_stages, "record_action_stage_timing", lambda *args, **kwargs: None)
+
+    def apply_result(state, *, stage_name, result):
+        state.result = result
+
+    monkeypatch.setattr(qwen_stages, "apply_encoder_result", apply_result)
+    monkeypatch.setattr(qwen_stages, "store_state", lambda payload, state: payload)
+
+    def model(**kwargs):
+        model_calls.append(kwargs)
+        return {
+            "audio_output_lengths": torch.tensor([1]),
+            "audio_feature_lengths": torch.tensor([1]),
+            "audio_embeds": torch.ones((1, 4)),
+        }
+
+    results = qwen_stages._batch_audio_encoder_payloads(payloads, model=model)
+
+    assert results == payloads
+    assert len(model_calls) == 1
+    assert model_calls[0]["input_features"].shape[0] == 1
+    assert states[id(payloads[0])].result is states[id(payloads[1])].result
+
+
+
 def _stage(config: PipelineConfig, name: str):
     return next(stage for stage in config.stages if stage.name == name)
 

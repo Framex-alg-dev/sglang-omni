@@ -99,6 +99,45 @@ class FakeClient:
         )
 
 
+class ReplyHistoryRouteClient(FakeClient):
+    def __init__(self, decision: str = "CURRENT_ONLY", *, error=None) -> None:
+        super().__init__()
+        self.decision = decision
+        self.error = error
+
+    async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+        self.score_requests.append(request)
+        if request.stage != multimodal_module.REPLY_HISTORY_ROUTE_STAGE:
+            return await super().score_action_suffixes(request)
+        if self.error is not None:
+            raise self.error
+        required = self.decision == "HISTORY_REQUIRED"
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id="R0",
+                    token_count=1,
+                    mean_logprob=-1.0 if required else -0.1,
+                    mean_nll=1.0 if required else 0.1,
+                    ppl=2.718281 if required else 1.105170,
+                    token_scores=[TokenScore(token_id=101, logprob=-1.0 if required else -0.1)],
+                ),
+                CandidateScore(
+                    candidate_id="R1",
+                    token_count=1,
+                    mean_logprob=-0.1 if required else -1.0,
+                    mean_nll=0.1 if required else 1.0,
+                    ppl=1.105170 if required else 2.718281,
+                    token_scores=[TokenScore(token_id=102, logprob=-0.1 if required else -1.0)],
+                ),
+            ],
+            stats={"audio_encoder_ms": 7.5},
+        )
+
+
 class BlockingActionClient(FakeClient):
     def __init__(self) -> None:
         super().__init__()
@@ -3583,6 +3622,328 @@ def test_reply_history_keeps_two_recent_unique_assistant_replies() -> None:
     assert [
         session._reply_history_assistant_signature(turn) for turn in visible
     ] == ["重复回复", "最新回复"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [
+        ("CURRENT_ONLY", "CURRENT_ONLY"),
+        ("HISTORY_REQUIRED", "HISTORY_REQUIRED"),
+    ],
+)
+async def test_audio_reply_history_route_scores_current_audio_only(
+    decision: str, expected: str
+) -> None:
+    client = ReplyHistoryRouteClient(decision)
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": f"session-route-{decision}",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start(f"turn-route-{decision}"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = f"request-route-{decision}"
+
+    route = await session._classify_reply_history_requirement(
+        turn, ["audio-current"]
+    )
+
+    assert route.decision == expected
+    assert route.confidence_margin == pytest.approx(0.9)
+    request = client.score_requests[-1]
+    assert request.stage == multimodal_module.REPLY_HISTORY_ROUTE_STAGE
+    assert request.audios == ["audio-current"]
+    assert request.images == []
+    assert request.history == []
+    assert request.history_audios == []
+    assert request.history_images == []
+    assert [candidate.candidate_id for candidate in request.candidates] == [
+        "R0",
+        "R1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_audio_reply_history_route_failure_falls_back_current_only() -> None:
+    client = ReplyHistoryRouteClient(error=RuntimeError("route unavailable"))
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-route-failure",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-route-failure"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-route-failure"
+
+    route = await session._classify_reply_history_requirement(
+        turn, ["audio-current"]
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert "RuntimeError" in (route.fallback_reason or "")
+    assert turn.active_request_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_audio_reply_history_route_timeout_falls_back_current_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HangingRouteClient(ReplyHistoryRouteClient):
+        async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setenv(
+        multimodal_module.REPLY_HISTORY_ROUTE_TIMEOUT_ENV, "0.05"
+    )
+    session = make_session(FakeWebSocket(), HangingRouteClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-route-timeout",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-route-timeout"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-route-timeout"
+
+    route = await session._classify_reply_history_requirement(
+        turn, ["audio-current"]
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.fallback_reason == "timeout"
+    assert route.elapsed_ms >= 40
+    assert turn.active_request_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_audio_reply_history_route_cancellation_propagates() -> None:
+    class HangingRouteClient(ReplyHistoryRouteClient):
+        async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    session = make_session(FakeWebSocket(), HangingRouteClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-route-cancel",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-route-cancel"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-route-cancel"
+    task = asyncio.create_task(
+        session._classify_reply_history_requirement(turn, ["audio-current"])
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert turn.active_request_ids == set()
+
+
+def test_reply_history_required_forwards_at_most_two_recent_turns() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    for index in range(3):
+        session.reply_history_turns.append(
+            multimodal_module.ReplyHistoryTurn(
+                turn_id=f"history-{index}",
+                messages=[{"role": "assistant", "content": f"reply-{index}"}],
+                audios=[f"audio-{index}"],
+                images=[],
+                image_roles=[],
+            )
+        )
+    turn = multimodal_module.TurnBuffer(
+        turn_id="current",
+        started_at=0.0,
+        audio=multimodal_module.RealtimeAudioBuffer(),
+        images=[],
+        audio_seqs=set(),
+        image_seqs=set(),
+        turn_origin="user",
+        text_role="user_input",
+    )
+    route = multimodal_module.ReplyHistoryRouteResult(
+        decision="HISTORY_REQUIRED"
+    )
+
+    request, _ = session._build_reply_request(
+        turn, ["audio-current"], [], [], None, history_route=route
+    )
+
+    assert request.metadata["reply_history_forwarded_turn_count"] == 2
+    assert request.metadata["audios"] == [
+        "audio-1",
+        "audio-2",
+        "audio-current",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("decision", "forwarded"),
+    [("CURRENT_ONLY", 0), ("HISTORY_REQUIRED", 1)],
+)
+async def test_audio_route_gates_generated_reply_history(
+    decision: str, forwarded: int
+) -> None:
+    client = ReplyHistoryRouteClient(decision)
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": f"session-route-integration-{decision}",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    session.reply_history_turns.append(
+        multimodal_module.ReplyHistoryTurn(
+            turn_id="history",
+            messages=[{"role": "assistant", "content": "历史回复"}],
+            audios=["audio-history"],
+            images=[],
+            image_roles=[],
+        )
+    )
+    await session.handle_turn_start(user_turn_start("turn-route-integration"))
+    pcm = base64.b64encode(b"\x00\x00" * 160).decode()
+    await session.handle_audio_append(
+        {
+            "type": "input_audio.append",
+            "turn_id": "turn-route-integration",
+            "seq": 1,
+            "audio": pcm,
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit("turn-route-integration")
+    )
+
+    assert len(client.score_requests) == 1
+    assert len(client.chat_requests) == 1
+    reply_request = client.chat_requests[0]
+    assert reply_request.metadata["reply_history_route_decision"] == decision
+    assert reply_request.metadata["reply_history_forwarded_turn_count"] == forwarded
+    expected_audio_count = 2 if forwarded else 1
+    assert len(reply_request.metadata["audios"]) == expected_audio_count
+
+
+@pytest.mark.asyncio
+async def test_audio_only_user_turn_does_not_forward_reply_history() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-audio-only-reply-history",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    session.reply_history_turns.append(
+        multimodal_module.ReplyHistoryTurn(
+            turn_id="turn-history",
+            messages=[
+                {"role": "user", "content": [{"type": "audio"}]},
+                {"role": "assistant", "content": "历史回复"},
+            ],
+            audios=["audio-history"],
+            images=[],
+            image_roles=[],
+        )
+    )
+    await session.handle_turn_start(user_turn_start("turn-audio-only"))
+    turn = session.active_turn
+    assert turn is not None
+
+    request, _ = session._build_reply_request(
+        turn,
+        ["audio-current"],
+        [],
+        [],
+        None,
+    )
+
+    assert request.metadata["audios"] == ["audio-current"]
+    assert request.metadata["reply_history_available_turn_count"] == 1
+    assert request.metadata["reply_history_forwarded_turn_count"] == 0
+    assert request.metadata["reply_history_suppressed_for_audio_only"] is True
+    assert all(
+        message.content != "历史回复" for message in request.messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_turn_with_explicit_text_can_forward_reply_history() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-text-reply-history",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    session.reply_history_turns.append(
+        multimodal_module.ReplyHistoryTurn(
+            turn_id="turn-history",
+            messages=[
+                {"role": "user", "content": [{"type": "audio"}]},
+                {"role": "assistant", "content": "历史回复"},
+            ],
+            audios=["audio-history"],
+            images=[],
+            image_roles=[],
+        )
+    )
+    await session.handle_turn_start(user_turn_start("turn-with-text"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.text = "继续说刚刚的话题"
+
+    request, _ = session._build_reply_request(
+        turn,
+        ["audio-current"],
+        [],
+        [],
+        None,
+    )
+
+    assert request.metadata["audios"] == [
+        "audio-history",
+        "audio-current",
+    ]
+    assert request.metadata["reply_history_forwarded_turn_count"] == 1
+    assert request.metadata["reply_history_suppressed_for_audio_only"] is False
+    assert any(
+        message.content == "历史回复" for message in request.messages
+    )
 
 
 @pytest.mark.asyncio

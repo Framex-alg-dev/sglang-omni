@@ -213,6 +213,13 @@ def _run_single_encoder_payload(
         model_ms=round(model_ms, 3),
         batch_size=1,
     )
+    record_action_stage_timing(
+        payload,
+        stage_name,
+        cache_status=cache_status,
+        cache_key=_short_cache_key(request.cache_key),
+        model_ms=round(model_ms, 3),
+    )
     apply_encoder_result(state, stage_name=stage_name, result=result)
     return store_state(payload, state)
 
@@ -735,6 +742,8 @@ def _batch_audio_encoder_payloads(
 ) -> list[StagePayload]:
     results: list[StagePayload | None] = [None] * len(payloads)
     active: list[tuple[int, StagePayload, Any, Any]] = []
+    active_cache_keys: set[str] = set()
+    duplicate_waiters: dict[str, list[tuple[int, StagePayload, Any]]] = {}
 
     for idx, payload in enumerate(payloads):
         state = load_state(payload)
@@ -768,6 +777,13 @@ def _batch_audio_encoder_payloads(
             )
             apply_encoder_result(state, stage_name=AUDIO_STAGE, result=cached)
             results[idx] = store_state(payload, state)
+            record_action_stage_timing(
+                payload,
+                AUDIO_STAGE,
+                cache_status="hit",
+                cache_key=_short_cache_key(request.cache_key),
+                model_ms=0.0,
+            )
             continue
 
         if not _audio_request_is_batchable(request):
@@ -779,6 +795,13 @@ def _batch_audio_encoder_payloads(
             )
             continue
 
+        if request.cache_key is not None and request.cache_key in active_cache_keys:
+            duplicate_waiters.setdefault(request.cache_key, []).append(
+                (idx, payload, state)
+            )
+            continue
+        if request.cache_key is not None:
+            active_cache_keys.add(request.cache_key)
         active.append((idx, payload, state, request))
 
     if not active:
@@ -823,6 +846,7 @@ def _batch_audio_encoder_payloads(
     embeds = combined["audio_embeds"]
     row_cursor = 0
     token_cursor = 0
+    computed_by_cache_key: dict[str, dict[str, Any]] = {}
     for item in normalized:
         row_end = row_cursor + item["count"]
         req_output_lengths = output_lengths[row_cursor:row_end]
@@ -843,6 +867,8 @@ def _batch_audio_encoder_payloads(
         )
         apply_encoder_result(item["state"], stage_name=AUDIO_STAGE, result=stage_result)
         results[item["idx"]] = store_state(item["payload"], item["state"])
+        if item["request"].cache_key is not None:
+            computed_by_cache_key[item["request"].cache_key] = stage_result
         row_cursor = row_end
         token_cursor = token_end
         _log_action_media_event(
@@ -857,6 +883,28 @@ def _batch_audio_encoder_payloads(
             model_ms=round(model_ms, 3),
             batch_size=len(normalized),
         )
+        record_action_stage_timing(
+            item["payload"],
+            AUDIO_STAGE,
+            cache_status="compute",
+            cache_key=_short_cache_key(item["request"].cache_key),
+            model_ms=round(model_ms, 3),
+        )
+
+    for cache_key, waiters in duplicate_waiters.items():
+        stage_result = computed_by_cache_key.get(cache_key)
+        if stage_result is None:
+            continue
+        for idx, payload, state in waiters:
+            apply_encoder_result(state, stage_name=AUDIO_STAGE, result=stage_result)
+            results[idx] = store_state(payload, state)
+            record_action_stage_timing(
+                payload,
+                AUDIO_STAGE,
+                cache_status="shared",
+                cache_key=_short_cache_key(cache_key),
+                model_ms=0.0,
+            )
 
     return [result for result in results if result is not None]
 

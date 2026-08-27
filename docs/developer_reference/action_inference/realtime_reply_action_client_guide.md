@@ -481,6 +481,24 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
 
 服务端以 `turn.committed` 确认输入冻结，其中包含实际接收的音频块数和图片数。
 
+### 6.5 音频回复历史路由
+
+对于包含当前用户音频、且需要服务端生成文本回复的 Turn，服务端会在回复生成前执行一次
+仅含当前音频的两候选 PPL 分类：
+
+- `CURRENT_ONLY`：当前语音可以独立理解，回复请求不携带跨 Turn 历史；
+- `HISTORY_REQUIRED`：当前语音依赖“继续说”“刚才那个”“为什么”等先前语境，回复请求
+  携带最近最多两个可见回复 Turn。
+
+分类请求不携带历史消息、历史音频、图片或动作候选，也不执行完整 ASR。当前 Turn 的用户
+摄像头图片、人设和 `reply.context` 仍按原规则进入最终回复请求。历史图片永远不会进入后续
+回复。分类异常或超时时降级为 `CURRENT_ONLY`，避免旧回复反复污染无关新问题。
+
+分类和后续回复使用相同的当前音频内容缓存键，因此音频编码可以复用。服务端结构化日志会
+记录 `reply_history_route_started`、`reply_history_route_completed` 或
+`reply_history_route_fallback`，以及分类耗时、候选分数、置信差值和音频编码缓存状态。
+分类超时可通过 `SGLANG_OMNI_REPLY_HISTORY_ROUTE_TIMEOUT_S` 调整，默认 0.5 秒。
+
 ## 7. 回复流
 
 ### 7.1 仅文本模式
