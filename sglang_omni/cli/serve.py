@@ -992,6 +992,60 @@ def serve(
             help="Maximum number of items accepted by /v1/audio/speech/batch.",
         ),
     ] = DEFAULT_TTS_BATCH_MAX_ITEMS,
+    realtime_tts_url: Annotated[
+        str | None,
+        typer.Option(
+            "--realtime-tts-url",
+            help="Embedded Realtime TTS provider WebSocket URL.",
+        ),
+    ] = None,
+    realtime_tts_voice: Annotated[
+        str | None,
+        typer.Option(
+            "--realtime-tts-voice",
+            help="Voice sent to the embedded Realtime TTS provider.",
+        ),
+    ] = None,
+    realtime_tts_connect_timeout_seconds: Annotated[
+        float,
+        typer.Option("--realtime-tts-connect-timeout-seconds"),
+    ] = 10.0,
+    realtime_tts_ready_timeout_seconds: Annotated[
+        float,
+        typer.Option("--realtime-tts-ready-timeout-seconds"),
+    ] = 10.0,
+    realtime_tts_send_timeout_seconds: Annotated[
+        float,
+        typer.Option("--realtime-tts-send-timeout-seconds"),
+    ] = 10.0,
+    realtime_tts_first_audio_timeout_seconds: Annotated[
+        float,
+        typer.Option("--realtime-tts-first-audio-timeout-seconds"),
+    ] = 10.0,
+    realtime_tts_turn_timeout_seconds: Annotated[
+        float,
+        typer.Option("--realtime-tts-turn-timeout-seconds"),
+    ] = 30.0,
+    realtime_tts_text_queue_max_chunks: Annotated[
+        int,
+        typer.Option("--realtime-tts-text-queue-max-chunks"),
+    ] = 64,
+    realtime_tts_max_audio_chunk_bytes: Annotated[
+        int,
+        typer.Option("--realtime-tts-max-audio-chunk-bytes"),
+    ] = 1048576,
+    realtime_tts_max_turn_audio_bytes: Annotated[
+        int,
+        typer.Option("--realtime-tts-max-turn-audio-bytes"),
+    ] = 33554432,
+    realtime_tts_provisional_audio_max_bytes: Annotated[
+        int,
+        typer.Option("--realtime-tts-provisional-audio-max-bytes"),
+    ] = 8388608,
+    realtime_tts_provisional_audio_max_milliseconds: Annotated[
+        int,
+        typer.Option("--realtime-tts-provisional-audio-max-milliseconds"),
+    ] = 10000,
     mem_fraction_static: Annotated[
         float | None,
         typer.Option(
@@ -1375,4 +1429,22 @@ def serve(
         ),
         allowed_media_domains=_normalize_allowed_media_domains(allowed_media_domain),
         tts_batch_max_items=_validate_tts_batch_max_items(tts_batch_max_items),
+        realtime_tts_url=realtime_tts_url,
+        realtime_tts_voice=realtime_tts_voice,
+        realtime_tts_connect_timeout_seconds=realtime_tts_connect_timeout_seconds,
+        realtime_tts_ready_timeout_seconds=realtime_tts_ready_timeout_seconds,
+        realtime_tts_send_timeout_seconds=realtime_tts_send_timeout_seconds,
+        realtime_tts_first_audio_timeout_seconds=(
+            realtime_tts_first_audio_timeout_seconds
+        ),
+        realtime_tts_turn_timeout_seconds=realtime_tts_turn_timeout_seconds,
+        realtime_tts_text_queue_max_chunks=realtime_tts_text_queue_max_chunks,
+        realtime_tts_max_audio_chunk_bytes=realtime_tts_max_audio_chunk_bytes,
+        realtime_tts_max_turn_audio_bytes=realtime_tts_max_turn_audio_bytes,
+        realtime_tts_provisional_audio_max_bytes=(
+            realtime_tts_provisional_audio_max_bytes
+        ),
+        realtime_tts_provisional_audio_max_milliseconds=(
+            realtime_tts_provisional_audio_max_milliseconds
+        ),
     )

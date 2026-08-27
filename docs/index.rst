@@ -139,3 +139,10 @@ Supported Models
    developer_reference/action_inference/action_latency_history.md
    developer_reference/action_inference/reply_action_quality_cases.md
    developer_reference/action_inference/action_inference_change_history.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Architecture
+
+   design/tts_architecture.md
+   design/external_tts_integration.md

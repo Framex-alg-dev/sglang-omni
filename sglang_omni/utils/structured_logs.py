@@ -22,10 +22,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-
 logger = logging.getLogger(__name__)
 
-_STOP = object()
 _WRITER: "PartitionedJSONLWriter | None" = None
 _WRITER_LOCK = threading.Lock()
 _LOG_TYPES = {
@@ -73,12 +71,21 @@ class PartitionedJSONLWriter:
         *,
         max_queue_size: int = 8192,
         max_file_bytes: int = 128 * 1024 * 1024,
+        batch_max_records: int = 100,
+        batch_max_delay_seconds: float = 0.1,
         timezone: ZoneInfo | None = None,
     ) -> None:
-        if max_queue_size <= 0 or max_file_bytes <= 0:
-            raise ValueError("queue and file limits must be positive")
+        if (
+            max_queue_size <= 0
+            or max_file_bytes <= 0
+            or batch_max_records <= 0
+            or batch_max_delay_seconds <= 0
+        ):
+            raise ValueError("queue, file, and batch limits must be positive")
         self.root = Path(root)
         self.max_file_bytes = max_file_bytes
+        self.batch_max_records = batch_max_records
+        self.batch_max_delay_seconds = batch_max_delay_seconds
         self.timezone = timezone or _timezone()
         self.pid = os.getpid()
         self.hostname = socket.gethostname()
@@ -89,10 +96,15 @@ class PartitionedJSONLWriter:
             maxsize=max_queue_size
         )
         self._closed = False
+        self._stop_requested = threading.Event()
         self._lock = threading.Lock()
         self._dropped = 0
         self._written = 0
         self._write_errors = 0
+        self._queue_high_watermark = 0
+        self._batches_written = 0
+        self._max_batch_records = 0
+        self._max_batch_bytes = 0
         self._segments: dict[tuple[str, str, str], tuple[int, int]] = {}
         self._thread = threading.Thread(
             target=self._run,
@@ -103,11 +115,13 @@ class PartitionedJSONLWriter:
 
     @property
     def dropped_records(self) -> int:
-        return self._dropped
+        with self._lock:
+            return self._dropped
 
     @property
     def written_records(self) -> int:
-        return self._written
+        with self._lock:
+            return self._written
 
     def write(self, record: dict[str, Any]) -> bool:
         with self._lock:
@@ -123,6 +137,9 @@ class PartitionedJSONLWriter:
                         self._dropped,
                     )
                 return False
+            self._queue_high_watermark = max(
+                self._queue_high_watermark, self._queue.qsize()
+            )
         return True
 
     def emit(
@@ -136,13 +153,14 @@ class PartitionedJSONLWriter:
         if log_type not in _LOG_TYPES:
             raise ValueError(f"unsupported structured log type: {log_type!r}")
         now_ns = time.time_ns()
-        timestamp = datetime.fromtimestamp(
-            now_ns / 1_000_000_000, tz=self.timezone
-        )
+        monotonic_ns = time.monotonic_ns()
+        timestamp = datetime.fromtimestamp(now_ns / 1_000_000_000, tz=self.timezone)
         record = {
             "schema_version": "1.0",
             "timestamp": timestamp.isoformat(timespec="microseconds"),
             "timestamp_unix_ms": now_ns // 1_000_000,
+            "timestamp_unix_ns": now_ns,
+            "monotonic_ns": monotonic_ns,
             "log_hour": timestamp.strftime("%Y-%m-%d/%H"),
             "log_type": log_type,
             "event": event,
@@ -156,13 +174,18 @@ class PartitionedJSONLWriter:
         return self.write(record)
 
     def health(self) -> dict[str, Any]:
-        return {
-            "queue_size": self._queue.qsize(),
-            "queue_capacity": self._queue.maxsize,
-            "written_records": self._written,
-            "dropped_records": self._dropped,
-            "write_errors": self._write_errors,
-        }
+        with self._lock:
+            return {
+                "queue_size": self._queue.qsize(),
+                "queue_capacity": self._queue.maxsize,
+                "written_records": self._written,
+                "dropped_records": self._dropped,
+                "write_errors": self._write_errors,
+                "queue_high_watermark": self._queue_high_watermark,
+                "batches_written": self._batches_written,
+                "max_batch_records": self._max_batch_records,
+                "max_batch_bytes": self._max_batch_bytes,
+            }
 
     def flush(self) -> None:
         self._queue.join()
@@ -172,42 +195,82 @@ class PartitionedJSONLWriter:
             if self._closed:
                 return
             self._closed = True
-        self._queue.put(_STOP)
+            # Keep shutdown control out of the bounded business queue.  A full
+            # queue must never make close() wait before its bounded join.
+            self._stop_requested.set()
         self._thread.join(timeout=5.0)
 
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
             try:
-                if item is _STOP:
+                item = self._queue.get(timeout=self.batch_max_delay_seconds)
+            except queue.Empty:
+                if self._stop_requested.is_set():
                     return
-                self._append(item)
+                continue
+            batch: list[dict[str, Any]] = []
+            batch.append(item)
+            deadline = time.monotonic() + self.batch_max_delay_seconds
+            while len(batch) < self.batch_max_records:
+                if self._stop_requested.is_set():
+                    try:
+                        batch.append(self._queue.get_nowait())
+                    except queue.Empty:
+                        break
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    batch.append(self._queue.get(timeout=remaining))
+                except queue.Empty:
+                    break
+            try:
+                self._append_batch(batch)
             except Exception:
-                self._write_errors += 1
+                with self._lock:
+                    self._write_errors += len(batch)
                 logger.exception("failed to write realtime structured log")
             finally:
-                self._queue.task_done()
+                for _ in batch:
+                    self._queue.task_done()
+            if self._stop_requested.is_set() and self._queue.empty():
+                return
 
-    def _append(self, record: dict[str, Any]) -> None:
-        encoded = (
-            json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":"))
-            + "\n"
-        ).encode("utf-8")
-        log_hour = str(record["log_hour"])
-        log_type = str(record["log_type"])
-        component = str(record.get("component") or "api").replace("/", "_")
-        key = (log_hour, log_type, component)
-        segment, current_size = self._segments.get(key, (0, 0))
-        if current_size and current_size + len(encoded) > self.max_file_bytes:
-            segment += 1
-            current_size = 0
-        directory = self.root / log_hour
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{log_type}_{component}_{self.pid}_{segment:03d}.jsonl"
-        with path.open("ab", buffering=0) as handle:
-            handle.write(encoded)
-        self._segments[key] = (segment, current_size + len(encoded))
-        self._written += 1
+    def _append_batch(self, records: list[dict[str, Any]]) -> None:
+        blocks: dict[Path, bytearray] = {}
+        total_bytes = 0
+        for record in records:
+            encoded = (
+                json.dumps(
+                    record, ensure_ascii=False, default=str, separators=(",", ":")
+                )
+                + "\n"
+            ).encode("utf-8")
+            log_hour = str(record["log_hour"])
+            log_type = str(record["log_type"])
+            component = str(record.get("component") or "api").replace("/", "_")
+            key = (log_hour, log_type, component)
+            segment, current_size = self._segments.get(key, (0, 0))
+            if current_size and current_size + len(encoded) > self.max_file_bytes:
+                segment += 1
+                current_size = 0
+            directory = self.root / log_hour
+            path = directory / (
+                f"{log_type}_{component}_{self.pid}_{segment:03d}.jsonl"
+            )
+            blocks.setdefault(path, bytearray()).extend(encoded)
+            self._segments[key] = (segment, current_size + len(encoded))
+            total_bytes += len(encoded)
+        for path, block in blocks.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("ab") as handle:
+                handle.write(block)
+        with self._lock:
+            self._written += len(records)
+            self._batches_written += 1
+            self._max_batch_records = max(self._max_batch_records, len(records))
+            self._max_batch_bytes = max(self._max_batch_bytes, total_bytes)
         # Keep routing metadata bounded to the current and immediately previous
         # hour.  Files are opened per append, so dropping metadata is safe.
         active_hours = sorted({item[0] for item in self._segments})
@@ -245,6 +308,15 @@ def get_structured_log_writer() -> PartitionedJSONLWriter:
                     * 1024
                     * 1024
                 ),
+                batch_max_records=_positive_int_env(
+                    "SGLANG_OMNI_REALTIME_LOG_BATCH_MAX_RECORDS", 100
+                ),
+                batch_max_delay_seconds=(
+                    _positive_int_env(
+                        "SGLANG_OMNI_REALTIME_LOG_BATCH_MAX_DELAY_MS", 100
+                    )
+                    / 1000.0
+                ),
             )
         return _WRITER
 
@@ -256,9 +328,7 @@ def emit_structured_log(
     level: str = "info",
     **fields: Any,
 ) -> bool:
-    return get_structured_log_writer().emit(
-        log_type, event, level=level, **fields
-    )
+    return get_structured_log_writer().emit(log_type, event, level=level, **fields)
 
 
 def new_trace_id(session_id: str | None, turn_id: str | None) -> str:

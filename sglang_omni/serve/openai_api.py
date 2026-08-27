@@ -29,7 +29,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing, suppress
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from fastapi import (
     Depends,
@@ -50,8 +50,7 @@ from fastapi.responses import (
 )
 from starlette.types import Receive, Scope, Send
 
-from sglang_omni.client import (
-    Client,
+from sglang_omni.client.types import (
     ClientError,
     CompletionResult,
     GenerateChunk,
@@ -59,14 +58,11 @@ from sglang_omni.client import (
     Message,
     SamplingParams,
 )
-from sglang_omni.models.qwen3_omni.action_scoring import (
-    ActionScoreCandidate,
-    ActionSuffixScoreRequest,
-)
-from sglang_omni.models.qwen3_omni.global_action_catalog import (
-    GlobalActionCatalog,
-    GlobalActionCatalogPrewarmStatus,
-)
+
+if TYPE_CHECKING:
+    from sglang_omni.client.client import Client
+    from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+
 from sglang_omni.client.audio import (
     DEFAULT_SAMPLE_RATE,
     apply_speed,
@@ -78,13 +74,21 @@ from sglang_omni.http.admin_auth import (
     resolve_admin_api_key,
 )
 from sglang_omni.http.favicon import register_favicon
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+)
+from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    GlobalActionCatalog,
+    GlobalActionCatalogPrewarmStatus,
+)
 from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
 from sglang_omni.serve.protocol import (
     DEFAULT_TTS_BATCH_MAX_ITEMS,
-    AdminRequestBase,
-    ChatCompletionAudio,
     ActionScoreRequest,
     ActionScoreResponse,
+    AdminRequestBase,
+    ChatCompletionAudio,
     ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -115,6 +119,7 @@ from sglang_omni.serve.protocol import (
     VoiceListResponse,
     WeightsCheckerRequest,
 )
+from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
 from sglang_omni.serve.speech_errors import (
     SpeechAPIError,
     bad_request,
@@ -122,16 +127,18 @@ from sglang_omni.serve.speech_errors import (
     openai_error_payload,
     speech_error_response,
 )
-from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
-from sglang_omni.utils.resource_monitor import (
-    PeriodicResourceMonitor,
-    resource_log_interval_s,
-)
-from sglang_omni.utils.structured_logs import get_structured_log_writer
 from sglang_omni.serve.speech_service import SpeechRequestValidator
 from sglang_omni.serve.speech_voices import MAX_VOICE_UPLOAD_BYTES, SpeakerSampleStore
 from sglang_omni.serve.speech_ws import SpeechWebSocketSession
 from sglang_omni.serve.transcription_adapters import resolve_adapter
+from sglang_omni.utils.resource_monitor import (
+    PeriodicResourceMonitor,
+    resource_log_interval_s,
+)
+from sglang_omni.utils.structured_logs import (
+    emit_structured_log,
+    get_structured_log_writer,
+)
 
 logger = logging.getLogger(__name__)
 STREAM_DONE_SENTINEL = "[DONE]"
@@ -241,6 +248,9 @@ def create_app(
     architectures: list[str] | None = None,
     global_action_catalog: GlobalActionCatalog | None = None,
     global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
+    enable_resource_monitor: bool = True,
+    allow_unregistered_protocol_actions: bool = False,
+    embedded_tts_config: EmbeddedTTSConfig | None = None,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -264,6 +274,10 @@ def create_app(
         admin_api_key: Optional API key for admin-control endpoints.
         tts_batch_max_items: Maximum items accepted by
             ``/v1/audio/speech/batch``.
+        enable_resource_monitor: Whether to register process/GPU resource
+            telemetry lifecycle hooks. Development substitutes disable it.
+        allow_unregistered_protocol_actions: Allow protocol-v1 action
+            whitelists without the production catalog. Development only.
 
     Returns:
         Configured FastAPI application.
@@ -291,6 +305,7 @@ def create_app(
     app.state.global_action_prewarm = (
         global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
     )
+    app.state.embedded_tts_config = embedded_tts_config
     app.state.speaker_sample_store = SpeakerSampleStore()
     app.state.speech_service = SpeechRequestValidator(
         default_model=app.state.model_name,
@@ -327,8 +342,12 @@ def create_app(
         _register_realtime(app)
     # The manual-turn multimodal session API is part of the service contract
     # and must not depend on the legacy OpenAI Realtime switch.
-    _register_multimodal_realtime(app)
-    _register_resource_monitor(app)
+    _register_multimodal_realtime(
+        app,
+        allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
+    )
+    if enable_resource_monitor:
+        _register_resource_monitor(app)
 
     return app
 
@@ -493,9 +512,7 @@ def _register_resource_monitor(app: FastAPI) -> None:
         monitor.start()
 
     async def stop_resource_monitor() -> None:
-        if manager is not None and hasattr(
-            manager, "set_resource_sample_requester"
-        ):
+        if manager is not None and hasattr(manager, "set_resource_sample_requester"):
             manager.set_resource_sample_requester(None)
         await monitor.stop()
 
@@ -1314,7 +1331,9 @@ def _register_realtime(app: FastAPI) -> None:
             await manager.close(session.session_id)
 
 
-def _register_multimodal_realtime(app: FastAPI) -> None:
+def _register_multimodal_realtime(
+    app: FastAPI, *, allow_unregistered_protocol_actions: bool = False
+) -> None:
     """Mount the manual-turn multimodal session WebSocket."""
     from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
 
@@ -1325,12 +1344,26 @@ def _register_multimodal_realtime(app: FastAPI) -> None:
         model_name=model_name,
         global_action_catalog=app.state.global_action_catalog,
         global_action_prewarm=app.state.global_action_prewarm,
+        allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
+        embedded_tts_config=app.state.embedded_tts_config,
     )
     app.state.multimodal_realtime_manager = manager
 
     @app.websocket("/v1/session/realtime")
     async def multimodal_realtime(websocket: WebSocket) -> None:
+        emit_structured_log(
+            "lifecycle",
+            "ws_upgrade_received",
+            backend="production",
+            route="/v1/session/realtime",
+        )
         await websocket.accept()
+        emit_structured_log(
+            "lifecycle",
+            "ws_accepted",
+            backend="production",
+            route="/v1/session/realtime",
+        )
         session = manager.create(websocket)
         await session.run()
 
@@ -2021,7 +2054,9 @@ def _register_action_scores(app: FastAPI) -> None:
         try:
             result = await client.score_action_suffixes(scoring_request)
         except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="action scoring timed out") from exc
+            raise HTTPException(
+                status_code=504, detail="action scoring timed out"
+            ) from exc
         except ClientError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
