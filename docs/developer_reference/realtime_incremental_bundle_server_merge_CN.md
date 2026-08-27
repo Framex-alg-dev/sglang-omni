@@ -28,6 +28,10 @@ integration/luozhijie-realtime-tts-action-suffix
 这是增量 Bundle，不是完整源码压缩包。服务器仓库必须已经包含前置提交
 `6919c65`，但服务器当前工作区和当前分支可以在该提交之上包含自己的修改。
 
+`git bundle verify` 会列出 `6919c65` 和 `5969d21` 两个 prerequisite。
+`5969d21` 是 `6919c65` 的祖先，因此只要仓库包含完整的 `6919c65`，就已经同时
+满足这两个 prerequisite，不需要额外下载其他历史。
+
 ## 2. 安全边界
 
 本流程遵循以下规则：
