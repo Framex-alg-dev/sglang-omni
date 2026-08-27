@@ -14,8 +14,8 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     TokenScore,
 )
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
-    ACTION_HISTORY_INSTRUCTION,
-    ACTION_HISTORY_INSTRUCTION_EN,
+    CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
+    CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
     GlobalActionCatalogPrewarmStatus,
     UNSUPPORTED_CATEGORY_SHORT_DEFINITION,
     UNSUPPORTED_CATEGORY_SCORE_ID,
@@ -27,13 +27,260 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
 from sglang_omni.serve.realtime.multimodal import MultimodalSession
 
 
-def test_action_reference_prompts_separate_physical_and_user_actions() -> None:
-    assert "[当前实际动作状态]" in ACTION_HISTORY_INSTRUCTION
-    assert "[最近一次用户触发动作]" in ACTION_HISTORY_INSTRUCTION
-    assert "不得用后来由数字人主动触发的动作替代" in ACTION_HISTORY_INSTRUCTION
-    assert "[Current physical action state]" in ACTION_HISTORY_INSTRUCTION_EN
-    assert "[Most recent user-triggered action]" in ACTION_HISTORY_INSTRUCTION_EN
-    assert "not a later action initiated proactively" in ACTION_HISTORY_INSTRUCTION_EN
+def test_action_prompts_do_not_include_cross_turn_action_history() -> None:
+    catalog = load_global_action_catalog()
+    for locale in ("zh-CN", "en-US"):
+        prompts = [catalog.category_system_prompt_for(locale)]
+        prompts.extend(
+            catalog.child_system_prompt_for(locale, category.category_id)
+            for category in catalog.categories
+        )
+        for prompt in prompts:
+            assert "[当前实际动作状态]" not in prompt
+            assert "[最近一次用户触发动作]" not in prompt
+            assert "[Current physical action state]" not in prompt
+            assert "[Most recent user-triggered action]" not in prompt
+
+
+def test_builtin_category_prompt_separates_system_accompaniment_routes() -> None:
+    catalog = load_global_action_catalog()
+    chinese = catalog.category_system_prompt_for("zh-CN")
+    english = catalog.category_system_prompt_for("en-US")
+
+    assert "若本轮实际产生非空回复，应选择语言表达伴随类别" in chinese
+    assert "若本轮无需说话、回复为空或回复生成失败，应选择静默低扰伴随类别" in chinese
+    assert "仍应根据实际回复是否为空选择语言表达伴随或静默低扰伴随类别" in chinese
+    assert "actual non-empty reply text" in english
+    assert "reply-accompaniment or silent low-disturbance accompaniment category" in english
+
+
+def test_builtin_catalog_exposes_shy_composite_action_semantics() -> None:
+    catalog = load_global_action_catalog()
+    category = next(
+        category for category in catalog.categories if category.source_label == "情绪动作"
+    )
+    action = next(
+        child for child in category.children if child.source_label.startswith("娇羞（")
+    )
+
+    assert all(term in category.short_definition for term in ("害羞", "娇羞", "撒娇"))
+    assert all(term in action.short_definition for term in ("害羞", "娇羞"))
+    for locale in ("zh-CN", "en-US"):
+        assert category.short_definition in catalog.category_system_prompt_for(locale)
+        assert action.short_definition in catalog.child_system_prompt_for(
+            locale, category.category_id
+        )
+
+
+def test_builtin_catalog_exposes_forward_approach_category_semantics() -> None:
+    catalog = load_global_action_catalog()
+    category = next(
+        category
+        for category in catalog.categories
+        if category.source_label == "躯干前后动作"
+    )
+    action = next(
+        child for child in category.children if child.source_label == "身体前倾"
+    )
+
+    assert "靠近镜头" in category.short_definition
+    assert "改变身体与观察目标的距离" in category.short_definition
+    assert "靠近镜头" in action.short_definition
+    assert action.category_id == category.category_id
+    for locale in ("zh-CN", "en-US"):
+        assert category.short_definition in catalog.category_system_prompt_for(
+            locale
+        )
+
+
+def test_builtin_catalog_exposes_self_introduction_category_semantics() -> None:
+    catalog = load_global_action_catalog()
+    greeting_category = next(
+        category
+        for category in catalog.categories
+        if category.source_label == "打招呼与告别"
+    )
+    single_hand = next(
+        child for child in greeting_category.children if child.source_label == "单手挥手"
+    )
+    both_hands = next(
+        child for child in greeting_category.children if child.source_label == "双手挥手"
+    )
+
+    assert single_hand.category_id == greeting_category.category_id
+    assert both_hands.category_id == greeting_category.category_id
+    assert "自我介绍" in greeting_category.short_definition
+
+    chinese_category = catalog.category_system_prompt_for("zh-CN")
+    english_category = catalog.category_system_prompt_for("en-US")
+    chinese_child = catalog.child_system_prompt_for(
+        "zh-CN", greeting_category.category_id
+    )
+    english_child = catalog.child_system_prompt_for(
+        "en-US", greeting_category.category_id
+    )
+
+    assert "介绍自己、说明自身身份" in chinese_category
+    assert "介绍产品、知识、地点、第三方人物" in chinese_category
+    assert "asks the character to introduce itself" in english_category
+    assert (
+        "introducing a product, knowledge, a place, a third party"
+        in english_category
+    )
+    assert single_hand.short_definition in chinese_child
+    assert both_hands.short_definition in english_child
+    assert "单手问候候选" not in chinese_child
+    assert "one-handed greeting" not in english_child
+
+
+def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None:
+    catalog = load_global_action_catalog()
+    touching = next(
+        category for category in catalog.categories if category.source_label == "身体触碰"
+    )
+    touch_ear = next(
+        child for child in touching.children if child.source_label == "摸耳朵"
+    )
+    drinking = next(
+        category
+        for category in catalog.categories
+        if category.source_label == "工具与日用品使用"
+    )
+    cup = next(child for child in drinking.children if child.candidate_id == "A571")
+    bottle = next(child for child in drinking.children if child.candidate_id == "A572")
+
+    assert "耳廓与耳垂" in touch_ear.short_definition
+    assert "喝口水、喝点水" in drinking.short_definition
+    assert "未指定容器时优先选择" in cup.short_definition
+    assert "明确要求瓶装水" in bottle.short_definition
+    chinese_child = catalog.child_system_prompt_for("zh-CN", touching.category_id)
+    english_child = catalog.child_system_prompt_for("en-US", touching.category_id)
+    assert "耳环与耳朵是不同交互物体" in chinese_child
+    assert "an earring" in english_child
+    assert "不是关键词匹配规则" in chinese_child
+
+
+def test_builtin_catalog_does_not_require_ordinary_category_semantic_tags() -> None:
+    catalog = load_global_action_catalog()
+    chinese = catalog.category_system_prompt_for("zh-CN")
+    english = catalog.category_system_prompt_for("en-US")
+    assert all(
+        not category.semantic_tags
+        for category in catalog.categories
+        if category.category_id in {"B032", "B039", "B040", "B041", "B042", "B043"}
+    )
+    assert "本目录中要求下肢、位移或全身大幅移动的类别为：" not in chinese
+    assert "the lower-body movement categories are:" not in english
+    assert "B033-B037" not in chinese
+
+
+def test_builtin_catalog_exposes_system_accompaniment_semantics() -> None:
+    catalog = load_global_action_catalog()
+    reply_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+    )
+    silent_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+
+    assert reply_category is not None
+    assert silent_category is not None
+    assert reply_category.category_id == "B001"
+    assert silent_category.category_id == "B002"
+    for locale in ("zh-CN", "en-US"):
+        category_prompt = catalog.category_system_prompt_for(locale)
+        reply_child_prompt = catalog.child_system_prompt_for(
+            locale, reply_category.category_id
+        )
+        silent_child_prompt = catalog.child_system_prompt_for(
+            locale, silent_category.category_id
+        )
+        ordinary_category = next(
+            category
+            for category in catalog.categories
+            if category.category_id
+            not in {reply_category.category_id, silent_category.category_id}
+        )
+        ordinary_child_prompt = catalog.child_system_prompt_for(
+            locale, ordinary_category.category_id
+        )
+
+        assert reply_category.category_id in category_prompt
+        assert silent_category.category_id in category_prompt
+        assert "A000" not in reply_child_prompt
+        assert "A000" not in silent_child_prompt
+        assert "candidate_id=A000" in ordinary_child_prompt
+    assert "本轮数字人实际回复开头" in catalog.child_system_prompt_for(
+        "zh-CN", reply_category.category_id
+    )
+    assert "本轮没有需要说出的回复文本" in catalog.child_system_prompt_for(
+        "zh-CN", silent_category.category_id
+    )
+
+
+def test_category_prompt_exposes_conversational_feedback_semantics() -> None:
+    catalog = load_global_action_catalog()
+    chinese = catalog.category_system_prompt_for("zh-CN")
+    english = catalog.category_system_prompt_for("en-US")
+
+    assert "评价、质疑或询问数字人此前的回答、笑话或表达效果" in chinese
+    assert "表情、情绪反应或思考类别" in chinese
+    assert "普通知识问答、对第三方内容的评价" in chinese
+    assert "除上述直接社交事件、对话反馈和自我呈现场景外" in chinese
+    assert "evaluates, challenges, or asks about the effect" in english
+    assert (
+        "facial-expression, emotional-response, or thinking category" in english
+    )
+    assert (
+        "Ordinary knowledge questions, evaluations of third-party content"
+        in english
+    )
+    assert "Except for the direct social events, conversational feedback" in english
+
+
+def test_direction_reference_uses_character_body_coordinates() -> None:
+    catalog = load_global_action_catalog()
+    representative_pairs = (
+        ("看左侧（仅眼球）", "看右侧（仅眼球）"),
+        ("转头看左侧", "转头看右侧"),
+        ("向左移动", "向右移动"),
+        ("左转身", "右转身"),
+        ("从左侧拿起物品", "从右侧拿起物品"),
+    )
+    direction_category_ids = set()
+    for left_label, right_label in representative_pairs:
+        category = next(
+            category
+            for category in catalog.categories
+            if {left_label, right_label}
+            <= {child.source_label for child in category.children}
+        )
+        left = next(child for child in category.children if child.source_label == left_label)
+        right = next(child for child in category.children if child.source_label == right_label)
+        assert left.category_id == right.category_id == category.category_id
+        assert "左" in left.source_label
+        assert "右" in right.source_label
+        direction_category_ids.add(category.category_id)
+
+    chinese_category = catalog.category_system_prompt_for("zh-CN")
+    english_category = catalog.category_system_prompt_for("en-US")
+    assert "以数字人自身的身体坐标为准" in chinese_category
+    assert "数字人自身左侧通常显示在用户画面右侧" in chinese_category
+    assert "屏幕左侧" in chinese_category
+    assert "digital character's own body coordinates" in english_category
+    assert (
+        "character's own left usually appears on the right side"
+        in english_category
+    )
+    assert "left side of the screen" in english_category
+
+    for category_id in direction_category_ids:
+        assert "以数字人自身的身体坐标为准" in (
+            catalog.child_system_prompt_for("zh-CN", category_id)
+        )
+        assert "digital character's own body coordinates" in (
+            catalog.child_system_prompt_for("en-US", category_id)
+        )
 
 
 def _catalog_payload() -> dict:
@@ -118,9 +365,43 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "动作请求不必明确描述身体部位、运动方向或执行方式" in (
         catalog.category_system_prompt
     )
+    assert "动作请求由语义目标决定，不由命令句形式决定" in (
+        catalog.category_system_prompt
+    )
+    assert "不得仅因其使用问句或建议句形式而将其当作普通对话或单纯能力咨询" in (
+        catalog.category_system_prompt
+    )
+    assert "属于对当前感知事实或能力的信息询问" in (
+        catalog.category_system_prompt
+    )
+    assert "“你能看见我吗”是视觉事实询问" in catalog.category_system_prompt
+    assert "“看向我”或“看向镜头”才是观察动作请求" in (
+        catalog.category_system_prompt
+    )
+    assert "Determine an action request from its semantic goal" in (
+        catalog.category_system_prompt_for("en-US")
+    )
+    assert "Do not treat them as ordinary conversation or a mere capability question" in (
+        catalog.category_system_prompt_for("en-US")
+    )
+    assert "a question about a current perceptual fact or capability" in (
+        catalog.category_system_prompt_for("en-US")
+    )
+    assert "'can you see me?' is a visual-fact question" in (
+        catalog.category_system_prompt_for("en-US")
+    )
     assert "以下示例仅说明语义判断方法，不是关键词匹配规则" in (
         catalog.category_system_prompt
     )
+    assert "人设、风格、取景和动作偏好只能在" in (
+        catalog.category_system_prompt
+    )
+    assert (
+        "由具体动作选择阶段判断候选是否满足姿态、取景及用户明确指定的交互物体等条件"
+        in catalog.category_system_prompt
+    )
+    assert "直接作用于数字人的社交行为" in catalog.category_system_prompt
+    assert "默认选择待机或思考类别" in catalog.category_system_prompt
     assert "“给我打个招呼”要求数字人以可观察行为完成问候" in (
         catalog.category_system_prompt
     )
@@ -149,13 +430,32 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "执行方式不同、仅表达含义相近的动作" in (
         catalog.child_system_prompts["B001"]
     )
-    assert "本次会话提供的默认动作类别" in (
+    assert "若姿态、取景或物体等硬性可执行条件" in (
+        catalog.child_system_prompts["B001"]
+    )
+    assert "普通对话且实际有非空回复时" in (
         catalog.category_system_prompt
     )
-    assert "避免选择要求下肢、位移或全身大幅移动的 B033-B037" in (
+    assert "本轮没有明确动作目标，且本轮主动场景约束也没有指定具体动作" in (
         catalog.category_system_prompt
     )
-    assert "选择要求与具体物体交互的 B043-B052 前" in (
+    assert "并在该类别内优先小幅、低打扰动作" in (
+        catalog.category_system_prompt
+    )
+    assert "不得覆盖用户明确提出且当前会话支持的动作请求" in (
+        catalog.category_system_prompt
+    )
+    assert "无论本轮由用户触发还是由数字人主动触发" not in (
+        catalog.category_system_prompt
+    )
+    assert "避免选择要求下肢、位移或全身大幅移动的类别" in (
+        catalog.category_system_prompt
+    )
+    assert "B033-B037" not in catalog.category_system_prompt
+    assert "物体是否出现在“数字人当前状态画面”中，不作为" in (
+        catalog.category_system_prompt
+    )
+    assert "选择要求与具体物体交互的 B043-B052 前" not in (
         catalog.category_system_prompt
     )
     assert "先综合用户摄像头画面与用户语音判断用户状态" not in (
@@ -190,6 +490,25 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "'greet me' asks for an observable greeting" in (
         english_category_prompt
     )
+    assert (
+        "social act directed at the digital character"
+        in english_category_prompt
+    )
+    assert "Before selecting B043-B052" not in english_category_prompt
+    assert "is not a prerequisite for selecting an object-interaction category" in (
+        english_category_prompt
+    )
+    assert "has no explicit action target" in english_category_prompt
+    assert "do not specify a concrete action" in english_category_prompt
+    assert "prefer a small low-disturbance action within that category" in (
+        english_category_prompt
+    )
+    assert "must not override an explicit action request that is supported" in (
+        english_category_prompt
+    )
+    assert "whether initiated by the user or the digital character" not in (
+        english_category_prompt
+    )
     assert "category=问候" in english_category_prompt
     assert "action=单手挥手" in english_child_prompt
     assert english_category_prompt != catalog.category_system_prompt
@@ -217,6 +536,78 @@ def test_global_catalog_does_not_require_b008(tmp_path) -> None:
     assert catalog.candidate_count == 3
 
 
+@pytest.mark.parametrize("path_value", [None, []])
+def test_global_catalog_category_path_is_optional(tmp_path, path_value) -> None:
+    payload = _catalog_payload()
+    if path_value is None:
+        payload["categories"][0].pop("category_path")
+    else:
+        payload["categories"][0]["category_path"] = path_value
+
+    catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
+
+    assert catalog.categories[0].category_path == ()
+
+
+def test_global_catalog_semantic_tags_are_optional_and_preserved(
+    tmp_path,
+) -> None:
+    payload = _catalog_payload()
+    payload["categories"][0].pop("semantic_tags", None)
+    payload["categories"][1]["semantic_tags"] = ["client_defined"]
+
+    catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
+
+    assert catalog.categories[0].semantic_tags == frozenset()
+    client_category = catalog.category_by_id["B001"]
+    assert client_category.semantic_tags == frozenset({"client_defined"})
+    assert "单手问候候选" not in catalog.child_system_prompt_for("zh-CN", "B001")
+
+
+def test_global_catalog_allows_one_action_in_multiple_categories(tmp_path) -> None:
+    payload = _catalog_payload()
+    shared = dict(payload["categories"][1]["children"][0])
+    shared.update(
+        source_label="系统视图中的单手挥手",
+        short_definition="同一执行动作在另一类别中的场景化说明",
+    )
+    payload["categories"][2]["children"].append(shared)
+
+    catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
+
+    assert catalog.candidate_count == 4
+    assert catalog.candidate_for_category("B001", "A001").source_label == (
+        "单手挥手"
+    )
+    assert catalog.candidate_for_category("B002", "A001").source_label == (
+        "系统视图中的单手挥手"
+    )
+    assert "candidate_id=A001｜动作=系统视图中的单手挥手" in (
+        catalog.child_system_prompt_for("zh-CN", "B002")
+    )
+
+
+def test_global_catalog_rejects_duplicate_system_semantic_tag_owner(
+    tmp_path,
+) -> None:
+    payload = _catalog_payload()
+    payload["categories"][0]["semantic_tags"] = [
+        CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+    ]
+    payload["categories"][1]["semantic_tags"] = [
+        CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "global category semantic tag must have at most one owner: "
+            "reply_accompaniment"
+        ),
+    ):
+        load_global_action_catalog(_write_catalog(tmp_path, payload))
+
+
 @pytest.mark.parametrize(
     "mutate, message",
     [
@@ -225,10 +616,6 @@ def test_global_catalog_does_not_require_b008(tmp_path) -> None:
                 category_id="B008"
             ),
             "duplicate global category_id",
-        ),
-        (
-            lambda payload: payload["categories"][1].update(category_path=[]),
-            "category_path",
         ),
         (
             lambda payload: payload["categories"][1]["children"][0].update(
@@ -257,6 +644,12 @@ def test_global_catalog_does_not_require_b008(tmp_path) -> None:
                 action_id="UNSUPPORTED"
             ),
             "action_id=UNSUPPORTED is reserved",
+        ),
+        (
+            lambda payload: payload["categories"][1].update(
+                semantic_tags=["client_defined", "client_defined"]
+            ),
+            "semantic_tags must not contain duplicates",
         ),
     ],
 )
@@ -320,6 +713,44 @@ async def test_global_prewarm_covers_category_and_every_child(tmp_path) -> None:
     assert status.failed_child_category_ids == frozenset({"B002"})
     assert set(status.by_locale) == {"zh-CN", "en-US"}
     assert all(item.category_ready for item in status.by_locale.values())
+
+
+@pytest.mark.asyncio
+async def test_global_prewarm_omits_a000_for_system_accompaniment_children() -> None:
+    catalog = load_global_action_catalog()
+
+    class SuccessfulPrefillClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def prefill_action_catalog(self, **kwargs) -> bool:
+            self.calls.append(kwargs)
+            return True
+
+    client = SuccessfulPrefillClient()
+    await prewarm_global_action_catalog(
+        client, model="Qwen3-Omni", catalog=catalog
+    )
+
+    system_category_ids = {
+        catalog.category_with_semantic_tag(
+            CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+        ).category_id,
+        catalog.category_with_semantic_tag(
+            CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+        ).category_id,
+    }
+    for call in client.calls:
+        if call["stage"] != "child":
+            continue
+        category_id = call["request_id"].rsplit("-", 1)[-1]
+        candidate_ids = {
+            candidate.candidate_id for candidate in call["candidates"]
+        }
+        if category_id in system_category_ids:
+            assert UNSUPPORTED_CHILD_SCORE_ID not in candidate_ids
+        else:
+            assert UNSUPPORTED_CHILD_SCORE_ID in candidate_ids
 
 
 class _WebSocket:
@@ -530,10 +961,10 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     assert "[本次会话允许选择的动作类别]" in category_request.prefix
     assert "可用的真实 category_id：B008、B001" in category_request.prefix
     assert "按优先级从高到低为：B008（待机动作）" in category_request.prefix
-    assert "这些类别只用于当前输入没有明确要求具体动作的情况" in (
+    assert "该列表只定义不支持判定后的可执行兜底顺序" in (
         category_request.prefix
     )
-    assert "不得把默认动作类别作为已支持该请求的替代类别" in (
+    assert "不得把执行兜底类别当作已支持该请求的替代类别" in (
         category_request.prefix
     )
     assert "PPL" not in category_request.prefix
@@ -558,7 +989,7 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     assert child_request.system_prompt == catalog.child_system_prompts["B001"]
     assert "candidate_id=A002" in child_request.system_prompt
     assert "只允许从以下 candidate_id 中选择：A001" in child_request.prefix
-    assert "即使当前类别是默认动作类别" in child_request.prefix
+    assert "即使当前类别也被列为执行兜底类别" in child_request.prefix
     assert [item.candidate_id for item in child_request.candidates] == [
         "A001",
         UNSUPPORTED_CHILD_SCORE_ID,
@@ -633,8 +1064,10 @@ async def test_english_session_uses_isolated_english_prompts_without_translating
     assert child_request.system_prompt == catalog.child_system_prompt_for(
         "en-US", "B001"
     )
-    assert category_request.prefix.endswith("Best matching category_id:")
-    assert child_request.prefix.endswith("Best matching candidate_id:")
+    assert category_request.output_prompt == "Best matching category_id:"
+    assert child_request.output_prompt == "Best matching candidate_id:"
+    assert category_request.current_text == "你好"
+    assert child_request.current_text == "你好"
     assert "Action categories allowed in this conversation" in category_request.prefix
     assert "海洋科学家" in category_request.prefix
     assert "优先低打扰类别" in category_request.prefix
@@ -685,7 +1118,7 @@ async def test_chinese_and_english_sessions_cannot_share_localized_prefixes(
 
 
 @pytest.mark.asyncio
-async def test_hierarchical_action_history_keeps_only_latest_reply_and_action_fact(
+async def test_hierarchical_action_scoring_omits_cross_turn_history(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
@@ -725,14 +1158,8 @@ async def test_hierarchical_action_history_keeps_only_latest_reply_and_action_fa
     for request in (category_request, child_request):
         assert request.history_audios == []
         assert request.history_images == []
-        assert len(request.history) == 1
-        assert request.history[0]["role"] == "assistant"
-        content = request.history[0]["content"]
-        assert "[数字人最近一次回复] 换个互动方式吧。" in content
-        assert "[当前实际动作状态；同时是最近一次用户触发动作]" in content
-        assert "turn_id=" not in content
-        assert "candidate_id=A001" in content
-        assert "你好" not in content
+        assert request.history == []
+        assert request.avatar_state == {}
 
 
 @pytest.mark.asyncio
@@ -961,7 +1388,7 @@ async def test_default_category_child_can_reject_explicit_action_request(
         "A008",
         UNSUPPORTED_CHILD_SCORE_ID,
     ]
-    assert "即使当前类别是默认动作类别" in child_request.prefix
+    assert "即使当前类别也被列为执行兜底类别" in child_request.prefix
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["action"]["category_id"] == "B008"
     assert result["action"]["candidate_id"] == "A008"
@@ -1104,7 +1531,7 @@ async def test_explicit_proactive_prohibition_filters_conflicting_category(
             "turn_id": "turn-proactive-no-idle",
             "turn_origin": "proactive",
             "text_role": "character_reply",
-            "trigger": "action_finished",
+            "trigger": "idle_timeout",
         }
     )
     await session.handle_turn_commit(
@@ -1113,7 +1540,7 @@ async def test_explicit_proactive_prohibition_filters_conflicting_category(
             "turn_id": "turn-proactive-no-idle",
             "turn_origin": "proactive",
             "text_role": "character_reply",
-            "trigger": "action_finished",
+            "trigger": "idle_timeout",
             "avatar_state": {
                 "state_description": (
                     "选择一个清晰可见且有实际身体变化的后续动作。"

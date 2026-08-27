@@ -35,6 +35,26 @@ http://<host>:18002/debug/realtime?session_id=sess_xxxxxxxx
 - 最终 Category、Candidate、`action_id`、支持状态和是否执行。
 - Category/Child 计算耗时，以及以下两个端到端指标。
 
+当 Category 命中系统伴随类别时，动作日志还会出现
+`system_action_route_resolved`。其中 `category_scoring_candidate_id` 是 Category 原始结果，
+`resolved_category_id` 是按实际回复校正后的类别；`reply_prefix_status`、
+`reply_prefix_wait_ms`、`reply_prefix_chars` 和 `reply_prefix_sha256` 用于核对首句等待。只有启用
+完整诊断模式时日志才记录回复前缀正文。B001 Child 的动态 Prompt 会显示
+“本轮数字人实际回复开头”，B002 Child 则显示无有效回复文本的状态。
+
+`action_finished` 会记录 `action_category_route_forced`，其中
+`category_scoring_skipped=true`、`category_scoring_skip_reason=trigger_policy` 和
+`forced_semantic_tag=silent_accompaniment` 表示 Category 未执行。`turn_timing` 还会
+记录 `resolved_category_id`、`child_candidate_count`、`child_compute_ms` 及
+`system_route_degradation_reason`。`action_finished_random_selected` 记录随机池大小、上一条
+`action_finished` 候选、是否成功排除连续重复，以及仅剩单一候选时是否不得不重复；此路径的
+`child_scoring_skipped=true`、`child_scoring_skip_reason=action_finished_random` 表示 Child
+PPL 也未执行。
+
+动作名称中的未限定“左/右”均指数字人自身方向。数字人正面面对用户时，自身左侧通常位于
+用户画面右侧；调试时不能仅按屏幕左右判断动作绑定是否反向。用户明确指定屏幕、画面或用户
+自身方向时，模型会先按该参照系理解目标，再映射为数字人的执行方向。
+
 ### 回复首包耗时
 
 `reply.first_delta_after_commit_ms`：从服务收到合法 `turn.commit` 到发出第一个回复文本 Delta 的耗时。

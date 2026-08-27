@@ -103,6 +103,7 @@
 <main>
   <h1>Realtime Session 调试</h1>
   <div class="muted">按 Session ID 聚合回复、动作 Prompt 与端到端耗时。页面只读取结构化日志。</div>
+  <div class="muted">方向约定：动作名称中未限定的左/右均为数字人自身方向；正面视角下可能与屏幕左右相反。</div>
   <form id="query" class="query">
     <input id="session-id" autocomplete="off" placeholder="Session ID，例如 sess_9958c06b" required>
     <input id="admin-token" type="password" autocomplete="off" placeholder="Admin Bearer Token（未配置可留空）">
@@ -241,7 +242,7 @@
     const actionResult = node('div', 'action-result');
     actionResult.append(
       node('div', '', `类别\n${value(turn.action.category_id)} · ${value(turn.action.category_label)}`),
-      node('div', '', `动作\n${value(turn.action.candidate_id)} / ${value(turn.action.action_id)} · ${value(turn.action.source_label)}`)
+      node('div', '', `动作（左右=数字人自身）\n${value(turn.action.candidate_id)} / ${value(turn.action.action_id)} · ${value(turn.action.source_label)}`)
     );
     action.append(actionResult);
     action.append(promptDetails('Category Prompt', turn.action.category_prompt, 'action'));

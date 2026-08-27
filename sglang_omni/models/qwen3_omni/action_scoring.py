@@ -53,6 +53,12 @@ class ActionSuffixScoreRequest:
     audios: list[str]
     images: list[Any]
     sample_rate: int
+    # Realtime action scoring keeps turn-local constraints in ``prefix`` but
+    # places the actual current text immediately before the short output cue.
+    # Direct/legacy callers may leave both fields unset and retain the former
+    # single-instruction layout.
+    current_text: str | None = None
+    output_prompt: str | None = None
     system_prompt: str | None = None
     micro_batch_size: int = 64
     session_id: str | None = None
@@ -210,6 +216,12 @@ def validate_action_suffix_request(
         raise ValueError("suffix_tokenization_mode must be 'exact' or 'short_id'")
     if not request.prefix or not request.prefix.strip():
         raise ValueError("prefix must be non-empty")
+    for name, value in (
+        ("current_text", request.current_text),
+        ("output_prompt", request.output_prompt),
+    ):
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{name} must be a string or null")
     if not request.candidates:
         raise ValueError("candidates must not be empty")
     if len(request.candidates) > MAX_ACTION_CANDIDATES:

@@ -313,6 +313,8 @@ async def test_realtime_debug_routes_render_page_and_enforce_admin_auth(
         page = await client.get("/debug/realtime")
         assert page.status_code == 200
         assert "Realtime Session 调试" in page.text
+        assert "左/右均为数字人自身方向" in page.text
+        assert "动作（左右=数字人自身）" in page.text
 
         unauthorized = await client.get("/debug/realtime/api/session/sess_debug_1")
         assert unauthorized.status_code == 401

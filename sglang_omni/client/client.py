@@ -119,6 +119,8 @@ def _action_request_debug_payload(
         "stage": request.stage,
         "logical_request_id": request.logical_request_id,
         "prefix": request.prefix,
+        "current_text": request.current_text,
+        "output_prompt": request.output_prompt,
         "system_prompt": request.system_prompt,
         "messages": inputs.get("messages", []),
         "candidates": [
@@ -756,6 +758,9 @@ class Client:
         images: list[Any],
         image_roles: list[str],
         language: str = "zh",
+        current_text: str | None = None,
+        output_prompt: str | None = None,
+        text_role: str = "user_input",
     ) -> Any:
         """Append the action instruction to a user message.
 
@@ -764,6 +769,35 @@ class Client:
         multimodal preprocessor cannot distinguish historical media from the
         current turn.
         """
+        ordered_current_turn = current_text is not None or output_prompt is not None
+        if ordered_current_turn:
+            parts: list[Any] = [{"type": "text", "text": instruction}]
+            if images:
+                parts.extend(
+                    Client._current_image_content_parts(image_roles, language)
+                )
+            parts.extend({"type": "audio"} for _ in audios)
+            if isinstance(current_text, str) and current_text.strip():
+                label = localized_prompt(
+                    language,
+                    zh=(
+                        "[当前用户文本]"
+                        if text_role == "user_input"
+                        else "[数字人本轮将说出的文本]"
+                    ),
+                    en=(
+                        "[Current user text]"
+                        if text_role == "user_input"
+                        else "[Text the digital character will say this interaction]"
+                    ),
+                )
+                parts.append(
+                    {"type": "text", "text": f"{label}\n{current_text.strip()}"}
+                )
+            if isinstance(output_prompt, str) and output_prompt.strip():
+                parts.append({"type": "text", "text": output_prompt.strip()})
+            return parts
+
         if isinstance(content, list):
             parts = [dict(part) if isinstance(part, dict) else part for part in content]
             parts.extend({"type": "audio"} for _ in audios)
@@ -797,6 +831,9 @@ class Client:
         images: list[Any],
         image_roles: list[str],
         language: str = "zh",
+        current_text: str | None = None,
+        output_prompt: str | None = None,
+        text_role: str = "user_input",
     ) -> list[dict[str, Any]]:
         """Build action context with static catalog first and current turn last.
 
@@ -813,22 +850,21 @@ class Client:
 
         current_instruction = instruction
         has_avatar_image = "avatar_state" in image_roles
-        state_for_prompt = dict(avatar_state or {})
-        if has_avatar_image:
-            state_for_prompt = {
-                key: value
-                for key, value in state_for_prompt.items()
-                if key in {"current_action_id", "state_description"}
-            }
+        # Current structured state complements the current avatar image. A
+        # previous-action ID is deliberately never model-visible: animation
+        # transition and reset are responsibilities of the animation engine.
+        state_for_prompt = {
+            key: value
+            for key, value in dict(avatar_state or {}).items()
+            if key != "current_action_id"
+        }
         if state_for_prompt:
             state_labels = (
                 {
-                    "current_action_id": "当前实际动作 ID",
                     "state_description": "本轮主动场景约束",
                 }
                 if normalize_prompt_language(language) == "zh"
                 else {
-                    "current_action_id": "current physical action ID",
                     "state_description": "proactive-scene constraints for this interaction",
                 }
             )
@@ -895,7 +931,21 @@ class Client:
             if missing_images and image_roles
             else ["unknown"] * len(missing_images)
         )
-        if messages and messages[-1].get("role") == "user":
+        ordered_current_turn = current_text is not None or output_prompt is not None
+        if ordered_current_turn:
+            current_content = Client._action_instruction_content(
+                None,
+                current_instruction,
+                audios=missing_audios,
+                images=missing_images,
+                image_roles=missing_image_roles,
+                language=language,
+                current_text=current_text,
+                output_prompt=output_prompt,
+                text_role=text_role,
+            )
+            messages.append({"role": "user", "content": current_content})
+        elif messages and messages[-1].get("role") == "user":
             latest_user = messages.pop()
             latest_user["content"] = Client._action_instruction_content(
                 latest_user.get("content"),
@@ -940,6 +990,9 @@ class Client:
             images=[*request.history_images, *request.images],
             image_roles=request.image_roles,
             language=request.language,
+            current_text=request.current_text,
+            output_prompt=request.output_prompt,
+            text_role=request.text_role,
         )
         if candidates is None:
             candidates = [
