@@ -2965,6 +2965,22 @@ class MultimodalSession:
         if turn.phase == TURN_PHASE_PROCESSING:
             request_ids = list(turn.active_request_ids)
             turn.phase = TURN_PHASE_CANCELLING
+            # Stop externally visible audio before waiting for model aborts.
+            # Abort RPCs may take long enough for the provider to emit more
+            # audio, which can otherwise arrive after the client cancelled.
+            if self.embedded_tts is not None:
+                tts_cancel_started = time.perf_counter()
+                await self.embedded_tts.cancel_active_turn()
+                emit_structured_log(
+                    "performance",
+                    "session_tts_cancel_completed",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    elapsed_ms=round(
+                        (time.perf_counter() - tts_cancel_started) * 1000, 3
+                    ),
+                )
             if (
                 turn.provisional_reply is not None
                 and turn.provisional_reply.status == "pending"
@@ -3012,19 +3028,6 @@ class MultimodalSession:
                         isinstance(result, Exception) for result in abort_results
                     ),
                     elapsed_ms=round((time.perf_counter() - abort_started) * 1000, 3),
-                )
-            if self.embedded_tts is not None:
-                tts_cancel_started = time.perf_counter()
-                await self.embedded_tts.cancel_active_turn()
-                emit_structured_log(
-                    "performance",
-                    "session_tts_cancel_completed",
-                    session_id=self.session_id,
-                    turn_id=turn.turn_id,
-                    trace_id=turn.trace_id,
-                    elapsed_ms=round(
-                        (time.perf_counter() - tts_cancel_started) * 1000, 3
-                    ),
                 )
             branch_tasks = [task for task in turn.branch_tasks if not task.done()]
             for branch_task in branch_tasks:
@@ -3363,7 +3366,17 @@ class MultimodalSession:
                     )
 
             provided_reply = turn.reply_provided
-            fusion_reply = "text" in self.modalities and "action" in self.modalities
+            silent_action_finished = (
+                provided_reply
+                and not turn.text
+                and turn.turn_origin == TURN_ORIGIN_PROACTIVE
+                and turn.trigger == ACTION_FINISHED_TRIGGER
+            )
+            fusion_reply = (
+                "text" in self.modalities
+                and "action" in self.modalities
+                and not silent_action_finished
+            )
             if fusion_reply:
                 provisional_state = await self._create_provisional_reply(
                     turn,
@@ -3460,7 +3473,11 @@ class MultimodalSession:
                         ),
                     )
                 provisional_state.task = reply_task
-            elif "text" in self.modalities and provided_reply:
+            elif (
+                "text" in self.modalities
+                and provided_reply
+                and not silent_action_finished
+            ):
                 reply_task = track_branch(
                     self._run_provided_reply(turn, turn.text or ""),
                     name=f"session-provided-reply-{self.session_id}-{turn.turn_id}",
@@ -3673,7 +3690,8 @@ class MultimodalSession:
                         if modality == "action" and action_error is not None
                         else (
                             "suppressed"
-                            if modality == "text" and action_unsupported
+                            if modality == "text"
+                            and (action_unsupported or silent_action_finished)
                             else "completed"
                         )
                     )
@@ -6405,9 +6423,10 @@ class MultimodalSession:
         )
         tts_state: ReplyTTSState | None = None
         if provisional is not None:
-            tts_state = self._start_reply_tts(
-                turn, response_id=response_id, provisional=provisional
-            )
+            if text:
+                tts_state = self._start_reply_tts(
+                    turn, response_id=response_id, provisional=provisional
+                )
             if text:
                 await self._send_provisional_reply_delta(turn, provisional, text)
                 await self._enqueue_reply_tts_text(tts_state, text)
@@ -6460,7 +6479,8 @@ class MultimodalSession:
                 "delta": text,
             }
         )
-        tts_state = self._start_reply_tts(turn, response_id=response_id)
+        if text:
+            tts_state = self._start_reply_tts(turn, response_id=response_id)
         await self._enqueue_reply_tts_text(tts_state, text)
         first_delta_after_commit_ms = self._after_commit_ms(turn)
         try:

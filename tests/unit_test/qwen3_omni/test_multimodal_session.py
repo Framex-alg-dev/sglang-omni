@@ -2411,6 +2411,13 @@ async def test_action_finished_forces_silent_category_and_skips_category(
     client = SystemRouteFusionClient(category_id=reply_category.category_id)
     ws = FakeWebSocket()
     session = make_session(ws, client, global_action_catalog=catalog)
+    monkeypatch.setattr(
+        session,
+        "_start_reply_tts",
+        lambda *args, **kwargs: pytest.fail(
+            "silent action_finished must not start embedded TTS"
+        ),
+    )
     await start_system_route_session(session, catalog)
 
     await session.dispatch(
@@ -2439,7 +2446,8 @@ async def test_action_finished_forces_silent_category_and_skips_category(
 
     assert client.score_requests == []
     result = next(event for event in ws.events if event["type"] == "turn.result")
-    assert result["reply"] == {"text": "", "source": "provided"}
+    assert "reply" not in result
+    assert result["outputs"]["text"] == "suppressed"
     assert result["action"]["category_id"] == silent_category.category_id
     assert result["action"]["candidate_id"] == (
         silent_category.children[1].candidate_id
@@ -4262,10 +4270,27 @@ async def test_fusion_cancel_aborts_reply_and_child_requests() -> None:
     await asyncio.wait_for(client.reply_started.wait(), timeout=1)
     await asyncio.wait_for(client.child_started.wait(), timeout=1)
 
+    class RecordingTTS:
+        cancelled = False
+
+        async def cancel_active_turn(self) -> None:
+            self.cancelled = True
+
+    tts = RecordingTTS()
+    session.embedded_tts = tts
+    original_abort = client.abort
+
+    async def abort_after_tts(request_id: str):
+        assert tts.cancelled is True
+        return await original_abort(request_id)
+
+    client.abort = abort_after_tts
+
     await session.handle_turn_cancel(
         {"type": "turn.cancel", "turn_id": "turn-fusion-cancel"}
     )
 
+    assert tts.cancelled is True
     assert len(client.aborted) == 2
     assert any(request_id.endswith("-reply") for request_id in client.aborted)
     assert any(request_id.endswith("-child") for request_id in client.aborted)
