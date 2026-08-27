@@ -50,7 +50,7 @@ dependencies = [
     # /v1/realtime — server-side VAD
     "silero-vad>=5.1",
     "onnxruntime>=1.17",
-    "websockets>=12.0",       # FastAPI WebSocket library + example clients
+    "websockets>=13.0",       # asyncio.client API used by embedded Realtime TTS
     # Testing
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

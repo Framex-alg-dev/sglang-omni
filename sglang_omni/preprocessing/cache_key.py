@@ -7,9 +7,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 import numpy as np
-import torch
 import xxhash
 from PIL import Image
+
+try:
+    import torch
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    torch = None  # type: ignore[assignment]
 
 
 def _is_url_like(s: str) -> bool:
@@ -208,7 +214,7 @@ def hash_media_item(item: Any) -> str | None:
         return f"np:{meta}:{content_hash}"
 
     # torch Tensor
-    if isinstance(item, torch.Tensor):
+    if torch is not None and isinstance(item, torch.Tensor):
         cpu = item.detach().cpu()
         meta = f"{cpu.dtype}|{tuple(cpu.shape)}"
         content_hash = hash_bytes(cpu.numpy().tobytes())
