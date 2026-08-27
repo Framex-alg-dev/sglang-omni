@@ -89,10 +89,12 @@ MAX_AUDIO_CHUNKS_PER_TURN = 4096
 MAX_IMAGE_PREPROCESS_TASKS_PER_TURN = 8
 MAX_PREPARED_IMAGE_BYTES_PER_FRAME = 32 * 1024 * 1024
 MAX_PREPARED_IMAGE_BYTES_PER_TURN = 64 * 1024 * 1024
-# Reply generation may retain a small amount of conversational history. Action
+# Reply generation retains only a narrow recent window. The current user turn
+# remains authoritative; older turns are context for explicit references, not
+# examples whose topic or wording should be continued by default. Action
 # scoring omits general history; its one reference-only action anchor does not
 # use this limit.
-MAX_REPLY_HISTORY_TURNS = 4
+MAX_REPLY_HISTORY_TURNS = 2
 MAX_ACTION_CURRENT_IMAGES = 8
 # Keep lightweight action facts outside multimodal history. Reply generation
 # never receives them; action scoring may receive only the latest user-triggered
@@ -4387,11 +4389,7 @@ class MultimodalSession:
             )
         history_audios: list[str] = []
         history_images: list[str] = []
-        visible_history_turns = [
-            history_turn
-            for history_turn in self.reply_history_turns
-            if history_turn.model_visible
-        ][-MAX_REPLY_HISTORY_TURNS:]
+        visible_history_turns = self._visible_reply_history_turns()
         for history_turn in visible_history_turns:
             if len(history_turn.images) != len(history_turn.image_roles):
                 raise ValueError(
@@ -4427,13 +4425,20 @@ class MultimodalSession:
             # action-only interruption.
             parts.append(self._reply_podcast_context_scope_part())
             parts.append({"type": "text", "text": reply_context})
+        if turn.turn_origin == TURN_ORIGIN_USER:
+            parts.append(self._reply_current_turn_priority_part())
         parts.extend({"type": "audio"} for _ in audios)
         if turn.turn_origin == TURN_ORIGIN_USER:
             if isinstance(turn.text, str) and turn.text.strip():
                 parts.append({"type": "text", "text": turn.text.strip()})
         if reply_context is not None and not podcast_context:
             parts.append({"type": "text", "text": reply_context})
-        if not reply_image_roles:
+        if reply_image_roles:
+            # Repeat only the decision boundary after the current speech/text.
+            # The earlier label explains the image role; this final guard keeps
+            # an available camera frame from becoming the default reply topic.
+            parts.append(self._reply_user_camera_response_guard_part())
+        else:
             # Keep the current-turn visual fact closest to generation so it
             # overrides stale visual claims in reply history. The instruction
             # is deliberately scoped so non-visual requests, including camera-
@@ -4463,6 +4468,50 @@ class MultimodalSession:
         return request, reply_image_roles
 
     @staticmethod
+    def _normalized_reply_text(text: str) -> str:
+        return "".join(
+            character.casefold()
+            for character in text
+            if character.isalnum()
+        )
+
+    @classmethod
+    def _reply_history_assistant_signature(
+        cls, history_turn: ReplyHistoryTurn
+    ) -> str | None:
+        assistant_text = "".join(
+            str(message.get("content", ""))
+            for message in history_turn.messages
+            if message.get("role") == "assistant"
+            and isinstance(message.get("content"), str)
+        )
+        normalized = cls._normalized_reply_text(assistant_text)
+        return normalized or None
+
+    def _visible_reply_history_turns(self) -> list[ReplyHistoryTurn]:
+        """Return a small recent history window without repeated replies.
+
+        Keeping only the newest occurrence prevents one bad assistant sentence
+        from appearing several times in the next request while preserving the
+        most recent user/audio context for an explicit follow-up.
+        """
+        selected: list[ReplyHistoryTurn] = []
+        seen_assistant_replies: set[str] = set()
+        for history_turn in reversed(self.reply_history_turns):
+            if not history_turn.model_visible:
+                continue
+            signature = self._reply_history_assistant_signature(history_turn)
+            if signature is not None and signature in seen_assistant_replies:
+                continue
+            if signature is not None:
+                seen_assistant_replies.add(signature)
+            selected.append(history_turn)
+            if len(selected) >= MAX_REPLY_HISTORY_TURNS:
+                break
+        selected.reverse()
+        return selected
+
+    @staticmethod
     def _select_reply_user_camera_images(
         images: list[Any], image_roles: list[str]
     ) -> tuple[list[Any], list[str]]:
@@ -4487,14 +4536,52 @@ class MultimodalSession:
             "type": "text",
             "text": self._prompt(
                 zh=(
-                    "[本轮用户摄像头画面，仅作为回答本轮问题的视觉证据；"
-                    "只识别用户本轮询问的目标，不要主动描述正在观看用户]"
+                    "[本轮附带用户摄像头图片。只有当前问题明确需要"
+                    "视觉判断时才使用，否则忽略。]"
                 ),
                 en=(
-                    "[User camera view for this interaction: use only as visual "
-                    "evidence for the current question; identify only the target "
-                    "asked about in this interaction and do not proactively describe "
-                    "watching the user]"
+                    "[A user-camera image accompanies this interaction. Use it only "
+                    "when the current question explicitly requires visual judgment; "
+                    "otherwise ignore it.]"
+                ),
+            ),
+        }
+
+    def _reply_current_turn_priority_part(self) -> dict[str, str]:
+        return {
+            "type": "text",
+            "text": self._prompt(
+                zh=(
+                    "[当前轮优先：先独立理解并回答本轮用户语音或文本。"
+                    "只有本轮明确出现指代、追问、继续、重复、比较或省略表达时，"
+                    "才使用相关历史；否则不得延续、复用或重复上一轮回复的主题和答案。]"
+                ),
+                en=(
+                    "[Current interaction takes priority: first understand and answer "
+                    "the current user audio or text independently. Use relevant history "
+                    "only when the current input explicitly contains a reference, "
+                    "follow-up, continuation, repetition, comparison, or omission. "
+                    "Otherwise, do not continue, reuse, or repeat the previous reply's "
+                    "topic or answer.]"
+                ),
+            ),
+        }
+
+    def _reply_user_camera_response_guard_part(self) -> dict[str, str]:
+        return {
+            "type": "text",
+            "text": self._prompt(
+                zh=(
+                    "[本轮回复约束：只有用户本轮明确询问视觉内容时，才可使用"
+                    "用户摄像头画面；否则必须完全忽略画面，只回答本轮语音或"
+                    "文本，不得主动描述或评价用户的外观、状态、动作或环境。]"
+                ),
+                en=(
+                    "[Reply constraint for this interaction: use the user-camera image "
+                    "only when the user explicitly asks about visual content in this "
+                    "interaction. Otherwise, ignore the image completely, answer only "
+                    "the current audio or text, and do not proactively describe or judge "
+                    "the user's appearance, state, actions, or environment.]"
                 ),
             ),
         }

@@ -3095,6 +3095,55 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
 
 
 @pytest.mark.asyncio
+async def test_concrete_action_promotes_reply_without_semantic_text_filter() -> None:
+    ws = FakeWebSocket()
+    client = SystemRouteFusionClient(
+        category_id="B010",
+        reply_chunks=["宝贝，你今天看起来有点累呢。"],
+    )
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-visual-drift-fusion",
+            "language": "zh",
+            "modalities": ["text", "action"],
+            "instructions": "只回答当前用户请求。",
+            "unsupported_action_text": "暂时做不了。",
+            "fallback_category_ids": ["B000"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-visual-drift-fusion"))
+    await session._dispatch_turn_commit(
+        user_turn_commit(
+            "turn-visual-drift-fusion",
+            text="给我打个招呼",
+        )
+    )
+    await asyncio.wait_for(session.active_turn.inference_task, timeout=1)
+
+    resolved = next(
+        event
+        for event in ws.events
+        if event["type"] == "response.provisional.resolved"
+    )
+    assert resolved["status"] == "promoted"
+    assert resolved["reason"] == "action_supported"
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["modalities"]["text"] == "completed"
+    assert result["reply"] == {
+        "text": "宝贝，你今天看起来有点累呢。",
+        "source": "generated",
+    }
+    assert result["action"]["action_id"] == "wave"
+    assert len(session.reply_history_turns) == 1
+    assert session._reply_history_assistant_signature(
+        session.reply_history_turns[0]
+    ) == "宝贝你今天看起来有点累呢"
+
+
+@pytest.mark.asyncio
 async def test_turn_resource_samples_cover_successful_inference_boundaries() -> None:
     requests: list[tuple[str, dict]] = []
 
@@ -3416,6 +3465,7 @@ async def test_reply_without_instructions_has_no_server_system_prompt() -> None:
     assert all(message.role != "system" for message in reply_request.messages)
     assert reply_request.messages[0].role == "user"
     assert reply_request.messages[0].content == [
+        session._reply_current_turn_priority_part(),
         {"type": "text", "text": "你好。"},
         {
             "type": "text",
@@ -3463,7 +3513,7 @@ async def test_podcast_reply_context_is_scoped_before_current_user_input() -> No
     )
 
     current_content = request.messages[-1].content
-    assert current_content[:4] == [
+    assert current_content[:5] == [
         {
             "type": "text",
             "text": (
@@ -3474,6 +3524,7 @@ async def test_podcast_reply_context_is_scoped_before_current_user_input() -> No
             ),
         },
         {"type": "text", "text": turn.reply_context},
+        session._reply_current_turn_priority_part(),
         {"type": "audio"},
         {"type": "text", "text": "你可以摸摸自己的脸颊吗？"},
     ]
@@ -3489,6 +3540,49 @@ def test_podcast_reply_context_scope_has_equivalent_english_rule() -> None:
     assert "current user audio or text is the primary input" in scope
     assert "action-only request" in scope
     assert "not an instruction" in scope
+
+
+def test_user_camera_response_guard_has_equivalent_english_rule() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+
+    guard = session._reply_user_camera_response_guard_part()["text"]
+
+    assert "only when the user explicitly asks about visual content" in guard
+    assert "ignore the image completely" in guard
+    assert "answer only the current audio or text" in guard
+    assert "do not proactively describe or judge" in guard
+
+
+def test_current_turn_priority_has_equivalent_english_rule() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+
+    priority = session._reply_current_turn_priority_part()["text"]
+
+    assert "Current interaction takes priority" in priority
+    assert "answer the current user audio or text independently" in priority
+    assert "only when the current input explicitly contains" in priority
+    assert "do not continue, reuse, or repeat" in priority
+
+
+def test_reply_history_keeps_two_recent_unique_assistant_replies() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    for index, reply in enumerate(("第一条", "重复回复", "重复回复", "最新回复")):
+        session.reply_history_turns.append(
+            multimodal_module.ReplyHistoryTurn(
+                turn_id=f"turn-{index}",
+                messages=[{"role": "assistant", "content": reply}],
+                audios=[],
+                images=[],
+                image_roles=[],
+            )
+        )
+
+    visible = session._visible_reply_history_turns()
+
+    assert [turn.turn_id for turn in visible] == ["turn-2", "turn-3"]
+    assert [
+        session._reply_history_assistant_signature(turn) for turn in visible
+    ] == ["重复回复", "最新回复"]
 
 
 @pytest.mark.asyncio
@@ -3524,14 +3618,23 @@ async def test_reply_uses_latest_user_camera_and_drops_images_from_history() -> 
         {
             "type": "text",
             "text": (
-                "[本轮用户摄像头画面，仅作为回答本轮问题的视觉证据；"
-                "只识别用户本轮询问的目标，不要主动描述正在观看用户]"
+                "[本轮附带用户摄像头图片。只有当前问题明确需要"
+                "视觉判断时才使用，否则忽略。]"
             ),
         },
         {"type": "image"},
+        session._reply_current_turn_priority_part(),
         {"type": "audio"},
         {"type": "text", "text": "看看我"},
         {"type": "text", "text": "只回答本轮问题。"},
+        {
+            "type": "text",
+            "text": (
+                "[本轮回复约束：只有用户本轮明确询问视觉内容时，才可使用"
+                "用户摄像头画面；否则必须完全忽略画面，只回答本轮语音或"
+                "文本，不得主动描述或评价用户的外观、状态、动作或环境。]"
+            ),
+        },
     ]
     assert "avatar-current" not in request.metadata["images"]
     assert "user-camera-old" not in request.metadata["images"]
@@ -3574,6 +3677,7 @@ async def test_reply_uses_latest_user_camera_and_drops_images_from_history() -> 
     assert next_request.metadata["images"] == []
     assert next_request.metadata["audios"] == ["audio-history", "audio-next"]
     assert next_request.messages[-1].content == [
+        session._reply_current_turn_priority_part(),
         {"type": "audio"},
         {"type": "text", "text": "看看我"},
         {"type": "text", "text": "只回答本轮问题。"},
