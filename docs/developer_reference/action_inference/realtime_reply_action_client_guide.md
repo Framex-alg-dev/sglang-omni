@@ -6,6 +6,9 @@
 
 当前协议尚未上线，不提供旧字段或旧事件名兼容。客户端必须严格使用本文字段。
 
+回复、TTS 与动作并发调度的事件顺序和客户端迁移检查，另见
+[回复、TTS 与动作并发改造：客户端检查与迁移说明](realtime_reply_action_concurrency_client_migration_CN.md)。
+
 ## 1. 基本约定
 
 - WebSocket 地址：`ws://<host>:<port>/v1/session/realtime`。
@@ -43,8 +46,8 @@
   │── input.text.set（可选）────────>│
   │── turn.commit ──────────────────>│
   │<─ turn.committed ────────────────│
-  │<─ response.provisional.* ─────────│  融合模式：可预生成 TTS，但不可播放
-  │<─ response.* / turn.action.ready │  动作确认支持后；相对顺序不固定
+  │<─ response.provisional.* ─────────│  融合模式：仅临时文本，不含音频
+  │<─ response.* / turn.action.ready │  provisional 已决议；相对顺序不固定
   │<─ turn.result ───────────────────│  Turn 最终结果
   │── 下一个 turn.start，或 close ──>│
 ```
@@ -113,7 +116,7 @@
 | `type` | 是 | 固定为 `session.start` |
 | `protocol_version` | 是 | 当前只接受整数 `1` |
 | `session_id` | 是 | 客户端生成的唯一 Session ID |
-| `outputs` | 否 | `text`、`action` 的非空去重数组；缺省为当前版本全部支持类型 |
+| `outputs` | 否 | `text`、`audio`、`action` 的非空去重数组；缺省为 `text+action` |
 | `locale` | 否 | `zh-CN` 或 `en-US`，缺省 `en-US`；显式传 `null` 或其他值会被拒绝 |
 | `character_profile` | 否 | 动作 Category 和 Child 共享的数字人人设；不进入回复 Prompt |
 | `reply` | 否 | 回复专用 Session 配置 |
@@ -121,8 +124,9 @@
 | `input_audio` | 否 | 输入音频格式；缺省即 PCM16LE、16 kHz、单声道 |
 | `diagnostics` | 否 | 诊断输出开关 |
 
-`outputs` 当前支持 `["text"]`、`["action"]` 和 `["text", "action"]`。生产客户端
-建议始终显式发送，避免未来协议新增输出类型后产生意外行为。
+`outputs` 支持 `text`、`audio`、`action` 的组合，但 `audio` 必须与 `text` 同时启用。
+需要服务端 TTS 的融合会话使用 `["text", "audio", "action"]`；生产客户端建议始终显式
+发送，避免未来缺省值变化后产生意外行为。
 
 `locale` 控制服务端生成的 Category、Child 和动作上下文 Prompt 使用中文还是英文。
 客户端传入的 `reply.instructions`、人设、临时上下文、不支持文案，以及动作目录中
@@ -552,9 +556,10 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
 {"type":"response.provisional.text.delta","turn_id":"turn-user-001","provisional_id":"resp-abcd","response_id":"resp-abcd","seq":1,"delta":"你好呀"}
 ```
 
-回复较短或动作较慢时，还可能先收到 `response.provisional.text.done`。客户端可以立即将
-临时 delta 交给 TTS 生成，但只能缓存在当前 Turn 的临时音频区，不能播放、上屏为正式
-消息或写入对话历史。
+回复较短或动作较慢时，还可能先收到 `response.provisional.text.done`。这些事件只用于诊断
+和可选的临时 UI；客户端不得把临时文本交给另一个 TTS，也不得播放、上屏为正式消息或写入
+对话历史。在线 TTS 由服务端连接配置的 TTS provider 完成；服务端在 provisional 未决议时
+缓存 provider 返回的音频，只有提升为正式回复后才通过 `response.audio.delta` 发给客户端。
 
 服务端随后只会发送一次 `response.provisional.resolved`：
 
@@ -563,6 +568,9 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
   文本合并为一条带 `replayed_from_provisional=true` 的 `response.text.delta`，之后继续发送
   新的标准 delta 和 done。已消费临时流的新客户端不得再次对 replay delta 做 TTS；它只
   用于标准流兼容、正式展示和文本归档。
+- `status="promoted"`、`reason="language_required"`：本轮存在必须回答的独立语言意图，
+  即使动作分支为 `support_status="unsupported"`，仍保留正常回复和服务端 TTS 音频。客户端
+  不得播放本地 `reply.unsupported_action_text` 音频。
 - `status="discarded"`、`reason="category_unsupported"` 或
   `reason="child_unsupported"`：立即丢弃临时文本和对应 TTS 缓冲，不会再收到该 Turn 的
   标准回复流；播放当前角色预生成的 `reply.unsupported_action_text` 音频。
@@ -570,8 +578,9 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
 - `status="discarded"`、`reason="reply_failed"`：丢弃缓冲且不要播放“不支持动作”音频，
   等待该 Turn 的顶层 `error` 并按失败流程处理。
 
-推荐以 `(turn_id, provisional_id)` 建立临时 TTS 状态，并用 `seq` 去重。即使已经收到完整
-临时文本，也必须等到 `promoted` 才能播放，因为 Child 仍可能返回 `A000`。
+推荐以 `(turn_id, provisional_id)` 建立临时文本状态，并用 `seq` 去重。客户端只播放服务端
+正式发送的 `response.audio.delta`；不会收到 provisional 音频。即使已经收到完整临时文本，
+也必须等到 `promoted` 后才能正式展示，因为 Child 仍可能返回不支持。
 
 ## 8. 动作结果与执行
 
@@ -595,8 +604,13 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
 ```
 
 客户端只在 `execute=true` 时执行；按 `turn_id` 幂等，不能因为 `turn.result` 再次出现
-同一 action 而重复执行。`execute=false` 表示保持当前状态。`turn.action.ready` 和回复
-delta 的相对顺序不固定。
+同一 action 而重复执行。`execute=false` 表示保持当前状态。`turn.action.ready` 不再等待
+TTS 完成或 TTS 取消：它可能早于首个 `response.audio.delta`，也可能晚于已经提升并立即冲刷
+的首个音频块。客户端不得让动作等待音频，也不得让音频等待动作。
+
+融合模式下，服务端会先发送本 Turn 的 `response.provisional.resolved`，再发送
+`turn.action.ready`。但 `response.audio.delta` 与 `turn.action.ready` 的相对顺序不固定；
+`response.audio.done`、`response.done` 和 `turn.result` 仍是后续终态屏障。
 
 当前协议没有动作播放结果 ACK，服务端暂时把成功推理的动作视为后续 Turn 已执行动作。
 
@@ -767,9 +781,11 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
   `action.last_executed_action_id` 不再影响动作推理；
 - `avatar_state.state_description` 改为 `action.guidance`；
 - 解析 `session.started.outputs` 和 `turn.result.outputs`；
-- 支持 `response.provisional.*` 状态机：临时 delta 仅生成并缓存 TTS，`promoted` 后播放，
-  `discarded` 后清空；按 `provisional_id` 和 `seq` 去重；
-- 提升时忽略 `replayed_from_provisional=true` 的重复 TTS 输入，但仍用于正式文本展示/归档；
+- 支持 `response.provisional.*` 状态机：临时 delta 只作临时文本，不在客户端调用 TTS；
+  `promoted` 后正式展示，`discarded` 后清空；按 `provisional_id` 和 `seq` 去重；
+- 客户端直接播放服务端的 `response.audio.delta`；不得自行合成 provisional 音频，也不得要求
+  音频等待 `turn.action.ready`；
+- 提升时将 `replayed_from_provisional=true` 视为正式文本回放，用于展示/归档时去重；
 - Category/Child 不支持时播放当前角色的预生成音频，不等待或调用在线 TTS；
 - 将 `outputs.text="suppressed"` 视为正常业务结果，不当作文本分支失败；
 - 媒体 ACK 改为异步处理，不必逐包等待后再 commit；

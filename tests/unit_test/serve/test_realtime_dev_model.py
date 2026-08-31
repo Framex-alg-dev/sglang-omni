@@ -253,7 +253,7 @@ def test_optional_capability_detection_is_safe() -> None:
     assert not hasattr(client, "action_scoring_load")
 
 
-def test_fusion_category_ignores_unavailable_child_preference() -> None:
+def test_fusion_reports_unavailable_child_preference_and_uses_safe_fallback() -> None:
     with TestClient(_dev_app(action_candidate_id="A999")).websocket_connect(
         "/v1/session/realtime"
     ) as ws:
@@ -275,9 +275,13 @@ def test_fusion_category_ignores_unavailable_child_preference() -> None:
             if event["type"] == "turn.result":
                 break
         result = events[-1]
-        assert result["status"] == "completed"
-        assert result["action"]["action_id"] == "ADEV"
-        assert "fallback_applied" not in result["action"]
+        assert result["status"] == "partial"
+        assert result["outputs"] == {"text": "completed", "action": "failed"}
+        assert "not in the Session whitelist" in result["errors"]["action"][
+            "message"
+        ]
+        assert result["action"]["action_id"] == "no_action"
+        assert result["action"]["fallback_applied"] is True
 
 
 def test_turn_cancel_stops_stream_and_has_single_terminal_event() -> None:

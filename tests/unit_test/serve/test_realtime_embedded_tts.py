@@ -14,6 +14,7 @@ from sglang_omni.serve.realtime.dev_model import (
 )
 from sglang_omni.serve.realtime.dev_server import create_dev_app
 from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+from sglang_omni.serve.realtime.multimodal import ReplyHistoryRouteResult
 
 
 class ProgrammableTTSWebSocket:
@@ -476,7 +477,7 @@ def test_fusion_cancel_discards_buffered_audio_without_leak() -> None:
     assert connector.contexts[0].closed is True
 
 
-def test_fusion_unsupported_action_discards_online_tts_audio() -> None:
+def test_fusion_unsupported_action_preserves_language_reply_and_tts() -> None:
     connector = ProgrammableTTSConnector()
     app = _fusion_app(connector)
     manager = app.state.multimodal_realtime_manager
@@ -513,9 +514,64 @@ def test_fusion_unsupported_action_discards_online_tts_audio() -> None:
         events = _run_turn(ws, "turn-unsupported")
 
     types = [event["type"] for event in events]
+    assert "response.audio.delta" in types
+    assert "response.audio.done" in types
+    assert "response.done" in types
+    assert events[-1]["type"] == "turn.result"
+    assert events[-1]["reply"] == {
+        "text": "固定流式回复",
+        "source": "generated",
+    }
+
+
+def test_fusion_unsupported_pure_action_discards_online_tts_audio() -> None:
+    connector = ProgrammableTTSConnector()
+    app = _fusion_app(connector)
+    manager = app.state.multimodal_realtime_manager
+    original_create = manager.create
+
+    def create_unsupported_session(websocket: Any):
+        session = original_create(websocket)
+
+        async def classify_pure_action(*args: Any, **kwargs: Any):
+            del args, kwargs
+            return ReplyHistoryRouteResult(
+                decision="CURRENT_ONLY",
+                reply_mode="PURE_ACTION",
+            )
+
+        async def score_unsupported(*args: Any, **kwargs: Any):
+            del args
+            callback = kwargs.get("on_category_selected")
+            if callback is not None:
+                callback(None, "unsupported")
+            return (
+                {
+                    "candidate_id": "ADEV",
+                    "action_id": "ADEV",
+                    "category_id": "BDEV",
+                    "execution_binding": {},
+                    "execute": False,
+                    "support_status": "unsupported",
+                },
+                [],
+                0.0,
+                {"category_decision_id": "UNSUPPORTED"},
+            )
+
+        session._classify_reply_history_requirement = classify_pure_action
+        session._score_action = score_unsupported
+        return session
+
+    manager.create = create_unsupported_session
+    with TestClient(app).websocket_connect("/v1/session/realtime") as ws:
+        _start_fusion_session(ws)
+        events = _run_turn(ws, "turn-unsupported-pure-action")
+
+    types = [event["type"] for event in events]
     assert "response.audio.delta" not in types
     assert "response.audio.done" not in types
     assert "response.done" not in types
     assert events[-1]["type"] == "turn.result"
     assert events[-1]["reply"]["source"] == "client_prerecorded_audio"
-    assert connector.contexts[0].closed is True
+    assert connector.contexts == []

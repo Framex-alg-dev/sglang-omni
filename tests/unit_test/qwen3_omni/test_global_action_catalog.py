@@ -63,8 +63,9 @@ def test_builtin_catalog_exposes_shy_composite_action_semantics() -> None:
         child for child in category.children if child.source_label.startswith("娇羞（")
     )
 
-    assert all(term in category.short_definition for term in ("害羞", "娇羞", "撒娇"))
-    assert all(term in action.short_definition for term in ("害羞", "娇羞"))
+    assert all(term in category.short_definition for term in ("情绪", "亲昵", "撒娇"))
+    assert "娇羞" in action.source_label
+    assert all(term in action.short_definition for term in ("低头", "双手捂脸"))
     for locale in ("zh-CN", "en-US"):
         assert category.short_definition in catalog.category_system_prompt_for(locale)
         assert action.short_definition in catalog.child_system_prompt_for(
@@ -84,8 +85,8 @@ def test_builtin_catalog_exposes_forward_approach_category_semantics() -> None:
     )
 
     assert "靠近镜头" in category.short_definition
-    assert "改变身体与观察目标的距离" in category.short_definition
-    assert "靠近镜头" in action.short_definition
+    assert "靠近镜头或远离镜头" in category.short_definition
+    assert "向前倾斜" in action.short_definition
     assert action.category_id == category.category_id
     for locale in ("zh-CN", "en-US"):
         assert category.short_definition in catalog.category_system_prompt_for(
@@ -150,9 +151,11 @@ def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None
     bottle = next(child for child in drinking.children if child.candidate_id == "A572")
 
     assert "耳廓与耳垂" in touch_ear.short_definition
-    assert "喝口水、喝点水" in drinking.short_definition
-    assert "未指定容器时优先选择" in cup.short_definition
-    assert "明确要求瓶装水" in bottle.short_definition
+    assert "喝口水/喝点水" in drinking.short_definition
+    assert "未指定容器时默认杯子" in drinking.short_definition
+    assert "明确瓶装水" in drinking.short_definition
+    assert "杯子" in cup.short_definition
+    assert "瓶" in bottle.short_definition
     chinese_child = catalog.child_system_prompt_for("zh-CN", touching.category_id)
     english_child = catalog.child_system_prompt_for("en-US", touching.category_id)
     assert "耳环与耳朵是不同交互物体" in chinese_child
@@ -368,9 +371,17 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "动作请求由语义目标决定，不由命令句形式决定" in (
         catalog.category_system_prompt
     )
-    assert "不得仅因其使用问句或建议句形式而将其当作普通对话或单纯能力咨询" in (
+    assert "疑问句形式本身既不能证明用户在要求执行动作" in (
         catalog.category_system_prompt
     )
+    assert "“你可以唱歌吗”“你会唱歌吗”" in catalog.category_system_prompt
+    assert "本轮产生非空回复时应选择语言表达伴随类别" in (
+        catalog.category_system_prompt
+    )
+    assert "“给我唱一首”“现在唱一段吧”“唱给我听”" in (
+        catalog.category_system_prompt
+    )
+    assert "“你可以挥挥手吗”" in catalog.category_system_prompt
     assert "属于对当前感知事实或能力的信息询问" in (
         catalog.category_system_prompt
     )
@@ -381,7 +392,16 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "Determine an action request from its semantic goal" in (
         catalog.category_system_prompt_for("en-US")
     )
-    assert "Do not treat them as ordinary conversation or a mere capability question" in (
+    assert "Interrogative form alone proves neither an execution request" in (
+        catalog.category_system_prompt_for("en-US")
+    )
+    assert "'can you sing?' or 'do you know how to sing?'" in (
+        catalog.category_system_prompt_for("en-US")
+    )
+    assert "'sing me a song', 'sing something now', or 'sing for me'" in (
+        catalog.category_system_prompt_for("en-US")
+    )
+    assert "'Can you wave?' still requests an action" in (
         catalog.category_system_prompt_for("en-US")
     )
     assert "a question about a current perceptual fact or capability" in (
@@ -833,22 +853,48 @@ class _WhitelistScoreClient(_ScoreClient):
 
 
 class _DecisionScoreClient(_ScoreClient):
-    def __init__(self, *, category: str, child: str) -> None:
+    def __init__(
+        self,
+        *,
+        category: str,
+        child: str,
+        category_runner_up: str | None = None,
+        reply_route: str = "R0",
+        completion_text: str = "换个互动方式吧。",
+    ) -> None:
         super().__init__()
         self.category = category
         self.child = child
+        self.category_runner_up = category_runner_up
+        self.reply_route = reply_route
+        self.completion_text = completion_text
         self.completion_requests = []
 
     async def completion(self, request, *, request_id: str) -> CompletionResult:
         self.completion_requests.append(request)
-        return CompletionResult(request_id=request_id, text="换个互动方式吧。")
+        return CompletionResult(request_id=request_id, text=self.completion_text)
 
     async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
         self.requests.append(request)
-        selected = self.category if request.stage == "category" else self.child
+        if request.stage == "reply_history_route":
+            selected = self.reply_route
+        elif request.stage == "reply_speech_mode":
+            selected = "S0"
+        elif request.stage == "pure_action_reply_validation":
+            selected = "V0"
+        else:
+            selected = self.category if request.stage == "category" else self.child
         scores = []
         for index, candidate in enumerate(request.candidates):
-            logprob = -0.01 if candidate.candidate_id == selected else -10.0
+            if candidate.candidate_id == selected:
+                logprob = -0.01
+            elif (
+                request.stage == "category"
+                and candidate.candidate_id == self.category_runner_up
+            ):
+                logprob = -0.02
+            else:
+                logprob = -10.0
             scores.append(
                 CandidateScore(
                     candidate_id=candidate.candidate_id,
@@ -922,6 +968,7 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
         ws,
         client=client,  # type: ignore[arg-type]
         model_name="Qwen3-Omni",
+        action_category_top_k=1,
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
@@ -1025,6 +1072,7 @@ async def test_english_session_uses_isolated_english_prompts_without_translating
         _WebSocket(),
         client=client,  # type: ignore[arg-type]
         model_name="Qwen3-Omni",
+        action_category_top_k=1,
         global_action_catalog=catalog,
         claim_session=lambda session_id, value: None,
         release_session=lambda session_id, value: None,
@@ -1154,7 +1202,12 @@ async def test_hierarchical_action_scoring_omits_cross_turn_history(
             }
         )
 
-    category_request, child_request = client.requests[2:]
+    action_requests = [
+        request
+        for request in client.requests
+        if request.stage in {"category", "child"}
+    ]
+    category_request, child_request = action_requests[2:]
     for request in (category_request, child_request):
         assert request.history_audios == []
         assert request.history_images == []
@@ -1163,10 +1216,14 @@ async def test_hierarchical_action_scoring_omits_cross_turn_history(
 
 
 @pytest.mark.asyncio
-async def test_category_unsupported_routes_to_configured_primary_fallback(tmp_path) -> None:
+async def test_category_b000_still_recalls_real_category_and_child_decides_support(
+    tmp_path,
+) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category=UNSUPPORTED_CATEGORY_SCORE_ID, child="A001"
+        category=UNSUPPORTED_CATEGORY_SCORE_ID,
+        category_runner_up="B001",
+        child="A001",
     )
     ws = _WebSocket()
     session = MultimodalSession(
@@ -1205,24 +1262,34 @@ async def test_category_unsupported_routes_to_configured_primary_fallback(tmp_pa
     )
 
     assert [item.stage for item in client.requests] == ["category", "child"]
-    assert [
-        item.candidate_id for item in client.requests[1].candidates
-    ] == ["A001", UNSUPPORTED_CHILD_SCORE_ID]
+    assert [item.candidate_id for item in client.requests[1].candidates] == [
+        "A001",
+        "A008",
+        UNSUPPORTED_CHILD_SCORE_ID,
+    ]
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["action"]["category_id"] == "B001"
     assert result["action"]["candidate_id"] == "A001"
     assert result["action"]["execute"] is True
-    assert result["action"]["support_status"] == "unsupported"
-    assert result["action"]["fallback_applied"] is True
+    assert result["action"]["support_status"] == "supported"
+    assert result["action"]["fallback_applied"] is False
+    context = result["media_summary"]["action_context"]
+    assert context["category_scoring_candidate_id"] == (
+        UNSUPPORTED_CATEGORY_SCORE_ID
+    )
+    assert context["category_decision_id"] == "B001"
 
 
 @pytest.mark.asyncio
-async def test_category_unsupported_reaches_reply_before_idle_child_finishes(
+async def test_category_b000_waits_for_child_before_discarding_reply(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category=UNSUPPORTED_CATEGORY_SCORE_ID, child="A008"
+        category=UNSUPPORTED_CATEGORY_SCORE_ID,
+        category_runner_up="B001",
+        child=UNSUPPORTED_CHILD_SCORE_ID,
+        reply_route="R2",
     )
     ws = _WebSocket()
     session = MultimodalSession(
@@ -1273,7 +1340,7 @@ async def test_category_unsupported_reaches_reply_before_idle_child_finishes(
         if item["type"] == "response.provisional.resolved"
     )
     assert resolved["status"] == "discarded"
-    assert resolved["reason"] == "category_unsupported"
+    assert resolved["reason"] == "child_unsupported"
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert "text" not in result["reply"]
     assert result["reply"]["source"] == "client_prerecorded_audio"
@@ -1292,13 +1359,16 @@ async def test_category_unsupported_reaches_reply_before_idle_child_finishes(
 async def test_child_unsupported_routes_to_default_idle_action(tmp_path) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category="B001", child=UNSUPPORTED_CHILD_SCORE_ID
+        category="B001",
+        child=UNSUPPORTED_CHILD_SCORE_ID,
+        reply_route="R2",
     )
     ws = _WebSocket()
     session = MultimodalSession(
         ws,
         client=client,  # type: ignore[arg-type]
         model_name="Qwen3-Omni",
+        action_category_top_k=1,
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
@@ -1354,6 +1424,7 @@ async def test_default_category_child_can_reject_explicit_action_request(
         ws,
         client=client,  # type: ignore[arg-type]
         model_name="Qwen3-Omni",
+        action_category_top_k=1,
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
@@ -1402,7 +1473,9 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category="B001", child=UNSUPPORTED_CHILD_SCORE_ID
+        category="B001",
+        child=UNSUPPORTED_CHILD_SCORE_ID,
+        reply_route="R2",
     )
     ws = _WebSocket()
     session = MultimodalSession(
@@ -1496,6 +1569,80 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
     ]
     assert "这个动作暂时做不了。" not in json.dumps(
         next_reply_messages, ensure_ascii=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_language_required_reply_survives_unsupported_action(
+    tmp_path,
+) -> None:
+    catalog = load_global_action_catalog(_write_catalog(tmp_path))
+    client = _DecisionScoreClient(
+        category="B001",
+        child=UNSUPPORTED_CHILD_SCORE_ID,
+        reply_route="R0",
+        completion_text="会呀，你想听什么风格的歌？",
+    )
+    ws = _WebSocket()
+    session = MultimodalSession(
+        ws,
+        client=client,  # type: ignore[arg-type]
+        model_name="Qwen3-Omni",
+        global_action_catalog=catalog,
+        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
+            True,
+            frozenset({"B008", "B001", "B002"}),
+            frozenset(),
+            1.0,
+        ),
+        claim_session=lambda session_id, value: None,
+        release_session=lambda session_id, value: None,
+    )
+    payload = _session_start_payload()
+    payload["modalities"] = ["text", "action"]
+    payload["unsupported_action_text"] = "这个动作暂时做不了。"
+    await session.handle_session_start(payload)
+    await session.handle_turn_start(
+        {
+            "type": "turn.start",
+            "turn_id": "turn-capability-question",
+            "turn_origin": "user",
+            "text_role": "user_input",
+        }
+    )
+    await session.handle_turn_commit(
+        {
+            "type": "turn.commit",
+            "turn_id": "turn-capability-question",
+            "turn_origin": "user",
+            "text_role": "user_input",
+            "text": "你可以唱歌吗",
+        }
+    )
+
+    resolved = next(
+        item
+        for item in ws.events
+        if item["type"] == "response.provisional.resolved"
+    )
+    assert resolved["status"] == "promoted"
+    assert resolved["reason"] == "language_required"
+    assert any(item["type"] == "response.text.done" for item in ws.events)
+    result = next(item for item in ws.events if item["type"] == "turn.result")
+    assert result["modalities"]["text"] == "completed"
+    assert result["reply"] == {
+        "text": "会呀，你想听什么风格的歌？",
+        "source": "generated",
+    }
+    assert result["action"]["support_status"] == "unsupported"
+    assert session.reply_history_turns[-1].messages[-1]["content"] == (
+        "会呀，你想听什么风格的歌？"
+    )
+    assert session.reply_history_turns[-1].model_visible is True
+    assert session.reply_history_turns[-1].history_kind == "reply"
+    assert "这个动作暂时做不了。" not in json.dumps(
+        session.history_turns[-1].messages,
+        ensure_ascii=False,
     )
 
 
@@ -1603,9 +1750,10 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
         client = _WhitelistScoreClient()
         session = MultimodalSession(
             _WebSocket(),
-            client=client,  # type: ignore[arg-type]
-            model_name="Qwen3-Omni",
-            global_action_catalog=catalog,
+                client=client,  # type: ignore[arg-type]
+                model_name="Qwen3-Omni",
+                action_category_top_k=1,
+                global_action_catalog=catalog,
             global_action_prewarm=status,
             claim_session=lambda claimed_id, value: None,
             release_session=lambda claimed_id, value: None,
