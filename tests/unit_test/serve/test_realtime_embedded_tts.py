@@ -82,9 +82,11 @@ class ProgrammableTTSConnector:
         self.invalid_audio = invalid_audio
         self.audio_payload = audio_payload
         self.contexts: list[ProgrammableTTSContext] = []
+        self.urls: list[str] = []
 
     def __call__(self, url: str, **kwargs: object) -> ProgrammableTTSContext:
-        del url, kwargs
+        del kwargs
+        self.urls.append(url)
         context = ProgrammableTTSContext(
             ProgrammableTTSWebSocket(
                 invalid_audio=self.invalid_audio,
@@ -145,20 +147,23 @@ def _fusion_app(
     )
 
 
-def _start_session(ws: Any) -> None:
-    ws.send_json(
-        {
-            "type": "session.start",
-            "protocol_version": 1,
-            "session_id": "tts-session",
-            "outputs": ["text", "audio"],
-            "locale": "zh-CN",
-            "reply": {"instructions": "简短回复"},
-        }
-    )
+def _start_session(ws: Any, *, voice: str | None = None) -> None:
+    payload: dict[str, Any] = {
+        "type": "session.start",
+        "protocol_version": 1,
+        "session_id": "tts-session",
+        "outputs": ["text", "audio"],
+        "locale": "zh-CN",
+        "reply": {"instructions": "简短回复"},
+    }
+    if voice is not None:
+        payload["output_audio"] = {"voice": voice}
+    ws.send_json(payload)
     started = ws.receive_json()
     assert started["type"] == "session.started"
     assert started["outputs"] == ["text", "audio"]
+    if voice is not None:
+        assert started["output_audio"] == {"voice": voice}
 
 
 def _start_fusion_session(ws: Any) -> None:
@@ -235,6 +240,61 @@ def test_text_audio_streams_pcm_and_reuses_connection_across_turns() -> None:
             "channels": 1,
         }
         assert events[-1]["outputs"] == {"text": "completed", "audio": "completed"}
+
+
+def test_session_voice_overrides_global_tts_voice() -> None:
+    connector = ProgrammableTTSConnector()
+    with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
+        _start_session(ws, voice="spk_character_1")
+        _run_turn(ws, "turn-1")
+
+    from urllib.parse import parse_qs, urlsplit
+
+    assert parse_qs(urlsplit(connector.urls[0]).query)["voice"] == [
+        "spk_character_1"
+    ]
+
+
+def test_session_rejects_invalid_output_audio_voice() -> None:
+    connector = ProgrammableTTSConnector()
+    with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(
+            {
+                "type": "session.start",
+                "protocol_version": 1,
+                "session_id": "invalid-voice-session",
+                "outputs": ["text", "audio"],
+                "locale": "zh-CN",
+                "output_audio": {"voice": "bad voice"},
+            }
+        )
+        error = ws.receive_json()
+
+    assert error["type"] == "error"
+    assert error["error"]["code"] == "invalid_audio"
+    assert "output_audio.voice" in error["error"]["message"]
+    assert connector.contexts == []
+
+
+def test_text_only_session_rejects_output_audio_config() -> None:
+    connector = ProgrammableTTSConnector()
+    with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
+        ws.send_json(
+            {
+                "type": "session.start",
+                "protocol_version": 1,
+                "session_id": "text-output-audio-session",
+                "outputs": ["text"],
+                "locale": "zh-CN",
+                "output_audio": {"voice": "spk_character_1"},
+            }
+        )
+        error = ws.receive_json()
+
+    assert error["type"] == "error"
+    assert error["error"]["code"] == "invalid_audio"
+    assert "requires the audio output" in error["error"]["message"]
+    assert connector.contexts == []
 
 
 def test_provider_protocol_failure_fails_turn_without_success_terminal() -> None:

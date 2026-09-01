@@ -92,6 +92,7 @@ class ReplyTTSComponent:
                 turn_id=turn.turn_id,
                 text_chunks=text_chunks(),
                 audio_sink=audio_sink,
+                voice=self.output_audio_voice,
             ),
             name=f"session-embedded-tts-{self.session_id}-{turn.turn_id}",
         )
@@ -253,4 +254,3 @@ class ReplyTTSComponent:
 
 
 MultimodalReplyTTSMixin = ReplyTTSComponent
-

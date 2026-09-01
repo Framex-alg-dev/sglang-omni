@@ -455,6 +455,7 @@ class ProtocolValidationComponent:
                 "reply",
                 "action",
                 "input_audio",
+                "output_audio",
                 "diagnostics",
             },
             required={"type", "protocol_version", "session_id"},
@@ -571,6 +572,34 @@ class ProtocolValidationComponent:
         if isinstance(channels, bool) or not isinstance(channels, int):
             raise ValueError("input_audio.channels must be an integer")
 
+        output_audio_config = event.get("output_audio")
+        output_audio_voice: str | None = None
+        if "audio" in outputs:
+            output_audio = self._strict_object(
+                (
+                    output_audio_config
+                    if output_audio_config is not None
+                    else {}
+                ),
+                "output_audio",
+                allowed={"voice"},
+            )
+            output_audio_voice = self._bounded_optional_text(
+                output_audio.get("voice"),
+                "output_audio.voice",
+                max_chars=MAX_OUTPUT_AUDIO_VOICE_CHARS,
+                allow_empty=False,
+            )
+            if output_audio_voice is not None:
+                output_audio_voice = output_audio_voice.strip()
+                if OUTPUT_AUDIO_VOICE_RE.fullmatch(output_audio_voice) is None:
+                    raise ValueError(
+                        "output_audio.voice must contain only letters, numbers, "
+                        "underscores, or hyphens and start with a letter or number"
+                    )
+        elif output_audio_config is not None:
+            raise ValueError("output_audio requires the audio output")
+
         diagnostics = self._strict_object(
             event.get("diagnostics", {}),
             "diagnostics",
@@ -607,6 +636,8 @@ class ProtocolValidationComponent:
             normalized["action_profile"] = action_profile
         if "action" in outputs:
             normalized["_fallback_category_ids"] = fallback_category_ids
+        if output_audio_voice is not None:
+            normalized["_output_audio_voice"] = output_audio_voice
         return normalized
 
 

@@ -235,6 +235,7 @@ class MultimodalSession:
         self.output_capabilities = SessionOutputCapabilities.parse(
             list(DEFAULT_OUTPUTS)
         )
+        self.output_audio_voice: str | None = None
         self.embedded_tts: EmbeddedTTSConnection | None = None
         self.closed = False
         self.started = False

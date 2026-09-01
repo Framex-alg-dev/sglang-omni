@@ -71,6 +71,7 @@ class SessionStartComponent:
             output_capabilities = SessionOutputCapabilities.parse(list(modalities))
         if output_capabilities.audio_enabled and self.embedded_tts_config is None:
             raise ValueError("embedded TTS provider is not configured")
+        requested_output_audio_voice = event.get("_output_audio_voice")
         raw_instructions = event.get("instructions")
         raw_unsupported_action_text = event.get(
             "_unsupported_action_text", event.get("unsupported_action_text")
@@ -390,6 +391,11 @@ class SessionStartComponent:
                 session_id=session_id.strip(),
                 **tts_kwargs,
             )
+            self.output_audio_voice = (
+                requested_output_audio_voice or self.embedded_tts_config.voice
+            )
+        else:
+            self.output_audio_voice = None
         if instructions is not None:
             self.instructions = instructions
         if raw_unsupported_action_text is not None:
@@ -610,6 +616,10 @@ class SessionStartComponent:
                     "locale": self.locale,
                 }
             )
+            if self.output_audio_voice is not None:
+                started_payload["output_audio"] = {
+                    "voice": self.output_audio_voice,
+                }
         else:
             started_payload["modalities"] = list(self.modalities)
         if self.global_action_catalog is not None:
@@ -660,4 +670,3 @@ class SessionStartComponent:
 
 
 MultimodalSessionStartMixin = SessionStartComponent
-
