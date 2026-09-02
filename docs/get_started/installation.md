@@ -32,7 +32,7 @@ cd sglang-omni
 uv venv .venv -p 3.12
 source .venv/bin/activate
 
-uv pip install -v -e .   # drop `-e` for a non-editable install
+uv sync --locked
 ```
 
 ## 🛠️ Option B: Manual install
@@ -51,5 +51,9 @@ cd sglang-omni
 uv venv .venv -p 3.12
 source .venv/bin/activate
 
-uv pip install -v -e .   # drop `-e` for a non-editable install
+uv sync --locked
 ```
+
+`uv.lock` is the reproducible dependency source of truth. See the
+[runtime environment and compatibility matrix](../operations/environment.md)
+for the supported system, CUDA, GPU, and Python combinations.

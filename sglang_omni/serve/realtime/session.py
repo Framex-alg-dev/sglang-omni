@@ -5,12 +5,12 @@ import dataclasses
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
-from sglang_omni.client import Client, GenerateRequest, Message, SamplingParams
+from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.serve.realtime.audio_buffer import RealtimeAudioBuffer
 from sglang_omni.serve.realtime.events import (
     InputAudioBufferAppend,
@@ -27,6 +27,9 @@ from sglang_omni.serve.realtime.vad import (
     VADEvent,
     offsets_to_ms,
 )
+
+if TYPE_CHECKING:
+    from sglang_omni.client.client import Client
 
 DEFAULT_INSTRUCTIONS = (
     "You are a helpful realtime voice assistant. Respond conversationally."

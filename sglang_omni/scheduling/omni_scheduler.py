@@ -14,6 +14,8 @@ inheriting from ``SGLangScheduler``.
 from __future__ import annotations
 
 import logging
+import dataclasses
+import os
 import queue as _queue_mod
 import threading
 import time
@@ -39,6 +41,14 @@ from sglang.srt.managers.scheduler import validate_input_length
 from sglang.srt.mem_cache.common import release_kv_cache
 from sglang.srt.utils import broadcast_pyobj
 
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    aggregate_candidate_score,
+    score_candidate_from_runtime,
+)
+from sglang_omni.models.qwen3_omni.action_timing import get_action_stage_timings
+from sglang_omni.models.qwen3_omni.request_builders import (
+    build_action_scoring_candidate_data,
+)
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.profiler.event_recorder import (
     emit_model_path_end as _emit_model_path_end,
@@ -62,6 +72,144 @@ from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 from sglang_omni.vendor.sglang.server_args import override_server_args
 
 logger = logging.getLogger(__name__)
+
+_NVML_INITIALIZED = False
+_NVML_MODULE: Any | None = None
+
+
+def _to_python_list(value: Any) -> list[Any]:
+    """Convert a tensor-like value to a list without failing on lists.
+
+    SGLang's result processor normally receives tensors here, but mixed
+    generation and action-prefix batches can expose a value that has already
+    been moved to Python.  Keeping this conversion idempotent prevents a
+    second ``.tolist()`` call from terminating the scheduler process.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    return list(value)
+
+
+def _move_logprobs_to_cpu_compat(
+    _processor: Any,
+    *,
+    batch: Any,
+    logits_output: Any,
+) -> None:
+    """Idempotent equivalent of SGLang's logprob CPU transfer."""
+    if not batch.return_logprob:
+        return
+
+    next_token_logprobs = getattr(logits_output, "next_token_logprobs", None)
+    if next_token_logprobs is not None:
+        logits_output.next_token_logprobs = _to_python_list(next_token_logprobs)
+
+    input_token_logprobs = getattr(logits_output, "input_token_logprobs", None)
+    if input_token_logprobs is not None:
+        logits_output.input_token_logprobs = tuple(
+            _to_python_list(input_token_logprobs)
+        )
+
+    top_values = getattr(logits_output, "next_token_top_logprobs_val", None)
+    if top_values is not None and len(top_values) > 0:
+        logits_output.next_token_top_logprobs_val = [
+            _to_python_list(value) for value in top_values
+        ]
+        top_indices = getattr(logits_output, "next_token_top_logprobs_idx", None)
+        if top_indices is not None:
+            logits_output.next_token_top_logprobs_idx = [
+                _to_python_list(value) for value in top_indices
+            ]
+
+    selected_values = getattr(
+        logits_output, "next_token_token_ids_logprobs_val", None
+    )
+    if selected_values is not None and len(selected_values) > 0:
+        logits_output.next_token_token_ids_logprobs_val = [
+            _to_python_list(value) for value in selected_values
+        ]
+
+def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
+    """Return process-local CUDA memory and best-effort device telemetry."""
+    snapshot: dict[str, Any] = {
+        "device_id": int(device_id),
+        "cuda_available": bool(torch.cuda.is_available()),
+    }
+    if not snapshot["cuda_available"]:
+        return snapshot
+
+    try:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device_id)
+        snapshot.update(
+            {
+                "device_name": torch.cuda.get_device_name(device_id),
+                "total_memory_bytes": int(total_bytes),
+                "free_memory_bytes": int(free_bytes),
+                "used_memory_bytes": int(total_bytes - free_bytes),
+                "process_memory_allocated_bytes": int(
+                    torch.cuda.memory_allocated(device_id)
+                ),
+                "process_memory_reserved_bytes": int(
+                    torch.cuda.memory_reserved(device_id)
+                ),
+                "process_max_memory_allocated_bytes": int(
+                    torch.cuda.max_memory_allocated(device_id)
+                ),
+                "process_max_memory_reserved_bytes": int(
+                    torch.cuda.max_memory_reserved(device_id)
+                ),
+            }
+        )
+    except Exception as exc:
+        snapshot["cuda_memory_error"] = f"{type(exc).__name__}: {exc}"
+
+    global _NVML_INITIALIZED, _NVML_MODULE
+    try:
+        if _NVML_MODULE is None:
+            import pynvml as nvml
+
+            _NVML_MODULE = nvml
+        nvml = _NVML_MODULE
+        if not _NVML_INITIALIZED:
+            nvml.nvmlInit()
+            _NVML_INITIALIZED = True
+        handle = nvml.nvmlDeviceGetHandleByIndex(int(device_id))
+        utilization = nvml.nvmlDeviceGetUtilizationRates(handle)
+        memory = nvml.nvmlDeviceGetMemoryInfo(handle)
+        snapshot.update(
+            {
+                "gpu_utilization_percent": int(utilization.gpu),
+                "nvml_memory_utilization_percent": int(utilization.memory),
+                "nvml_used_memory_bytes": int(memory.used),
+                "power_usage_watts": round(
+                    nvml.nvmlDeviceGetPowerUsage(handle) / 1000.0, 3
+                ),
+                "temperature_c": int(
+                    nvml.nvmlDeviceGetTemperature(
+                        handle, nvml.NVML_TEMPERATURE_GPU
+                    )
+                ),
+            }
+        )
+    except Exception as exc:
+        snapshot["nvml_error"] = f"{type(exc).__name__}: {exc}"
+    return snapshot
+
+
+def _reset_gpu_peak_stats(device_id: int) -> bool:
+    try:
+        if not torch.cuda.is_available():
+            return False
+        torch.cuda.reset_peak_memory_stats(device_id)
+        return True
+    except Exception:
+        return False
+
 
 _FAILED_BATCH_RESULT = object()
 
@@ -489,6 +637,7 @@ class OmniScheduler:
         self._dirty_deferred_request_ids: set[str] = set()
         self._first_emit_done: set[str] = set()
         self._prefill_start_done: set[str] = set()
+        self._action_scoring_requests: dict[str, Any] = {}
 
     def bind_model_runner(self, model_runner: Any) -> None:
         """Attach a custom runner and its SGLang execution-contract bridge.
@@ -584,6 +733,13 @@ class OmniScheduler:
             SchedulerPoolStatsObserver,
         )
 
+        class CompatibleSchedulerBatchResultProcessor(
+            SchedulerBatchResultProcessor
+        ):
+            """SGLang result processor with idempotent logprob conversion."""
+
+            move_logprobs_to_cpu = _move_logprobs_to_cpu_compat
+
         self.dp_attn_adapter = SchedulerDPAttnAdapter(
             tp_group=self.tp_group,
             req_to_token_pool=self.req_to_token_pool,
@@ -646,7 +802,7 @@ class OmniScheduler:
                 reqs, return_logprob
             ),
         )
-        self.batch_result_processor = SchedulerBatchResultProcessor(
+        self.batch_result_processor = CompatibleSchedulerBatchResultProcessor(
             is_generation=self.is_generation,
             disaggregation_mode=self.disaggregation_mode,
             enable_overlap=self.enable_overlap,
@@ -997,6 +1153,26 @@ class OmniScheduler:
         req = req_data.req
         self._normalize_req_token_arrays(req)
         req_id = req.rid
+        if getattr(req_data, "action_scoring_role", None) == "prefix":
+            plan = getattr(req_data, "action_scoring_plan", None) or {}
+            admitted_at = time.perf_counter()
+            plan.setdefault("started_at", admitted_at)
+            server_build_finished = plan.get("server_build_finished_at")
+            if isinstance(server_build_finished, (int, float)):
+                plan["scheduler_admission_ms"] = max(
+                    (admitted_at - float(server_build_finished)) * 1000.0, 0.0
+                )
+            plan["scheduler_queue_entered_at"] = admitted_at
+            plan.setdefault("scheduler_wait_ms", 0.0)
+            plan.setdefault("prefix_prefill_ms", 0.0)
+            plan.setdefault("suffix_batch_queue_wait_ms", [])
+            plan.setdefault("preprocessing_ms", 0.0)
+            plan.setdefault("image_encoder_ms", 0.0)
+            plan.setdefault("audio_encoder_ms", 0.0)
+            plan["gpu_peak_stats_reset"] = _reset_gpu_peak_stats(self.gpu_id)
+            plan["gpu_stats_start"] = _gpu_resource_snapshot(self.gpu_id)
+            req_data.action_scoring_plan = plan
+            self._action_scoring_requests[req_id] = req_data
         if req_data.enforce_request_limits:
             error_msg = self._prepare_request_limits(req_data)
             if error_msg:
@@ -1035,6 +1211,236 @@ class OmniScheduler:
         else:
             with self._request_admission_lock:
                 enqueue_if_live()
+
+    def _build_and_enqueue_action_candidate_batch(
+        self,
+        parent: Any,
+        candidate_ids: list[str] | tuple[str, ...],
+    ) -> None:
+        """Build only the next suffix batch after the shared prefix completes."""
+        plan = parent.action_scoring_plan
+        batch = [
+            build_action_scoring_candidate_data(parent, candidate_id)
+            for candidate_id in candidate_ids
+        ]
+        plan["candidate_data"] = batch
+        plan["current_batch_ids"] = set(candidate_ids)
+        self._enqueue_action_candidate_batch(parent, batch)
+
+    def _enqueue_action_candidate_batch(self, parent: Any, batch: list[Any]) -> None:
+        plan = parent.action_scoring_plan
+        batch_entered_at = time.perf_counter()
+        plan["batch_started_at"] = batch_entered_at
+        plan["suffix_batch_queue_entered_at"] = batch_entered_at
+        plan["suffix_batch_scheduler_started_at"] = None
+        for candidate_data in batch:
+            req = candidate_data.req
+            self._normalize_req_token_arrays(req)
+            if req.rid in self._aborted_request_ids:
+                continue
+            req._omni_data = candidate_data
+            req._omni_terminal_claimed = False
+            req._coalesce_enqueue_t = time.perf_counter()
+            self.waiting_queue.append(req)
+        _emit_event(
+            request_id=parent.req.rid,
+            stage="thinker",
+            event_name="action_suffix_batch_queued",
+            metadata={"size": len(batch)},
+        )
+
+    def _handle_action_prefix_terminal(self, req: Any, data: Any) -> None:
+        parent = data.action_scoring_parent
+        plan = data.action_scoring_plan
+        logits = data.extra_model_outputs.get("action_prefix_token_logprobs")
+        if logits is None:
+            raise RuntimeError("action scoring prefix logits were not captured")
+        plan["prefix_next_token_logits"] = logits
+        prefix_started = plan.get("prefix_scheduler_started_at")
+        if isinstance(prefix_started, (int, float)):
+            plan["prefix_prefill_ms"] = max(
+                (time.perf_counter() - float(prefix_started)) * 1000.0, 0.0
+            )
+        plan["prefix_physical_prefill_chunk_count"] = max(
+            int(plan.get("prefix_physical_prefill_chunk_count", 0)),
+            int(getattr(data, "generation_steps", 0)),
+            1,
+        )
+        candidate_ids = list(plan["candidate_ids"])
+        plan["candidate_batches"] = [
+            tuple(candidate_ids[start : start + plan["micro_batch_size"]])
+            for start in range(0, len(candidate_ids), plan["micro_batch_size"])
+        ]
+        plan["candidate_data"] = []
+        plan["candidate_results"] = {}
+        plan["candidate_cached_tokens"] = {}
+        plan["candidate_prefix_recompute_tokens"] = {}
+        plan["completed_candidate_ids"] = set()
+        plan["suffix_batch_ms"] = []
+        plan["suffix_batch_sizes"] = []
+        plan["next_batch_index"] = 0
+        self._close_completed_request(req)
+        if plan["candidate_batches"]:
+            self._build_and_enqueue_action_candidate_batch(
+                parent,
+                plan["candidate_batches"][0],
+            )
+
+    def _finish_action_scoring(self, parent: Any, plan: dict[str, Any]) -> None:
+        prefix_logits = plan.get("prefix_next_token_logits")
+        if prefix_logits is None:
+            raise RuntimeError("action scoring has no shared prefix logits")
+        scores = []
+        for candidate_id in plan["candidate_ids"]:
+            suffix_ids = plan["candidate_suffix_ids"][candidate_id]
+            raw = plan["candidate_results"].get(candidate_id)
+            if raw is None:
+                raise RuntimeError(f"missing action suffix result: {candidate_id}")
+            scores.append(
+                score_candidate_from_runtime(
+                    candidate_id,
+                    suffix_ids,
+                    prefix_logits,
+                    raw,
+                    terminal_token_id=plan.get("terminal_token_id"),
+                )
+            )
+        prefix_len = int(plan["prefix_token_count"])
+        prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
+            int(value) >= prefix_len
+            for value in plan["candidate_cached_tokens"].values()
+        )
+        plan["prefix_cached"] = prefix_cached
+        recompute_tokens = sum(plan.get("candidate_prefix_recompute_tokens", {}).values())
+        aggregation_started = time.perf_counter()
+        suffix_batch_ms = list(plan.get("suffix_batch_ms", []))
+        gpu_start = plan.get("gpu_stats_start")
+        gpu_end = _gpu_resource_snapshot(self.gpu_id)
+        gpu_stats = {
+            "device_id": int(self.gpu_id),
+            "tp_rank": int(self.tp_rank),
+            "tp_size": int(self.tp_size),
+            "peak_stats_reset": bool(plan.get("gpu_peak_stats_reset", False)),
+            "start": gpu_start,
+            "end": gpu_end,
+        }
+        if isinstance(gpu_start, dict):
+            start_allocated = gpu_start.get("process_memory_allocated_bytes")
+            end_allocated = gpu_end.get("process_memory_allocated_bytes")
+            if isinstance(start_allocated, int) and isinstance(end_allocated, int):
+                gpu_stats["process_allocated_delta_bytes"] = (
+                    end_allocated - start_allocated
+                )
+        pipeline_stage_timing = (
+            get_action_stage_timings(parent.stage_payload)
+            if parent.stage_payload is not None
+            else {}
+        )
+        preprocessing_ms = float(
+            pipeline_stage_timing.get("preprocessing", {}).get("wall_ms", 0.0)
+        )
+        image_encoder_ms = float(
+            pipeline_stage_timing.get("image_encoder", {}).get("wall_ms", 0.0)
+        )
+        audio_encoder_ms = float(
+            pipeline_stage_timing.get("audio_encoder", {}).get("wall_ms", 0.0)
+        )
+        stats = {
+            "queue_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
+            "client_request_build_ms": float(plan.get("client_request_build_ms", 0.0)),
+            "server_request_build_ms": float(plan.get("server_request_build_ms", 0.0)),
+            "scheduler_admission_ms": float(plan.get("scheduler_admission_ms", 0.0)),
+            "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
+            "prefix_prefill_ms": float(plan.get("prefix_prefill_ms", 0.0)),
+            "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
+            "preprocessing_ms": preprocessing_ms,
+            "image_encoder_ms": image_encoder_ms,
+            "audio_encoder_ms": audio_encoder_ms,
+            "mm_aggregate_ms": float(
+                pipeline_stage_timing.get("mm_aggregate", {}).get(
+                    "wall_ms", 0.0
+                )
+            ),
+            "pipeline_stage_timing": pipeline_stage_timing,
+            "logical_prefix_request_count": 1,
+            "physical_prefix_chunk_count": int(plan.get("prefix_physical_prefill_chunk_count", 0)),
+            "prefix_token_count": prefix_len,
+            "cached_prefix_token_count": min(plan["candidate_cached_tokens"].values()),
+            "candidate_prefix_recompute_tokens": recompute_tokens,
+            "suffix_batch_count": len(plan["candidate_batches"]),
+            "suffix_batch_sizes": list(plan.get("suffix_batch_sizes", [])),
+            "suffix_batch_ms": suffix_batch_ms,
+            "aggregation_ms": (time.perf_counter() - aggregation_started) * 1000.0,
+            "total_ms": (time.perf_counter() - plan.get("started_at", aggregation_started)) * 1000.0,
+            "gpu": gpu_stats,
+        }
+        result = {
+            "request_id": parent.req.rid,
+            "model": (
+                parent.stage_payload.request.metadata.get("model", "")
+                if parent.stage_payload is not None
+                else ""
+            ),
+            "prefix_cached": prefix_cached,
+            "scores": [dataclasses.asdict(score) for score in scores],
+            "stats": stats,
+        }
+        parent.extra_model_outputs["action_scoring_result"] = result
+        _emit_event(
+            request_id=parent.req.rid,
+            stage="thinker",
+            event_name="action_scoring_complete",
+            metadata={
+                "candidate_count": len(plan["candidate_ids"]),
+                "micro_batch_size": plan["micro_batch_size"],
+                "stats": stats,
+                "gpu": gpu_stats,
+                "cache_digest": plan.get("cache_digest"),
+            },
+        )
+        logger.info(
+            "action scoring complete request_id=%s candidates=%d top_ppl=%s stats=%s gpu=%s",
+            parent.req.rid,
+            len(scores),
+            [(score.candidate_id, round(score.ppl, 6)) for score in sorted(scores, key=lambda item: item.ppl)[:3]],
+            stats,
+            gpu_stats,
+        )
+        payload = self._result_adapter(parent)
+        self._action_scoring_requests.pop(parent.req.rid, None)
+        self._emit_model_path_end_once(parent.req.rid, status="success")
+        self._first_emit_done.discard(parent.req.rid)
+        self.outbox.put(OutgoingMessage(request_id=parent.req.rid, type="result", data=payload))
+
+    def _handle_action_candidate_terminal(self, req: Any, data: Any) -> None:
+        parent = data.action_scoring_parent
+        plan = parent.action_scoring_plan
+        candidate_id = data.action_scoring_candidate_id
+        raw = data.extra_model_outputs.get("action_candidate_input_token_logprobs")
+        if raw is None:
+            raise RuntimeError(f"action scoring candidate {candidate_id} has no input logprobs")
+        plan["candidate_results"][candidate_id] = list(raw)
+        plan["candidate_cached_tokens"][candidate_id] = len(req.prefix_indices)
+        suffix_len = len(plan["candidate_suffix_ids"][candidate_id])
+        plan["candidate_prefix_recompute_tokens"][candidate_id] = max(
+            len(req.origin_input_ids) - len(req.prefix_indices) - suffix_len, 0
+        )
+        plan["completed_candidate_ids"].add(candidate_id)
+        self._close_completed_request(req)
+        if plan["completed_candidate_ids"] >= plan["current_batch_ids"]:
+            batch_started = plan.pop("batch_started_at", time.perf_counter())
+            plan.setdefault("suffix_batch_ms", []).append(
+                (time.perf_counter() - batch_started) * 1000.0
+            )
+            plan["suffix_batch_scheduler_started_at"] = None
+            plan.setdefault("suffix_batch_sizes", []).append(len(plan["current_batch_ids"]))
+            plan["next_batch_index"] += 1
+            if plan["next_batch_index"] < len(plan["candidate_batches"]):
+                next_batch = plan["candidate_batches"][plan["next_batch_index"]]
+                self._build_and_enqueue_action_candidate_batch(parent, next_batch)
+            elif len(plan["completed_candidate_ids"]) == len(plan["candidate_ids"]):
+                self._finish_action_scoring(parent, plan)
+
 
     @staticmethod
     def _normalize_req_token_arrays(req: Any) -> None:
@@ -1263,9 +1669,11 @@ class OmniScheduler:
         if mr_output.host_token_ids is not None:
             next_token_ids = mr_output.host_token_ids
         return GenerationBatchResult(
-            logits_output=None,
+            logits_output=mr_output.logits_output,
             next_token_ids=next_token_ids,
             can_run_cuda_graph=mr_output.can_run_cuda_graph,
+            extend_input_len_per_req=mr_output.extend_input_len_per_req,
+            extend_logprob_start_len_per_req=mr_output.extend_logprob_start_len_per_req,
         )
 
     def _run_batch_launch(self, batch):
@@ -1298,9 +1706,11 @@ class OmniScheduler:
             return _FAILED_BATCH_RESULT
         self._emit_stream_output(sched_output, mr_output, skip_rids=skip_rids)
         return GenerationBatchResult(
-            logits_output=None,
+            logits_output=mr_output.logits_output,
             next_token_ids=mr_output.next_token_ids,
             can_run_cuda_graph=mr_output.can_run_cuda_graph,
+            extend_input_len_per_req=mr_output.extend_input_len_per_req,
+            extend_logprob_start_len_per_req=mr_output.extend_logprob_start_len_per_req,
         )
 
     def _handle_batch_failure(self, batch: Any, error: Exception) -> None:
@@ -1320,6 +1730,32 @@ class OmniScheduler:
         }
         for req in batch.reqs:
             rid = req.rid
+            req_data = getattr(req, "_omni_data", None)
+            action_role = getattr(req_data, "action_scoring_role", None)
+            if action_role == "prefix":
+                plan = getattr(req_data, "action_scoring_plan", None)
+                if isinstance(plan, dict):
+                    now = time.perf_counter()
+                    if plan.get("prefix_scheduler_started_at") is None:
+                        plan["prefix_scheduler_started_at"] = now
+                        entered = plan.get("scheduler_queue_entered_at")
+                        if isinstance(entered, (int, float)):
+                            wait_ms = max((now - float(entered)) * 1000.0, 0.0)
+                            plan["scheduler_wait_ms"] = float(plan.get("scheduler_wait_ms", 0.0)) + wait_ms
+                    plan["prefix_physical_prefill_chunk_count"] = (
+                        int(plan.get("prefix_physical_prefill_chunk_count", 0)) + 1
+                    )
+            elif action_role == "candidate":
+                parent = getattr(req_data, "action_scoring_parent", None)
+                plan = getattr(parent, "action_scoring_plan", None)
+                if isinstance(plan, dict) and plan.get("suffix_batch_scheduler_started_at") is None:
+                    now = time.perf_counter()
+                    plan["suffix_batch_scheduler_started_at"] = now
+                    entered = plan.get("suffix_batch_queue_entered_at")
+                    if isinstance(entered, (int, float)):
+                        wait_ms = max((now - float(entered)) * 1000.0, 0.0)
+                        plan["suffix_batch_queue_wait_ms"].append(wait_ms)
+                        plan["scheduler_wait_ms"] = float(plan.get("scheduler_wait_ms", 0.0)) + wait_ms
             if rid in self._prefill_start_done:
                 continue
             self._prefill_start_done.add(rid)
@@ -1386,6 +1822,21 @@ class OmniScheduler:
                 self._first_emit_done.discard(rid)
                 self._emit_model_path_end_once(rid, status="aborted")
                 _detach_request_data(req)
+                continue
+
+            action_role = getattr(data, "action_scoring_role", None)
+            if action_role in ("prefix", "candidate"):
+                try:
+                    if action_role == "prefix":
+                        self._handle_action_prefix_terminal(req, data)
+                    else:
+                        self._handle_action_candidate_terminal(req, data)
+                except Exception as exc:
+                    parent = getattr(data, "action_scoring_parent", data)
+                    logical_id = getattr(getattr(parent, "req", None), "rid", rid)
+                    logger.exception("Action scoring terminal failed for %s", logical_id)
+                    self._emit_request_error(logical_id, exc)
+                    self.abort(logical_id)
                 continue
 
             result = None
@@ -1524,7 +1975,18 @@ class OmniScheduler:
         executor.shutdown(wait=False, cancel_futures=True)
         self._request_build_executor = None
 
-    def abort(self, request_id: str, *, defer_running_cleanup: bool = True) -> None:
+    def abort(
+        self, request_id: str, *, defer_running_cleanup: bool = True, _internal: bool = False
+    ) -> None:
+        action_parent = self._action_scoring_requests.get(request_id)
+        action_internal_ids = []
+        if action_parent is not None:
+            plan = action_parent.action_scoring_plan or {}
+            action_internal_ids = [
+                item.req.rid
+                for item in plan.get("candidate_data", [])
+                if getattr(item, "req", None) is not None
+            ]
         with self._request_admission_lock:
             if request_id not in self._aborted_request_ids:
                 if len(self._aborted_request_ids) >= _ABORTED_REQUEST_ID_LIMIT:
@@ -1561,7 +2023,7 @@ class OmniScheduler:
                 else:
                     waiting_queue.append(req)
             self.waiting_queue = waiting_queue
-        if not running_abort:
+        if not running_abort and not _internal:
             self._run_abort_callback(request_id)
         self._pending_stream_ingress.pop(request_id, None)
         self._deferred_request_payloads.pop(request_id, None)
@@ -1581,6 +2043,14 @@ class OmniScheduler:
             _remove_from_batch(self.last_batch, request_id)
             _remove_from_batch(self._async_pending_batch(), request_id)
         self._drain_inbox_for_request(request_id)
+        self._action_scoring_requests.pop(request_id, None)
+        for internal_id in action_internal_ids:
+            if internal_id != request_id:
+                self.abort(
+                    internal_id,
+                    defer_running_cleanup=defer_running_cleanup,
+                    _internal=True,
+                )
 
     def admin(
         self, action: str, payload: dict[str, Any] | None = None

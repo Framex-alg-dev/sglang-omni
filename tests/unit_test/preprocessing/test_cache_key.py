@@ -1,7 +1,91 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the shared reference-audio path cache-key helpers."""
 
+import builtins
+import importlib.util
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
 from sglang_omni.preprocessing import cache_key
+
+
+def test_cache_key_imports_without_torch_and_hashes_non_tensor(
+    monkeypatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def import_without_torch(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise ModuleNotFoundError("No module named 'torch'", name="torch")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_torch)
+    spec = importlib.util.spec_from_file_location(
+        "cache_key_without_torch", cache_key.__file__
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.torch is None
+    assert module.hash_media_item(b"payload") == cache_key.hash_media_item(b"payload")
+    assert module.hash_media_item(np.array([1, 2], dtype=np.int16)).startswith(
+        "np:int16|(2,):"
+    )
+
+
+def test_cache_key_does_not_hide_missing_torch_dependency(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def import_with_broken_torch_dependency(name, *args, **kwargs):
+        if name == "torch":
+            raise ModuleNotFoundError(
+                "No module named 'torch_dependency'", name="torch_dependency"
+            )
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_with_broken_torch_dependency)
+    spec = importlib.util.spec_from_file_location(
+        "cache_key_with_broken_torch", cache_key.__file__
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    with pytest.raises(ModuleNotFoundError, match="torch_dependency"):
+        spec.loader.exec_module(module)
+
+
+def test_tensor_hash_semantics_are_unchanged_when_torch_is_available(
+    monkeypatch,
+) -> None:
+    class FakeTensor:
+        def __init__(self, values):
+            self._values = values
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        @property
+        def dtype(self):
+            return "torch.int16"
+
+        @property
+        def shape(self):
+            return self._values.shape
+
+        def numpy(self):
+            return self._values
+
+    monkeypatch.setattr(cache_key, "torch", SimpleNamespace(Tensor=FakeTensor))
+    values = np.array([1, 2], dtype=np.int16)
+
+    assert cache_key.hash_media_item(FakeTensor(values)) == (
+        f"pt:torch.int16|(2,):{cache_key.hash_bytes(values.tobytes())}"
+    )
 
 
 def test_reference_path_cache_key_tracks_file_content(tmp_path) -> None:

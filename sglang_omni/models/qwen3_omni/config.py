@@ -18,7 +18,9 @@ from sglang_omni.config import (
 _PKG = "sglang_omni.models.qwen3_omni"
 _PLACEMENT_POLICY = f"{_PKG}.placement.Qwen3OmniPlacementPolicy"
 THINKER_STAGE = "thinker"
-MIN_PARTIAL_START_CHUNKS = 3
+# The low-latency colocated profile may start after one text chunk. Deployments
+# that need more context can still set a higher runtime override.
+MIN_PARTIAL_START_CHUNKS = 1
 
 # SGLang reads this when DeepGEMM compile utilities are imported. Qwen AR
 # stages can first hit some dense FP8 shapes after readiness; disable all-M
@@ -69,7 +71,7 @@ def _image_encoder_stage(*, gpu: int, process: str) -> StageConfig:
         name="image_encoder",
         process=process,
         factory=f"{_PKG}.stages.create_image_encoder_executor",
-        factory_args={"device": "cuda", "dtype": None},
+        factory_args={"device": "cuda", "dtype": None, "max_batch_wait_ms": 50},
         gpu=gpu,
         next="mm_aggregate",
         project_payload={
@@ -83,7 +85,7 @@ def _audio_encoder_stage(*, gpu: int, process: str) -> StageConfig:
         name="audio_encoder",
         process=process,
         factory=f"{_PKG}.stages.create_audio_encoder_executor",
-        factory_args={"device": "cuda", "dtype": None},
+        factory_args={"device": "cuda", "dtype": None, "max_batch_wait_ms": 50},
         gpu=gpu,
         next="mm_aggregate",
         project_payload={
@@ -124,6 +126,7 @@ def _aggregate_stage(
         wait_for_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_wait_sources",
         merge_fn=f"{_PKG}.merge.merge_for_thinker",
         next="thinker",
+        route_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_next_stages",
         disable_direct_cuda_ipc_payload=True,
     )
 
@@ -140,13 +143,9 @@ def _thinker_stage(*, gpu: int, speech_enabled: bool, process: str) -> StageConf
         factory_args=factory_args,
         gpu=gpu,
         runtime_arg_map={"max_seq_len": "thinker_max_seq_len"},
-        next="decode",
+        next=["decode", "action_score"],
         stream_to=["talker_ar", "decode"] if speech_enabled else ["decode"],
-        route_fn=(
-            f"{_PKG}.request_builders.resolve_thinker_next_stages"
-            if speech_enabled
-            else None
-        ),
+        route_fn=f"{_PKG}.request_builders.resolve_thinker_next_stages",
         stream_done_to_fn=(
             f"{_PKG}.request_builders.resolve_thinker_stream_done_targets"
             if speech_enabled
@@ -154,7 +153,17 @@ def _thinker_stage(*, gpu: int, speech_enabled: bool, process: str) -> StageConf
         ),
         project_payload={
             "decode": f"{_PKG}.request_builders.project_thinker_to_decode",
+            "action_score": f"{_PKG}.request_builders.project_thinker_to_action_score",
         },
+    )
+
+
+def _action_score_stage(*, process: str) -> StageConfig:
+    return StageConfig(
+        name="action_score",
+        process=process,
+        factory=f"{_PKG}.stages.create_action_score_executor",
+        terminal=True,
     )
 
 
@@ -218,6 +227,7 @@ def _code2wav_stage(*, gpu: int, process: str) -> StageConfig:
     )
 
 
+
 def _text_stages() -> list[StageConfig]:
     return [
         _preprocessing_stage(process="pipeline"),
@@ -225,6 +235,7 @@ def _text_stages() -> list[StageConfig]:
         _audio_encoder_stage(gpu=0, process="pipeline"),
         _aggregate_stage(process="pipeline", gpu=0, speech_enabled=False),
         _thinker_stage(gpu=0, speech_enabled=False, process="pipeline"),
+        _action_score_stage(process="pipeline"),
         _decode_stage(process="pipeline"),
     ]
 
@@ -256,6 +267,7 @@ def _speech_stages(
             speech_enabled=True,
             process=process_by_stage["thinker"],
         ),
+        _action_score_stage(process=process_by_stage["thinker"]),
         _decode_stage(process=process_by_stage["decode"]),
         _talker_stage(
             gpu=talker_gpu,
@@ -305,6 +317,10 @@ class Qwen3OmniPipelineConfig(_Qwen3OmniBasePipelineConfig):
 
     model_path: str
     placement_policy: str | None = _PLACEMENT_POLICY
+    # Text generation and action suffix scoring terminate on different stages.
+    # Resolve the active terminal per request so action-only requests do not
+    # wait indefinitely for the decode stage.
+    terminal_stages_fn: str | None = f"{_PKG}.request_builders.resolve_terminal_stages"
     placement: PlacementConfig = Field(
         default_factory=lambda: PlacementConfig(
             require_memory_fraction_for_colocation=False

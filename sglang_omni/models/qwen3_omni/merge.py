@@ -3,10 +3,15 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Iterable
 
 import torch
 
+from sglang_omni.models.qwen3_omni.action_timing import (
+    merge_action_stage_timings,
+    record_action_stage_timing,
+)
 from sglang_omni.models.qwen3_omni.payload_types import (
     Qwen3OmniEvent,
     Qwen3OmniPipelineState,
@@ -34,7 +39,9 @@ def _non_empty(value: Any) -> bool:
 
 def merge_for_thinker(payloads: dict[str, StagePayload]) -> StagePayload:
     """Aggregate preprocessing + encoder outputs into thinker inputs."""
+    started = time.perf_counter()
     base = payloads.get("preprocessing") or next(iter(payloads.values()))
+    merge_action_stage_timings(payloads.values(), base)
     state = Qwen3OmniPipelineState.from_dict(base.data)
     encoder_outs: dict[str, Any] = {}
     if state.encoder_outs:
@@ -57,6 +64,11 @@ def merge_for_thinker(payloads: dict[str, StagePayload]) -> StagePayload:
     # doubles multimodal tensor payloads sent to the thinker.
     state.encoder_outs = {}
     base.data = state.to_dict()
+    record_action_stage_timing(
+        base,
+        "mm_aggregate",
+        wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+    )
     return base
 
 

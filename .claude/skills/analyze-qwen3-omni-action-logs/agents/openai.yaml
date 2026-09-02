@@ -1,0 +1,4 @@
+interface:
+  display_name: "Qwen3-Omni Action Log Analysis"
+  short_description: "Analyze action latency, tokens, media, and session logs"
+  default_prompt: "Use $analyze-qwen3-omni-action-logs to summarize the current Qwen3-Omni action session logs."

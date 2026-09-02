@@ -38,6 +38,7 @@ from sglang_omni.models.qwen3_omni.merge import decode_events, merge_for_thinker
 from sglang_omni.models.qwen3_omni.payload_types import Qwen3OmniPipelineState
 from sglang_omni.models.qwen3_omni.request_builders import (
     apply_thinker_result,
+    build_action_scoring_candidate_data,
     build_sglang_thinker_request,
     project_preprocessing_to_mm_aggregate,
     project_talker_to_code2wav,
@@ -57,6 +58,74 @@ from tests.unit_test.fixtures.qwen_fakes import (
     make_qwen_payload,
     make_qwen_state,
 )
+
+
+def test_audio_encoder_batch_shares_identical_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = [
+        SimpleNamespace(request_id="audio-route", request=SimpleNamespace(metadata={})),
+        SimpleNamespace(request_id="audio-reply", request=SimpleNamespace(metadata={})),
+    ]
+    states = {id(payload): SimpleNamespace(result=None) for payload in payloads}
+    requests = {
+        id(payload): SimpleNamespace(
+            skip_result=None,
+            cache_key="same-current-audio",
+            model_inputs={"input_features": torch.ones((1, 2, 3))},
+        )
+        for payload in payloads
+    }
+    model_calls = []
+
+    monkeypatch.setattr(qwen_stages, "load_state", lambda payload: states[id(payload)])
+    monkeypatch.setattr(
+        qwen_stages,
+        "build_encoder_request",
+        lambda state, *, stage_name: requests[
+            next(key for key, value in states.items() if value is state)
+        ],
+    )
+    monkeypatch.setattr(
+        qwen_stages, "_lookup_cached_encoder_output", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        qwen_stages, "_store_cached_encoder_output", lambda **kwargs: None
+    )
+    monkeypatch.setattr(qwen_stages, "_audio_request_is_batchable", lambda request: True)
+    monkeypatch.setattr(
+        qwen_stages,
+        "_normalize_audio_request_tensors",
+        lambda request: (
+            torch.ones((1, 2, 3)),
+            torch.ones((1, 2), dtype=torch.bool),
+            torch.tensor([1]),
+        ),
+    )
+    monkeypatch.setattr(qwen_stages, "_log_action_media_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(qwen_stages, "record_action_stage_timing", lambda *args, **kwargs: None)
+
+    def apply_result(state, *, stage_name, result):
+        state.result = result
+
+    monkeypatch.setattr(qwen_stages, "apply_encoder_result", apply_result)
+    monkeypatch.setattr(qwen_stages, "store_state", lambda payload, state: payload)
+
+    def model(**kwargs):
+        model_calls.append(kwargs)
+        return {
+            "audio_output_lengths": torch.tensor([1]),
+            "audio_feature_lengths": torch.tensor([1]),
+            "audio_embeds": torch.ones((1, 4)),
+        }
+
+    results = qwen_stages._batch_audio_encoder_payloads(payloads, model=model)
+
+    assert results == payloads
+    assert len(model_calls) == 1
+    assert model_calls[0]["input_features"].shape[0] == 1
+    assert states[id(payloads[0])].result is states[id(payloads[1])].result
+
 
 
 def _stage(config: PipelineConfig, name: str):
@@ -83,9 +152,14 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
         "audio_encoder",
         "mm_aggregate",
         "thinker",
+        "action_score",
         "decode",
     ]
-    assert speech_config.terminal_stages == ["decode", "code2wav"]
+    assert (
+        text_config.terminal_stages_fn
+        == "sglang_omni.models.qwen3_omni.request_builders.resolve_terminal_stages"
+    )
+    assert speech_config.terminal_stages == ["action_score", "decode", "code2wav"]
     assert (
         speech_config.terminal_stages_fn
         == "sglang_omni.models.qwen3_omni.request_builders.resolve_terminal_stages"
@@ -149,11 +223,11 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
     assert speech_aggregate.next == ["thinker", "talker_ar"]
     assert speech_aggregate.project_payload is not None
     assert "talker_ar" in speech_aggregate.project_payload
-    assert _stage(speech_config, "thinker").next == "decode"
+    assert _stage(speech_config, "thinker").next == ["decode", "action_score"]
 
     text_aggregate = _stage(text_config, "mm_aggregate")
     assert text_aggregate.next == "thinker"
-    assert _stage(text_config, "thinker").next == "decode"
+    assert _stage(text_config, "thinker").next == ["decode", "action_score"]
 
     state = Qwen3OmniPipelineState.from_dict(
         {
@@ -483,6 +557,19 @@ def test_qwen_speech_config_wires_request_granular_active_subgraph() -> None:
     assert route_fn("default", default_payload) == "decode"
     assert stream_done_to_fn("default", default_payload) == ["talker_ar", "decode"]
     assert terminal_stages_fn(default_payload.request) == ["decode", "code2wav"]
+
+    action_payload = StagePayload(
+        request_id="action",
+        request=OmniRequest(
+            inputs=[],
+            metadata={"task": "action_suffix_scoring", "output_modalities": ["text"]},
+        ),
+        data={},
+    )
+    assert aggregate_route_fn("action", action_payload) == "thinker"
+    assert route_fn("action", action_payload) == "action_score"
+    assert stream_done_to_fn("action", action_payload) == []
+    assert terminal_stages_fn(action_payload.request) == ["action_score"]
 
 
 def test_qwen_preprocessing_routes_only_active_encoder_branches() -> None:
@@ -1401,6 +1488,60 @@ def test_qwen_sglang_request_hashes_media_tokens_without_changing_mrope_ids(
     assert pad_values["audio"] >= 256
     assert int(req_data.input_ids[1]) == pad_values["audio"]
     assert captured["input_ids"].tolist() == input_ids.tolist()
+
+
+def test_action_scoring_candidate_requests_are_materialized_lazily():
+    class ShortIdTokenizer:
+        eos_token_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            del add_special_tokens
+            return [int(text.removeprefix("A")) + 1000]
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(
+            "sglang.srt.sampling.sampling_params.SamplingParams.normalize",
+            lambda self, tokenizer: None,
+        )
+        monkeypatch.setattr(
+            "sglang.srt.sampling.sampling_params.SamplingParams.verify",
+            lambda self, vocab_size: None,
+        )
+        state = make_qwen_state(
+            prompt={
+                "prompt_text": "long shared prefix",
+                "input_ids": torch.tensor([11, 12, 13], dtype=torch.long),
+                "attention_mask": torch.ones(3, dtype=torch.long),
+            }
+        )
+        req_data = build_sglang_thinker_request(
+            state,
+            params={
+                "max_new_tokens": 0,
+                "action_scoring": {
+                    "language": "zh",
+                    "suffix_tokenization_mode": "short_id",
+                    "candidates": [
+                        {"candidate_id": "A1", "suffix": "A1"},
+                        {"candidate_id": "A2", "suffix": "A2"},
+                    ],
+                },
+            },
+            tokenizer=ShortIdTokenizer(),
+            vocab_size=4096,
+            request_id="lazy-plan",
+        )
+
+        plan = req_data.action_scoring_plan
+        assert plan["candidate_data"] == []
+        assert plan["candidate_ids"] == ["A1", "A2"]
+
+        candidate_data = build_action_scoring_candidate_data(req_data, "A1")
+        assert candidate_data.req.origin_input_ids == [11, 12, 13, 1001, 99]
+        assert candidate_data.action_scoring_candidate_id == "A1"
+    finally:
+        monkeypatch.undo()
 
 
 def _encode_processed_tensor(tensor: torch.Tensor) -> dict[str, object]:

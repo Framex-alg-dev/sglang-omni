@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import WebSocket
 
-from sglang_omni.client import Client
 from sglang_omni.serve.realtime.session import RealtimeSession
+
+if TYPE_CHECKING:
+    from sglang_omni.client.client import Client
 
 logger = logging.getLogger(__name__)
 

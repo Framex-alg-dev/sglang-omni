@@ -7,14 +7,18 @@ Each factory returns either:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn.functional as F
 
+from sglang_omni.models.qwen3_omni.action_timing import record_action_stage_timing
 from sglang_omni.models.qwen3_omni.bootstrap import create_thinker_scheduler
 from sglang_omni.models.qwen3_omni.components.audio_encoder import Qwen3OmniAudioEncoder
 from sglang_omni.models.qwen3_omni.components.image_encoder import Qwen3OmniImageEncoder
@@ -168,10 +172,13 @@ def _run_single_encoder_payload(
     model: Any,
     cache: StageOutputCache | None = None,
 ) -> StagePayload:
+    started = time.perf_counter()
+    model_ms = 0.0
     state = load_state(payload)
     request = build_encoder_request(state, stage_name=stage_name)
     if request.skip_result is not None:
         result = request.skip_result
+        cache_status = "skip"
     else:
         result = _lookup_cached_encoder_output(
             request=request,
@@ -180,8 +187,11 @@ def _run_single_encoder_payload(
             cache=cache,
         )
         if result is None:
+            model_started = time.perf_counter()
             with torch.no_grad():
                 result = model(**request.model_inputs)
+            model_ms = (time.perf_counter() - model_started) * 1000.0
+            cache_status = "compute"
             _store_cached_encoder_output(
                 request=request,
                 request_id=payload.request_id,
@@ -189,6 +199,27 @@ def _run_single_encoder_payload(
                 cache=cache,
                 result=result,
             )
+        else:
+            cache_status = "hit"
+    _log_action_media_event(
+        payload,
+        encoder_stage=stage_name,
+        event="encoder_completed",
+        cache_status=cache_status,
+        cache_key=_short_cache_key(request.cache_key),
+        input_bytes=_nested_tensor_bytes(request.model_inputs),
+        output_bytes=_nested_tensor_bytes(result),
+        wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        model_ms=round(model_ms, 3),
+        batch_size=1,
+    )
+    record_action_stage_timing(
+        payload,
+        stage_name,
+        cache_status=cache_status,
+        cache_key=_short_cache_key(request.cache_key),
+        model_ms=round(model_ms, 3),
+    )
     apply_encoder_result(state, stage_name=stage_name, result=result)
     return store_state(payload, state)
 
@@ -275,6 +306,52 @@ def _nested_tensor_bytes(value: Any) -> int:
 def _encoder_cache_trace_enabled() -> bool:
     value = os.getenv("SGLANG_OMNI_TRACE_ENCODER_CACHE", "")
     return value.lower() not in ("", "0", "false", "no")
+def _action_media_context(payload: StagePayload) -> dict[str, Any] | None:
+    """Return safe correlation fields for action-media diagnostics."""
+    request = getattr(payload, "request", None)
+    metadata = getattr(request, "metadata", None)
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("task") != "action_suffix_scoring"
+    ):
+        return None
+    logical_request_id = metadata.get("logical_request_id")
+    logical_request_id = (
+        str(logical_request_id) if logical_request_id is not None else None
+    )
+    turn_id = None
+    if logical_request_id:
+        match = re.search(r"-turn-(.+?)-action-", logical_request_id)
+        if match:
+            turn_id = match.group(1)
+    return {
+        "session_id": metadata.get("session_id"),
+        "turn_id": turn_id,
+        "action_stage": metadata.get("action_stage"),
+        "logical_request_id": logical_request_id,
+    }
+
+
+def _log_action_media_event(
+    payload: StagePayload,
+    *,
+    encoder_stage: str,
+    event: str,
+    **fields: Any,
+) -> None:
+    """Log action media processing without logging raw audio or image data."""
+    context = _action_media_context(payload)
+    if context is None:
+        return
+    record = {
+        "event": event,
+        "request_id": payload.request_id,
+        "encoder_stage": encoder_stage,
+        **context,
+        **fields,
+    }
+    logger.info("action_media %s", json.dumps(record, ensure_ascii=False, default=str))
+
 
 
 def _short_cache_key(cache_key: str | None) -> str:
@@ -400,6 +477,17 @@ def _batch_image_encoder_payloads(
             cache=cache,
         )
         if cached is not None:
+            _log_action_media_event(
+                payload,
+                encoder_stage=IMAGE_STAGE,
+                event="encoder_completed",
+                cache_status="hit",
+                cache_key=_short_cache_key(request.cache_key),
+                input_bytes=_nested_tensor_bytes(request.model_inputs),
+                output_bytes=_nested_tensor_bytes(cached),
+                model_ms=0.0,
+                batch_size=1,
+            )
             apply_encoder_result(state, stage_name=IMAGE_STAGE, result=cached)
             results[idx] = store_state(payload, state)
             continue
@@ -498,8 +586,10 @@ def _batch_image_encoder_payloads(
         batched_inputs["pixel_values_videos"] = torch.cat(video_pixels, dim=0)
         batched_inputs["video_grid_thw"] = torch.cat(video_grids, dim=0)
 
+    model_started = time.perf_counter()
     with torch.no_grad():
         combined = model(**batched_inputs)
+    model_ms = (time.perf_counter() - model_started) * 1000.0
 
     image_grid_all = combined.get("image_grid_thw")
     image_counts_all = combined.get("image_token_counts")
@@ -563,6 +653,18 @@ def _batch_image_encoder_payloads(
             computed_by_cache_key[request.cache_key] = stage_result
         apply_encoder_result(meta["state"], stage_name=IMAGE_STAGE, result=stage_result)
         results[meta["idx"]] = store_state(meta["payload"], meta["state"])
+        _log_action_media_event(
+            meta["payload"],
+            encoder_stage=IMAGE_STAGE,
+            event="encoder_completed",
+            cache_status="compute",
+            cache_key=_short_cache_key(request.cache_key),
+            input_bytes=_nested_tensor_bytes(request.model_inputs),
+            output_bytes=_nested_tensor_bytes(stage_result),
+            wall_ms=round(model_ms, 3),
+            model_ms=round(model_ms, 3),
+            batch_size=len(active),
+        )
 
     for cache_key, waiters in duplicate_waiters.items():
         stage_result = computed_by_cache_key.get(cache_key)
@@ -640,6 +742,8 @@ def _batch_audio_encoder_payloads(
 ) -> list[StagePayload]:
     results: list[StagePayload | None] = [None] * len(payloads)
     active: list[tuple[int, StagePayload, Any, Any]] = []
+    active_cache_keys: set[str] = set()
+    duplicate_waiters: dict[str, list[tuple[int, StagePayload, Any]]] = {}
 
     for idx, payload in enumerate(payloads):
         state = load_state(payload)
@@ -660,8 +764,26 @@ def _batch_audio_encoder_payloads(
             cache=cache,
         )
         if cached is not None:
+            _log_action_media_event(
+                payload,
+                encoder_stage=AUDIO_STAGE,
+                event="encoder_completed",
+                cache_status="hit",
+                cache_key=_short_cache_key(request.cache_key),
+                input_bytes=_nested_tensor_bytes(request.model_inputs),
+                output_bytes=_nested_tensor_bytes(cached),
+                model_ms=0.0,
+                batch_size=1,
+            )
             apply_encoder_result(state, stage_name=AUDIO_STAGE, result=cached)
             results[idx] = store_state(payload, state)
+            record_action_stage_timing(
+                payload,
+                AUDIO_STAGE,
+                cache_status="hit",
+                cache_key=_short_cache_key(request.cache_key),
+                model_ms=0.0,
+            )
             continue
 
         if not _audio_request_is_batchable(request):
@@ -673,6 +795,13 @@ def _batch_audio_encoder_payloads(
             )
             continue
 
+        if request.cache_key is not None and request.cache_key in active_cache_keys:
+            duplicate_waiters.setdefault(request.cache_key, []).append(
+                (idx, payload, state)
+            )
+            continue
+        if request.cache_key is not None:
+            active_cache_keys.add(request.cache_key)
         active.append((idx, payload, state, request))
 
     if not active:
@@ -703,6 +832,7 @@ def _batch_audio_encoder_payloads(
         [_pad_audio_mask(item["mask"], max_time) for item in normalized], dim=0
     )
     batched_lengths = torch.cat([item["lengths"] for item in normalized], dim=0)
+    model_started = time.perf_counter()
 
     with torch.no_grad():
         combined = model(
@@ -710,11 +840,13 @@ def _batch_audio_encoder_payloads(
             feature_attention_mask=batched_mask,
             audio_feature_lengths=batched_lengths,
         )
+    model_ms = (time.perf_counter() - model_started) * 1000.0
 
     output_lengths = combined["audio_output_lengths"]
     embeds = combined["audio_embeds"]
     row_cursor = 0
     token_cursor = 0
+    computed_by_cache_key: dict[str, dict[str, Any]] = {}
     for item in normalized:
         row_end = row_cursor + item["count"]
         req_output_lengths = output_lengths[row_cursor:row_end]
@@ -735,8 +867,44 @@ def _batch_audio_encoder_payloads(
         )
         apply_encoder_result(item["state"], stage_name=AUDIO_STAGE, result=stage_result)
         results[item["idx"]] = store_state(item["payload"], item["state"])
+        if item["request"].cache_key is not None:
+            computed_by_cache_key[item["request"].cache_key] = stage_result
         row_cursor = row_end
         token_cursor = token_end
+        _log_action_media_event(
+            item["payload"],
+            encoder_stage=AUDIO_STAGE,
+            event="encoder_completed",
+            cache_status="compute",
+            cache_key=_short_cache_key(item["request"].cache_key),
+            input_bytes=_nested_tensor_bytes(item["request"].model_inputs),
+            output_bytes=_nested_tensor_bytes(stage_result),
+            wall_ms=round(model_ms, 3),
+            model_ms=round(model_ms, 3),
+            batch_size=len(normalized),
+        )
+        record_action_stage_timing(
+            item["payload"],
+            AUDIO_STAGE,
+            cache_status="compute",
+            cache_key=_short_cache_key(item["request"].cache_key),
+            model_ms=round(model_ms, 3),
+        )
+
+    for cache_key, waiters in duplicate_waiters.items():
+        stage_result = computed_by_cache_key.get(cache_key)
+        if stage_result is None:
+            continue
+        for idx, payload, state in waiters:
+            apply_encoder_result(state, stage_name=AUDIO_STAGE, result=stage_result)
+            results[idx] = store_state(payload, state)
+            record_action_stage_timing(
+                payload,
+                AUDIO_STAGE,
+                cache_status="shared",
+                cache_key=_short_cache_key(cache_key),
+                model_ms=0.0,
+            )
 
     return [result for result in results if result is not None]
 
@@ -783,11 +951,23 @@ def create_aggregate_executor():
     return SimpleScheduler(_identity)
 
 
+def create_action_score_executor():
+    """Terminal pass-through for the Thinker-produced action score result."""
+    from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
+
+    def _identity(payload: StagePayload) -> StagePayload:
+        return payload
+
+    return SimpleScheduler(_identity)
+
+
+
 def create_image_encoder_executor(
     model_path: str,
     *,
     device: str = "cuda",
     dtype: str | None = None,
+    max_batch_wait_ms: int = 50,
 ):
     from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 
@@ -799,6 +979,7 @@ def create_image_encoder_executor(
     )
 
     def _encode(payload: StagePayload) -> StagePayload:
+        started = time.perf_counter()
         _emit_event(
             request_id=payload.request_id,
             stage=None,
@@ -819,8 +1000,15 @@ def create_image_encoder_executor(
                 event_name="encoder_end",
                 metadata={"modality": "image", "batch_size": 1},
             )
+            record_action_stage_timing(
+                payload,
+                IMAGE_STAGE,
+                wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                batch_size=1,
+            )
 
     def _encode_batch(payloads: list[StagePayload]) -> list[StagePayload]:
+        started = time.perf_counter()
         for p in payloads:
             _emit_event(
                 request_id=p.request_id,
@@ -842,6 +1030,12 @@ def create_image_encoder_executor(
                     event_name="encoder_end",
                     metadata={"modality": "image", "batch_size": len(payloads)},
                 )
+                record_action_stage_timing(
+                    p,
+                    IMAGE_STAGE,
+                    wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                    batch_size=len(payloads),
+                )
 
     # Preserve the calibrated image-encoder batching shape and add a small
     # batch_wait so video benchmarks at concurrency=16 batch together.
@@ -849,7 +1043,7 @@ def create_image_encoder_executor(
         _encode,
         batch_compute_fn=_encode_batch,
         max_batch_size=32,
-        max_batch_wait_ms=50,
+        max_batch_wait_ms=max_batch_wait_ms,
         request_cost_fn=_create_image_encoder_request_cost_fn(model),
         max_batch_cost=QWEN3_IMAGE_ENCODER_BATCH_BUDGET_BYTES,
     )
@@ -860,6 +1054,7 @@ def create_audio_encoder_executor(
     *,
     device: str = "cuda",
     dtype: str | None = None,
+    max_batch_wait_ms: int = 50,
 ):
     from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 
@@ -871,6 +1066,7 @@ def create_audio_encoder_executor(
     )
 
     def _encode(payload: StagePayload) -> StagePayload:
+        started = time.perf_counter()
         _emit_event(
             request_id=payload.request_id,
             stage=None,
@@ -891,8 +1087,15 @@ def create_audio_encoder_executor(
                 event_name="encoder_end",
                 metadata={"modality": "audio", "batch_size": 1},
             )
+            record_action_stage_timing(
+                payload,
+                AUDIO_STAGE,
+                wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                batch_size=1,
+            )
 
     def _encode_batch(payloads: list[StagePayload]) -> list[StagePayload]:
+        started = time.perf_counter()
         for p in payloads:
             _emit_event(
                 request_id=p.request_id,
@@ -914,12 +1117,18 @@ def create_audio_encoder_executor(
                     event_name="encoder_end",
                     metadata={"modality": "audio", "batch_size": len(payloads)},
                 )
+                record_action_stage_timing(
+                    p,
+                    AUDIO_STAGE,
+                    wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                    batch_size=len(payloads),
+                )
 
     return SimpleScheduler(
         _encode,
         batch_compute_fn=_encode_batch,
         max_batch_size=32,
-        max_batch_wait_ms=50,
+        max_batch_wait_ms=max_batch_wait_ms,
     )
 
 

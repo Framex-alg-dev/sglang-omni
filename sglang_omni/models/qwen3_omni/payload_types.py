@@ -7,12 +7,17 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
 
-class PromptInputs(TypedDict):
-    """Tokenized prompt inputs for the thinker."""
+class PromptInputs(TypedDict, total=False):
+    """Tokenized prompt inputs for the thinker.
+
+    ``action_scoring_cache`` is populated only for action requests and carries
+    the safe token boundary through which a parent prefix may be reused.
+    """
 
     input_ids: Any
     attention_mask: Any
     prompt_text: str
+    action_scoring_cache: dict[str, Any]
 
 
 class PreprocessingData(TypedDict, total=False):
