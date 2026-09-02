@@ -383,6 +383,50 @@ class ActionPipeline:
         )
 
 
+    def _proactive_action_repeat_instruction(
+        self,
+        *,
+        turn_origin: Literal["user", "proactive"],
+        client_last_action_id: str | None = None,
+    ) -> str:
+        record = self.last_executed_action
+        if turn_origin != TURN_ORIGIN_PROACTIVE:
+            return ""
+        action_id = (
+            client_last_action_id.strip()
+            if isinstance(client_last_action_id, str)
+            and client_last_action_id.strip()
+            else (record.action_id if record is not None and record.execute else None)
+        )
+        if action_id is None:
+            return ""
+        candidate = next(
+            (
+                item
+                for item in self.candidates
+                if item.action_id == action_id
+            ),
+            None,
+        )
+        candidate_id = candidate.candidate_id if candidate is not None else "unknown"
+        source_label = candidate.source_label if candidate is not None else "unknown"
+        return self._prompt(
+            zh=(
+                "[最近一次已执行动作，仅用于主动动作去重]\n"
+                f"candidate_id={candidate_id}｜action_id={action_id}｜"
+                f"动作={source_label}。本轮存在其他同样合适的候选时，优先选择"
+                "不同 action_id；只有当前场景和硬约束使重复不可避免时才可重复。\n"
+            ),
+            en=(
+                "[Most recently executed action; proactive de-duplication only]\n"
+                f"candidate_id={candidate_id} | action_id={action_id} | "
+                f"action={source_label}. Prefer a different action_id when another "
+                "candidate is equally suitable. Repeat only when scene and hard constraints "
+                "leave no suitable alternative.\n"
+            ),
+        )
+
+
     def _build_turn_action_instruction(
         self,
         text: str | None,
@@ -1117,4 +1161,3 @@ class ActionPipeline:
 
 
 MultimodalActionMixin = ActionPipeline
-

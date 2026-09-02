@@ -878,6 +878,7 @@ class MultimodalSessionManager:
         action_history_turn_count = 0
         reply_history_turn_count = 0
         session_memory_active_claim_count = 0
+        session_memory_open_thread_count = 0
         session_memory_episode_count = 0
         session_memory_pending_turn_count = 0
         session_memory_running_turn_count = 0
@@ -893,6 +894,9 @@ class MultimodalSessionManager:
             if session.session_memory_store is not None:
                 session_memory_active_claim_count += len(
                     session.session_memory_store.active_claims()
+                )
+                session_memory_open_thread_count += len(
+                    session.session_memory_store.active_open_threads()
                 )
                 session_memory_episode_count += len(
                     session.session_memory_store.episodes
@@ -926,6 +930,7 @@ class MultimodalSessionManager:
                 "write_enabled": self.session_memory_config.write_enabled,
                 "read_enabled": self.session_memory_config.read_enabled,
                 "active_claim_count": session_memory_active_claim_count,
+                "open_thread_count": session_memory_open_thread_count,
                 "episode_count": session_memory_episode_count,
                 "pending_turn_count": session_memory_pending_turn_count,
                 "running_turn_count": session_memory_running_turn_count,

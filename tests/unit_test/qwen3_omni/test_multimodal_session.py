@@ -38,8 +38,11 @@ from sglang_omni.serve.realtime.session_memory import (
     SESSION_MEMORY_ENABLED_ENV,
     SESSION_MEMORY_READ_ENABLED_ENV,
     SESSION_MEMORY_WRITE_ENABLED_ENV,
+    ExtractedOpenThreadOperation,
+    ExtractedTurnMemory,
     SessionMemoryConfig,
     SessionMemoryScheduler,
+    SessionMemoryTurn,
 )
 
 
@@ -615,6 +618,102 @@ async def test_protocol_v1_routes_visual_behavior_preferences_to_action_only() -
     assert "视觉行为偏好（仅用于动作选择" in action_prompt
     assert preference in action_prompt
     assert preference not in session.instructions
+
+
+@pytest.mark.asyncio
+async def test_protocol_v1_normalizes_proactive_scene_and_action_constraints() -> None:
+    catalog = load_global_action_catalog()
+    fallback_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback_category is not None
+    fallback = fallback_category.children[0]
+    alternative = next(
+        candidate
+        for candidate in catalog.candidate_by_id.values()
+        if candidate.candidate_id != fallback.candidate_id
+    )
+    session = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "protocol-v1-proactive-scene",
+            outputs=["text", "action"],
+            reply={"unsupported_action_text": "这个动作暂时做不了。"},
+            action={
+                "fallback_category_ids": [fallback_category.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": fallback.candidate_id},
+                    {"candidate_id": alternative.candidate_id},
+                ],
+            },
+        )
+    )
+    await session.dispatch(
+        {
+            "type": "turn.start",
+            "turn_id": "turn-proactive-scene",
+            "origin": "proactive",
+            "trigger_type": "session_enter",
+        }
+    )
+
+    normalized = session._normalize_wire_event(
+        {
+            "type": "turn.commit",
+            "turn_id": "turn-proactive-scene",
+            "scene": {
+                "context": "用户刚进入当前互动界面。",
+                "reply_guidance": "语速轻快，控制在一句。",
+            },
+            "action": {
+                "guidance": "保持坐姿，动作友好。",
+                "allowed_candidate_ids": [
+                    fallback.candidate_id,
+                    fallback.candidate_id,
+                ],
+                "excluded_candidate_ids": [alternative.candidate_id],
+                "last_executed_action_id": fallback.action_id,
+            },
+        }
+    )
+
+    assert normalized["scene_context"] == "用户刚进入当前互动界面。"
+    assert normalized["scene_reply_guidance"] == "语速轻快，控制在一句。"
+    assert normalized["action_allowed_candidate_ids"] == (
+        fallback.candidate_id,
+    )
+    assert normalized["action_excluded_candidate_ids"] == (
+        alternative.candidate_id,
+    )
+    assert normalized["last_executed_action_id"] == fallback.action_id
+    assert normalized["avatar_state"]["state_description"] == (
+        "保持坐姿，动作友好。"
+    )
+    repeat_instruction = session._proactive_action_repeat_instruction(
+        turn_origin="proactive",
+        client_last_action_id=fallback.action_id,
+    )
+    assert fallback.action_id in repeat_instruction
+    assert "存在其他同样合适的候选时" in repeat_instruction
+
+    with pytest.raises(ValueError, match="candidate constraints overlap"):
+        session._normalize_wire_event(
+            {
+                "type": "turn.commit",
+                "turn_id": "turn-proactive-scene",
+                "action": {
+                    "allowed_candidate_ids": [fallback.candidate_id],
+                    "excluded_candidate_ids": [fallback.candidate_id],
+                },
+            }
+        )
+    await session.dispatch(
+        {"type": "turn.cancel", "turn_id": "turn-proactive-scene"}
+    )
 
 
 @pytest.mark.asyncio
@@ -4908,6 +5007,126 @@ def test_reply_history_required_forwards_at_most_two_recent_turns() -> None:
     ]
 
 
+def test_proactive_scene_policy_suppresses_raw_history_and_scopes_client_data() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.language = "zh"
+    session.instructions = "请使用角色人设自然回复。"
+    session.reply_history_turns.append(
+        multimodal_module.ReplyHistoryTurn(
+            turn_id="prior-reminder",
+            messages=[{"role": "assistant", "content": "你终于回来啦！"}],
+            audios=[],
+            images=[],
+            image_roles=[],
+        )
+    )
+    turn = multimodal_module.TurnBuffer(
+        turn_id="proactive-session-enter",
+        started_at=0.0,
+        audio=multimodal_module.RealtimeAudioBuffer(),
+        images=[],
+        audio_seqs=set(),
+        image_seqs=set(),
+        turn_origin="proactive",
+        text_role="character_reply",
+        trigger="session_enter",
+        scene_context="当前界面使用近景展示。",
+        scene_reply_guidance="语速轻快，控制在一句。",
+    )
+
+    request, _ = session._build_reply_request(turn, [], [], [], None)
+
+    system = request.messages[0].content
+    assert "[主动场景：首次进入会话]" in system
+    assert "不得说‘欢迎回来’" in system
+    assert "请使用角色人设自然回复。" in system
+    assert request.metadata["reply_history_forwarded_turn_count"] == 0
+    assert "你终于回来啦" not in str(request.messages)
+    current_parts = request.messages[-1].content
+    assert any(
+        "[客户端提供的当前场景补充" in part.get("text", "")
+        and "当前界面使用近景展示" in part.get("text", "")
+        for part in current_parts
+    )
+    assert any(
+        "[客户端提供的回复风格偏好]" in part.get("text", "")
+        and "语速轻快" in part.get("text", "")
+        for part in current_parts
+    )
+
+
+def test_character_proactive_uses_open_thread_snapshot_without_raw_history() -> None:
+    config = SessionMemoryConfig(enabled=True, write_enabled=False, read_enabled=True)
+    session = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        session_memory_config=config,
+    )
+    session.language = "zh"
+    assert session.session_memory_store is not None
+    source = SessionMemoryTurn(
+        turn_id="user-pending-result",
+        turn_seq=1,
+        user_text="我正在等待面试结果。",
+        audios=(),
+        assistant_text="祝你顺利。",
+        reply_model_visible=True,
+        reply_mode="LANGUAGE_REQUIRED",
+    )
+    session.session_memory_store.apply(
+        [
+            ExtractedTurnMemory(
+                turn_id=source.turn_id,
+                turn_seq=source.turn_seq,
+                user_summary="用户正在等待面试结果",
+                assistant_summary=None,
+                artifact_kind="none",
+                operations=(),
+                thread_operations=(
+                    ExtractedOpenThreadOperation(
+                        op="open",
+                        content="用户正在等待面试结果",
+                        evidence="我正在等待面试结果",
+                        confidence=0.98,
+                    ),
+                ),
+            )
+        ],
+        {1: source},
+    )
+    session.reply_history_turns.append(
+        multimodal_module.ReplyHistoryTurn(
+            turn_id="stale-assistant",
+            messages=[{"role": "assistant", "content": "欢迎回来呀！"}],
+            audios=[],
+            images=[],
+            image_roles=[],
+        )
+    )
+    turn = multimodal_module.TurnBuffer(
+        turn_id="character-proactive",
+        started_at=0.0,
+        audio=multimodal_module.RealtimeAudioBuffer(),
+        images=[],
+        audio_seqs=set(),
+        image_seqs=set(),
+        turn_origin="proactive",
+        text_role="character_reply",
+        trigger="character_proactive",
+    )
+
+    request, _ = session._build_reply_request(turn, [], [], [], None)
+
+    assert request.metadata["reply_history_forwarded_turn_count"] == 0
+    assert request.metadata["session_memory_open_thread_count"] == 1
+    assert request.metadata["session_memory_retrieval_mode"] == (
+        "proactive_snapshot"
+    )
+    assert len(turn.proactive_memory_thread_ids) == 1
+    assert "用户正在等待面试结果" in str(request.messages[-1].content)
+    assert "欢迎回来呀" not in str(request.messages)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("decision", "forwarded"),
@@ -6314,7 +6533,12 @@ async def test_proactive_generated_reply_keeps_reply_and_action_prompts_isolated
     for action_request in client.score_requests:
         assert "回复要简洁亲切" not in action_request.system_prompt
         assert "用户刚刚回来" not in action_request.prefix
-        assert action_request.avatar_state["state_description"] == "避免重复上一个动作。"
+        assert "动作意图为欢迎用户重新出现" in (
+            action_request.avatar_state["state_description"]
+        )
+        assert action_request.avatar_state["state_description"].endswith(
+            "避免重复上一个动作。"
+        )
         assert "[本轮主动场景约束优先级]" in action_request.prefix
         assert action_request.prefix.rfind(
             "[本轮主动场景约束优先级]"
@@ -7048,8 +7272,11 @@ async def test_hierarchical_proactive_turn_uses_character_reply_in_both_stages()
         assert "本轮没有可用的数字人当前状态信息" in request.prefix
         assert "以结构化 数字人当前状态信息为准" not in request.prefix
         assert "该文本的语义、语气和表达目标直接相关" in request.prefix
-        assert "本轮主动场景约束中给出的目标" not in request.prefix
-        assert "[本轮主动场景约束优先级]" not in request.prefix
+        assert "本轮主动场景约束中给出的目标" in request.prefix
+        assert "[本轮主动场景约束优先级]" in request.prefix
+        assert "动作意图为欢迎用户重新出现" in (
+            request.avatar_state["state_description"]
+        )
         assert "历史动作" not in request.prefix
         assert "选择与表达目标和状态约束最匹配的候选项" in request.prefix
         assert "candidate_id=A0" not in request.prefix
@@ -7263,6 +7490,7 @@ def test_session_memory_feature_flag_and_load_snapshot(monkeypatch) -> None:
         "write_enabled": False,
         "read_enabled": False,
         "active_claim_count": 0,
+        "open_thread_count": 0,
         "episode_count": 0,
         "pending_turn_count": 0,
         "running_turn_count": 0,

@@ -60,11 +60,14 @@ class SessionMemoryConfig:
     max_injected_episodes: int = 4
     max_artifacts: int = 8
     max_injected_artifacts: int = 2
+    max_open_threads: int = 12
+    max_injected_open_threads: int = 1
     max_context_chars: int = 4096
     max_input_text_chars: int = 4096
     max_claim_content_chars: int = 256
     max_summary_chars: int = 320
     max_artifact_content_chars: int = 4096
+    max_open_thread_content_chars: int = 320
     max_new_tokens: int = 512
     max_retries: int = 1
     max_queued_sessions: int = 256
@@ -94,4 +97,3 @@ class SessionMemoryConfig:
                 maximum=4,
             ),
         )
-

@@ -163,6 +163,46 @@ class ActionPromptComponent:
         return self._primary_fallback_category().children[0]
 
 
+    @staticmethod
+    def _turn_candidate_is_allowed(
+        turn: TurnBuffer,
+        candidate: SessionActionCandidate,
+    ) -> bool:
+        allowed = set(turn.action_allowed_candidate_ids)
+        excluded = set(turn.action_excluded_candidate_ids)
+        return (
+            (not allowed or candidate.candidate_id in allowed)
+            and candidate.candidate_id not in excluded
+        )
+
+
+    def _filter_turn_action_candidates(
+        self,
+        turn: TurnBuffer,
+        candidates: list[SessionActionCandidate],
+    ) -> list[SessionActionCandidate]:
+        return [
+            candidate
+            for candidate in candidates
+            if self._turn_candidate_is_allowed(turn, candidate)
+        ]
+
+
+    def _default_fallback_candidate_for_turn(
+        self,
+        turn: TurnBuffer,
+    ) -> SessionActionCandidate:
+        fallback = self._default_fallback_candidate()
+        if self._turn_candidate_is_allowed(turn, fallback):
+            return fallback
+        eligible = self._filter_turn_action_candidates(turn, list(self.candidates))
+        if not eligible:
+            raise ValueError(
+                "per-turn action candidate constraints leave no executable action"
+            )
+        return eligible[0]
+
+
     def _no_action_candidate_id(self) -> str:
         return self._no_action_candidate().candidate_id
 
@@ -526,4 +566,3 @@ class ActionPromptComponent:
 
 
 MultimodalActionPromptMixin = ActionPromptComponent
-

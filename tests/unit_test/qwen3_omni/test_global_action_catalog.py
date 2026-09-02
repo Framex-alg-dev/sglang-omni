@@ -1647,7 +1647,7 @@ async def test_language_required_reply_survives_unsupported_action(
 
 
 @pytest.mark.asyncio
-async def test_explicit_proactive_prohibition_filters_conflicting_category(
+async def test_proactive_hard_candidate_exclusion_filters_conflicting_category(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
@@ -1668,10 +1668,6 @@ async def test_explicit_proactive_prohibition_filters_conflicting_category(
         release_session=lambda session_id, value: None,
     )
     await session.handle_session_start(_session_start_payload())
-    assert session._state_description_excluded_candidate_ids(
-        "禁止：选择自然呼吸。",
-        list(session.categories[0].children),
-    ) == ("A008",)
     await session.handle_turn_start(
         {
             "type": "turn.start",
@@ -1694,6 +1690,7 @@ async def test_explicit_proactive_prohibition_filters_conflicting_category(
                     "禁止：选择自然待机、自然呼吸或其他微动作。"
                 )
             },
+            "action_excluded_candidate_ids": ["A008"],
         }
     )
 
@@ -1701,7 +1698,10 @@ async def test_explicit_proactive_prohibition_filters_conflicting_category(
     assert "B008" not in {
         candidate.candidate_id for candidate in category_request.candidates
     }
-    assert "已从本轮可选集合移除：B008" in category_request.prefix
+    assert "禁止：选择自然待机、自然呼吸或其他微动作" in (
+        category_request.avatar_state["state_description"]
+    )
+    assert "已从本轮可选集合移除：B008" not in category_request.prefix
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["action"]["category_id"] == "B001"
     assert result["action"]["candidate_id"] == "A001"

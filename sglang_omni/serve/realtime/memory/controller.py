@@ -242,6 +242,7 @@ class SessionMemoryController:
             language=self.language,
             turns=turns,
             active_claims=store.extraction_state(),
+            active_threads=store.open_thread_extraction_state(),
             config=config,
             base_store_revision=base_store_revision,
         )
@@ -262,6 +263,7 @@ class SessionMemoryController:
             batch_size=len(turns),
             pending_turn_count=len(self._session_memory_pending_turns),
             active_claim_count=len(store.active_claims()),
+            active_open_thread_count=len(store.active_open_threads()),
             base_store_revision=base_store_revision,
             attempt=attempt,
             queue_wait_ms=queue_wait_ms,
@@ -302,7 +304,11 @@ class SessionMemoryController:
                 rejected_operations=list(apply_stats.rejected_operations),
                 episode_count=apply_stats.episode_count,
                 artifact_count=apply_stats.artifact_count,
+                opened_thread_count=apply_stats.opened_thread_count,
+                updated_thread_count=apply_stats.updated_thread_count,
+                closed_thread_count=apply_stats.closed_thread_count,
                 active_claim_count=len(store.active_claims()),
+                active_open_thread_count=len(store.active_open_threads()),
                 retained_episode_count=len(store.episodes),
                 retained_artifact_count=len(store.artifacts),
                 processed_through_turn_seq=(

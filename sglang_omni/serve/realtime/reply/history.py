@@ -57,12 +57,14 @@ class ReplyHistoryComponent:
         plausible response reinforce itself across otherwise unrelated turns.
         Explicit current text remains the low-cost signal that permits history.
         """
-        return (
-            turn.turn_origin == TURN_ORIGIN_USER
-            and bool(audios)
-            and not (
-                isinstance(turn.text, str) and bool(turn.text.strip())
-            )
+        if turn.turn_origin == TURN_ORIGIN_PROACTIVE:
+            # Proactive scenes are server-planned, not conversational queries.
+            # Raw recent replies otherwise cause welcome/reminder text to copy
+            # itself across unrelated proactive events.  character_proactive
+            # receives a separately bounded, user-backed memory block.
+            return True
+        return bool(audios) and not (
+            isinstance(turn.text, str) and bool(turn.text.strip())
         )
 
 
@@ -103,6 +105,7 @@ class ReplyHistoryComponent:
             history_turn
             for history_turn in self.reply_history_turns
             if history_turn.model_visible
+            and history_turn.eligible_for_user_followup
         ][-MAX_REPLY_HISTORY_TURNS:]
         for history_turn in reversed(recent):
             signature = self._reply_history_assistant_signature(history_turn)
@@ -167,7 +170,7 @@ class ReplyHistoryComponent:
         reply_text: str | None,
         *,
         model_visible: bool = True,
-        history_kind: Literal["reply", "unsupported_action_notice"] = "reply",
+        history_kind: str = "reply",
     ) -> None:
         if not reply_text:
             return
@@ -188,6 +191,14 @@ class ReplyHistoryComponent:
             ]
         else:
             messages = [{"role": "assistant", "content": reply_text}]
+        if turn.turn_origin == TURN_ORIGIN_PROACTIVE and history_kind == "reply":
+            history_kind = {
+                "session_enter": "proactive_session_enter",
+                "idle_timeout": "proactive_idle_timeout",
+                "user_returned": "proactive_user_returned",
+                "character_proactive": "proactive_character",
+                "session_ending": "proactive_session_ending",
+            }.get(turn.trigger or "", "proactive_custom")
         self.reply_history_turns.append(
             ReplyHistoryTurn(
                 turn_id=turn.turn_id,
@@ -200,6 +211,10 @@ class ReplyHistoryComponent:
                 image_roles=[],
                 model_visible=model_visible,
                 history_kind=history_kind,
+                eligible_for_user_followup=model_visible,
+                eligible_for_proactive_planning=(
+                    model_visible and turn.turn_origin == TURN_ORIGIN_USER
+                ),
             )
         )
 
@@ -226,4 +241,3 @@ class ReplyHistoryComponent:
 
 
 MultimodalReplyHistoryMixin = ReplyHistoryComponent
-

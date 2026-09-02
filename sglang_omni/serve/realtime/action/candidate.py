@@ -92,6 +92,10 @@ class ActionCandidateComponent:
             + self._last_user_action_reference_instruction(
                 turn_origin=turn_origin,
             )
+            + self._proactive_action_repeat_instruction(
+                turn_origin=turn_origin,
+                client_last_action_id=turn.client_last_executed_action_id,
+            )
             + self._build_turn_action_instruction(
                 text,
                 turn_origin=turn_origin,
@@ -110,6 +114,13 @@ class ActionCandidateComponent:
                 enabled=("state_description" in effective_avatar_state),
             )
         )
+        eligible_candidates = self._filter_turn_action_candidates(
+            turn, list(self.candidates)
+        )
+        if not eligible_candidates:
+            raise ValueError(
+                "per-turn action candidate constraints leave no executable action"
+            )
         candidates = [
             ActionScoreCandidate(
                 candidate_id=item.candidate_id,
@@ -117,7 +128,7 @@ class ActionCandidateComponent:
                 action_id=item.action_id,
                 execution_binding=dict(item.execution_binding),
             )
-            for item in self.candidates
+            for item in eligible_candidates
         ]
         request = ActionSuffixScoreRequest(
             request_id=request_base + "-single",
@@ -206,7 +217,13 @@ class ActionCandidateComponent:
                     self.action_selection_mode if self.categories else "flat"
                 ),
                 "flattened_child_count": (
-                    len(self.candidates) if self.categories else None
+                    len(eligible_candidates) if self.categories else None
+                ),
+                "turn_action_allowed_candidate_ids": list(
+                    turn.action_allowed_candidate_ids
+                ),
+                "turn_action_excluded_candidate_ids": list(
+                    turn.action_excluded_candidate_ids
                 ),
                 "compute_ms": compute_ms,
                 "action_timing_breakdown": {
@@ -220,5 +237,3 @@ class ActionCandidateComponent:
 
 
 MultimodalActionCandidateMixin = ActionCandidateComponent
-
-

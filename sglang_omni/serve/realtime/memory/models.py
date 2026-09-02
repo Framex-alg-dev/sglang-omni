@@ -20,6 +20,25 @@ MEMORY_OPERATION_SUPERSEDE = "supersede"
 MEMORY_OPERATION_RETRACT = "retract"
 MEMORY_OPERATION_NOOP = "noop"
 
+THREAD_OPERATION_OPEN = "open"
+THREAD_OPERATION_UPDATE = "update"
+THREAD_OPERATION_RESOLVE = "resolve"
+THREAD_OPERATION_REJECT = "reject"
+THREAD_OPERATION_NOOP = "noop"
+THREAD_OPERATIONS = frozenset(
+    {
+        THREAD_OPERATION_OPEN,
+        THREAD_OPERATION_UPDATE,
+        THREAD_OPERATION_RESOLVE,
+        THREAD_OPERATION_REJECT,
+        THREAD_OPERATION_NOOP,
+    }
+)
+
+THREAD_STATUS_OPEN = "open"
+THREAD_STATUS_RESOLVED = "resolved"
+THREAD_STATUS_REJECTED = "rejected"
+
 MEMORY_STATUS_ACTIVE = "active"
 MEMORY_STATUS_SUPERSEDED = "superseded"
 MEMORY_STATUS_RETRACTED = "retracted"
@@ -206,6 +225,42 @@ class SessionArtifactRecord:
         return result
 
 
+@dataclass(slots=True)
+class SessionOpenThread:
+    thread_id: str
+    content: str
+    status: Literal["open", "resolved", "rejected"]
+    source_turn_ids: tuple[str, ...]
+    source_authority: Literal["user_supported", "server_confirmed"]
+    created_turn_seq: int
+    updated_turn_seq: int
+    evidence: str = ""
+    confidence: float = 1.0
+    last_proactive_turn_seq: int = 0
+    proactive_attempt_count: int = 0
+
+    def as_context_dict(self) -> dict[str, str]:
+        return {
+            "thread_id": self.thread_id,
+            "source": self.source_authority,
+            "content": self.content,
+            "status": self.status,
+            "source_turn_ids": ",".join(self.source_turn_ids),
+            "created_turn_seq": str(self.created_turn_seq),
+            "updated_turn_seq": str(self.updated_turn_seq),
+            "confidence": f"{self.confidence:.3f}",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedOpenThreadOperation:
+    op: Literal["open", "update", "resolve", "reject", "noop"]
+    thread_id: str = ""
+    content: str = ""
+    evidence: str = ""
+    confidence: float = 1.0
+
+
 @dataclass(frozen=True, slots=True)
 class ExtractedMemoryOperation:
     op: Literal["add", "supersede", "retract", "noop"]
@@ -229,6 +284,7 @@ class ExtractedTurnMemory:
     assistant_summary: str | None
     artifact_kind: str
     operations: tuple[ExtractedMemoryOperation, ...]
+    thread_operations: tuple[ExtractedOpenThreadOperation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,8 +294,10 @@ class SessionMemoryContext:
     episode_count: int
     artifact_count: int
     source_turn_ids: tuple[str, ...]
+    open_thread_count: int = 0
     selected_claim_ids: tuple[str, ...] = ()
     selected_artifact_ids: tuple[str, ...] = ()
+    selected_open_thread_ids: tuple[str, ...] = ()
     retrieval_mode: str = "none"
 
 
@@ -251,6 +309,9 @@ class SessionMemoryApplyStats:
     rejected: int = 0
     episode_count: int = 0
     artifact_count: int = 0
+    opened_thread_count: int = 0
+    updated_thread_count: int = 0
+    closed_thread_count: int = 0
     rejected_operations: tuple[dict[str, Any], ...] = ()
     processed_through_turn_seq: int = 0
     complete_through_turn_seq: int = 0

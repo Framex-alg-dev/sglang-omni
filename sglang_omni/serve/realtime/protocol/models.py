@@ -288,7 +288,18 @@ class ReplyHistoryTurn:
     images: list[str]
     image_roles: list[str]
     model_visible: bool = True
-    history_kind: Literal["reply", "unsupported_action_notice"] = "reply"
+    history_kind: Literal[
+        "reply",
+        "unsupported_action_notice",
+        "proactive_session_enter",
+        "proactive_idle_timeout",
+        "proactive_user_returned",
+        "proactive_character",
+        "proactive_session_ending",
+        "proactive_custom",
+    ] = "reply"
+    eligible_for_user_followup: bool = True
+    eligible_for_proactive_planning: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,6 +376,12 @@ class TurnBuffer:
     text: str | None = None
     reply_provided: bool = False
     reply_context: str | None = None
+    scene_context: str | None = None
+    scene_reply_guidance: str | None = None
+    action_allowed_candidate_ids: tuple[str, ...] = ()
+    action_excluded_candidate_ids: tuple[str, ...] = ()
+    client_last_executed_action_id: str | None = None
+    proactive_memory_thread_ids: tuple[str, ...] = ()
     avatar_state: dict[str, Any] | None = None
     audio_chunk_count: int = 0
     duplicate_audio_chunks: int = 0
@@ -427,4 +444,3 @@ class ReplySpeechModeResult:
     scores: dict[str, float] = field(default_factory=dict)
     fallback_reason: str | None = None
     stats: dict[str, Any] = field(default_factory=dict)
-

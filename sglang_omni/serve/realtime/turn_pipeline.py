@@ -26,6 +26,7 @@ from sglang_omni.utils.structured_logs import (
     emit_structured_log as _base_emit_structured_log,
     get_structured_log_writer,
 )
+from sglang_omni.serve.realtime.proactive import proactive_scene_policy
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,30 @@ class TurnPipeline:
                     f"reply_context must contain at most {MAX_REPLY_CONTEXT_CHARS} characters"
                 )
             turn.reply_context = reply_context
+        if "scene_context" in event:
+            scene_context = event.get("scene_context")
+            if scene_context is not None and not isinstance(scene_context, str):
+                raise ValueError("scene_context must be a string or null")
+            turn.scene_context = scene_context
+        if "scene_reply_guidance" in event:
+            scene_reply_guidance = event.get("scene_reply_guidance")
+            if scene_reply_guidance is not None and not isinstance(
+                scene_reply_guidance, str
+            ):
+                raise ValueError("scene_reply_guidance must be a string or null")
+            turn.scene_reply_guidance = scene_reply_guidance
+        if "action_allowed_candidate_ids" in event:
+            turn.action_allowed_candidate_ids = tuple(
+                event.get("action_allowed_candidate_ids") or ()
+            )
+        if "action_excluded_candidate_ids" in event:
+            turn.action_excluded_candidate_ids = tuple(
+                event.get("action_excluded_candidate_ids") or ()
+            )
+        if "last_executed_action_id" in event:
+            turn.client_last_executed_action_id = event.get(
+                "last_executed_action_id"
+            )
         if turn.reply_provided and isinstance(turn.reply_context, str):
             raise ValueError("provided reply and reply context are mutually exclusive")
         if "avatar_state" in event:
@@ -135,6 +160,31 @@ class TurnPipeline:
             if state_description is not None and not isinstance(state_description, str):
                 raise ValueError("avatar_state.state_description must be a string")
             turn.avatar_state = dict(state)
+        if turn.turn_origin == TURN_ORIGIN_PROACTIVE:
+            policy = proactive_scene_policy(turn.trigger)
+            if turn.trigger != ACTION_FINISHED_TRIGGER:
+                effective_state = dict(turn.avatar_state or {})
+                client_guidance = effective_state.get("state_description")
+                guidance_parts: list[str] = []
+                if policy is not None:
+                    guidance_parts.append(
+                        policy.default_action_guidance(self.language).strip()
+                    )
+                if isinstance(turn.scene_context, str) and turn.scene_context.strip():
+                    guidance_parts.append(
+                        self._prompt(
+                            zh="当前主动场景补充：",
+                            en="Current proactive scene refinement: ",
+                        )
+                        + turn.scene_context.strip()
+                    )
+                if isinstance(client_guidance, str) and client_guidance.strip():
+                    guidance_parts.append(client_guidance.strip())
+                if guidance_parts:
+                    effective_state["state_description"] = "\n".join(
+                        guidance_parts
+                    )
+                    turn.avatar_state = effective_state
 
         current_audio = (
             turn.audio.to_full_wav_data_uri() if not turn.audio.is_empty() else None
@@ -165,6 +215,15 @@ class TurnPipeline:
             image_frame_count=len(current_images),
             text_present=bool(turn.text),
             reply_context_present=bool(turn.reply_context),
+            scene_context_present=bool(turn.scene_context),
+            scene_reply_guidance_present=bool(turn.scene_reply_guidance),
+            action_allowed_candidate_count=len(
+                turn.action_allowed_candidate_ids
+            ),
+            action_excluded_candidate_count=len(
+                turn.action_excluded_candidate_ids
+            ),
+            client_last_executed_action_id=turn.client_last_executed_action_id,
         )
         emit_structured_log(
             "performance",
@@ -341,6 +400,16 @@ class TurnPipeline:
                 else "reply"
             ),
         )
+        if (
+            reply_text
+            and turn.turn_origin == TURN_ORIGIN_PROACTIVE
+            and turn.trigger == "character_proactive"
+            and turn.proactive_memory_thread_ids
+            and self.session_memory_store is not None
+        ):
+            self.session_memory_store.mark_proactive_threads_used(
+                turn.proactive_memory_thread_ids
+            )
         self._enqueue_session_memory(
             turn,
             current_audio_list,

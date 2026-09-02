@@ -97,6 +97,7 @@ class ActionCategoryComponent:
             )
             if self.global_action_catalog is not None
             and forced_category is None
+            and turn_origin != TURN_ORIGIN_PROACTIVE
             else ()
         )
         excluded_category_id_set = set(excluded_category_ids)
@@ -130,6 +131,10 @@ class ActionCategoryComponent:
             self._last_user_action_reference_instruction(
                 turn_origin=turn_origin,
             )
+        )
+        proactive_repeat_instruction = self._proactive_action_repeat_instruction(
+            turn_origin=turn_origin,
+            client_last_action_id=turn.client_last_executed_action_id,
         )
         action_context.update(
             {
@@ -173,7 +178,18 @@ class ActionCategoryComponent:
             current_text=text or "",
         )
         started = time.perf_counter()
-        category_by_id = {item.category_id: item for item in self.categories}
+        eligible_categories = [
+            category
+            for category in self.categories
+            if self._filter_turn_action_candidates(turn, list(category.children))
+        ]
+        if not eligible_categories:
+            raise ValueError(
+                "per-turn action candidate constraints leave no executable action"
+            )
+        category_by_id = {
+            item.category_id: item for item in eligible_categories
+        }
         category_result = None
         category_ranked: list[Any] = []
         category_ms = 0.0
@@ -207,7 +223,7 @@ class ActionCategoryComponent:
                     suffix=item.category_id,
                     action_id=item.category_id,
                 )
-                for item in self.categories
+                for item in eligible_categories
                 if item.category_id not in excluded_category_id_set
             ]
             if self.global_action_catalog is not None:
@@ -223,6 +239,7 @@ class ActionCategoryComponent:
                 prefix=(
                     self._build_session_action_profile_instruction("category")
                     + last_user_action_reference
+                    + proactive_repeat_instruction
                     + base
                     + self._category_whitelist_instruction()
                     + self._state_description_exclusion_instruction(
@@ -339,15 +356,18 @@ class ActionCategoryComponent:
                 raise ValueError(
                     "session is missing the resolved system accompaniment category"
                 )
-            selected_category = resolved_category
-            selected_categories = [resolved_category] + [
-                category
-                for category in selected_categories[1:]
-                if category.category_id != resolved_category.category_id
-            ]
-            system_route_reconciled = (
-                resolved_category.category_id != original_category_id
-            )
+            if self._filter_turn_action_candidates(
+                turn, list(resolved_category.children)
+            ):
+                selected_category = resolved_category
+                selected_categories = [resolved_category] + [
+                    category
+                    for category in selected_categories[1:]
+                    if category.category_id != resolved_category.category_id
+                ]
+                system_route_reconciled = (
+                    resolved_category.category_id != original_category_id
+                )
         execution_category = selected_categories[0]
         selected_category_ids = [item.category_id for item in selected_categories]
 
@@ -374,11 +394,15 @@ class ActionCategoryComponent:
         )
 
         child_candidates = self._child_candidates_for_categories(selected_categories)
+        child_candidates = self._filter_turn_action_candidates(
+            turn, child_candidates
+        )
         excluded_candidate_ids = (
             self._state_description_excluded_candidate_ids(
                 effective_avatar_state.get("state_description"), child_candidates
             )
             if self.global_action_catalog is not None
+            and turn_origin != TURN_ORIGIN_PROACTIVE
             else ()
         )
         excluded_candidate_id_set = set(excluded_candidate_ids)
@@ -429,12 +453,16 @@ class ActionCategoryComponent:
                 "reply_candidates_exhausted_to_silent"
             )
             child_candidates = list(silent_category.children)
+            child_candidates = self._filter_turn_action_candidates(
+                turn, child_candidates
+            )
             excluded_candidate_ids = (
                 self._state_description_excluded_candidate_ids(
                     effective_avatar_state.get("state_description"),
                     child_candidates,
                 )
                 if self.global_action_catalog is not None
+                and turn_origin != TURN_ORIGIN_PROACTIVE
                 else ()
             )
             excluded_candidate_id_set = set(excluded_candidate_ids)
@@ -454,7 +482,28 @@ class ActionCategoryComponent:
             system_route_degradation_reason = (
                 "silent_candidates_exhausted_first_real"
             )
-            child_candidates = [execution_category.children[0]]
+            constrained_silent_candidates = self._filter_turn_action_candidates(
+                turn, list(execution_category.children)
+            )
+            fallback_candidate = (
+                constrained_silent_candidates[0]
+                if constrained_silent_candidates
+                else self._default_fallback_candidate_for_turn(turn)
+            )
+            child_candidates = [fallback_candidate]
+            fallback_category = next(
+                (
+                    category
+                    for category in self.categories
+                    if category.category_id == fallback_candidate.category_id
+                ),
+                None,
+            )
+            if fallback_category is not None:
+                execution_category = fallback_category
+                selected_category = fallback_category
+                selected_categories = [fallback_category]
+                selected_category_ids = [fallback_category.category_id]
             emit_structured_log(
                 "action",
                 "system_action_candidates_exhausted",
@@ -631,6 +680,12 @@ class ActionCategoryComponent:
                     "state_description_excluded_candidate_ids": list(
                         excluded_candidate_ids
                     ),
+                    "turn_action_allowed_candidate_ids": list(
+                        turn.action_allowed_candidate_ids
+                    ),
+                    "turn_action_excluded_candidate_ids": list(
+                        turn.action_excluded_candidate_ids
+                    ),
                     "category_compute_ms": category_ms,
                     "child_compute_ms": 0.0,
                     "child_prefix_prefilled": (
@@ -757,6 +812,7 @@ class ActionCategoryComponent:
             prefix=(
                 self._build_session_action_profile_instruction("child")
                 + last_user_action_reference
+                + proactive_repeat_instruction
                 + base
                 + self._system_accompaniment_child_instruction(
                     execution_category,
@@ -857,7 +913,7 @@ class ActionCategoryComponent:
             for score in ranked
         ]
         if child_unsupported:
-            fallback = self._default_fallback_candidate()
+            fallback = self._default_fallback_candidate_for_turn(turn)
             action = {
                 "candidate_id": fallback.candidate_id,
                 "action_id": fallback.action_id,
@@ -927,6 +983,12 @@ class ActionCategoryComponent:
             "state_description_excluded_candidate_ids": list(
                 excluded_candidate_ids
             ),
+            "turn_action_allowed_candidate_ids": list(
+                turn.action_allowed_candidate_ids
+            ),
+            "turn_action_excluded_candidate_ids": list(
+                turn.action_excluded_candidate_ids
+            ),
             "category_scores": [
                 compact_stage_score(score) for score in category_ranked
             ],
@@ -949,5 +1011,3 @@ class ActionCategoryComponent:
 
 
 MultimodalActionCategoryMixin = ActionCategoryComponent
-
-

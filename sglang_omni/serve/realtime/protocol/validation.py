@@ -108,6 +108,42 @@ class ProtocolValidationComponent:
         )
 
 
+    def _bounded_candidate_id_list(
+        self,
+        value: Any,
+        name: str,
+    ) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if not isinstance(value, list):
+            raise ValueError(f"{name} must be an array")
+        if len(value) > MAX_ACTION_CANDIDATES:
+            raise ValueError(
+                f"{name} must contain at most {MAX_ACTION_CANDIDATES} entries"
+            )
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for index, raw_id in enumerate(value):
+            candidate_id = self._bounded_optional_text(
+                raw_id,
+                f"{name}[{index}]",
+                max_chars=MAX_TURN_ID_CHARS,
+                allow_empty=False,
+            )
+            assert candidate_id is not None
+            candidate_id = candidate_id.strip()
+            if candidate_id in seen:
+                continue
+            if candidate_id not in self.candidate_by_id:
+                raise ValueError(
+                    f"{name}[{index}] is not available in this session: "
+                    f"{candidate_id}"
+                )
+            seen.add(candidate_id)
+            normalized.append(candidate_id)
+        return tuple(normalized)
+
+
     def _wire_turn_id(self, event: dict[str, Any]) -> str:
         turn_id = self._bounded_optional_text(
             event.get("turn_id"),
@@ -702,7 +738,14 @@ class ProtocolValidationComponent:
             event = self._strict_object(
                 payload,
                 "turn.commit",
-                allowed={"type", "turn_id", "reply", "action", "avatar_state"},
+                allowed={
+                    "type",
+                    "turn_id",
+                    "reply",
+                    "scene",
+                    "action",
+                    "avatar_state",
+                },
                 required={"type", "turn_id"},
             )
             turn = self._require_collecting_turn(event)
@@ -748,10 +791,45 @@ class ProtocolValidationComponent:
                         "empty string when text output is enabled"
                     )
 
+            scene = self._strict_object(
+                event.get("scene", {}),
+                "turn.commit.scene",
+                allowed={"context", "reply_guidance"},
+            )
+            if scene and turn.turn_origin != TURN_ORIGIN_PROACTIVE:
+                raise ValueError(
+                    "turn.commit.scene is only supported for proactive turns"
+                )
+            if scene and turn.trigger == ACTION_FINISHED_TRIGGER:
+                raise ValueError("action_finished must not include turn.commit.scene")
+            scene_context = self._bounded_optional_text(
+                scene.get("context"),
+                "turn.commit.scene.context",
+                max_chars=MAX_REPLY_CONTEXT_CHARS,
+            )
+            scene_reply_guidance = self._bounded_optional_text(
+                scene.get("reply_guidance"),
+                "turn.commit.scene.reply_guidance",
+                max_chars=MAX_REPLY_CONTEXT_CHARS,
+            )
+            if scene_reply_guidance is not None and "text" not in self.modalities:
+                raise ValueError(
+                    "turn.commit.scene.reply_guidance requires the text output"
+                )
+            if reply_provided and scene:
+                raise ValueError(
+                    "reply.provided_text and turn.commit.scene are mutually exclusive"
+                )
+
             action = self._strict_object(
                 event.get("action", {}),
                 "turn.commit.action",
-                allowed={"last_executed_action_id", "guidance"},
+                allowed={
+                    "last_executed_action_id",
+                    "guidance",
+                    "allowed_candidate_ids",
+                    "excluded_candidate_ids",
+                },
             )
             if action and "action" not in self.modalities:
                 raise ValueError("turn.commit.action requires the action output")
@@ -780,6 +858,39 @@ class ProtocolValidationComponent:
                 raise ValueError(
                     "turn.commit.action.guidance is only supported for proactive turns"
                 )
+            allowed_candidate_ids = self._bounded_candidate_id_list(
+                action.get("allowed_candidate_ids"),
+                "turn.commit.action.allowed_candidate_ids",
+            )
+            excluded_candidate_ids = self._bounded_candidate_id_list(
+                action.get("excluded_candidate_ids"),
+                "turn.commit.action.excluded_candidate_ids",
+            )
+            if (
+                (allowed_candidate_ids or excluded_candidate_ids)
+                and turn.turn_origin != TURN_ORIGIN_PROACTIVE
+            ):
+                raise ValueError(
+                    "per-turn action candidate constraints are only supported "
+                    "for proactive turns"
+                )
+            overlap = set(allowed_candidate_ids) & set(excluded_candidate_ids)
+            if overlap:
+                raise ValueError(
+                    "turn.commit.action candidate constraints overlap: "
+                    + ", ".join(sorted(overlap))
+                )
+            constrained_ids = (
+                set(allowed_candidate_ids)
+                if allowed_candidate_ids
+                else set(self.candidate_by_id)
+            )
+            constrained_ids.difference_update(excluded_candidate_ids)
+            if (allowed_candidate_ids or excluded_candidate_ids) and not constrained_ids:
+                raise ValueError(
+                    "turn.commit.action candidate constraints leave no "
+                    "executable action"
+                )
 
             avatar_state = event.get("avatar_state", {})
             if not isinstance(avatar_state, dict):
@@ -803,6 +914,13 @@ class ProtocolValidationComponent:
                 "text_role": turn.text_role,
                 "trigger": turn.trigger,
                 "reply_context": context,
+                "scene_context": scene_context,
+                "scene_reply_guidance": scene_reply_guidance,
+                "last_executed_action_id": (
+                    last_action_id.strip() if last_action_id is not None else None
+                ),
+                "action_allowed_candidate_ids": allowed_candidate_ids,
+                "action_excluded_candidate_ids": excluded_candidate_ids,
                 "avatar_state": internal_state,
                 "_reply_provided": reply_provided,
             }
@@ -1119,4 +1237,3 @@ class ProtocolComponent:
 
 MultimodalValidationMixin = ProtocolValidationComponent
 MultimodalProtocolMixin = ProtocolComponent
-

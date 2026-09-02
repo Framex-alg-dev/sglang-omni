@@ -12,6 +12,7 @@ from sglang_omni.serve.realtime.session_memory import (
     SESSION_MEMORY_READ_ENABLED_ENV,
     SESSION_MEMORY_WRITE_ENABLED_ENV,
     ExtractedMemoryOperation,
+    ExtractedOpenThreadOperation,
     ExtractedTurnMemory,
     SessionMemoryConfig,
     SessionMemoryScheduler,
@@ -72,6 +73,7 @@ def extracted_turn(
     turn: SessionMemoryTurn,
     *operations: ExtractedMemoryOperation,
     artifact_kind: str = "none",
+    thread_operations: tuple[ExtractedOpenThreadOperation, ...] = (),
 ) -> ExtractedTurnMemory:
     return ExtractedTurnMemory(
         turn_id=turn.turn_id,
@@ -80,6 +82,7 @@ def extracted_turn(
         assistant_summary=turn.assistant_text,
         artifact_kind=artifact_kind,
         operations=tuple(operations),
+        thread_operations=thread_operations,
     )
 
 
@@ -173,6 +176,52 @@ def test_parse_memory_extraction_rejects_invalid_json() -> None:
             expected_turns=[memory_turn("turn-1", 1)],
             config=SessionMemoryConfig(),
         )
+
+
+def test_parse_memory_extraction_parses_bounded_open_thread_operations() -> None:
+    turn = memory_turn(
+        "turn-thread-1",
+        1,
+        user_text="我正在等待面试结果，之后再告诉你。",
+    )
+    payload = {
+        "turns": [
+            {
+                "turn_id": turn.turn_id,
+                "turn_seq": turn.turn_seq,
+                "episode": {"artifact_kind": "none"},
+                "operations": [],
+                "thread_operations": [
+                    {
+                        "op": "open",
+                        "content": "用户正在等待面试结果",
+                        "evidence": "我正在等待面试结果",
+                        "confidence": 0.97,
+                    },
+                    {"op": "noop"},
+                    {
+                        "op": "open",
+                        "content": "超过单 Turn 上限的事项",
+                        "evidence": "之后再告诉你",
+                        "confidence": 0.9,
+                    },
+                ],
+            }
+        ]
+    }
+
+    parsed = parse_memory_extraction(
+        json.dumps(payload, ensure_ascii=False),
+        expected_turns=[turn],
+        config=SessionMemoryConfig(),
+    )
+
+    assert [operation.op for operation in parsed[0].thread_operations] == [
+        "open",
+        "noop",
+    ]
+    assert parsed[0].thread_operations[0].content == "用户正在等待面试结果"
+    assert parsed[0].thread_operations[0].confidence == pytest.approx(0.97)
 
 
 def test_parse_memory_extraction_rejects_partial_batch() -> None:
@@ -395,6 +444,137 @@ def test_store_rejects_low_confidence_and_mismatched_text_evidence() -> None:
     assert stats.added == 0
     assert stats.rejected == 2
     assert store.active_claims() == []
+
+
+def test_open_thread_lifecycle_and_proactive_snapshot_are_bounded() -> None:
+    config = SessionMemoryConfig(
+        max_injected_claims=2,
+        max_injected_open_threads=1,
+    )
+    store = SessionMemoryStore(config)
+    first = memory_turn(
+        "turn-thread-1",
+        1,
+        user_text="我正在等待面试结果，之后再告诉你。",
+    )
+    stats = store.apply(
+        [
+            extracted_turn(
+                first,
+                thread_operations=(
+                    ExtractedOpenThreadOperation(
+                        op="open",
+                        content="用户正在等待面试结果",
+                        evidence="我正在等待面试结果",
+                        confidence=0.98,
+                    ),
+                ),
+            )
+        ],
+        {1: first},
+    )
+
+    assert stats.opened_thread_count == 1
+    thread = store.active_open_threads()[0]
+    assert thread.source_authority == "user_supported"
+    assert thread.proactive_attempt_count == 0
+
+    proactive = store.build_proactive_context(language="zh")
+    assert proactive is not None
+    assert proactive.open_thread_count == 1
+    assert proactive.episode_count == 0
+    assert proactive.artifact_count == 0
+    assert proactive.selected_open_thread_ids == (thread.thread_id,)
+    assert "用户正在等待面试结果" in proactive.text
+
+    revision_before_delivery = store.revision
+    store.mark_proactive_threads_used(proactive.selected_open_thread_ids)
+    assert store.revision == revision_before_delivery
+    assert store.build_proactive_context(language="zh") is None
+
+    second = memory_turn(
+        "turn-thread-2",
+        2,
+        user_text="面试结束了，现在正在等待录用结果。",
+    )
+    stats = store.apply(
+        [
+            extracted_turn(
+                second,
+                thread_operations=(
+                    ExtractedOpenThreadOperation(
+                        op="update",
+                        thread_id=thread.thread_id,
+                        content="用户正在等待面试录用结果",
+                        evidence="现在正在等待录用结果",
+                        confidence=0.96,
+                    ),
+                ),
+            )
+        ],
+        {2: second},
+    )
+
+    assert stats.updated_thread_count == 1
+    assert thread.content == "用户正在等待面试录用结果"
+    assert thread.proactive_attempt_count == 0
+    assert store.build_proactive_context(language="zh") is not None
+
+    third = memory_turn(
+        "turn-thread-3",
+        3,
+        user_text="我已经收到录用结果了，这件事结束了。",
+    )
+    stats = store.apply(
+        [
+            extracted_turn(
+                third,
+                thread_operations=(
+                    ExtractedOpenThreadOperation(
+                        op="resolve",
+                        thread_id=thread.thread_id,
+                        evidence="这件事结束了",
+                        confidence=0.99,
+                    ),
+                ),
+            )
+        ],
+        {3: third},
+    )
+
+    assert stats.closed_thread_count == 1
+    assert store.active_open_threads() == []
+    assert store.build_proactive_context(language="zh") is None
+
+
+def test_open_thread_rejects_content_not_grounded_in_user_evidence() -> None:
+    store = SessionMemoryStore(SessionMemoryConfig())
+    turn = memory_turn(
+        "turn-thread-ungrounded",
+        1,
+        user_text="我正在等待面试结果。",
+    )
+
+    stats = store.apply(
+        [
+            extracted_turn(
+                turn,
+                thread_operations=(
+                    ExtractedOpenThreadOperation(
+                        op="open",
+                        content="用户计划下个月去国外旅行",
+                        evidence="我正在等待面试结果",
+                        confidence=0.99,
+                    ),
+                ),
+            )
+        ],
+        {1: turn},
+    )
+
+    assert stats.opened_thread_count == 0
+    assert stats.rejected == 1
+    assert store.active_open_threads() == []
 
 
 def test_store_rejects_stale_snapshot_and_late_older_overwrite() -> None:

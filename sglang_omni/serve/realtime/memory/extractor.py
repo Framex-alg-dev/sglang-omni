@@ -18,10 +18,13 @@ from sglang_omni.serve.realtime.memory.models import (
     SENSITIVE_RE,
     SESSION_MEMORY_EXTRACTION_TASK,
     ExtractedMemoryOperation,
+    ExtractedOpenThreadOperation,
     ExtractedTurnMemory,
     SessionMemoryConfig,
     SessionMemoryTurn,
     canonical_predicate,
+    THREAD_OPERATIONS,
+    THREAD_OPERATION_NOOP,
 )
 
 
@@ -51,13 +54,23 @@ def memory_extraction_system_prompt(language: str) -> str:
             "由服务端直接保存，绝不能成为用户事实来源；只有用户明确要求并得到可继续、"
             "复述或修改的语言产物时 artifact_kind 才能非 none，普通聊天必须为 none。"
             "artifact_kind 只能是 none、story、copywriting、translation、explanation 或 other。"
+            "另外维护少量尚未闭环且以后主动提及仍有价值的 open_threads。只有用户明确"
+            "表示某件事情、任务、等待结果、悬念或持续需求仍未完成时才能 open；一次性"
+            "请求、普通问题、短暂情绪和 assistant 提议不能创建 thread。已有 thread 的"
+            "后续进展使用 update；用户说明事情完成使用 resolve；用户拒绝继续或明确"
+            "不想再谈使用 reject。update、resolve、reject 必须引用输入中已有 thread_id。"
+            "每项必须给出用户原话 evidence 和不低于 0.65 的 confidence。每 Turn 最多两项"
+            "thread_operation；没有变化时输出 noop。"
             "只输出严格 JSON，不输出 Markdown 或解释。格式："
             '{"turns":[{"turn_id":"...","turn_seq":1,"episode":'
             '{"user_summary":"...或null","assistant_summary":"...或null",'
             '"artifact_kind":"none"},"operations":[{"op":"add|supersede|'
             'retract|noop","subject":"user","predicate":"...","value":"...",'
             '"content":"...","lifecycle":"session|until_replaced|historical",'
-            '"target_memory_ids":[],"evidence":"用户原话","confidence":0.95}]}]}'
+            '"target_memory_ids":[],"evidence":"用户原话","confidence":0.95}],'
+            '"thread_operations":[{"op":"open|update|resolve|reject|noop",'
+            '"thread_id":"thread_1或空","content":"未闭环内容",'
+            '"evidence":"用户原话","confidence":0.95}]}]}'
         )
     return (
         "You are a high-precision memory extractor for the current session. The input "
@@ -90,12 +103,25 @@ def memory_extraction_system_prompt(language: str) -> str:
         "the user explicitly requested a reusable language deliverable that could later be "
         "continued, repeated, or revised; ordinary conversation must use none. artifact_kind "
         "must be none, story, copywriting, "
-        "translation, explanation, or other. Output strict JSON only, with shape: "
+        "translation, explanation, or other. "
+        "Also maintain a very small set of open_threads: unfinished matters, pending "
+        "results, promises, or continuing needs explicitly stated by the user and still "
+        "valuable in a later proactive conversation. Do not open a thread for one-shot "
+        "requests, ordinary questions, temporary emotions, or assistant proposals. Use "
+        "update for progress on an active input thread, resolve when the user says it is "
+        "finished, and reject when the user declines further discussion. update, resolve, "
+        "and reject must reference an active input thread_id. Every thread operation needs "
+        "verbatim user evidence and confidence of at least 0.65. Emit at most two thread "
+        "operations per turn; use noop when nothing changes. Output strict JSON only, "
+        "with shape: "
         '{"turns":[{"turn_id":"...","turn_seq":1,"episode":'
         '{"user_summary":"... or null","assistant_summary":"... or null",'
         '"artifact_kind":"none"},"operations":[{"op":"add|supersede|retract|noop",'
         '"subject":"user","predicate":"...","value":"...","content":"...",'
         '"lifecycle":"session|until_replaced|historical","target_memory_ids":[], '
+        '"evidence":"verbatim user words","confidence":0.95}],'
+        '"thread_operations":[{"op":"open|update|resolve|reject|noop",'
+        '"thread_id":"thread_1 or empty","content":"unfinished item",'
         '"evidence":"verbatim user words","confidence":0.95}]}]}'
     )
 
@@ -110,12 +136,18 @@ def build_memory_extraction_request(
     active_claims: Sequence[dict[str, str]],
     config: SessionMemoryConfig,
     base_store_revision: int = 0,
+    active_threads: Sequence[dict[str, str]] = (),
 ) -> GenerateRequest:
     parts: list[dict[str, Any]] = [
         {
             "type": "text",
             "text": "active_session_claims="
             + json.dumps(active_claims, ensure_ascii=False, separators=(",", ":")),
+        },
+        {
+            "type": "text",
+            "text": "active_open_threads="
+            + json.dumps(active_threads, ensure_ascii=False, separators=(",", ":")),
         },
         {"type": "text", "text": f"base_store_revision={base_store_revision}"},
     ]
@@ -245,6 +277,13 @@ def _parse_turn(
             operation = _parse_operation(raw_operation, config)
             if operation is not None:
                 operations.append(operation)
+    thread_operations: list[ExtractedOpenThreadOperation] = []
+    raw_thread_operations = raw_turn.get("thread_operations")
+    if isinstance(raw_thread_operations, list):
+        for raw_operation in raw_thread_operations[:2]:
+            operation = _parse_thread_operation(raw_operation, config)
+            if operation is not None:
+                thread_operations.append(operation)
     return ExtractedTurnMemory(
         turn_id=turn_id,
         turn_seq=turn_seq,
@@ -256,6 +295,7 @@ def _parse_turn(
         ),
         artifact_kind=artifact_kind,
         operations=tuple(operations),
+        thread_operations=tuple(thread_operations),
     )
 
 
@@ -325,4 +365,38 @@ def _parse_operation(
         value=raw_value.strip()[: config.max_claim_content_chars],
         content=content.strip()[: config.max_claim_content_chars],
         lifecycle=lifecycle,
+    )
+
+
+def _parse_thread_operation(
+    value: Any,
+    config: SessionMemoryConfig,
+) -> ExtractedOpenThreadOperation | None:
+    if not isinstance(value, dict):
+        return None
+    op = value.get("op")
+    if op not in THREAD_OPERATIONS:
+        return None
+    if op == THREAD_OPERATION_NOOP:
+        return ExtractedOpenThreadOperation(op=op)
+    thread_id = value.get("thread_id", "")
+    content = value.get("content", "")
+    evidence = value.get("evidence", "")
+    confidence = value.get("confidence", 0.0)
+    if not all(isinstance(item, str) for item in (thread_id, content, evidence)):
+        return None
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        confidence = 0.0
+    if op != "open" and not thread_id.startswith("thread_"):
+        return None
+    if op in {"open", "update"} and not content.strip():
+        return None
+    if not evidence.strip():
+        confidence = 0.0
+    return ExtractedOpenThreadOperation(
+        op=op,
+        thread_id=thread_id.strip(),
+        content=content.strip()[: config.max_open_thread_content_chars],
+        evidence=evidence.strip()[: config.max_open_thread_content_chars],
+        confidence=max(0.0, min(float(confidence), 1.0)),
     )
