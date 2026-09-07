@@ -465,6 +465,22 @@ def load_realtime_session_debug(
                     points.get("tts_first_append_sent"),
                     points.get("tts_first_audio_received"),
                 ),
+                "tts_text_stream_ms": _monotonic_elapsed_ms(
+                    points.get("tts_first_append_sent"),
+                    points.get("tts_commit_sent"),
+                ),
+                "tts_provider_queue_ms": _monotonic_elapsed_ms(
+                    points.get("tts_commit_sent"),
+                    points.get("tts_response_created"),
+                ),
+                "tts_provider_first_pcm_ms": _monotonic_elapsed_ms(
+                    points.get("tts_response_created"),
+                    points.get("tts_first_audio_received"),
+                ),
+                "tts_commit_to_first_pcm_ms": _monotonic_elapsed_ms(
+                    points.get("tts_commit_sent"),
+                    points.get("tts_first_audio_received"),
+                ),
                 "commit_to_first_audio_ms": _monotonic_elapsed_ms(
                     commit, points.get("response_first_audio_delta_sent")
                 ),

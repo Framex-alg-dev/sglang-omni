@@ -64,6 +64,14 @@ from sglang_omni.serve.realtime.memory import (
     build_memory_extraction_request,
     parse_memory_extraction,
 )
+from sglang_omni.serve.realtime.knowledge import (
+    KnowledgeBinding,
+    KnowledgeContext,
+    KnowledgeController,
+    ProvidedEntitySnapshot,
+    KnowledgeGatewayClient,
+    RealtimeKnowledgeConfig,
+)
 from sglang_omni.utils.structured_logs import (
     get_structured_log_writer,
     new_trace_id,
@@ -156,6 +164,7 @@ class MultimodalSession:
         embedded_tts_connector: Callable[..., Any] | None = None,
         session_memory_config: SessionMemoryConfig | None = None,
         session_memory_scheduler: SessionMemoryScheduler | None = None,
+        knowledge_controller: KnowledgeController | None = None,
     ) -> None:
         self.websocket = websocket
         self.client = client
@@ -204,6 +213,13 @@ class MultimodalSession:
             if self.session_memory_config is not None
             else None
         )
+        self.knowledge_controller = knowledge_controller
+        self.knowledge_binding: KnowledgeBinding | None = None
+        self.provided_entity_snapshot: ProvidedEntitySnapshot | None = None
+        self.provided_entity_context: KnowledgeContext | None = None
+        self.passive_action_policy_metadata: dict[str, Any] | None = None
+        self._knowledge_state_lock = asyncio.Lock()
+        self._knowledge_commit_task: asyncio.Task[Any] | None = None
         if (
             self.session_memory_config is not None
             and self.session_memory_scheduler is None
@@ -768,6 +784,8 @@ class MultimodalSessionManager:
         allow_unregistered_protocol_actions: bool = False,
         embedded_tts_config: EmbeddedTTSConfig | None = None,
         embedded_tts_connector: Callable[..., Any] | None = None,
+        knowledge_config: RealtimeKnowledgeConfig | None = None,
+        knowledge_client: KnowledgeGatewayClient | None = None,
     ) -> None:
         self.client = client
         self.model_name = model_name
@@ -780,6 +798,14 @@ class MultimodalSessionManager:
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
         self.embedded_tts_connector = embedded_tts_connector
+        self.knowledge_config = knowledge_config or RealtimeKnowledgeConfig.from_env()
+        self.knowledge_config.validate()
+        self.knowledge_client = knowledge_client
+        if self.knowledge_config.enabled and self.knowledge_client is None:
+            self.knowledge_client = KnowledgeGatewayClient(self.knowledge_config)
+        self.knowledge_controller = KnowledgeController(
+            self.knowledge_config, self.knowledge_client
+        )
         self.global_action_prewarm = (
             global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
         )
@@ -855,7 +881,12 @@ class MultimodalSessionManager:
             request_resource_sample=self.resource_sample_requester,
             session_memory_config=self.session_memory_config,
             session_memory_scheduler=self.session_memory_scheduler,
+            knowledge_controller=self.knowledge_controller,
         )
+
+    async def close(self) -> None:
+        if self.knowledge_client is not None:
+            await self.knowledge_client.close()
 
     def claim(self, session_id: str, session: MultimodalSession) -> None:
         if session_id in self.sessions:

@@ -1046,6 +1046,43 @@ def serve(
         int,
         typer.Option("--realtime-tts-provisional-audio-max-milliseconds"),
     ] = 10000,
+    realtime_knowledge_url: Annotated[
+        str | None,
+        typer.Option(
+            "--realtime-knowledge-url",
+            help="Knowledge Gateway base URL for manual realtime sessions.",
+        ),
+    ] = None,
+    realtime_knowledge_default_tenant: Annotated[
+        str | None,
+        typer.Option(
+            "--realtime-knowledge-default-tenant",
+            help=(
+                "Fallback tenant when a trusted x-tenant-id header is absent. "
+                "Use only for single-tenant deployments."
+            ),
+        ),
+    ] = None,
+    realtime_knowledge_connect_timeout_seconds: Annotated[
+        float,
+        typer.Option("--realtime-knowledge-connect-timeout-seconds"),
+    ] = 1.0,
+    realtime_knowledge_turn_timeout_ms: Annotated[
+        int,
+        typer.Option("--realtime-knowledge-turn-timeout-ms"),
+    ] = 1200,
+    realtime_knowledge_max_concurrency: Annotated[
+        int,
+        typer.Option("--realtime-knowledge-max-concurrency"),
+    ] = 128,
+    realtime_knowledge_max_context_chars: Annotated[
+        int,
+        typer.Option("--realtime-knowledge-max-context-chars"),
+    ] = 6000,
+    realtime_knowledge_max_evidence: Annotated[
+        int,
+        typer.Option("--realtime-knowledge-max-evidence"),
+    ] = 4,
     mem_fraction_static: Annotated[
         float | None,
         typer.Option(
@@ -1447,4 +1484,15 @@ def serve(
         realtime_tts_provisional_audio_max_milliseconds=(
             realtime_tts_provisional_audio_max_milliseconds
         ),
+        realtime_knowledge_url=realtime_knowledge_url,
+        realtime_knowledge_default_tenant=realtime_knowledge_default_tenant,
+        realtime_knowledge_connect_timeout_seconds=(
+            realtime_knowledge_connect_timeout_seconds
+        ),
+        realtime_knowledge_turn_timeout_ms=realtime_knowledge_turn_timeout_ms,
+        realtime_knowledge_max_concurrency=realtime_knowledge_max_concurrency,
+        realtime_knowledge_max_context_chars=(
+            realtime_knowledge_max_context_chars
+        ),
+        realtime_knowledge_max_evidence=realtime_knowledge_max_evidence,
     )

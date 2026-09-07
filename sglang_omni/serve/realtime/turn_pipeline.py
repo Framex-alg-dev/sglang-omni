@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
@@ -27,6 +27,8 @@ from sglang_omni.utils.structured_logs import (
     get_structured_log_writer,
 )
 from sglang_omni.serve.realtime.proactive import proactive_scene_policy
+from sglang_omni.serve.realtime.knowledge import KnowledgeEntityHint
+from sglang_omni.serve.realtime.knowledge.models import PreparedKnowledgeTurn
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,138 @@ class TurnInferenceOutcome:
 
 
 class TurnPipeline:
+    async def _wait_for_knowledge_commit(self) -> None:
+        pending = self._knowledge_commit_task
+        if pending is None:
+            return
+        await asyncio.shield(pending)
+
+    async def _apply_knowledge_script_event(
+        self,
+        *,
+        turn_id: str,
+        script_id: str,
+        event: str,
+        script_version: int | None,
+        checksum: str | None,
+    ) -> Any:
+        await self._wait_for_knowledge_commit()
+        async with self._knowledge_state_lock:
+            binding = self.knowledge_binding
+            if binding is None or self.knowledge_controller is None:
+                raise RuntimeError("knowledge script event requires a binding")
+            updated = await self.knowledge_controller.script_event(
+                binding=binding,
+                session_id=self.session_id,
+                turn_id=turn_id,
+                script_id=script_id,
+                event=event,
+                script_version=script_version,
+                checksum=checksum,
+            )
+            self.knowledge_binding = updated
+            return updated
+
+    def _start_knowledge_commit(
+        self, prepared: PreparedKnowledgeTurn
+    ) -> asyncio.Task[Any]:
+        existing = self._knowledge_commit_task
+        if existing is not None and not existing.done():
+            raise RuntimeError("a knowledge state commit is already in progress")
+
+        async def commit() -> Any:
+            async with self._knowledge_state_lock:
+                binding = self.knowledge_binding
+                if binding is None or self.knowledge_controller is None:
+                    raise RuntimeError("knowledge binding disappeared before commit")
+                context = await self.knowledge_controller.commit_prepared_turn(
+                    binding=binding,
+                    prepared=prepared,
+                )
+                if context.degraded_code in {
+                    "COMMIT_OUTCOME_UNKNOWN",
+                    "STATE_VERSION_CONFLICT",
+                    "PREPARATION_EXPIRED",
+                    "PREPARATION_MISMATCH",
+                }:
+                    self.knowledge_binding = replace(binding, status="degraded")
+                else:
+                    self.knowledge_binding = replace(
+                        binding,
+                        state_token=context.state_token,
+                    )
+                return context
+
+        task = asyncio.create_task(
+            commit(),
+            name=f"session-knowledge-commit-{self.session_id}-{prepared.turn_id}",
+        )
+        self._knowledge_commit_task = task
+
+        def clear(completed: asyncio.Task[Any]) -> None:
+            if (
+                self._knowledge_commit_task is completed
+                and not completed.cancelled()
+                and completed.exception() is None
+            ):
+                self._knowledge_commit_task = None
+
+        task.add_done_callback(clear)
+        return task
+
+    async def _consume_prepared_knowledge(
+        self,
+        prepare_task: asyncio.Task[PreparedKnowledgeTurn],
+        *,
+        turn: TurnBuffer,
+        route_completed_at: float,
+    ) -> Any:
+        consume_started = time.perf_counter()
+        prepared = await prepare_task
+        prepare_timing = prepared.payload.get("timing_ms", {})
+        emit_structured_log(
+            "performance",
+            "knowledge_prepare_ready",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            preparation_id=prepared.preparation_id,
+            decision=prepared.payload.get("decision"),
+            prepare_ms=prepare_timing.get("total"),
+            error_code=prepared.error_code,
+        )
+        commit_started = time.perf_counter()
+        commit_task = self._start_knowledge_commit(prepared)
+        emit_structured_log(
+            "performance",
+            "knowledge_commit_started",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            preparation_id=prepared.preparation_id,
+        )
+        context = await asyncio.shield(commit_task)
+        emit_structured_log(
+            "performance",
+            "knowledge_commit_completed",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            preparation_id=prepared.preparation_id,
+            decision=context.decision,
+            degraded_code=context.degraded_code,
+            commit_ms=round((time.perf_counter() - commit_started) * 1000, 3),
+            route_overlap_ms=round(
+                max(0.0, route_completed_at - prepared.started_at) * 1000,
+                3,
+            ),
+            effective_knowledge_wait_ms=round(
+                (time.perf_counter() - consume_started) * 1000,
+                3,
+            ),
+        )
+        return context
+
     """Turn-level orchestration composed into ``MultimodalSession``."""
 
     def _prepare_turn_commit(self, event: dict[str, Any]) -> TurnCommitInput:
@@ -131,6 +265,19 @@ class TurnPipeline:
             ):
                 raise ValueError("scene_reply_guidance must be a string or null")
             turn.scene_reply_guidance = scene_reply_guidance
+        if "knowledge_entity_hints" in event:
+            turn.knowledge_entity_hints = tuple(
+                KnowledgeEntityHint(
+                    type=item["type"],
+                    external_id=item["external_id"],
+                    display_name=item.get("display_name"),
+                )
+                for item in (event.get("knowledge_entity_hints") or [])
+            )
+        if "knowledge_script_id" in event:
+            turn.knowledge_script_id = event.get("knowledge_script_id")
+            turn.knowledge_script_version = event.get("knowledge_script_version")
+            turn.knowledge_script_checksum = event.get("knowledge_script_checksum")
         if "action_allowed_candidate_ids" in event:
             turn.action_allowed_candidate_ids = tuple(
                 event.get("action_allowed_candidate_ids") or ()
@@ -521,6 +668,27 @@ class TurnPipeline:
                     ),
                 }
             )
+        if turn.knowledge_context is not None:
+            result["knowledge"] = {
+                "decision": turn.knowledge_context.decision,
+                "reason": turn.knowledge_context.reason,
+                "result_id": turn.knowledge_context.result_id,
+                "snapshot_id": turn.knowledge_context.snapshot_id,
+                "capabilities": list(turn.knowledge_context.capabilities),
+                "evidence_refs": [
+                    {
+                        "evidence_id": item.evidence_id,
+                        "source_type": item.source_type,
+                        "source_id": item.source_id,
+                    }
+                    for item in turn.knowledge_context.evidence
+                ],
+                **(
+                    {"degraded_code": turn.knowledge_context.degraded_code}
+                    if turn.knowledge_context.degraded_code
+                    else {}
+                ),
+            }
         if self.include_scores and action is not None:
             result["scores"] = scores
             result["media_summary"] = {
@@ -681,12 +849,15 @@ class TurnPipeline:
         commit_started = commit_input.commit_started
         turn_id = turn.turn_id
         turn_outcome = "failed"
+        knowledge_script_started = False
+        knowledge_script_finished = False
 
         try:
             prepared_commit = await self._acknowledge_and_prepare_turn(commit_input)
             if prepared_commit is None:
                 turn_outcome = "cancelled"
                 return
+            await self._wait_for_knowledge_commit()
             prepared_current_images = prepared_commit.prepared_current_images
             image_preprocess_stats = prepared_commit.image_preprocess_stats
             action: dict[str, Any] | None = None
@@ -705,6 +876,8 @@ class TurnPipeline:
             reply_history_route: ReplyHistoryRouteResult | None = None
             preserve_language_reply_on_unsupported_action = False
             reply_route_decision_ready = False
+            knowledge_task: asyncio.Task[Any] | None = None
+            knowledge_prepare_task: asyncio.Task[PreparedKnowledgeTurn] | None = None
 
             def track_branch(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
                 task = asyncio.create_task(coroutine, name=name)
@@ -776,6 +949,36 @@ class TurnPipeline:
                 maybe_schedule_category_discard()
 
             provided_reply = turn.reply_provided
+            if provided_reply and turn.knowledge_script_id is not None:
+                if self.knowledge_binding is None:
+                    raise ValueError(
+                        "a bound knowledge session is required for a provided script"
+                    )
+                if self.knowledge_binding.mode == "retrieval":
+                    if self.knowledge_controller is None:
+                        raise ValueError(
+                            "Knowledge Gateway integration is not configured"
+                        )
+                    previous_knowledge_binding = self.knowledge_binding
+                    self.knowledge_binding = await self._apply_knowledge_script_event(
+                        turn_id=turn.turn_id,
+                        script_id=turn.knowledge_script_id,
+                        event="started",
+                        script_version=turn.knowledge_script_version,
+                        checksum=turn.knowledge_script_checksum,
+                    )
+                    knowledge_script_started = (
+                        self.knowledge_binding.status == "ready"
+                        and self.knowledge_binding.state_token
+                        != previous_knowledge_binding.state_token
+                    )
+                    if knowledge_script_started:
+                        emit_structured_log(
+                            "diagnostic", "knowledge_script_started",
+                            session_id=self.session_id, turn_id=turn.turn_id,
+                            trace_id=turn.trace_id, script_id=turn.knowledge_script_id,
+                            snapshot_id=self.knowledge_binding.snapshot_id,
+                        )
             silent_action_finished = (
                 provided_reply
                 and not turn.text
@@ -866,6 +1069,58 @@ class TurnPipeline:
                 await asyncio.sleep(0)
                 start_action_scoring()
 
+            knowledge_eligible = bool(
+                self.knowledge_binding is not None
+                and self.knowledge_controller is not None
+                and self.knowledge_binding.mode == "retrieval"
+                and not provided_reply
+                and turn.turn_origin == TURN_ORIGIN_USER
+                and isinstance(turn.text, str)
+                and turn.text.strip()
+            )
+            if (
+                self.knowledge_binding is not None
+                and self.knowledge_binding.mode == "provided_context"
+                and self.provided_entity_context is not None
+                and not provided_reply
+                and turn.turn_origin == TURN_ORIGIN_USER
+            ):
+                turn.knowledge_context = self.provided_entity_context
+            knowledge_speculative_enabled = bool(
+                getattr(
+                    getattr(self.knowledge_controller, "config", None),
+                    "speculative_enabled",
+                    False,
+                )
+            )
+            if (
+                knowledge_eligible
+                and knowledge_speculative_enabled
+            ):
+                recent_user_turns, recent_assistant_turns = (
+                    self._knowledge_recent_text_turns()
+                )
+                emit_structured_log(
+                    "performance",
+                    "knowledge_prepare_started",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                )
+                knowledge_prepare_task = track_branch(
+                    self.knowledge_controller.prepare_turn(
+                        binding=self.knowledge_binding,
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        text=turn.text.strip(),
+                        hints=turn.knowledge_entity_hints,
+                        recent_user_turns=recent_user_turns,
+                        recent_assistant_turns=recent_assistant_turns,
+                    ),
+                    name=f"session-knowledge-prepare-{self.session_id}-{turn.turn_id}",
+                )
+
             if reply_history_route_task is not None:
                 reply_history_route = await reply_history_route_task
 
@@ -886,6 +1141,44 @@ class TurnPipeline:
                 await provisional_discard_task
             start_action_scoring()
 
+            if knowledge_prepare_task is not None and pure_action_reply:
+                if not knowledge_prepare_task.done():
+                    knowledge_prepare_task.cancel()
+                await asyncio.gather(knowledge_prepare_task, return_exceptions=True)
+                emit_structured_log(
+                    "performance",
+                    "knowledge_prepare_cancelled",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    reason="pure_action",
+                )
+            elif knowledge_prepare_task is not None:
+                knowledge_task = track_branch(
+                    self._consume_prepared_knowledge(
+                        knowledge_prepare_task,
+                        turn=turn,
+                        route_completed_at=time.perf_counter(),
+                    ),
+                    name=f"session-knowledge-consume-{self.session_id}-{turn.turn_id}",
+                )
+            elif knowledge_eligible and not pure_action_reply:
+                recent_user_turns, recent_assistant_turns = (
+                    self._knowledge_recent_text_turns()
+                )
+                knowledge_task = track_branch(
+                    self.knowledge_controller.resolve_turn(
+                        binding=self.knowledge_binding,
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        text=turn.text.strip(),
+                        hints=turn.knowledge_entity_hints,
+                        recent_user_turns=recent_user_turns,
+                        recent_assistant_turns=recent_assistant_turns,
+                    ),
+                    name=f"session-knowledge-{self.session_id}-{turn.turn_id}",
+                )
+
             # Action scoring is already running, so the rare bounded memory
             # catch-up cannot postpone action admission. It only delays reply
             # construction when an R1 request depends on turns older than the
@@ -893,6 +1186,30 @@ class TurnPipeline:
             await self._wait_for_session_memory_catchup(
                 turn, reply_history_route
             )
+            if knowledge_task is not None:
+                turn.knowledge_context = await knowledge_task
+                if not knowledge_speculative_enabled:
+                    self.knowledge_binding = replace(
+                        self.knowledge_binding,
+                        state_token=turn.knowledge_context.state_token,
+                    )
+
+                emit_structured_log(
+                    "diagnostic",
+                    "knowledge_turn_resolved",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    decision=turn.knowledge_context.decision,
+                    reason=turn.knowledge_context.reason,
+                    result_id=turn.knowledge_context.result_id,
+                    snapshot_id=turn.knowledge_context.snapshot_id,
+                    capability_count=len(turn.knowledge_context.capabilities),
+                    evidence_count=len(turn.knowledge_context.evidence),
+                    degraded_code=turn.knowledge_context.degraded_code,
+                    elapsed_ms=round(turn.knowledge_context.elapsed_ms, 3),
+                )
 
             if (
                 fusion_reply
@@ -1121,6 +1438,25 @@ class TurnPipeline:
             if provisional_state is not None and reply_timing is not None:
                 reply_timing = self._provisional_reply_timing(provisional_state)
 
+            if knowledge_script_started and not suppress_reply_for_unsupported_action:
+                assert self.knowledge_binding is not None
+                assert self.knowledge_controller is not None
+                assert turn.knowledge_script_id is not None
+                self.knowledge_binding = await self._apply_knowledge_script_event(
+                    turn_id=turn.turn_id,
+                    script_id=turn.knowledge_script_id,
+                    event="completed",
+                    script_version=turn.knowledge_script_version,
+                    checksum=turn.knowledge_script_checksum,
+                )
+                knowledge_script_finished = True
+                emit_structured_log(
+                    "diagnostic", "knowledge_script_completed",
+                    session_id=self.session_id, turn_id=turn.turn_id,
+                    trace_id=turn.trace_id, script_id=turn.knowledge_script_id,
+                    snapshot_id=self.knowledge_binding.snapshot_id,
+                )
+
             turn_status = await self._finalize_turn_success(
                 prepared_commit,
                 TurnInferenceOutcome(
@@ -1210,6 +1546,35 @@ class TurnPipeline:
                 turn_id=turn_id,
             )
         finally:
+            if (
+                knowledge_script_started
+                and not knowledge_script_finished
+                and turn.knowledge_script_id is not None
+                and self.knowledge_binding is not None
+                and self.knowledge_controller is not None
+            ):
+                try:
+                    self.knowledge_binding = await self._apply_knowledge_script_event(
+                        turn_id=turn.turn_id,
+                        script_id=turn.knowledge_script_id,
+                        event="interrupted",
+                        script_version=turn.knowledge_script_version,
+                        checksum=turn.knowledge_script_checksum,
+                    )
+                    knowledge_script_finished = True
+                    emit_structured_log(
+                        "diagnostic", "knowledge_script_interrupted",
+                        session_id=self.session_id, turn_id=turn.turn_id,
+                        trace_id=turn.trace_id, script_id=turn.knowledge_script_id,
+                        snapshot_id=self.knowledge_binding.snapshot_id,
+                    )
+                except Exception as exc:
+                    emit_structured_log(
+                        "error", "knowledge_script_interrupt_failed", level="warning",
+                        session_id=self.session_id, turn_id=turn.turn_id,
+                        trace_id=turn.trace_id, script_id=turn.knowledge_script_id,
+                        error_type=type(exc).__name__, error_message=str(exc),
+                    )
             self._request_turn_resource_sample(
                 "turn_after_terminal",
                 turn=turn,
@@ -1219,6 +1584,35 @@ class TurnPipeline:
                     3,
                 ),
             )
+    def _knowledge_recent_text_turns(self) -> tuple[list[str], list[str]]:
+        user_turns: list[str] = []
+        assistant_turns: list[str] = []
+        for history_turn in self.reply_history_turns[-4:]:
+            for message in history_turn.messages:
+                role = message.get("role")
+                text = self._knowledge_message_text(message.get("content"))
+                if not text:
+                    continue
+                if role == "user":
+                    user_turns.append(text)
+                elif role == "assistant":
+                    assistant_turns.append(text)
+        return user_turns[-8:], assistant_turns[-4:]
+
+    @staticmethod
+    def _knowledge_message_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        return "\n".join(
+            str(item.get("text", "")).strip()
+            for item in content
+            if isinstance(item, dict)
+            and item.get("type") in {"text", "input_text"}
+            and str(item.get("text", "")).strip()
+        )
+
     def _request_turn_resource_sample(
         self,
         sample_trigger: str,

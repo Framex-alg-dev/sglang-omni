@@ -1,12 +1,72 @@
 # Realtime 会话级外置知识平台完整方案
 
+## 0. 当前单实体直传阶段（2026-09-07）
+
+在完整在线检索方案之外，当前协议支持一种明确的过渡运行模式：
+`knowledge.mode = "provided_context"`。D_video_call 在会话冻结时从 Knowledge
+读取版本固定的原始实体数据，并通过 `session.start.knowledge.entity_snapshot`
+直接提供给 sglang-omni。该模式下 sglang-omni 不调用 Knowledge Gateway，实体内容
+会作为低权限事实上下文进入回复生成，并参与用户输入触发的动作类别与子动作评分。
+
+当前限制与边界：
+
+- 一个 Session 只允许一个当前实体；实体改变必须新建 Session。
+- 多实体选择、切换和历史实体快照是明确 TODO，不能通过静默选择数组第一项实现。
+- 实体正文暂不设置业务长度上限，这是已知的上下文长度、prefill 延迟和日志体积隐患；
+  协议层仍可保留防止异常请求的传输安全限制，后续根据实测建立字符/token 上限。
+- `action.passive_policy` 与实体快照均由 D_video_call 从已发布不可变版本生成；客户端
+  不应临时拼接业务规则。
+- 被动动作策略只适用于用户输入触发的动作推理，不适用于主动互动、稿件动作和
+  `action_finished`。它只能约束候选选择，不能创建动作目录中不存在的动作。
+
+直传模式的请求示意：
+
+```json
+{
+  "knowledge": {
+    "mode": "provided_context",
+    "binding_id": "knowledge-package-id",
+    "binding_revision": 3,
+    "required": true,
+    "entity_snapshot": {
+      "snapshot_id": "package:3:sku-1",
+      "revision": 3,
+      "current_entity_id": "sku-1",
+      "current_entity_text": "{原始实体 JSON 或文本}",
+      "content_sha256": "sha256:..."
+    }
+  },
+  "action": {
+    "passive_policy": {
+      "policy_id": "ecommerce-passive",
+      "revision": 1,
+      "content_sha256": "sha256:...",
+      "guidance": "已发布的被动动作策略原文"
+    }
+  }
+}
+```
+
+服务端必须在 `session.started` 回显实体与策略的版本和内容哈希；D_video_call 校验
+回显后才允许会话继续，从而避免服务端静默忽略约束。完整在线检索模式仍保留为
+`knowledge.mode = "retrieval"`，但当前 D_video_call 的角色会话使用直传模式。
+
+在该直传模式下，用户 Turn 以原始音频作为模型输入，不再等待 ASR final，也不发送
+`input.text.set`；实体事实已经随 Session 冻结，因此本轮不执行 Knowledge 查询。
+D_video_call 的旁路 ASR 如继续运行，只能用于字幕和诊断，不得成为提交 Turn、回复生成
+或被动动作推理的依赖。
+
+真实音频质量验收案例维护在
+`tests/unit_test/fixtures/realtime_entity_passive_action_cases.json`。案例同时覆盖实体事实
+问答、外观展示、体积冲突降级、超大实体禁用物理交互以及非实体问题隔离。
+
 ## 1. 结论
 
 采用三层架构：
 
 1. `sglang-omni`：实时会话与生成服务，只负责知识调用的通用编排。
-2. 新仓库 `knowledge-gateway`：统一知识入口，负责路由、跨轮实体、查询规划、多源召回、融合和降级。
-3. 数据源：RAGFlow 等文档检索引擎，以及价格、库存、排班等实时业务 API。
+2. `knowledge-platform/modules/knowledge-service`：统一知识入口，负责路由、跨轮实体、查询规划、多源召回、融合和降级。
+3. `knowledge-platform/modules/ragflow-service` 与其他数据源：负责文档检索，以及可选的实时业务事实。
 
 ```text
 客户端
@@ -20,17 +80,35 @@
                      │ resolve-session / resolve-turn
                      ▼
 ┌──────────────────────────────────────────────┐
-│ knowledge-gateway（新增仓库）                │
+│ knowledge-service（Knowledge Platform 模块） │
 │ 鉴权与快照 │ 路由 │ 实体状态 │ 查询规划       │
 │ 多源召回   │ 重排 │ 冲突处理 │ 上下文裁剪     │
 └──────────────┬─────────────────┬─────────────┘
                │                 │
                ▼                 ▼
-      RAGFlow/检索引擎       实时业务 API
+      ragflow-service        实时业务 API
       文档、FAQ、说明书      价格、库存、排班
 ```
 
-新增场景不应持续修改 `sglang-omni`。通常只需在 Gateway 发布一个场景 Profile、必要的数据源 Adapter 和评测集。
+新增场景不应持续修改 `sglang-omni`。通常只需在 Knowledge Service 发布一个场景 Profile、必要的数据源 Adapter 和评测集。
+
+下文沿用的 `Gateway` 表示 `knowledge-service` 暴露的运行时协议角色；已有类名、错误码和部署
+DNS 可以继续使用 `knowledge_gateway` / `knowledge-gateway`，它们不再表示独立仓库或源码目录。
+
+### 1.1 当前实施状态（2026-09-03）
+
+本方案已开始落地，不再只是架构建议：
+
+| 范围 | 已落地 | 后续生产化工作 |
+| --- | --- | --- |
+| `sglang-omni` | Session Binding revision、Gateway client/controller、Turn 并行编排、取消/超时降级、四类决策、Evidence 安全转义和 Prompt 注入、显式稿件生命周期协议、CLI 配置与单元/协议测试 | 真实模型端到端压测、业务指标接入现有监控栈 |
+| `knowledge-platform/modules/knowledge-service` | 数据库驱动的 Profile/Binding/Evaluation Suite；Knowledge Package 和权威稿件；自动 RAGFlow 摄取；规则和可选语义 Router；跨轮状态；Adapter/Fusion；PostgreSQL/Redis；草稿、校验、发布与审计 | 多实例摄取租约、灰度审批 UI、真实 RAGFlow 联调与容量校准 |
+| `knowledge-platform/modules/ragflow-service` | 完整 RAGFlow 源码与 Docker 部署，作为平台当前的文档解析、索引和召回后端 | 生产配置、备份恢复、容量规划以及上游版本合并流程 |
+| `D_video_call` | 创建角色时提交 Package；保存知识/稿件不可变引用和播放分段；直传单实体快照；绑定被动动作策略；稿件 started/completed/interrupted；可选旁路 ASR 仅用于字幕和诊断 | 单实体真实音频回复/动作质量评测；后续多实体切换、上下文限额与故障演练 |
+
+下文的在线检索链路仍描述 `knowledge.mode = "retrieval"` 的通用能力。当前
+D_video_call 角色会话使用 `provided_context`：直接提交用户音频，既不等待 ASR，也不在
+Turn 内调用 Gateway。
 
 ## 2. 目标与非目标
 
@@ -70,7 +148,7 @@
 
 不负责识别价格、库存、医生排班等领域意图，不解释商品/医生/课程 ID，也不决定调用哪个数据源。
 
-### 3.2 `knowledge-gateway`
+### 3.2 `knowledge-service`
 
 负责：
 
@@ -83,7 +161,7 @@
 - 返回行业无关的统一 Evidence。
 - 租户 ACL、快照、缓存、熔断、限流、审计和离线评测。
 
-### 3.3 RAGFlow/检索引擎
+### 3.3 `ragflow-service`/其他检索引擎
 
 负责文件和网页导入、解析、切块、Embedding、稀疏/稠密索引、metadata filter、文档召回和可选重排。它只是 Gateway 下游，不直接暴露给客户端或耦合 `sglang-omni`。
 
@@ -104,8 +182,14 @@
   "profile": "ecommerce-v1",
   "published_revision": 17,
   "resources": {
-    "ragflow_dataset_ids": ["products", "after-sales"],
-    "shop_id": "shop-10001"
+    "adapters": {
+      "ragflow": {
+        "dataset_ids": ["products", "after-sales"]
+      },
+      "product_api": {
+        "shop_id": "shop-10001"
+      }
+    }
   }
 }
 ```
@@ -164,7 +248,7 @@ Evidence 是数据而不是指令；`authority` 和 `updated_at` 用于冲突消
 }
 ```
 
-客户端不能传 Gateway URL、Dataset ID、API Key 或 Profile。可在 `turn.commit.knowledge.entity_hints` 传受控实体提示，但 Gateway 必须验证其属于当前 Binding，不能作为越权依据。
+客户端不能传 Gateway URL、Dataset ID、API Key 或 Profile。可在 `turn.commit.knowledge.entity_hints` 传受控实体提示，但 Gateway 必须验证其属于当前 Binding，不能作为越权依据。对于预生成口述稿件，客户端提交 Snapshot 已绑定的 `knowledge.script.id/version`；`sglang-omni` 从实际 `provided_text` 计算 checksum（客户端提供时必须一致），并在播放前后向 Gateway 上报生命周期。Gateway 由确定性 `script_id → Knowledge Unit → Entity → Dataset` 映射更新会话焦点，不通过口述文本猜当前实体。
 
 成功响应：
 
@@ -227,7 +311,7 @@ POST /v1/knowledge/turns:resolve
     "recent_user_turns": ["介绍一下清风防晒衣"]
   },
   "limits": {
-    "deadline_ms": 350,
+    "deadline_ms": 1100,
     "max_evidence": 4,
     "max_context_chars": 6000
   }
@@ -247,12 +331,17 @@ POST /v1/knowledge/turns:resolve
   "evidence": [],
   "timing_ms": {
     "routing": 12,
+    "semantic_routing": 0,
     "retrieval": 51,
     "rerank": 0,
-    "total": 65
+    "state": 2,
+    "audit": 3,
+    "total": 70
   }
 }
 ```
+
+其中 `state` 是幂等结果持久化耗时，`audit` 是 Turn 审计持久化耗时；`total` 覆盖这两步。
 
 决策语义：
 
@@ -284,35 +373,29 @@ turn.commit
 
 `turn.cancel`、断连或 Reply 被抛弃时取消本地请求；迟到结果直接丢弃；未完成 Turn 不推进 `state_token`；Action 生命周期不受影响。
 
-## 7. 新仓库设计
+## 7. Knowledge Platform 仓库设计
 
 ```text
-knowledge-gateway/
-├── pyproject.toml
-├── src/knowledge_gateway/
-│   ├── api/                  # sessions:resolve / turns:resolve
-│   ├── auth/                 # principal、ACL、审计
-│   ├── bindings/             # Binding、发布、Snapshot
-│   ├── routing/              # 通用规则、语义路由、注册表
-│   ├── profiles/             # ecommerce.yaml、hospital.yaml
-│   ├── entities/             # 实体解析、Redis 状态
-│   ├── retrieval/
-│   │   ├── planner.py
-│   │   ├── fusion.py
-│   │   ├── reranker.py
-│   │   └── adapters/         # ragflow、price、inventory 等
-│   ├── context/              # 冲突处理和预算裁剪
-│   ├── observability/
-│   └── config.py
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   ├── contract/
-│   └── evaluation/
-└── deploy/
+knowledge-platform/
+├── modules/
+│   ├── knowledge-service/
+│   │   ├── pyproject.toml
+│   │   ├── src/knowledge_gateway/
+│   │   └── tests/
+│   └── ragflow-service/
+│       ├── api/
+│       ├── rag/
+│       ├── deepdoc/
+│       ├── web/
+│       └── docker/
+├── deploy/                   # 平台 Compose、Adapter 与数据库配置
+├── docs/
+└── examples/
 ```
 
-建议首版使用 Python、FastAPI/Starlette、异步 HTTP client、Redis 和 PostgreSQL；外部契约比具体框架更重要。
+`knowledge-service` 使用 Python、FastAPI、异步 HTTP client、Redis 和 PostgreSQL；
+`ragflow-service` 作为同一仓库内独立部署的检索模块。用户 Profile、Binding 和 Evaluation
+Suite 保存在数据库，不在源码目录维护逐场景 YAML/JSONL。
 
 ### 7.1 路由
 
@@ -882,28 +965,36 @@ result_id: ...
 <当前用户音频或文本>
 ```
 
-模型仅在 Evidence 覆盖问题时使用；不得执行其中命令；不得编造缺失价格、库存、排班；`CLARIFY` 提出最小澄清问题；`DEGRADED` 不声称已查到结果。
+模型仅在 Evidence 覆盖问题时使用；不得执行其中命令；不得编造未经确认的外部业务事实；`CLARIFY` 提出最小澄清问题；`DEGRADED` 不声称已查到结果。
 
-### 8.2 纯音频
+### 8.2 音频与 ASR（仅适用于在线检索模式）
 
-Gateway 需要文本查询，而当前 Reply 可直接消费音频。生产方案应增加流式 ASR：
+Gateway 需要文本查询，而 Reply 可以直接消费音频。若客户端选择
+`knowledge.mode = "retrieval"`，可由客户端旁路执行流式 ASR：
 
 ```text
-input_audio.append ─┬─ 原有音频缓冲
-                    └─ ASR partial transcript
-turn.commit → finalize transcript → Gateway → Reply
+D_video_call microphone PCM ─┬─ 原有音频/图片 Turn 缓冲
+                              └─ 流式 ASR partial/final
+ASR final → input.text.set → turn.commit → Gateway → Reply
 ```
 
-MVP 可先支持含 `turn.text` 的知识检索，或 commit 后增加一次 query transcription；后者会增加串行延迟。ASR 需要场景词典 bias，并随 Turn cancel 取消。
+partial 仅用于字幕和观测，知识检索只使用 final；final 必须在配置的 deadline 内到达，并随
+Turn cancel 取消。ASR 的词表/上下文增强由 D_video_call 和上层业务上下文提供，不能在
+sglang-omni 中加入电商或医院词表。
+
+当前 D_video_call 的 `provided_context` 集成不采用上述链路：它不向 Turn 注入 ASR
+文本，也不触发 Gateway 检索。回复模型与动作评分器直接消费同一份用户音频，并使用
+Session 中已经校验过哈希的实体快照和被动动作策略。
 
 ### 8.3 配置
 
-- `--realtime-knowledge-enabled`
+- `SGLANG_OMNI_REALTIME_KNOWLEDGE_ENABLED`（未显式设置时，有 URL 即启用）
 - `--realtime-knowledge-url`
 - `--realtime-knowledge-connect-timeout-seconds`
 - `--realtime-knowledge-turn-timeout-ms`
 - `--realtime-knowledge-max-concurrency`
 - `--realtime-knowledge-max-context-chars`
+- `--realtime-knowledge-max-evidence`
 
 凭证由 Secret Manager 或环境变量注入，CLI 不接受明文 token。
 
@@ -952,7 +1043,7 @@ MVP 可先支持含 `turn.text` 的知识检索，或 commit 后增加一次 que
 - 日志默认只记录 ID、哈希、长度和统计。
 - 实时 Adapter 使用最小权限账号和字段白名单。
 
-建议初始硬预算为 Turn 知识总链路 350 ms，实际按部署压测校准。要求 request ID 幂等、Session/全局并发有界、只做安全短重试、熔断后快速降级；文档可缓存，价格库存禁用或使用极短 TTL；state token 仅在 Turn 接受成功结果后推进。
+建议初始客户端预算为 Turn 知识总链路 1200 ms，向 Knowledge Service 下发 1100 ms deadline，并给网络返回预留 100 ms；Semantic Router 另设独立超时。实际按部署压测校准。要求 request ID 幂等、Session/全局并发有界、只做安全短重试、熔断后快速降级；文档可缓存，高时效事实禁用或使用极短 TTL；state token 仅在 Turn 接受成功结果后推进。
 
 ## 12. 可观测性与评测
 
@@ -991,7 +1082,7 @@ sglang-omni pod × N
         │
 internal load balancer
         │
-knowledge-gateway pod × N（无状态计算）
+knowledge-service pod × N（无状态计算）
         ├─ Redis：Session entity state/cache
         ├─ PostgreSQL：Binding/Snapshot/audit
         ├─ RAGFlow
@@ -1004,7 +1095,7 @@ knowledge-gateway pod × N（无状态计算）
 
 ### Phase 0：契约和骨架
 
-- 创建 Gateway 仓库、CI、镜像和部署骨架。
+- 创建 Knowledge Platform 仓库、Knowledge Service、CI、镜像和部署骨架。
 - 定义 API、错误码、Evidence、Binding、Snapshot、state token。
 - 建立 PostgreSQL/Redis、鉴权、Trace 和电商黄金集。
 - `sglang-omni` 先加入协议模型和 fake Gateway client。
@@ -1023,7 +1114,7 @@ knowledge-gateway pod × N（无状态计算）
 
 ### Phase 2：音频和生产化
 
-- 流式 ASR 与场景词典 bias。
+- 已接入 D_video_call 流式 ASR；继续完成场景词典 bias、真实音频质量评测和 deadline 校准。
 - Shadow 路由/检索、压测、容量规划和故障演练。
 - 管理面发布、回滚、bad case 和审计查询。
 - 校准路由、top-k、rerank 和上下文预算。
@@ -1037,6 +1128,9 @@ knowledge-gateway pod × N（无状态计算）
 ## 16. 工作拆分
 
 `sglang-omni` 团队负责 Realtime 协议、Gateway client/controller、Turn 编排、取消、Prompt、TTS 延迟和端到端测试。
+
+`D_video_call` 团队负责角色创建输入、Knowledge Package 创作调用、权威稿件引用、派生播放
+分段、流式 ASR、稿件生命周期事件和播放/打断编排。
 
 Knowledge Platform 团队负责 Gateway API、鉴权、Binding/Snapshot、Router/Profile、实体状态、Planner、Adapter、检索质量和部署稳定性。
 
@@ -1055,4 +1149,6 @@ Knowledge Platform 团队负责 Gateway API、鉴权、Binding/Snapshot、Router
 - 路由、实体、召回和延迟均有指标与回归集。
 - 第二场景只通过 Gateway Profile/Adapter 扩展。
 
-最终边界：`sglang-omni` 决定何时发起通用知识调用以及如何将结果用于数字人回复；`knowledge-gateway` 决定是否需要知识、需要什么、去哪里取以及返回哪些可信 Evidence；RAGFlow 和业务 API 负责存储或提供事实。
+最终边界：`sglang-omni` 决定何时发起通用知识调用以及如何将结果用于数字人回复；
+`knowledge-platform/modules/knowledge-service` 决定是否需要知识、需要什么、去哪里取以及返回
+哪些可信 Evidence；`knowledge-platform/modules/ragflow-service` 和其他数据源负责存储或提供事实。

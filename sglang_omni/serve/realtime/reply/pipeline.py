@@ -59,6 +59,7 @@ from sglang_omni.serve.realtime.reply.generation import ReplyGenerationComponent
 
 from sglang_omni.serve.realtime.reply.prompts import ReplyPromptComponent
 from sglang_omni.serve.realtime.reply.history import ReplyHistoryComponent
+from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
 
 
 @compose_components(
@@ -197,6 +198,12 @@ class ReplyPipeline:
             # user message (below system authority), before the actual current
             # speech/text, and explicitly mark it as non-instructional data.
             parts.append({"type": "text", "text": session_memory_context.text})
+        if turn.knowledge_context is not None and turn.knowledge_context.should_inject:
+            knowledge_text = render_knowledge_context(
+                turn.knowledge_context, language=self.language
+            )
+            if knowledge_text:
+                parts.append({"type": "text", "text": knowledge_text})
         if turn.turn_origin == TURN_ORIGIN_PROACTIVE:
             if isinstance(turn.scene_context, str) and turn.scene_context.strip():
                 parts.append(
@@ -316,6 +323,21 @@ class ReplyPipeline:
                     else None
                 ),
                 "session_memory_enabled": self.session_memory_store is not None,
+                "knowledge_decision": (
+                    turn.knowledge_context.decision
+                    if turn.knowledge_context is not None
+                    else None
+                ),
+                "knowledge_result_id": (
+                    turn.knowledge_context.result_id
+                    if turn.knowledge_context is not None
+                    else None
+                ),
+                "knowledge_evidence_count": (
+                    len(turn.knowledge_context.evidence)
+                    if turn.knowledge_context is not None
+                    else 0
+                ),
                 "session_memory_write_enabled": (
                     self.session_memory_config.write_enabled
                     if self.session_memory_config is not None

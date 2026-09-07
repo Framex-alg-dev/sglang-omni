@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import math
 from io import BytesIO
@@ -323,6 +324,65 @@ def protocol_v1_session_start(
     }
     event.update(fields)
     return event
+
+
+@pytest.mark.asyncio
+async def test_protocol_v1_accepts_provided_entity_context_without_gateway() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    entity_text = '{"display_name":"测试音箱","volume_level":"medium"}'
+    content_hash = "sha256:" + hashlib.sha256(
+        entity_text.encode("utf-8")
+    ).hexdigest()
+
+    await session.dispatch(
+        protocol_v1_session_start(
+            "provided-entity-context",
+            knowledge={
+                "mode": "provided_context",
+                "binding_id": "package-1",
+                "binding_revision": 2,
+                "required": True,
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:2:sku-1",
+                    "revision": 2,
+                    "current_entity_id": "sku-1",
+                    "current_entity_text": entity_text,
+                    "content_sha256": content_hash,
+                },
+            },
+        )
+    )
+
+    assert session.knowledge_binding.mode == "provided_context"
+    assert session.provided_entity_snapshot.current_entity_text == entity_text
+    started = session.websocket.events[-1]
+    assert started["knowledge"] == {
+        "status": "ready",
+        "snapshot_id": "package-1:2:sku-1",
+        "mode": "provided_context",
+        "binding_revision": 2,
+        "revision": 2,
+        "current_entity_id": "sku-1",
+        "content_sha256": content_hash,
+    }
+    await session.handle_knowledge_script_event(
+        {
+            "request_id": "script-event-1",
+            "script_id": "script-1",
+            "script_version": 1,
+            "checksum": "sha256:" + "a" * 64,
+            "event": "started",
+        }
+    )
+    assert session.websocket.events[-1]["type"] == "knowledge.script.event.ack"
+
+
+def test_passive_action_policy_has_separate_protocol_safety_budget() -> None:
+    policy = "被动动作约束" * 1000
+    profile = SessionActionProfile.from_payload(
+        {"passive_action_policy": policy}
+    )
+    assert profile.passive_action_policy == policy
 
 
 def user_turn_start(turn_id: str | None) -> dict:
@@ -2648,6 +2708,88 @@ def fusion_catalog() -> list[dict]:
     ]
 
 
+@pytest.mark.asyncio
+async def test_audio_entity_turn_injects_snapshot_into_reply_and_passive_action_scoring() -> None:
+    ws = FakeWebSocket()
+    client = FusionFakeClient()
+    session = make_session(ws, client)
+    entity_text = (
+        '{"type":"product","external_id":"speaker-1",'
+        '"display_name":"桌面音箱","attributes":'
+        '{"categories":["3C/数码/音箱"],"volume_level":"medium"}}'
+    )
+    content_hash = "sha256:" + hashlib.sha256(
+        entity_text.encode("utf-8")
+    ).hexdigest()
+    passive_policy = (
+        "用户要求查看实体外观时，优先选择与实体品类和体积相容的展示动作；"
+        "体积信息不足时不得猜测。"
+    )
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-audio-entity-policy",
+            "language": "zh",
+            "modalities": ["text", "action"],
+            "action_candidates": fusion_catalog(),
+            "action_profile": {"passive_action_policy": passive_policy},
+            "knowledge": {
+                "mode": "provided_context",
+                "binding_id": "package-1",
+                "binding_revision": 1,
+                "required": True,
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:1:speaker-1",
+                    "revision": 1,
+                    "current_entity_id": "speaker-1",
+                    "current_entity_text": entity_text,
+                    "content_sha256": content_hash,
+                },
+            },
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-audio-entity"))
+    await session.handle_audio_append(
+        {
+            "type": "input_audio.append",
+            "turn_id": "turn-audio-entity",
+            "seq": 1,
+            "audio": base64.b64encode(b"\x00\x00" * 320).decode(),
+        }
+    )
+    await session._dispatch_turn_commit(user_turn_commit("turn-audio-entity"))
+    turn_task = session.active_turn.inference_task
+    await asyncio.wait_for(turn_task, timeout=1)
+
+    action_requests = [
+        request
+        for request in client.score_requests
+        if request.stage in {"category", "child"}
+    ]
+    assert {request.stage for request in action_requests} == {"category", "child"}
+    for request in action_requests:
+        assert passive_policy in request.prefix
+        assert "桌面音箱" in request.prefix
+        assert "volume_level" in request.prefix
+        assert len(request.audios) == 1
+    assert len(client.reply_requests) == 1
+    reply_request = client.reply_requests[0]
+    reply_prompt = str(reply_request.messages)
+    assert "桌面音箱" in reply_prompt
+    assert "volume_level" in reply_prompt
+    assert any(
+        part.get("type") == "audio"
+        for message in reply_request.messages
+        if isinstance(message.content, list)
+        for part in message.content
+    )
+    proactive_instruction = session._build_session_action_profile_instruction(
+        "category", turn_origin="proactive"
+    )
+    assert passive_policy not in proactive_instruction
+    assert "桌面音箱" not in proactive_instruction
+
+
 def system_accompaniment_categories(
     catalog: GlobalActionCatalog,
 ):
@@ -4354,6 +4496,10 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "a separate action system decides" in prompt
     assert "digital character or model" not in prompt
     assert "takes priority over persona and response-style instructions" in prompt
+    assert "[Response length and conversational continuation]" in prompt
+    assert "Match response length to the amount of information" in prompt
+    assert "add at most one brief question" in prompt
+    assert "Do not append a continuation question" in prompt
 
 
 def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None:
@@ -4385,6 +4531,10 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "简短但完整的内容" in prompt
     assert "一个最小化的澄清问题" in prompt
     assert "不适用于无需语言内容的纯动作请求" in prompt
+    assert "[回复长度与交流延续规则]" in prompt
+    assert "回复长度应与当前请求需要的信息量相匹配" in prompt
+    assert "每次最多一个" in prompt
+    assert "不得为了延续对话而追加问题" in prompt
     assert "[全局对话角色、人称指代与语义保持规则]" in prompt
     assert "情绪或状态体验者、意愿主体，以及事实和经历的归属" in prompt
     assert "用户用“我”陈述情绪、身体状态、意愿、经历或处境" in prompt

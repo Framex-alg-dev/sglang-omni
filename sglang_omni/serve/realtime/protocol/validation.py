@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Literal
 
@@ -457,6 +458,7 @@ class ProtocolValidationComponent:
                 "input_audio",
                 "output_audio",
                 "diagnostics",
+                "knowledge",
             },
             required={"type", "protocol_version", "session_id"},
         )
@@ -525,6 +527,7 @@ class ProtocolValidationComponent:
         action_config = event.get("action")
         action_candidates: list[dict[str, Any]] | None = None
         action_profile: dict[str, Any] | None = None
+        normalized_passive_policy: dict[str, Any] | None = None
         fallback_category_ids: list[str] = []
         if "action" in outputs:
             action_config = self._strict_object(
@@ -533,6 +536,7 @@ class ProtocolValidationComponent:
                 allowed={
                     "category_guidance",
                     "candidate_guidance",
+                    "passive_policy",
                     "allowed_candidates",
                     "fallback_category_ids",
                 },
@@ -543,6 +547,57 @@ class ProtocolValidationComponent:
                 action_profile,
                 fallback_category_ids,
             ) = self._compact_action_catalog(action_config)
+            passive_policy = self._strict_object(
+                action_config.get("passive_policy", {}),
+                "action.passive_policy",
+                allowed={"policy_id", "revision", "content_sha256", "guidance"},
+                required={"policy_id", "revision", "content_sha256", "guidance"}
+                if action_config.get("passive_policy") is not None
+                else set(),
+            )
+            if passive_policy:
+                passive_policy_id = self._bounded_optional_text(
+                    passive_policy.get("policy_id"),
+                    "action.passive_policy.policy_id",
+                    max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+                    allow_empty=False,
+                )
+                passive_policy_revision = passive_policy.get("revision")
+                if (
+                    not isinstance(passive_policy_revision, int)
+                    or isinstance(passive_policy_revision, bool)
+                    or passive_policy_revision < 1
+                ):
+                    raise ValueError(
+                        "action.passive_policy.revision must be a positive integer"
+                    )
+                passive_policy_hash = self._bounded_optional_text(
+                    passive_policy.get("content_sha256"),
+                    "action.passive_policy.content_sha256",
+                    max_chars=71,
+                    allow_empty=False,
+                )
+                guidance = passive_policy.get("guidance")
+                if not isinstance(guidance, str) or not guidance.strip():
+                    raise ValueError(
+                        "action.passive_policy.guidance must be a non-empty string"
+                    )
+                computed_policy_hash = "sha256:" + hashlib.sha256(
+                    guidance.encode("utf-8")
+                ).hexdigest()
+                if passive_policy_hash != computed_policy_hash:
+                    raise ValueError(
+                        "action.passive_policy.content_sha256 does not match guidance"
+                    )
+                action_profile = dict(action_profile or {})
+                action_profile["passive_action_policy"] = guidance.strip()
+                normalized_passive_policy = {
+                    "policy_id": passive_policy_id.strip(),
+                    "revision": passive_policy_revision,
+                    "content_sha256": computed_policy_hash,
+                }
+            else:
+                normalized_passive_policy = None
             if character_profile:
                 action_profile = dict(action_profile or {})
                 visual_behavior_preferences = character_profile.pop(
@@ -613,6 +668,117 @@ class ProtocolValidationComponent:
                 "diagnostics.include_action_scores requires the action output"
             )
 
+        knowledge = self._strict_object(
+            event.get("knowledge", {}),
+            "knowledge",
+            allowed={
+                "mode",
+                "binding_id",
+                "binding_revision",
+                "required",
+                "entity_snapshot",
+            },
+        )
+        knowledge_mode = knowledge.get("mode", "retrieval")
+        if knowledge_mode not in {"retrieval", "provided_context"}:
+            raise ValueError(
+                "knowledge.mode must be 'retrieval' or 'provided_context'"
+            )
+        knowledge_binding_id = self._bounded_optional_text(
+            knowledge.get("binding_id"),
+            "knowledge.binding_id",
+            max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+            allow_empty=False,
+        )
+        knowledge_required = knowledge.get("required", True)
+        if not isinstance(knowledge_required, bool):
+            raise ValueError("knowledge.required must be a boolean")
+        if knowledge and knowledge_binding_id is None:
+            raise ValueError("knowledge.binding_id is required")
+        knowledge_binding_revision = knowledge.get("binding_revision")
+        if knowledge_binding_revision is not None and (
+            not isinstance(knowledge_binding_revision, int)
+            or isinstance(knowledge_binding_revision, bool)
+            or knowledge_binding_revision < 1
+        ):
+            raise ValueError("knowledge.binding_revision must be a positive integer")
+        normalized_entity_snapshot = None
+        raw_entity_snapshot = knowledge.get("entity_snapshot")
+        if knowledge_mode == "provided_context":
+            entity_snapshot = self._strict_object(
+                raw_entity_snapshot,
+                "knowledge.entity_snapshot",
+                allowed={
+                    "snapshot_id",
+                    "revision",
+                    "current_entity_id",
+                    "current_entity_text",
+                    "content_sha256",
+                },
+                required={
+                    "snapshot_id",
+                    "revision",
+                    "current_entity_id",
+                    "current_entity_text",
+                    "content_sha256",
+                },
+            )
+            snapshot_id = self._bounded_optional_text(
+                entity_snapshot.get("snapshot_id"),
+                "knowledge.entity_snapshot.snapshot_id",
+                max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+                allow_empty=False,
+            )
+            entity_id = self._bounded_optional_text(
+                entity_snapshot.get("current_entity_id"),
+                "knowledge.entity_snapshot.current_entity_id",
+                max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+                allow_empty=False,
+            )
+            snapshot_revision = entity_snapshot.get("revision")
+            if (
+                not isinstance(snapshot_revision, int)
+                or isinstance(snapshot_revision, bool)
+                or snapshot_revision < 1
+            ):
+                raise ValueError(
+                    "knowledge.entity_snapshot.revision must be a positive integer"
+                )
+            entity_text = entity_snapshot.get("current_entity_text")
+            # Intentionally no business length limit in the single-entity phase.
+            # TODO(entity-context-size-limit): add measured character/token/request
+            # limits after production entity-size and prefill-latency observation.
+            if not isinstance(entity_text, str) or not entity_text.strip():
+                raise ValueError(
+                    "knowledge.entity_snapshot.current_entity_text must be a "
+                    "non-empty string"
+                )
+            supplied_content_hash = self._bounded_optional_text(
+                entity_snapshot.get("content_sha256"),
+                "knowledge.entity_snapshot.content_sha256",
+                max_chars=71,
+                allow_empty=False,
+            )
+            computed_content_hash = "sha256:" + hashlib.sha256(
+                entity_text.encode("utf-8")
+            ).hexdigest()
+            if supplied_content_hash != computed_content_hash:
+                raise ValueError(
+                    "knowledge.entity_snapshot.content_sha256 does not match "
+                    "current_entity_text"
+                )
+            normalized_entity_snapshot = {
+                "snapshot_id": snapshot_id.strip(),
+                "revision": snapshot_revision,
+                "current_entity_id": entity_id.strip(),
+                "current_entity_text": entity_text,
+                "content_sha256": computed_content_hash,
+            }
+        elif raw_entity_snapshot is not None:
+            raise ValueError(
+                "knowledge.entity_snapshot requires mode='provided_context'"
+            )
+
         normalized: dict[str, Any] = {
             "type": "session.start",
             "session_id": session_id.strip(),
@@ -634,10 +800,22 @@ class ProtocolValidationComponent:
             normalized["action_candidates"] = action_candidates
         if action_profile is not None:
             normalized["action_profile"] = action_profile
+        if normalized_passive_policy is not None:
+            normalized["_passive_action_policy"] = normalized_passive_policy
         if "action" in outputs:
             normalized["_fallback_category_ids"] = fallback_category_ids
         if output_audio_voice is not None:
             normalized["_output_audio_voice"] = output_audio_voice
+        if knowledge_binding_id is not None:
+            normalized["knowledge"] = {
+                "mode": knowledge_mode,
+                "binding_id": knowledge_binding_id.strip(),
+                "required": knowledge_required,
+            }
+            if knowledge_binding_revision is not None:
+                normalized["knowledge"]["binding_revision"] = knowledge_binding_revision
+            if normalized_entity_snapshot is not None:
+                normalized["knowledge"]["entity_snapshot"] = normalized_entity_snapshot
         return normalized
 
 
@@ -645,6 +823,65 @@ class ProtocolValidationComponent:
         event_type = payload.get("type")
         if event_type == "session.start":
             return self._normalize_session_start(payload)
+        if event_type == "knowledge.script.event":
+            event = self._strict_object(
+                payload,
+                "knowledge.script.event",
+                allowed={"type", "request_id", "script", "event"},
+                required={"type", "request_id", "script", "event"},
+            )
+            request_id = self._bounded_optional_text(
+                event.get("request_id"),
+                "request_id",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_EVENT_REQUEST_ID_CHARS,
+                allow_empty=False,
+            )
+            script = self._strict_object(
+                event.get("script"),
+                "knowledge.script.event.script",
+                allowed={"id", "version", "checksum"},
+                required={"id", "version", "checksum"},
+            )
+            script_id = self._bounded_optional_text(
+                script.get("id"),
+                "knowledge.script.event.script.id",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_ID_CHARS,
+                allow_empty=False,
+            )
+            script_version = script.get("version")
+            if (
+                not isinstance(script_version, int)
+                or isinstance(script_version, bool)
+                or script_version < 1
+            ):
+                raise ValueError(
+                    "knowledge.script.event.script.version must be a positive integer"
+                )
+            checksum = self._bounded_optional_text(
+                script.get("checksum"),
+                "knowledge.script.event.script.checksum",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_CHECKSUM_CHARS,
+                allow_empty=False,
+            )
+            if checksum is None or re.fullmatch(
+                r"sha256:[0-9a-fA-F]{64}", checksum
+            ) is None:
+                raise ValueError(
+                    "knowledge.script.event.script.checksum must be sha256: followed by 64 hex characters"
+                )
+            lifecycle_event = event.get("event")
+            if lifecycle_event not in {"started", "completed", "interrupted"}:
+                raise ValueError(
+                    "knowledge.script.event.event must be started, completed, or interrupted"
+                )
+            return {
+                "type": "knowledge.script.event",
+                "request_id": request_id,
+                "script_id": script_id,
+                "script_version": script_version,
+                "checksum": checksum.lower(),
+                "event": lifecycle_event,
+            }
         if event_type == "turn.start":
             event = self._strict_object(
                 payload,
@@ -776,6 +1013,7 @@ class ProtocolValidationComponent:
                     "scene",
                     "action",
                     "avatar_state",
+                    "knowledge",
                 },
                 required={"type", "turn_id"},
             )
@@ -851,6 +1089,103 @@ class ProtocolValidationComponent:
                 raise ValueError(
                     "reply.provided_text and turn.commit.scene are mutually exclusive"
                 )
+
+            knowledge = self._strict_object(
+                event.get("knowledge", {}),
+                "turn.commit.knowledge",
+                allowed={"entity_hints", "script"},
+            )
+            script = self._strict_object(
+                knowledge.get("script", {}),
+                "turn.commit.knowledge.script",
+                allowed={"id", "version", "checksum"},
+                required={"id"} if knowledge.get("script") is not None else set(),
+            )
+            script_id = self._bounded_optional_text(
+                script.get("id"), "turn.commit.knowledge.script.id",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_ID_CHARS, allow_empty=False,
+            )
+            script_version = script.get("version")
+            if script_version is not None and (
+                not isinstance(script_version, int)
+                or isinstance(script_version, bool)
+                or script_version < 1
+            ):
+                raise ValueError("turn.commit.knowledge.script.version must be a positive integer")
+            script_checksum = self._bounded_optional_text(
+                script.get("checksum"), "turn.commit.knowledge.script.checksum",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_CHECKSUM_CHARS, allow_empty=False,
+            )
+            if script_checksum is not None and (
+                len(script_checksum) != 71
+                or not script_checksum.startswith("sha256:")
+                or any(char not in "0123456789abcdefABCDEF" for char in script_checksum[7:])
+            ):
+                raise ValueError(
+                    "turn.commit.knowledge.script.checksum must be sha256: "
+                    "followed by 64 hex characters"
+                )
+            if script and not reply_provided:
+                raise ValueError(
+                    "turn.commit.knowledge.script requires reply.provided_text"
+                )
+            if script and not provided_text:
+                raise ValueError(
+                    "turn.commit.knowledge.script requires non-empty reply.provided_text"
+                )
+            if script and provided_text:
+                computed_script_checksum = "sha256:" + hashlib.sha256(
+                    provided_text.encode("utf-8")
+                ).hexdigest()
+                if (
+                    script_checksum is not None
+                    and script_checksum.lower() != computed_script_checksum
+                ):
+                    raise ValueError(
+                        "turn.commit.knowledge.script.checksum does not match "
+                        "reply.provided_text"
+                    )
+                script_checksum = computed_script_checksum
+            raw_hints = knowledge.get("entity_hints", [])
+            if not isinstance(raw_hints, list):
+                raise ValueError("turn.commit.knowledge.entity_hints must be a list")
+            if len(raw_hints) > MAX_KNOWLEDGE_ENTITY_HINTS:
+                raise ValueError(
+                    "turn.commit.knowledge.entity_hints contains too many items"
+                )
+            knowledge_entity_hints: list[dict[str, str]] = []
+            for index, raw_hint in enumerate(raw_hints):
+                hint = self._strict_object(
+                    raw_hint,
+                    f"turn.commit.knowledge.entity_hints[{index}]",
+                    allowed={"type", "external_id", "display_name"},
+                    required={"type", "external_id"},
+                )
+                entity_type = self._bounded_optional_text(
+                    hint.get("type"),
+                    f"turn.commit.knowledge.entity_hints[{index}].type",
+                    max_chars=MAX_KNOWLEDGE_ENTITY_FIELD_CHARS,
+                    allow_empty=False,
+                )
+                external_id = self._bounded_optional_text(
+                    hint.get("external_id"),
+                    f"turn.commit.knowledge.entity_hints[{index}].external_id",
+                    max_chars=MAX_KNOWLEDGE_ENTITY_FIELD_CHARS,
+                    allow_empty=False,
+                )
+                display_name = self._bounded_optional_text(
+                    hint.get("display_name"),
+                    f"turn.commit.knowledge.entity_hints[{index}].display_name",
+                    max_chars=MAX_KNOWLEDGE_ENTITY_FIELD_CHARS,
+                )
+                assert entity_type is not None and external_id is not None
+                item = {
+                    "type": entity_type.strip(),
+                    "external_id": external_id.strip(),
+                }
+                if display_name is not None:
+                    item["display_name"] = display_name.strip()
+                knowledge_entity_hints.append(item)
 
             action = self._strict_object(
                 event.get("action", {}),
@@ -947,6 +1282,12 @@ class ProtocolValidationComponent:
                 "reply_context": context,
                 "scene_context": scene_context,
                 "scene_reply_guidance": scene_reply_guidance,
+                "knowledge_entity_hints": knowledge_entity_hints,
+                "knowledge_script_id": script_id.strip() if script_id else None,
+                "knowledge_script_version": script_version,
+                "knowledge_script_checksum": (
+                    script_checksum.strip() if script_checksum else None
+                ),
                 "last_executed_action_id": (
                     last_action_id.strip() if last_action_id is not None else None
                 ),

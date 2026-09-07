@@ -14,6 +14,7 @@ from sglang_omni.serve.realtime.audio_buffer import RealtimeAudioBuffer
 MAX_ACTION_CHILDREN_PER_CATEGORY = 128
 MAX_ACTION_PROFILE_CHARS = 8 * 1024
 MAX_ACTION_PROFILE_FIELD_CHARS = 2 * 1024
+MAX_PASSIVE_ACTION_POLICY_CHARS = 64 * 1024
 MAX_CHARACTER_PROFILE_ROLE_CHARS = 5_000
 ACTION_PERSONA_FIELDS = (
     "gender_expression",
@@ -81,6 +82,7 @@ class SessionActionProfile:
     visual_behavior_preferences: str = ""
     category_preferences: str = ""
     action_preferences: str = ""
+    passive_action_policy: str = ""
 
     @classmethod
     def from_payload(cls, value: Any) -> "SessionActionProfile":
@@ -91,6 +93,7 @@ class SessionActionProfile:
             "visual_behavior_preferences",
             "category_preferences",
             "action_preferences",
+            "passive_action_policy",
         }
         unknown_fields = sorted(set(value) - allowed_fields)
         if unknown_fields:
@@ -149,6 +152,17 @@ class SessionActionProfile:
                 )
             preferences[field_name] = normalized
 
+        passive_action_policy = value.get("passive_action_policy", "")
+        if passive_action_policy is None:
+            passive_action_policy = ""
+        if not isinstance(passive_action_policy, str):
+            raise ValueError("action_profile.passive_action_policy must be a string")
+        passive_action_policy = passive_action_policy.strip()
+        if len(passive_action_policy) > MAX_PASSIVE_ACTION_POLICY_CHARS:
+            raise ValueError(
+                "action_profile.passive_action_policy exceeds the protocol safety limit"
+            )
+
         profile = cls(
             persona=tuple(persona),
             visual_behavior_preferences=preferences[
@@ -156,15 +170,19 @@ class SessionActionProfile:
             ],
             category_preferences=preferences["category_preferences"],
             action_preferences=preferences["action_preferences"],
+            passive_action_policy=passive_action_policy,
         )
         if not profile.persona and not (
             profile.visual_behavior_preferences
             or profile.category_preferences
             or profile.action_preferences
+            or profile.passive_action_policy
         ):
             raise ValueError("action_profile must contain at least one non-empty field")
+        base_payload = profile.as_dict()
+        base_payload.pop("passive_action_policy", None)
         encoded = json.dumps(
-            profile.as_dict(),
+            base_payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -188,6 +206,8 @@ class SessionActionProfile:
             payload["category_preferences"] = self.category_preferences
         if self.action_preferences:
             payload["action_preferences"] = self.action_preferences
+        if self.passive_action_policy:
+            payload["passive_action_policy"] = self.passive_action_policy
         return payload
 
 
@@ -378,6 +398,11 @@ class TurnBuffer:
     reply_context: str | None = None
     scene_context: str | None = None
     scene_reply_guidance: str | None = None
+    knowledge_entity_hints: tuple[Any, ...] = ()
+    knowledge_script_id: str | None = None
+    knowledge_script_version: int | None = None
+    knowledge_script_checksum: str | None = None
+    knowledge_context: Any | None = None
     action_allowed_candidate_ids: tuple[str, ...] = ()
     action_excluded_candidate_ids: tuple[str, ...] = ()
     client_last_executed_action_id: str | None = None

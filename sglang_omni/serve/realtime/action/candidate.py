@@ -88,7 +88,9 @@ class ActionCandidateComponent:
             has_avatar_image=IMAGE_ROLE_AVATAR_STATE in action_image_roles,
         )
         prefix = (
-            self._build_session_action_profile_instruction("single")
+            self._build_session_action_profile_instruction(
+                "single", turn_origin=turn_origin
+            )
             + self._last_user_action_reference_instruction(
                 turn_origin=turn_origin,
             )

@@ -275,30 +275,6 @@
           "short_definition": "臀部小幅挪动姿态。"
         },
         {
-          "candidate_id": "A143",
-          "action_id": "A143",
-          "source_label": "视线扫视",
-          "short_definition": "眼球快速转动，视线左右来回移动。"
-        },
-        {
-          "candidate_id": "A139",
-          "action_id": "A139",
-          "source_label": "看左侧（仅眼球）",
-          "short_definition": "头部保持正前，仅眼球转向左侧。"
-        },
-        {
-          "candidate_id": "A140",
-          "action_id": "A140",
-          "source_label": "看右侧（仅眼球）",
-          "short_definition": "头部保持正前，仅眼球转向右侧。"
-        },
-        {
-          "candidate_id": "A141",
-          "action_id": "A141",
-          "source_label": "看上方",
-          "short_definition": "眼球上翻，视线投向上方。"
-        },
-        {
           "candidate_id": "A142",
           "action_id": "A142",
           "source_label": "看下方",
@@ -327,12 +303,6 @@
           "action_id": "A124",
           "source_label": "重心右移",
           "short_definition": "髋部带动身体将重心缓慢转移至右脚。"
-        },
-        {
-          "candidate_id": "A256",
-          "action_id": "A256",
-          "source_label": "搓手",
-          "short_definition": "双手掌心贴合前后快速相互摩擦揉搓。"
         },
         {
           "candidate_id": "A358",

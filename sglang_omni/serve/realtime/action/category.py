@@ -237,7 +237,9 @@ class ActionCategoryComponent:
             category_request = ActionSuffixScoreRequest(
                 request_id=request_base + "-category",
                 prefix=(
-                    self._build_session_action_profile_instruction("category")
+                    self._build_session_action_profile_instruction(
+                        "category", turn_origin=turn_origin
+                    )
                     + last_user_action_reference
                     + proactive_repeat_instruction
                     + base
@@ -810,7 +812,9 @@ class ActionCategoryComponent:
         action_request = ActionSuffixScoreRequest(
             request_id=request_base + "-child",
             prefix=(
-                self._build_session_action_profile_instruction("child")
+                self._build_session_action_profile_instruction(
+                    "child", turn_origin=turn_origin
+                )
                 + last_user_action_reference
                 + proactive_repeat_instruction
                 + base

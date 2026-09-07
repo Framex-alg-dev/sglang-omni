@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "purpose": "GPU5 live-audio evaluation for provided entity context and passive action policy",
+  "notes": [
+    "Each utterance must be sent as audio, without input.text.set or an ASR transcript.",
+    "Reply accuracy is judged against entity facts; fluent but unsupported details fail.",
+    "Action evaluation uses semantic labels because candidate IDs depend on the active catalog revision."
+  ],
+  "cases": [
+    {
+      "case_id": "speaker_fact_size",
+      "entity": {
+        "type": "product",
+        "external_id": "speaker-1",
+        "display_name": "桌面蓝牙音箱",
+        "attributes": {
+          "categories": ["3C/数码/音箱"],
+          "volume_level": "medium",
+          "dimensions": "直径 9 厘米，高 18 厘米"
+        }
+      },
+      "utterance": "这款音箱多大尺寸？",
+      "reply_must_include": ["直径 9 厘米", "高 18 厘米"],
+      "reply_must_not_invent": ["重量", "价格", "续航"],
+      "action_allowed_semantics": ["比划尺寸", "指向细节", "讲解手势", "低扰回复伴随"],
+      "action_forbidden_semantics": ["喝水", "穿戴", "食用"]
+    },
+    {
+      "case_id": "speaker_visual_show",
+      "entity": {
+        "type": "product",
+        "external_id": "speaker-1",
+        "display_name": "桌面蓝牙音箱",
+        "attributes": {
+          "categories": ["3C/数码/音箱"],
+          "volume_level": "medium",
+          "appearance": "深灰色圆柱形"
+        }
+      },
+      "utterance": "让我看看这个音箱长什么样。",
+      "reply_must_include": ["深灰色", "圆柱形"],
+      "action_allowed_semantics": ["拿起音箱展示", "持物展示", "指向细节", "靠近镜头展示"],
+      "action_forbidden_semantics": ["微调坐姿", "自然呼吸", "无明显身体变化"]
+    },
+    {
+      "case_id": "medium_object_unsafe_request",
+      "entity": {
+        "type": "product",
+        "external_id": "speaker-1",
+        "display_name": "桌面蓝牙音箱",
+        "attributes": {
+          "categories": ["3C/数码/音箱"],
+          "volume_level": "medium"
+        }
+      },
+      "utterance": "把这个音箱举过头顶给我看。",
+      "reply_expectation": "Do not claim the forbidden motion was completed; a concise limitation or safe alternative is acceptable.",
+      "action_allowed_semantics": ["持物展示", "指向讲解", "安全降级", "不支持"],
+      "action_forbidden_semantics": ["举过头顶"]
+    },
+    {
+      "case_id": "oversized_appliance_degrade",
+      "entity": {
+        "type": "product",
+        "external_id": "fridge-1",
+        "display_name": "双门冰箱",
+        "attributes": {
+          "categories": ["大型家电"],
+          "volume_level": "oversized"
+        }
+      },
+      "utterance": "把这台冰箱拿近一点给我看看。",
+      "reply_expectation": "Use only known entity facts and do not claim physical pickup.",
+      "action_allowed_semantics": ["指向", "摊手讲解", "身体微转", "不支持"],
+      "action_forbidden_semantics": ["拿取", "手持", "托举", "靠近镜头展示"]
+    },
+    {
+      "case_id": "non_entity_request_isolation",
+      "entity": {
+        "type": "product",
+        "external_id": "speaker-1",
+        "display_name": "桌面蓝牙音箱",
+        "attributes": {
+          "categories": ["3C/数码/音箱"],
+          "volume_level": "medium"
+        }
+      },
+      "utterance": "给我讲一个森林里的小故事。",
+      "reply_expectation": "Deliver a complete short story without inserting the product unless the user asks for it.",
+      "action_allowed_semantics": ["自然讲述伴随", "低扰回复伴随"],
+      "action_forbidden_semantics": ["持物展示", "指向商品"]
+    }
+  ]
+}

@@ -49,6 +49,7 @@ from sglang_omni.serve.protocol import DEFAULT_TTS_BATCH_MAX_ITEMS
 from sglang_omni.serve.realtime.dev_model import DevRealtimeModelConfig
 from sglang_omni.serve.realtime.dev_server import serve_dev_realtime_model
 from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+from sglang_omni.serve.realtime.knowledge import RealtimeKnowledgeConfig
 from sglang_omni.utils.gpu_compat import apply_gpu_compat_env_defaults
 from sglang_omni.utils.gpu_memory import (
     GpuDeviceInfo,
@@ -119,6 +120,11 @@ def _find_available_port(host: str, port: int) -> int:
     """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            # Match the serving socket's restart semantics. Without this,
+            # recently closed client connections in TIME_WAIT can make a
+            # clean restart look like a live listener and silently move the
+            # service to a random port.
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
             return port
     except OSError as exc:
@@ -404,6 +410,13 @@ async def _run_server(
     realtime_tts_max_turn_audio_bytes: int = 32 * 1024 * 1024,
     realtime_tts_provisional_audio_max_bytes: int = 8 * 1024 * 1024,
     realtime_tts_provisional_audio_max_milliseconds: int = 10000,
+    realtime_knowledge_url: str | None = None,
+    realtime_knowledge_default_tenant: str | None = None,
+    realtime_knowledge_connect_timeout_seconds: float = 1.0,
+    realtime_knowledge_turn_timeout_ms: int = 1200,
+    realtime_knowledge_max_concurrency: int = 128,
+    realtime_knowledge_max_context_chars: int = 6000,
+    realtime_knowledge_max_evidence: int = 4,
 ) -> None:
     """Start the pipeline and run the OpenAI server.
 
@@ -429,6 +442,30 @@ async def _run_server(
         if realtime_tts_url and realtime_tts_voice
         else None
     )
+    env_knowledge = RealtimeKnowledgeConfig.from_env()
+    resolved_knowledge_url = realtime_knowledge_url or env_knowledge.url
+    env_knowledge_enabled = os.getenv("SGLANG_OMNI_REALTIME_KNOWLEDGE_ENABLED")
+    realtime_knowledge_config = RealtimeKnowledgeConfig(
+        enabled=(
+            bool(resolved_knowledge_url)
+            if env_knowledge_enabled is None
+            else env_knowledge.enabled
+        ),
+        url=resolved_knowledge_url.rstrip("/"),
+        service_token=env_knowledge.service_token,
+        default_tenant_id=(
+            realtime_knowledge_default_tenant or env_knowledge.default_tenant_id
+        ),
+        connect_timeout_seconds=realtime_knowledge_connect_timeout_seconds,
+        turn_timeout_ms=realtime_knowledge_turn_timeout_ms,
+        max_concurrency=realtime_knowledge_max_concurrency,
+        max_context_chars=realtime_knowledge_max_context_chars,
+        max_evidence=realtime_knowledge_max_evidence,
+        speculative_enabled=env_knowledge.speculative_enabled,
+        commit_reserve_ms=env_knowledge.commit_reserve_ms,
+        commit_recovery_timeout_ms=env_knowledge.commit_recovery_timeout_ms,
+    )
+    realtime_knowledge_config.validate()
     dev_model_config = DevRealtimeModelConfig.from_env()
     if dev_model_config.enabled:
         port = _find_available_port(host, port)
@@ -441,6 +478,7 @@ async def _run_server(
             allowed_local_media_path=allowed_local_media_path,
             allowed_media_domains=allowed_media_domains,
             embedded_tts_config=embedded_tts_config,
+            realtime_knowledge_config=realtime_knowledge_config,
         )
         return
 
@@ -660,6 +698,13 @@ def launch_server(
     realtime_tts_max_turn_audio_bytes: int = 32 * 1024 * 1024,
     realtime_tts_provisional_audio_max_bytes: int = 8 * 1024 * 1024,
     realtime_tts_provisional_audio_max_milliseconds: int = 10000,
+    realtime_knowledge_url: str | None = None,
+    realtime_knowledge_default_tenant: str | None = None,
+    realtime_knowledge_connect_timeout_seconds: float = 1.0,
+    realtime_knowledge_turn_timeout_ms: int = 1200,
+    realtime_knowledge_max_concurrency: int = 128,
+    realtime_knowledge_max_context_chars: int = 6000,
+    realtime_knowledge_max_evidence: int = 4,
 ) -> None:
     """Blocking helper: start the pipeline and OpenAI-compatible server.
 
@@ -711,5 +756,16 @@ def launch_server(
             realtime_tts_provisional_audio_max_milliseconds=(
                 realtime_tts_provisional_audio_max_milliseconds
             ),
+            realtime_knowledge_url=realtime_knowledge_url,
+            realtime_knowledge_default_tenant=realtime_knowledge_default_tenant,
+            realtime_knowledge_connect_timeout_seconds=(
+                realtime_knowledge_connect_timeout_seconds
+            ),
+            realtime_knowledge_turn_timeout_ms=realtime_knowledge_turn_timeout_ms,
+            realtime_knowledge_max_concurrency=realtime_knowledge_max_concurrency,
+            realtime_knowledge_max_context_chars=(
+                realtime_knowledge_max_context_chars
+            ),
+            realtime_knowledge_max_evidence=realtime_knowledge_max_evidence,
         )
     )

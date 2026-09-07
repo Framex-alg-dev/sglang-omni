@@ -252,6 +252,8 @@ def test_debug_derives_monotonic_tts_timeline_and_rejects_cross_process(
         _record("turn_commit_received", 1_000, turn_id="turn_debug_1"),
         _record("reply_first_token", 1_030, turn_id="turn_debug_1"),
         _record("tts_first_append_sent", 1_050, turn_id="turn_debug_1"),
+        _record("tts_commit_sent", 1_070, turn_id="turn_debug_1"),
+        _record("tts_response_created", 1_080, turn_id="turn_debug_1"),
         _record("tts_first_audio_received", 1_100, turn_id="turn_debug_1"),
         _record("response_first_audio_delta_sent", 1_105, turn_id="turn_debug_1"),
         _record("tts_playable_250ms_ready", 1_250, turn_id="turn_debug_1"),
@@ -267,13 +269,17 @@ def test_debug_derives_monotonic_tts_timeline_and_rejects_cross_process(
     assert timing["commit_to_first_text_ms"] == 30
     assert timing["first_text_to_tts_append_ms"] == 20
     assert timing["tts_first_audio_ms"] == 50
+    assert timing["tts_text_stream_ms"] == 20
+    assert timing["tts_provider_queue_ms"] == 10
+    assert timing["tts_provider_first_pcm_ms"] == 20
+    assert timing["tts_commit_to_first_pcm_ms"] == 30
     assert timing["commit_to_first_audio_ms"] == 105
     assert timing["commit_to_playable_250ms"] == 250
     assert timing["response_total_ms"] == 300
     assert timing["turn_total_ms"] == 320
 
-    events[3]["pid"] = 2
-    _write(tmp_path, "performance_api_2_000.jsonl", [events[3]])
+    events[5]["pid"] = 2
+    _write(tmp_path, "performance_api_2_000.jsonl", [events[5]])
     result = load_realtime_session_debug("sess_debug_1", log_root=tmp_path)
     assert result is not None
     assert result["turns"][0]["timing"]["tts_first_audio_ms"] is None

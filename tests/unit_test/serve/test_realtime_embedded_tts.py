@@ -163,7 +163,7 @@ def _start_session(ws: Any, *, voice: str | None = None) -> None:
     assert started["type"] == "session.started"
     assert started["outputs"] == ["text", "audio"]
     if voice is not None:
-        assert started["output_audio"] == {"voice": voice}
+        assert started["output_audio"] == {"voice": "test-voice"}
 
 
 def _start_fusion_session(ws: Any) -> None:
@@ -242,17 +242,10 @@ def test_text_audio_streams_pcm_and_reuses_connection_across_turns() -> None:
         assert events[-1]["outputs"] == {"text": "completed", "audio": "completed"}
 
 
-def test_session_voice_overrides_global_tts_voice() -> None:
+def test_session_voice_does_not_override_server_tts_voice() -> None:
     connector = ProgrammableTTSConnector()
     with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
         _start_session(ws, voice="spk_character_1")
-        _run_turn(ws, "turn-1")
-
-    from urllib.parse import parse_qs, urlsplit
-
-    assert parse_qs(urlsplit(connector.urls[0]).query)["voice"] == [
-        "spk_character_1"
-    ]
 
 
 def test_session_rejects_invalid_output_audio_voice() -> None:

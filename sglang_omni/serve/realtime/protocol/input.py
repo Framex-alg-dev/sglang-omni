@@ -448,10 +448,79 @@ class TurnInputComponent:
         )
         await self._cancel_active_turn(send_event=True, expected_turn=turn)
         self.cancelled_turn_ids.add(turn.turn_id)
+    async def handle_knowledge_script_event(self, event: dict[str, Any]) -> None:
+        self._require_started()
+        if self.active_turn is not None:
+            raise ValueError(
+                "knowledge.script.event cannot run while a turn is active"
+            )
+        if self.knowledge_binding is None:
+            raise ValueError(
+                "knowledge.script.event requires a bound knowledge session"
+            )
+        if self.knowledge_binding.mode == "provided_context":
+            # The entity snapshot is immutable for the whole Session. Script
+            # lifecycle remains protocol-compatible but intentionally has no
+            # online Knowledge side effect in provided-context mode.
+            await self.send(
+                {
+                    "type": "knowledge.script.event.ack",
+                    "session_id": self.session_id,
+                    "request_id": event["request_id"],
+                    "event": event["event"],
+                    "script_id": event["script_id"],
+                    "status": "accepted",
+                    "snapshot_id": self.knowledge_binding.snapshot_id,
+                }
+            )
+            return
+        if self.knowledge_controller is None:
+            raise ValueError(
+                "knowledge.script.event requires Knowledge Gateway integration"
+            )
+        await self._wait_for_knowledge_commit()
+        async with self._knowledge_state_lock:
+            self.knowledge_binding = await self.knowledge_controller.script_event(
+                binding=self.knowledge_binding,
+                session_id=self.session_id,
+                turn_id=event["request_id"],
+                script_id=event["script_id"],
+                event=event["event"],
+                script_version=event["script_version"],
+                checksum=event["checksum"],
+            )
+        await self.send(
+            {
+                "type": "knowledge.script.event.ack",
+                "session_id": self.session_id,
+                "request_id": event["request_id"],
+                "event": event["event"],
+                "script_id": event["script_id"],
+                "status": "accepted",
+                "snapshot_id": self.knowledge_binding.snapshot_id,
+            }
+        )
     async def handle_session_close(self, event: dict[str, Any]) -> None:
         reason = event.get("reason")
         self.closed = True
         await self._cancel_active_turn(send_event=False)
+        pending_commit = self._knowledge_commit_task
+        if pending_commit is not None:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(pending_commit),
+                    timeout=(
+                        self.knowledge_controller.config.commit_recovery_timeout_ms
+                        / 1000
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "knowledge commit did not settle before session close "
+                    "session_id=%s",
+                    self.session_id,
+                    exc_info=True,
+                )
         await self._shutdown_session_memory()
         if self.embedded_tts is not None:
             await self.embedded_tts.close()

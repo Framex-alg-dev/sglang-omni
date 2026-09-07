@@ -36,6 +36,12 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.serve.realtime.output_capabilities import SessionOutputCapabilities
+from sglang_omni.serve.realtime.knowledge import (
+    KnowledgeBinding,
+    KnowledgeContext,
+    KnowledgeEvidence,
+    ProvidedEntitySnapshot,
+)
 from sglang_omni.utils.structured_logs import (
     emit_structured_log as _base_emit_structured_log,
     new_trace_id,
@@ -77,6 +83,7 @@ class SessionStartComponent:
             "_unsupported_action_text", event.get("unsupported_action_text")
         )
         raw_action_profile = event.get("action_profile")
+        raw_knowledge = event.get("knowledge")
         emit_structured_log(
             "lifecycle",
             "session_start_received",
@@ -95,6 +102,11 @@ class SessionStartComponent:
             **_json_audit_fields("action_profile", raw_action_profile),
             fallback_category_ids=event.get(
                 "_fallback_category_ids", event.get("fallback_category_ids")
+            ),
+            knowledge_binding_id=(
+                raw_knowledge.get("binding_id")
+                if isinstance(raw_knowledge, dict)
+                else None
             ),
         )
 
@@ -371,9 +383,78 @@ class SessionStartComponent:
             session_id=session_id.strip(),
             outputs=list(output_capabilities.outputs),
             audio_enabled=output_capabilities.audio_enabled,
+            requested_output_audio_voice=requested_output_audio_voice,
+            effective_output_audio_voice=(
+                self.embedded_tts_config.voice
+                if output_capabilities.audio_enabled
+                and self.embedded_tts_config is not None
+                else None
+            ),
             action_candidate_count=len(candidates),
             action_category_count=len(categories),
         )
+        knowledge_binding = None
+        provided_entity_snapshot = None
+        provided_entity_context = None
+        if raw_knowledge is not None:
+            if not isinstance(raw_knowledge, dict):
+                raise ValueError("knowledge must be an object")
+            knowledge_mode = raw_knowledge.get("mode", "retrieval")
+            if knowledge_mode == "provided_context":
+                snapshot = raw_knowledge["entity_snapshot"]
+                provided_entity_snapshot = ProvidedEntitySnapshot(
+                    snapshot_id=snapshot["snapshot_id"],
+                    revision=snapshot["revision"],
+                    current_entity_id=snapshot["current_entity_id"],
+                    current_entity_text=snapshot["current_entity_text"],
+                    content_sha256=snapshot["content_sha256"],
+                )
+                knowledge_binding = KnowledgeBinding(
+                    binding_id=raw_knowledge["binding_id"],
+                    binding_revision=raw_knowledge.get("binding_revision"),
+                    required=bool(raw_knowledge.get("required", True)),
+                    tenant_id="",
+                    snapshot_id=provided_entity_snapshot.snapshot_id,
+                    state_token="",
+                    status="ready",
+                    mode="provided_context",
+                )
+                provided_entity_context = KnowledgeContext(
+                    decision="RETRIEVE",
+                    reason="client_provided_entity_snapshot",
+                    result_id=provided_entity_snapshot.content_sha256,
+                    state_token="",
+                    snapshot_id=provided_entity_snapshot.snapshot_id,
+                    evidence=(
+                        KnowledgeEvidence(
+                            evidence_id=provided_entity_snapshot.content_sha256,
+                            source_type="provided_entity_snapshot",
+                            source_id=provided_entity_snapshot.current_entity_id,
+                            title="Current entity",
+                            content=provided_entity_snapshot.current_entity_text,
+                            authority=100,
+                            metadata={"provided_context": True},
+                        ),
+                    ),
+                )
+            else:
+                if self.knowledge_controller is None:
+                    raise ValueError("Knowledge Gateway integration is not configured")
+                tenant_id = None
+                headers = getattr(self.websocket, "headers", None)
+                if headers is not None:
+                    tenant_id = headers.get("x-tenant-id")
+                knowledge_binding = await self.knowledge_controller.resolve_session(
+                    session_id=session_id.strip(),
+                    tenant_id=tenant_id,
+                    binding_id=raw_knowledge["binding_id"],
+                    binding_revision=raw_knowledge.get("binding_revision"),
+                    required=bool(raw_knowledge.get("required", True)),
+                    locale=event.get(
+                        "_locale", "zh-CN" if language == "zh" else "en-US"
+                    ),
+                )
+
         self.claim_session(session_id, self)
         self.session_id = session_id
         self.protocol_version = event.get("_protocol_version")
@@ -381,6 +462,10 @@ class SessionStartComponent:
         self.language = language
         self.modalities = modalities
         self.output_capabilities = output_capabilities
+        self.knowledge_binding = knowledge_binding
+        self.provided_entity_snapshot = provided_entity_snapshot
+        self.provided_entity_context = provided_entity_context
+        self.passive_action_policy_metadata = event.get("_passive_action_policy")
         if output_capabilities.audio_enabled:
             tts_kwargs: dict[str, Any] = {}
             if self.embedded_tts_connector is not None:
@@ -391,9 +476,12 @@ class SessionStartComponent:
                 session_id=session_id.strip(),
                 **tts_kwargs,
             )
-            self.output_audio_voice = (
-                requested_output_audio_voice or self.embedded_tts_config.voice
-            )
+            # Temporary compatibility guard: keep the embedded TTS voice under
+            # server control while clients may still send cloud-provider voice IDs
+            # that are not registered by the configured local TTS provider. Remove
+            # this guard and restore the validated session voice override after the
+            # client and local TTS speaker namespaces are aligned.
+            self.output_audio_voice = self.embedded_tts_config.voice
         else:
             self.output_audio_voice = None
         if instructions is not None:
@@ -622,6 +710,33 @@ class SessionStartComponent:
                 }
         else:
             started_payload["modalities"] = list(self.modalities)
+        if self.knowledge_binding is not None:
+            started_payload["knowledge"] = {
+                "status": self.knowledge_binding.status,
+                "snapshot_id": self.knowledge_binding.snapshot_id or None,
+                "mode": self.knowledge_binding.mode,
+            }
+            if self.knowledge_binding.binding_revision is not None:
+                started_payload["knowledge"]["binding_revision"] = (
+                    self.knowledge_binding.binding_revision
+                )
+            if self.provided_entity_snapshot is not None:
+                started_payload["knowledge"].update(
+                    {
+                        "revision": self.provided_entity_snapshot.revision,
+                        "current_entity_id": (
+                            self.provided_entity_snapshot.current_entity_id
+                        ),
+                        "content_sha256": (
+                            self.provided_entity_snapshot.content_sha256
+                        ),
+                    }
+                )
+        if self.passive_action_policy_metadata is not None:
+            started_payload["passive_action_policy"] = {
+                "applied": True,
+                **self.passive_action_policy_metadata,
+            }
         if self.global_action_catalog is not None:
             started_payload.update(
                 {

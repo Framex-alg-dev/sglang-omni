@@ -125,6 +125,7 @@ Supported Models
    developer_reference/reference_encode_service.md
    developer_reference/profiler.md
    developer_reference/rl_admin_control.md
+   developer_reference/realtime_external_knowledge_CN.md
 
 .. toctree::
    :maxdepth: 1

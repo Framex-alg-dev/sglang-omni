@@ -62,6 +62,7 @@ from sglang_omni.client.types import (
 if TYPE_CHECKING:
     from sglang_omni.client.client import Client
     from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+    from sglang_omni.serve.realtime.knowledge import RealtimeKnowledgeConfig
 
 from sglang_omni.client.audio import (
     DEFAULT_SAMPLE_RATE,
@@ -251,6 +252,7 @@ def create_app(
     enable_resource_monitor: bool = True,
     allow_unregistered_protocol_actions: bool = False,
     embedded_tts_config: EmbeddedTTSConfig | None = None,
+    realtime_knowledge_config: RealtimeKnowledgeConfig | None = None,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -306,6 +308,7 @@ def create_app(
         global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
     )
     app.state.embedded_tts_config = embedded_tts_config
+    app.state.realtime_knowledge_config = realtime_knowledge_config
     app.state.speaker_sample_store = SpeakerSampleStore()
     app.state.speech_service = SpeechRequestValidator(
         default_model=app.state.model_name,
@@ -345,6 +348,7 @@ def create_app(
     _register_multimodal_realtime(
         app,
         allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
+        knowledge_config=realtime_knowledge_config,
     )
     if enable_resource_monitor:
         _register_resource_monitor(app)
@@ -1332,7 +1336,10 @@ def _register_realtime(app: FastAPI) -> None:
 
 
 def _register_multimodal_realtime(
-    app: FastAPI, *, allow_unregistered_protocol_actions: bool = False
+    app: FastAPI,
+    *,
+    allow_unregistered_protocol_actions: bool = False,
+    knowledge_config: RealtimeKnowledgeConfig | None = None,
 ) -> None:
     """Mount the manual-turn multimodal session WebSocket."""
     from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
@@ -1346,8 +1353,10 @@ def _register_multimodal_realtime(
         global_action_prewarm=app.state.global_action_prewarm,
         allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
         embedded_tts_config=app.state.embedded_tts_config,
+        knowledge_config=knowledge_config,
     )
     app.state.multimodal_realtime_manager = manager
+    app.router.add_event_handler("shutdown", manager.close)
 
     @app.websocket("/v1/session/realtime")
     async def multimodal_realtime(websocket: WebSocket) -> None:
