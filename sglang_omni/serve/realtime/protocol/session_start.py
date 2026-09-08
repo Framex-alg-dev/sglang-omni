@@ -337,6 +337,19 @@ class SessionStartComponent:
                 )
         if self.global_action_catalog is not None and "action" in modalities:
             session_category_ids = {item.category_id for item in categories}
+            if (
+                output_capabilities.expression_enabled
+                and FACIAL_EXPRESSION_CATEGORY_ID not in session_category_ids
+            ):
+                raise ValueError(
+                    "expression output requires allowed candidates from facial "
+                    f"expression category {FACIAL_EXPRESSION_CATEGORY_ID}"
+                )
+            if FACIAL_EXPRESSION_CATEGORY_ID in fallback_category_ids:
+                raise ValueError(
+                    "fallback_category_ids must not include the facial expression "
+                    f"category {FACIAL_EXPRESSION_CATEGORY_ID}"
+                )
             reply_system_category = (
                 self.global_action_catalog.category_with_semantic_tag(
                     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT

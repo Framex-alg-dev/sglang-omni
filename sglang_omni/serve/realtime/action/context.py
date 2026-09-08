@@ -1086,6 +1086,8 @@ class ActionPipeline:
         compact["execute"] = action["execute"]
         if action.get("support_status"):
             compact["support_status"] = action["support_status"]
+        if action.get("reason_code"):
+            compact["reason_code"] = action["reason_code"]
         if "fallback_applied" in action:
             compact["fallback_applied"] = bool(action["fallback_applied"])
         execution_binding = action.get("execution_binding")

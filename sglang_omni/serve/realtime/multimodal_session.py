@@ -128,6 +128,7 @@ from sglang_omni.serve.realtime.protocol.validation import ProtocolComponent
 
 
 from sglang_omni.serve.realtime.turn_pipeline import TurnPipeline
+from sglang_omni.serve.realtime.performance import PerformancePipeline
 
 
 @compose_components(
@@ -136,6 +137,7 @@ from sglang_omni.serve.realtime.turn_pipeline import TurnPipeline
     SessionMemoryController,
     ReplyPipeline,
     ActionPipeline,
+    PerformancePipeline,
 )
 class MultimodalSession:
     """Manual-turn, multimodal session for audio chunks and image frames.

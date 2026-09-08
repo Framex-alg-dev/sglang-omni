@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-OUTPUT_ORDER = ("text", "audio", "action")
+OUTPUT_ORDER = ("text", "audio", "expression", "action")
 SUPPORTED_OUTPUTS = frozenset(OUTPUT_ORDER)
 DEFAULT_OUTPUTS = ("text", "action")
 
@@ -18,6 +18,7 @@ class SessionOutputCapabilities:
     outputs: tuple[str, ...]
     text_enabled: bool
     audio_enabled: bool
+    expression_enabled: bool
     action_enabled: bool
 
     @classmethod
@@ -38,9 +39,12 @@ class SessionOutputCapabilities:
 
         if "audio" in outputs and "text" not in outputs:
             raise ValueError("audio output requires the text output")
+        if "expression" in outputs and "action" not in outputs:
+            raise ValueError("expression output requires the action output")
         return cls(
             outputs=outputs,
             text_enabled="text" in outputs,
             audio_enabled="audio" in outputs,
+            expression_enabled="expression" in outputs,
             action_enabled="action" in outputs,
         )

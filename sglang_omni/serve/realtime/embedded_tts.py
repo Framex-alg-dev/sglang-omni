@@ -164,6 +164,7 @@ class EmbeddedTTSConnection:
         text_chunks: AsyncIterator[str],
         audio_sink: AudioSink,
         voice: str | None = None,
+        instruct: str | Awaitable[str] | None = None,
     ) -> EmbeddedTTSResult:
         if not turn_id.strip():
             raise ValueError("TTS turn_id must be non-empty")
@@ -201,7 +202,13 @@ class EmbeddedTTSConnection:
                     name=f"embedded-tts-producer:{turn_id}",
                 )
                 sender = asyncio.create_task(
-                    self._send_text(websocket, queue, first_text_sent, turn_id),
+                    self._send_text(
+                        websocket,
+                        queue,
+                        first_text_sent,
+                        turn_id,
+                        instruct=instruct,
+                    ),
                     name=f"embedded-tts-sender:{turn_id}",
                 )
                 receiver = asyncio.create_task(
@@ -376,7 +383,15 @@ class EmbeddedTTSConnection:
         queue: asyncio.Queue[str | None],
         first_text_sent: asyncio.Event,
         turn_id: str,
+        *,
+        instruct: str | Awaitable[str] | None,
     ) -> None:
+        instruct_wait_started = time.monotonic()
+        resolved_instruct = await self._resolve_instruct(instruct)
+        instruct_wait_ms = round(
+            (time.monotonic() - instruct_wait_started) * 1000,
+            3,
+        )
         saw_text = False
         text_chunks = 0
         text_chars = 0
@@ -388,13 +403,14 @@ class EmbeddedTTSConnection:
             saw_text = True
             if first_append_started is None:
                 first_append_started = time.monotonic()
+            append_event = {
+                "type": "input_text_buffer.append",
+                "text": chunk,
+            }
+            if resolved_instruct is not None:
+                append_event["instruct"] = resolved_instruct
             await _wait_for_phase(
-                websocket.send(
-                    json.dumps(
-                        {"type": "input_text_buffer.append", "text": chunk},
-                        ensure_ascii=False,
-                    )
-                ),
+                websocket.send(json.dumps(append_event, ensure_ascii=False)),
                 timeout=self._config.send_timeout_seconds,
                 phase="send_timeout",
             )
@@ -407,6 +423,11 @@ class EmbeddedTTSConnection:
                     session_id=self._session_id,
                     turn_id=turn_id,
                     chars=len(chunk),
+                    instruct_applied=resolved_instruct is not None,
+                    instruct_chars=(
+                        len(resolved_instruct) if resolved_instruct is not None else 0
+                    ),
+                    instruct_wait_ms=instruct_wait_ms,
                     elapsed_ms=round(
                         (time.monotonic() - first_append_started) * 1000, 3
                     ),
@@ -427,6 +448,32 @@ class EmbeddedTTSConnection:
             text_chunks=text_chunks,
             text_chars=text_chars,
         )
+
+    @staticmethod
+    async def _resolve_instruct(
+        instruct: str | Awaitable[str] | None,
+    ) -> str | None:
+        if instruct is None:
+            return None
+        value = (
+            instruct
+            if isinstance(instruct, str)
+            else await asyncio.shield(instruct)
+        )
+        if not isinstance(value, str):
+            raise EmbeddedTTSError(
+                "TTS instruct must resolve to a string",
+                phase="send",
+            )
+        value = value.strip()
+        if not value:
+            raise EmbeddedTTSError("TTS instruct must be non-empty", phase="send")
+        if len(value) > 1000:
+            raise EmbeddedTTSError(
+                "TTS instruct exceeds 1000 characters",
+                phase="send",
+            )
+        return value
 
     async def _receive_turn(
         self,

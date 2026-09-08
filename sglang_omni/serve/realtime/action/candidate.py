@@ -117,7 +117,14 @@ class ActionCandidateComponent:
             )
         )
         eligible_candidates = self._filter_turn_action_candidates(
-            turn, list(self.candidates)
+            turn,
+            [
+                candidate
+                for candidate in self.candidates
+                if candidate.category_id != FACIAL_EXPRESSION_CATEGORY_ID
+                and candidate.candidate_id
+                not in self._facial_expression_candidate_ids()
+            ],
         )
         if not eligible_candidates:
             raise ValueError(

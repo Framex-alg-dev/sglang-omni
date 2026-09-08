@@ -408,6 +408,17 @@ def test_fusion_buffers_audio_until_promotion_and_synthesizes_text_once() -> Non
         )
         == "固定流式回复"
     )
+    append_events = [
+        event
+        for event in provider.sent
+        if event["type"] == "input_text_buffer.append"
+    ]
+    assert append_events
+    assert all(
+        isinstance(event.get("instruct"), str) and event["instruct"].strip()
+        for event in append_events
+    )
+    assert len({event["instruct"] for event in append_events}) == 1
 
 
 def test_fusion_provisional_audio_overflow_fails_without_audio_leak() -> None:

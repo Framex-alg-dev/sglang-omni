@@ -178,10 +178,19 @@ class ActionCategoryComponent:
             current_text=text or "",
         )
         started = time.perf_counter()
+        expression_ids = self._facial_expression_candidate_ids()
         eligible_categories = [
             category
             for category in self.categories
-            if self._filter_turn_action_candidates(turn, list(category.children))
+            if category.category_id != FACIAL_EXPRESSION_CATEGORY_ID
+            if self._filter_turn_action_candidates(
+                turn,
+                [
+                    child
+                    for child in category.children
+                    if child.candidate_id not in expression_ids
+                ],
+            )
         ]
         if not eligible_categories:
             raise ValueError(

@@ -111,6 +111,48 @@ class FakeClient:
         )
 
 
+class PerformanceMatrixClient(FakeClient):
+    def __init__(self, performance_winner: str) -> None:
+        super().__init__()
+        self.performance_winner = performance_winner
+
+    async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+        self.score_requests.append(request)
+        candidate_ids = [candidate.candidate_id for candidate in request.candidates]
+        if request.stage == "performance":
+            winner = self.performance_winner
+        elif "R0" in candidate_ids:
+            winner = "R0"
+        elif request.stage == "category":
+            winner = "B010"
+        elif "A100" in candidate_ids:
+            winner = "A100"
+        else:
+            winner = candidate_ids[0]
+        assert winner in candidate_ids
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=candidate_id,
+                    token_count=1,
+                    mean_logprob=-0.01 if candidate_id == winner else -10.0,
+                    mean_nll=0.01 if candidate_id == winner else 10.0,
+                    ppl=1.01 if candidate_id == winner else 22026.0,
+                    token_scores=[
+                        TokenScore(
+                            token_id=100 + index,
+                            logprob=-0.01 if candidate_id == winner else -10.0,
+                        )
+                    ],
+                )
+                for index, candidate_id in enumerate(candidate_ids)
+            ],
+        )
+
+
 class ReplyHistoryRouteClient(FakeClient):
     def __init__(
         self,
@@ -404,6 +446,113 @@ def user_turn_commit(turn_id: str, **fields) -> dict:
         "text_role": "user_input",
         **fields,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "performance_winner",
+        "text",
+        "expect_expression",
+        "expected_action_status",
+        "expected_action_execute",
+    ),
+    [
+        pytest.param(
+            "P200", "挥挥手", False, "supported", True, id="body-only"
+        ),
+        pytest.param(
+            "P201", "你好", True, "supported", True, id="body-with-optional-expression"
+        ),
+        pytest.param(
+            "P101", "笑一个", True, "not_required", False, id="expression-only"
+        ),
+        pytest.param(
+            "P301", "笑着挥挥手", True, "supported", True, id="expression-and-body"
+        ),
+    ],
+)
+async def test_turn_expression_body_event_matrix(
+    performance_winner: str,
+    text: str,
+    expect_expression: bool,
+    expected_action_status: str,
+    expected_action_execute: bool,
+) -> None:
+    catalog = load_global_action_catalog()
+    expression = catalog.category_by_id["B019"].children[0]
+    body = catalog.category_by_id["B010"].children[0]
+    fallback_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback_category is not None
+    reply_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+    )
+    assert reply_category is not None
+    fallback = next(
+        child
+        for child in fallback_category.children
+        if child.candidate_id != expression.candidate_id
+    )
+    reply_accompaniment = next(
+        child
+        for child in reply_category.children
+        if child.candidate_id
+        not in {expression.candidate_id, fallback.candidate_id}
+    )
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        PerformanceMatrixClient(performance_winner),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            f"performance-matrix-{performance_winner}",
+            outputs=["text", "expression", "action"],
+            reply={"unsupported_action_text": "这个动作暂时无法执行。"},
+            action={
+                "fallback_category_ids": [fallback_category.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": expression.candidate_id},
+                    {"candidate_id": body.candidate_id},
+                    {"candidate_id": fallback.candidate_id},
+                    {"candidate_id": reply_accompaniment.candidate_id},
+                ],
+            },
+        )
+    )
+    turn_id = f"turn-{performance_winner}"
+
+    await session.handle_turn_start(user_turn_start(turn_id))
+    await session.handle_turn_commit(user_turn_commit(turn_id, text=text))
+
+    turn_events = [event for event in ws.events if event.get("turn_id") == turn_id]
+    event_types = [event["type"] for event in turn_events]
+    expression_events = [
+        event for event in turn_events if event["type"] == "turn.expression.ready"
+    ]
+    assert bool(expression_events) is expect_expression
+    assert event_types.count("turn.action.ready") == 1
+    if expect_expression:
+        assert event_types.index("turn.expression.ready") < event_types.index(
+            "turn.action.ready"
+        )
+        assert expression_events[0]["expression"]["category_id"] == "B019"
+        assert expression_events[0]["expression"]["candidate_id"] == "A154"
+
+    action_event = next(
+        event for event in turn_events if event["type"] == "turn.action.ready"
+    )
+    assert action_event["action"]["support_status"] == expected_action_status
+    assert action_event["action"]["execute"] is expected_action_execute
+    result = next(event for event in turn_events if event["type"] == "turn.result")
+    assert result["outputs"]["expression"] == (
+        "completed" if expect_expression else "not_changed"
+    )
+    assert ("expression" in result) is expect_expression
+    assert result["action"]["support_status"] == expected_action_status
 
 
 def test_character_profile_role_accepts_5000_chars_and_warns_above_recommended(
@@ -865,6 +1014,59 @@ async def test_protocol_v1_requires_fallback_categories_for_action() -> None:
 
 
 @pytest.mark.asyncio
+async def test_protocol_v1_expression_requires_b019_and_excludes_it_from_fallback() -> None:
+    catalog = load_global_action_catalog()
+    expression_category = catalog.category_by_id["B019"]
+    expression = expression_category.children[0]
+    fallback_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback_category is not None
+    fallback = fallback_category.children[0]
+    session = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+
+    await session.dispatch(
+        protocol_v1_session_start(
+            "expression-output",
+            outputs=["expression", "action"],
+            action={
+                "fallback_category_ids": [fallback_category.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": expression.candidate_id},
+                    {"candidate_id": fallback.candidate_id},
+                ],
+            },
+        )
+    )
+
+    assert session.output_capabilities.expression_enabled is True
+    assert "B019" not in session.fallback_category_ids
+
+    missing_expression = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+    with pytest.raises(ValueError, match="expression output requires"):
+        await missing_expression.dispatch(
+            protocol_v1_session_start(
+                "expression-output-missing-b019",
+                outputs=["expression", "action"],
+                action={
+                    "fallback_category_ids": [fallback_category.category_id],
+                    "allowed_candidates": [
+                        {"candidate_id": fallback.candidate_id}
+                    ],
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_protocol_v1_rejects_legacy_and_unknown_fields() -> None:
     session = make_session(FakeWebSocket(), FakeClient())
     with pytest.raises(ValueError, match="unsupported protocol_version"):
@@ -876,6 +1078,7 @@ async def test_protocol_v1_rejects_legacy_and_unknown_fields() -> None:
                 "outputs": ["text"],
             }
         )
+
     with pytest.raises(ValueError, match="unsupported fields: modalities"):
         await session.dispatch(
             {
@@ -893,6 +1096,19 @@ async def test_protocol_v1_rejects_legacy_and_unknown_fields() -> None:
                 "seq": 1,
                 "audio": "AA==",
             }
+        )
+
+
+def test_protocol_v1_rejects_removed_output_audio_base_instruction() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+
+    with pytest.raises(ValueError, match="output_audio contains unsupported fields"):
+        session._normalize_wire_event(
+            protocol_v1_session_start(
+                "removed-audio-base-instruction",
+                outputs=["text", "audio"],
+                output_audio={"base_instruction": "青年女性，中音"},
+            )
         )
 
 

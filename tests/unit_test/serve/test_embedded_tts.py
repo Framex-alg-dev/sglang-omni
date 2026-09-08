@@ -97,10 +97,16 @@ async def test_streaming_protocol_and_connection_reuse() -> None:
         audio.append(chunk)
 
     first = await manager.synthesize_streaming(
-        turn_id="turn-1", text_chunks=_chunks("你", "好"), audio_sink=collect
+        turn_id="turn-1",
+        text_chunks=_chunks("你", "好"),
+        audio_sink=collect,
+        instruct="请开心、清晰地说。",
     )
     second = await manager.synthesize_streaming(
-        turn_id="turn-2", text_chunks=_chunks("再见"), audio_sink=collect
+        turn_id="turn-2",
+        text_chunks=_chunks("再见"),
+        audio_sink=collect,
+        instruct="请温柔、舒缓地说。",
     )
 
     assert first.audio_bytes == second.audio_bytes == 2
@@ -117,8 +123,96 @@ async def test_streaming_protocol_and_connection_reuse() -> None:
         "input_text_buffer.append",
         "input_text_buffer.commit",
     ]
+    appends = [
+        item
+        for item in connector.contexts[0].websocket.sent
+        if item["type"] == "input_text_buffer.append"
+    ]
+    assert appends == [
+        {
+            "type": "input_text_buffer.append",
+            "text": "你",
+            "instruct": "请开心、清晰地说。",
+        },
+        {
+            "type": "input_text_buffer.append",
+            "text": "好",
+            "instruct": "请开心、清晰地说。",
+        },
+        {
+            "type": "input_text_buffer.append",
+            "text": "再见",
+            "instruct": "请温柔、舒缓地说。",
+        },
+    ]
     await manager.close()
     assert connector.contexts[0].closed is True
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_streaming_waits_for_delayed_instruction_before_first_append() -> None:
+    connector = FakeConnector([_successful_events()])
+    manager = _manager(connector)
+    instruction: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+    task = asyncio.create_task(
+        manager.synthesize_streaming(
+            turn_id="turn-delayed-instruct",
+            text_chunks=_chunks("太好了", "！"),
+            audio_sink=lambda _chunk: asyncio.sleep(0),
+            instruct=instruction,
+        )
+    )
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert connector.contexts
+    assert not any(
+        item["type"] == "input_text_buffer.append"
+        for item in connector.contexts[0].websocket.sent
+    )
+
+    instruction.set_result("请非常开心地说一句话。")
+    await task
+
+    appends = [
+        item
+        for item in connector.contexts[0].websocket.sent
+        if item["type"] == "input_text_buffer.append"
+    ]
+    assert appends == [
+        {
+            "type": "input_text_buffer.append",
+            "text": "太好了",
+            "instruct": "请非常开心地说一句话。",
+        },
+        {
+            "type": "input_text_buffer.append",
+            "text": "！",
+            "instruct": "请非常开心地说一句话。",
+        },
+    ]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("instruct", ["   ", "x" * 1001])
+async def test_streaming_rejects_invalid_instruction(instruct: str) -> None:
+    connector = FakeConnector([_successful_events()])
+    manager = _manager(connector)
+
+    with pytest.raises(EmbeddedTTSError, match="TTS instruct"):
+        await manager.synthesize_streaming(
+            turn_id="turn-invalid-instruct",
+            text_chunks=_chunks("不会发送"),
+            audio_sink=lambda _chunk: asyncio.sleep(0),
+            instruct=instruct,
+        )
+
+    assert not any(
+        item["type"] == "input_text_buffer.append"
+        for item in connector.contexts[0].websocket.sent
+    )
     await manager.close()
 
 

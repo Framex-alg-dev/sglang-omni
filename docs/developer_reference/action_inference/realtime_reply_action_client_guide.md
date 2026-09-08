@@ -67,7 +67,7 @@
   "type": "session.start",
   "protocol_version": 1,
   "session_id": "session-20260822-001",
-  "outputs": ["text", "action"],
+  "outputs": ["text", "audio", "expression", "action"],
   "locale": "zh-CN",
   "character_profile": {
     "gender_expression": "男性",
@@ -95,6 +95,9 @@
       {
         "candidate_id": "A288",
         "execution_binding": {"asset_id": "motion_wave_single"}
+      },
+      {
+        "candidate_id": "A154"
       }
     ]
   },
@@ -116,16 +119,18 @@
 | `type` | 是 | 固定为 `session.start` |
 | `protocol_version` | 是 | 当前只接受整数 `1` |
 | `session_id` | 是 | 客户端生成的唯一 Session ID |
-| `outputs` | 否 | `text`、`audio`、`action` 的非空去重数组；缺省为 `text+action` |
+| `outputs` | 否 | `text`、`audio`、`expression`、`action` 的非空去重数组；缺省为 `text+action` |
 | `locale` | 否 | `zh-CN` 或 `en-US`，缺省 `en-US`；显式传 `null` 或其他值会被拒绝 |
-| `character_profile` | 否 | 动作 Category 和 Child 共享的数字人人设；不进入回复 Prompt |
+| `character_profile` | 否 | 动作推理和可选表情选择共享的精简角色信息；不进入回复 Prompt |
 | `reply` | 否 | 回复专用 Session 配置 |
+| `output_audio` | 启用 audio 时可选 | 可选的 TTS `voice` |
 | `action` | 启用 action 时是 | 动作偏好和 Session 动作白名单 |
 | `input_audio` | 否 | 输入音频格式；缺省即 PCM16LE、16 kHz、单声道 |
 | `diagnostics` | 否 | 诊断输出开关 |
 
-`outputs` 支持 `text`、`audio`、`action` 的组合，但 `audio` 必须与 `text` 同时启用。
-需要服务端 TTS 的融合会话使用 `["text", "audio", "action"]`；生产客户端建议始终显式
+`outputs` 支持 `text`、`audio`、`expression`、`action` 的组合，但 `audio` 必须与 `text`
+同时启用，`expression` 必须与 `action` 同时启用。需要服务端 TTS、表情和身体动作的融合
+会话使用 `["text", "audio", "expression", "action"]`；生产客户端建议始终显式
 发送，避免未来缺省值变化后产生意外行为。
 
 `locale` 控制服务端生成的 Category、Child 和动作上下文 Prompt 使用中文还是英文。
@@ -137,7 +142,7 @@
 
 | 字段 | 作用对象 | 有效期 |
 |---|---|---|
-| `character_profile` | 类别、动作 | 整个 Session |
+| `character_profile` | 类别、身体动作、可选表情风格 | 整个 Session |
 | `reply.instructions` | 回复；作为完整 System Prompt 原样使用 | 整个 Session |
 | `reply.unsupported_action_text` | 不支持动作时写入历史的文本，并对应客户端预生成音频 | 整个 Session |
 | `action.category_guidance` | 类别选择为主 | 整个 Session |
@@ -147,7 +152,8 @@
 | `turn.commit.action.guidance` | 动作 | 当前主动 Turn |
 
 `character_profile` 支持 `gender_expression`、`visual_style`、`role`、`personality`
-四个可选字符串字段，仅供动作推理使用。`reply.instructions` 最长 32768 字符，是回复模型
+四个可选字符串字段，供动作推理和普通语言 Turn 的可选表情风格参考。它不能覆盖用户明确
+提出的表情要求。`reply.instructions` 最长 32768 字符，是回复模型
 唯一的 System Prompt 来源；服务端不会拼接 `character_profile`，也不会添加默认或兜底 Prompt。
 客户端如需人设、语言、输出格式或缺省行为，必须完整写入 `reply.instructions`。未传入时，
 回复 System Prompt 为空。`character_profile.role` 最长 5000 字符；其他动作
@@ -249,10 +255,13 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
   "protocol_version": 1,
   "session_id": "session-20260822-001",
   "model": "Qwen3-Omni",
-  "outputs": ["text", "action"],
+  "outputs": ["text", "audio", "expression", "action"],
   "locale": "zh-CN",
-  "action_candidate_count": 3,
-  "action_category_count": 3,
+  "output_audio": {
+    "voice": "benchmark_qwen_cherry_zh"
+  },
+  "action_candidate_count": 4,
+  "action_category_count": 4,
   "session_action_catalog_hash": "sha256:...",
   "global_action_catalog_hash": "sha256:...",
   "global_action_catalog_version": "...",
@@ -613,6 +622,40 @@ TTS 完成或 TTS 取消：它可能早于首个 `response.audio.delta`，也可
 `response.audio.done`、`response.done` 和 `turn.result` 仍是后续终态屏障。
 
 当前协议没有动作播放结果 ACK，服务端暂时把成功推理的动作视为后续 Turn 已执行动作。
+
+### 8.1 独立脸部表情
+
+启用 `expression` 后，服务端只从全局目录 B019 选择脸部表情。B019 不参与身体动作的
+Category、Child、flat 或 fallback 选择。没有必要改变表情时不发送事件，并在
+`turn.result.outputs.expression` 返回 `not_changed`。
+
+需要改变表情时，服务端在本 Turn 的 `turn.action.ready` 之前发送一次：
+
+```json
+{
+  "type": "turn.expression.ready",
+  "session_id": "session-20260822-001",
+  "turn_id": "turn-user-001",
+  "expression": {
+    "category_id": "B019",
+    "candidate_id": "A154",
+    "expression_id": "A154",
+    "label": "微笑",
+    "description": "a natural smile with gently raised mouth corners and cheerful eyes",
+    "apply": true
+  }
+}
+```
+
+`turn.action.ready` 是表情事件的顺序屏障：客户端不得接受同一 Turn 在该事件之后到达的
+`turn.expression.ready`。纯表情请求的动作事件使用 `support_status="not_required"`、
+`execute=false` 和 `reason_code="expression_only"`；这表示请求已经由表情通道满足，不能
+播放不支持提示。明确同时要求表情和身体动作时采用原子语义，任一通道不支持则两者都不执行。
+
+每 Turn 的 TTS 控制描述与表情/请求范围在同一并行分支中生成，不通过 WebSocket 返回给
+客户端。服务端在发送首个 TTS 文本块前等待同 Turn 的控制描述就绪，并在该 Turn 的每个
+`input_text_buffer.append` 中使用相同的 `instruct`。这不会新增客户端事件；客户端仍只消费
+现有文本、音频、表情和动作事件。
 
 ## 9. Turn 终态
 

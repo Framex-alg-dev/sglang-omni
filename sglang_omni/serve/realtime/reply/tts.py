@@ -93,6 +93,7 @@ class ReplyTTSComponent:
                 text_chunks=text_chunks(),
                 audio_sink=audio_sink,
                 voice=self.output_audio_voice,
+                instruct=turn.tts_instruction_future,
             ),
             name=f"session-embedded-tts-{self.session_id}-{turn.turn_id}",
         )

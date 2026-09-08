@@ -65,6 +65,15 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 
 
 class ActionPromptComponent:
+    def _facial_expression_candidate_ids(self) -> frozenset[str]:
+        return frozenset(
+            child.candidate_id
+            for category in self.categories
+            if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID
+            for child in category.children
+        )
+
+
     def _no_action_candidate(self) -> SessionActionCandidate:
         for candidate in self.candidates:
             if candidate.action_id == "no_action":
@@ -160,7 +169,21 @@ class ActionPromptComponent:
 
     def _default_fallback_candidate(self) -> SessionActionCandidate:
         """Return the stable executable action from the primary fallback category."""
-        return self._primary_fallback_category().children[0]
+        category = self._primary_fallback_category()
+        if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID:
+            raise ValueError("facial expressions cannot be body-action fallbacks")
+        expression_ids = self._facial_expression_candidate_ids()
+        candidate = next(
+            (
+                child
+                for child in category.children
+                if child.candidate_id not in expression_ids
+            ),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("body-action fallback contains only facial expressions")
+        return candidate
 
 
     @staticmethod
@@ -195,7 +218,15 @@ class ActionPromptComponent:
         fallback = self._default_fallback_candidate()
         if self._turn_candidate_is_allowed(turn, fallback):
             return fallback
-        eligible = self._filter_turn_action_candidates(turn, list(self.candidates))
+        expression_ids = self._facial_expression_candidate_ids()
+        eligible = self._filter_turn_action_candidates(
+            turn,
+            [
+                candidate
+                for candidate in self.candidates
+                if candidate.candidate_id not in expression_ids
+            ],
+        )
         if not eligible:
             raise ValueError(
                 "per-turn action candidate constraints leave no executable action"
@@ -228,8 +259,13 @@ class ActionPromptComponent:
         # which follows category rank and therefore supplies the result's
         # category_id.
         candidates_by_id: dict[str, SessionActionCandidate] = {}
+        expression_ids = self._facial_expression_candidate_ids()
         for category in categories:
+            if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID:
+                continue
             for child in category.children:
+                if child.candidate_id in expression_ids:
+                    continue
                 candidates_by_id.setdefault(child.candidate_id, child)
         return list(candidates_by_id.values())
 

@@ -418,6 +418,7 @@ class TurnBuffer:
     current_request_id: str | None = None
     active_request_ids: set[str] = field(default_factory=set)
     branch_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    tts_instruction_future: asyncio.Future[str] | None = None
     inference_task: asyncio.Task[None] | None = None
     trace_id: str = ""
     commit_started_at: float | None = None
