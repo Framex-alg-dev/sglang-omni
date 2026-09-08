@@ -120,6 +120,13 @@ from sglang_omni.serve.protocol import (
     VoiceListResponse,
     WeightsCheckerRequest,
 )
+from sglang_omni.serve.realtime.runtime_prompt_overrides import (
+    prompt_slot_payloads as realtime_prompt_slot_payloads,
+    write_runtime_prompt as write_realtime_prompt,
+)
+from sglang_omni.models.qwen3_omni.global_action_catalog import ACTION_INTENT_POLICY
+from sglang_omni.serve.realtime.proactive.policies import _POLICIES
+from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules_zh
 from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
 from sglang_omni.serve.speech_errors import (
     SpeechAPIError,
@@ -332,6 +339,7 @@ def create_app(
     _register_health(app)
     _register_models(app)
     _register_admin(app, resolved_key)
+    _register_runtime_prompt_overrides(app, resolved_key)
     register_realtime_debug_routes(app, resolved_key)
     _register_chat_completions(app)
     _register_action_scores(app)
@@ -354,6 +362,57 @@ def create_app(
         _register_resource_monitor(app)
 
     return app
+
+
+def _register_runtime_prompt_overrides(
+    app: FastAPI,
+    admin_api_key: str | None = None,
+) -> None:
+    """Expose development prompt files through the existing admin boundary."""
+
+    auth = make_admin_auth_dependency(admin_api_key)
+
+    def prompt_defaults() -> dict[str, str]:
+        return {
+            "reply_rules": repository_reply_rules_zh(),
+            "action_rules": ACTION_INTENT_POLICY,
+            "proactive_reply_rules": "\n\n".join(
+                f"[{trigger}]\n{policy.reply_policy_zh}"
+                for trigger, policy in _POLICIES.items()
+            ),
+            "proactive_action_rules": "\n\n".join(
+                f"[{trigger}]\n{policy.default_action_guidance_zh}"
+                for trigger, policy in _POLICIES.items()
+            ),
+        }
+
+    @app.get("/admin/runtime-prompts", dependencies=[Depends(auth)])
+    async def list_runtime_prompts() -> JSONResponse:
+        return JSONResponse(
+            content={"items": realtime_prompt_slot_payloads(prompt_defaults())}
+        )
+
+    @app.put("/admin/runtime-prompts/{key}", dependencies=[Depends(auth)])
+    async def update_runtime_prompt(key: str, request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"content"}:
+                raise ValueError("request must contain only content")
+            content = payload.get("content")
+            if not isinstance(content, str):
+                raise ValueError("content must be a string")
+            write_realtime_prompt(key, content)
+            item = next(
+                item
+                for item in realtime_prompt_slot_payloads(prompt_defaults())
+                if item["key"] == key
+            )
+            return JSONResponse(content=item)
+        except (ValueError, StopIteration) as exc:
+            return JSONResponse(
+                content={"error": "RUNTIME_PROMPT_INVALID", "detail": str(exc)},
+                status_code=422,
+            )
 
 
 def _register_voices(app: FastAPI) -> None:

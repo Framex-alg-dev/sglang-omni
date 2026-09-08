@@ -54,3 +54,6 @@ logs/*
 
 deploy/sglang-omni-18001.service
 deploy/realtime-knowledge.env
+
+runtime/*
+!runtime/.gitkeep

@@ -7,7 +7,12 @@ or differently configured clients cannot remove the safety boundaries.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from sglang_omni.serve.realtime.proactive.models import ProactiveScenePolicy
+from sglang_omni.serve.realtime.runtime_prompt_overrides import (
+    read_runtime_prompt_section,
+)
 
 SESSION_ENTER_TRIGGER = "session_enter"
 IDLE_TIMEOUT_TRIGGER = "idle_timeout"
@@ -153,5 +158,25 @@ _POLICIES = {
 
 def proactive_scene_policy(trigger: str | None) -> ProactiveScenePolicy | None:
     """Return the built-in policy for a recognized language proactive scene."""
-
-    return _POLICIES.get(trigger or "")
+    policy = _POLICIES.get(trigger or "")
+    if policy is None:
+        return None
+    reply_override = read_runtime_prompt_section(
+        "proactive_reply_rules", policy.trigger
+    )
+    action_override = read_runtime_prompt_section(
+        "proactive_action_rules", policy.trigger
+    )
+    if reply_override is None and action_override is None:
+        return policy
+    return replace(
+        policy,
+        reply_policy_zh=reply_override or policy.reply_policy_zh,
+        reply_policy_en=reply_override or policy.reply_policy_en,
+        default_action_guidance_zh=(
+            action_override or policy.default_action_guidance_zh
+        ),
+        default_action_guidance_en=(
+            action_override or policy.default_action_guidance_en
+        ),
+    )
