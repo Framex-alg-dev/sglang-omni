@@ -38,7 +38,13 @@ def fuse_performance_decision(
         or action_error is not None
         or action.get("support_status") == "unsupported"
     )
-    if performance.request_scope == "expression_only":
+    body_supported = bool(
+        action is not None
+        and action_error is None
+        and action.get("support_status") == "supported"
+        and action.get("execute") is True
+    )
+    if performance.request_scope == "expression_only" and not body_supported:
         # A body inference failure is irrelevant when no body action was asked for.
         action_error = None
         if (

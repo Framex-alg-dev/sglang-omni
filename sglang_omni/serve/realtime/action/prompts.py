@@ -238,15 +238,18 @@ class ActionPromptComponent:
         return self._no_action_candidate().candidate_id
 
 
-    def _format_candidate_for_prompt(self, candidate: SessionActionCandidate) -> str:
+    def _format_candidate_for_prompt(
+        self, candidate: SessionActionCandidate, turn_origin: str = "user"
+    ) -> str:
+        definition = candidate.effective_definition(turn_origin)
         return self._prompt(
             zh=(
                 f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
-                f"说明={candidate.short_definition}"
+                f"说明={definition}"
             ),
             en=(
                 f"candidate_id={candidate.candidate_id} | action={candidate.source_label} | "
-                f"description={candidate.short_definition}"
+                f"description={definition}"
             ),
         )
 
@@ -334,12 +337,13 @@ class ActionPromptComponent:
         self,
         category: SessionActionCategory | list[SessionActionCategory],
         candidates: list[SessionActionCandidate],
+        turn_origin: str = "user",
     ) -> str:
         categories = category if isinstance(category, list) else [category]
         if self.global_action_catalog is not None:
             if len(categories) == 1:
                 return self.global_action_catalog.child_system_prompt_for(
-                    self.locale, categories[0].category_id
+                    self.locale, categories[0].category_id, turn_origin
                 )
             lines = [
                 self._prompt(
@@ -365,7 +369,10 @@ class ActionPromptComponent:
                     )
                 )
             lines.append(child_unsupported_policy(self.locale))
-            lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+            lines.extend(
+                self._format_candidate_for_prompt(item, turn_origin)
+                for item in candidates
+            )
             lines.append(
                 self._prompt(
                     zh=(
@@ -387,7 +394,10 @@ class ActionPromptComponent:
                 f"Selected category: category_id={selected.category_id} | category={selected.source_label} | description={selected.short_definition}"
                 for selected in categories
             )
-            lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+            lines.extend(
+                self._format_candidate_for_prompt(item, turn_origin)
+                for item in candidates
+            )
             lines.append(
                 "Select the candidate_id that best matches from the candidates in the "
                 "selected category above. Do not introduce another category or an "
@@ -402,7 +412,10 @@ class ActionPromptComponent:
                 f"已选类别：category_id={selected.category_id}｜类别={selected.source_label}｜"
                 f"说明={selected.short_definition}"
             )
-        lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+        lines.extend(
+            self._format_candidate_for_prompt(item, turn_origin)
+            for item in candidates
+        )
         lines.append(
             "只能从以上已选类别的候选动作中选择最匹配的 candidate_id；"
             "不得引入其他类别或系统兜底动作。"
@@ -574,13 +587,14 @@ class ActionPromptComponent:
         return ""
 
 
-    def _build_action_system_prompt(self) -> str:
+    def _build_action_system_prompt(self, turn_origin: str = "user") -> str:
         if self.language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the fixed set for this conversation.",
             ]
             lines.extend(
-                self._format_candidate_for_prompt(item) for item in self.candidates
+                self._format_candidate_for_prompt(item, turn_origin)
+                for item in self.candidates
             )
             lines.append(
                 "If no candidate satisfies the input and state constraints, or a "
@@ -592,7 +606,8 @@ class ActionPromptComponent:
             "你是数字人动作识别器。请从本次会话的固定集合中选择一个 candidate_id。",
         ]
         lines.extend(
-            self._format_candidate_for_prompt(item) for item in self.candidates
+            self._format_candidate_for_prompt(item, turn_origin)
+            for item in self.candidates
         )
         lines.append(
             "没有候选动作满足输入与状态约束，或需要避免冲突时，选择兜底 "

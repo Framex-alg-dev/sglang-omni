@@ -402,6 +402,16 @@ class GlobalActionCandidate:
     short_definition: str
     source_short_definition: str
     category_id: str
+    proactive_expression: str = ""
+    user_reaction_expression: str = ""
+
+    def effective_definition(self, turn_origin: str) -> str:
+        contextual = (
+            self.proactive_expression
+            if turn_origin == "proactive"
+            else self.user_reaction_expression
+        )
+        return contextual.strip() or self.short_definition
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +453,12 @@ class GlobalActionCatalog:
     category_prompt_hashes_by_locale: Mapping[str, str]
     child_system_prompts_by_locale: Mapping[str, Mapping[str, str]]
     child_prompt_hashes_by_locale: Mapping[str, Mapping[str, str]]
+    proactive_child_system_prompts_by_locale: Mapping[
+        str, Mapping[str, str]
+    ] = field(default_factory=lambda: MappingProxyType({}))
+    proactive_child_prompt_hashes_by_locale: Mapping[
+        str, Mapping[str, str]
+    ] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def candidate_count(self) -> int:
@@ -473,15 +489,29 @@ class GlobalActionCatalog:
             _normalize_prompt_locale(locale)
         ]
 
-    def child_system_prompt_for(self, locale: str, category_id: str) -> str:
-        return self.child_system_prompts_by_locale[
-            _normalize_prompt_locale(locale)
-        ][category_id]
+    def child_system_prompt_for(
+        self, locale: str, category_id: str, turn_origin: str = "user"
+    ) -> str:
+        normalized = _normalize_prompt_locale(locale)
+        prompts = (
+            self.proactive_child_system_prompts_by_locale
+            if turn_origin == "proactive"
+            and self.proactive_child_system_prompts_by_locale
+            else self.child_system_prompts_by_locale
+        )
+        return prompts[normalized][category_id]
 
-    def child_prompt_hash_for(self, locale: str, category_id: str) -> str:
-        return self.child_prompt_hashes_by_locale[
-            _normalize_prompt_locale(locale)
-        ][category_id]
+    def child_prompt_hash_for(
+        self, locale: str, category_id: str, turn_origin: str = "user"
+    ) -> str:
+        normalized = _normalize_prompt_locale(locale)
+        hashes = (
+            self.proactive_child_prompt_hashes_by_locale
+            if turn_origin == "proactive"
+            and self.proactive_child_prompt_hashes_by_locale
+            else self.child_prompt_hashes_by_locale
+        )
+        return hashes[normalized][category_id]
 
     def category_with_semantic_tag(
         self, semantic_tag: str
@@ -503,12 +533,15 @@ class GlobalActionCatalog:
         )
 
     def child_cache_namespace(
-        self, category_id: str, locale: str = "zh-CN"
+        self,
+        category_id: str,
+        locale: str = "zh-CN",
+        turn_origin: str = "user",
     ) -> str:
         normalized = _normalize_prompt_locale(locale)
         return (
-            f"hierarchical:{normalized}:child:{category_id}:"
-            f"{self.child_prompt_hash_for(normalized, category_id)}"
+            f"hierarchical:{normalized}:child:{category_id}:{turn_origin}:"
+            f"{self.child_prompt_hash_for(normalized, category_id, turn_origin)}"
         )
 
 
@@ -873,6 +906,7 @@ def build_category_system_prompt(
 def build_child_system_prompt(
     category: GlobalActionCategory,
     locale: str = "zh-CN",
+    turn_origin: str = "user",
 ) -> str:
     locale = _normalize_prompt_locale(locale)
     if locale == "en-US":
@@ -891,7 +925,7 @@ def build_child_system_prompt(
         else:
             lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY_EN)
         lines.extend(
-            f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.short_definition}"
+            f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.effective_definition(turn_origin)}"
             for item in category.children
         )
         lines.append(
@@ -914,7 +948,7 @@ def build_child_system_prompt(
     else:
         lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY)
     lines.extend(
-        f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.short_definition}"
+        f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.effective_definition(turn_origin)}"
         for item in category.children
     )
     lines.append(
@@ -1036,6 +1070,22 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 raise ValueError(f"{child_prefix}.short_definition must be a string")
             source_definition = source_definition.strip()
             prompt_definition = source_definition or child_label
+            proactive_expression = raw_child.get("proactive_expression", "")
+            user_reaction_expression = raw_child.get(
+                "user_reaction_expression", ""
+            )
+            if proactive_expression is None:
+                proactive_expression = ""
+            if user_reaction_expression is None:
+                user_reaction_expression = ""
+            if not isinstance(proactive_expression, str):
+                raise ValueError(
+                    f"{child_prefix}.proactive_expression must be a string"
+                )
+            if not isinstance(user_reaction_expression, str):
+                raise ValueError(
+                    f"{child_prefix}.user_reaction_expression must be a string"
+                )
             if candidate_id in category_candidate_ids:
                 raise ValueError(
                     "duplicate global candidate_id within category "
@@ -1067,6 +1117,8 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 short_definition=prompt_definition,
                 source_short_definition=source_definition,
                 category_id=category_id,
+                proactive_expression=proactive_expression.strip(),
+                user_reaction_expression=user_reaction_expression.strip(),
             )
             children.append(child)
             candidate_occurrences_by_id.setdefault(candidate_id, []).append(
@@ -1128,6 +1180,17 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
         )
         for locale in SUPPORTED_ACTION_PROMPT_LOCALES
     }
+    proactive_child_prompts_by_locale = {
+        locale: MappingProxyType(
+            {
+                item.category_id: build_child_system_prompt(
+                    item, locale, "proactive"
+                )
+                for item in normalized_categories
+            }
+        )
+        for locale in SUPPORTED_ACTION_PROMPT_LOCALES
+    }
     # Keep the original public fields as Chinese aliases for integrations that
     # inspect the catalog directly. Runtime sessions always use locale-aware
     # accessors.
@@ -1142,6 +1205,12 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
             {key: _sha256_text(value) for key, value in prompts.items()}
         )
         for locale, prompts in child_prompts_by_locale.items()
+    }
+    proactive_child_hashes_by_locale = {
+        locale: MappingProxyType(
+            {key: _sha256_text(value) for key, value in prompts.items()}
+        )
+        for locale, prompts in proactive_child_prompts_by_locale.items()
     }
     canonical = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -1169,6 +1238,12 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
         ),
         child_prompt_hashes_by_locale=MappingProxyType(
             child_hashes_by_locale
+        ),
+        proactive_child_system_prompts_by_locale=MappingProxyType(
+            proactive_child_prompts_by_locale
+        ),
+        proactive_child_prompt_hashes_by_locale=MappingProxyType(
+            proactive_child_hashes_by_locale
         ),
     )
 

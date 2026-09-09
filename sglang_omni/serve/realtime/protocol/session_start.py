@@ -61,6 +61,36 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prefill_action_catalog_degraded(
+        self,
+        prefill: Any,
+        **kwargs: Any,
+    ) -> bool:
+        """Warm an optimization-only prefix without rejecting the Session."""
+
+        try:
+            return bool(await prefill(**kwargs))
+        except Exception as exc:
+            logger.warning(
+                "[SESSION_ACTION_REALTIME] session prefix prefill failed; "
+                "continuing without the cache session_id=%s stage=%s namespace=%s",
+                self.session_id,
+                kwargs.get("stage"),
+                kwargs.get("prefix_cache_namespace"),
+                exc_info=True,
+            )
+            emit_structured_log(
+                "error",
+                "session_action_prefix_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                stage=kwargs.get("stage"),
+                prefix_cache_namespace=kwargs.get("prefix_cache_namespace"),
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+
     async def handle_session_start(self, event: dict[str, Any]) -> None:
         if self.started:
             raise ValueError("session.start can only be sent once")
@@ -560,15 +590,10 @@ class SessionStartComponent:
         prefill = getattr(self.client, "prefill_action_catalog", None)
         if self.global_action_catalog is not None and categories:
             locale_prewarm = self.global_action_prewarm.for_locale(self.locale)
-            self.action_prefix_prefilled = locale_prewarm.category_ready
             self.prewarmed_child_category_ids = sorted(
                 {item.category_id for item in categories}
                 & set(locale_prewarm.ready_child_category_ids)
             )
-            if self.action_prefix_prefilled:
-                self._prefilled_action_prefix_namespaces.add(
-                    self.action_prefix_cache_namespace
-                )
             self._prefilled_action_prefix_namespaces.update(
                 self.global_action_catalog.child_cache_namespace(
                     category_id, self.locale
@@ -583,6 +608,74 @@ class SessionStartComponent:
                     session_id,
                     prewarm_child_category_ids,
                 )
+            # Server startup warms the immutable global catalog.  Before the
+            # client may submit its first Turn, extend that prefix with this
+            # Session's immutable persona/entity/action policy.  Failure is a
+            # cache miss only: scoring remains fully functional and rebuilds
+            # the prefix lazily on the first Turn.
+            category_session_instruction = (
+                self._build_session_action_profile_instruction(
+                    "category", turn_origin=TURN_ORIGIN_USER
+                )
+            )
+            session_category_namespace = self._session_action_prefix_namespace(
+                base_namespace=self.action_prefix_cache_namespace,
+                stage="category",
+                turn_origin=TURN_ORIGIN_USER,
+                session_instruction=category_session_instruction,
+            )
+            session_prefill_started = time.perf_counter()
+            needs_session_category_prefill = bool(
+                category_session_instruction
+            ) or not locale_prewarm.category_ready
+            if needs_session_category_prefill:
+                self.action_prefix_prefilled = bool(
+                    callable(prefill)
+                    and await self._prefill_action_catalog_degraded(
+                        prefill,
+                        request_id=f"session-{session_id}-category-prefill",
+                        model=self.model_name,
+                        system_prompt=self.action_system_prompt,
+                        candidates=[
+                            *[
+                                ActionScoreCandidate(
+                                    candidate_id=item.category_id,
+                                    suffix=item.category_id,
+                                    action_id=item.category_id,
+                                )
+                                for item in categories
+                            ],
+                            ActionScoreCandidate(
+                                candidate_id=UNSUPPORTED_CATEGORY_SCORE_ID,
+                                suffix=UNSUPPORTED_CATEGORY_SCORE_ID,
+                                action_id=UNSUPPORTED_DECISION_ID,
+                            ),
+                        ],
+                        prefix_cache_namespace=session_category_namespace,
+                        stage="category",
+                        language=self.language,
+                        session_instruction=category_session_instruction,
+                    )
+                )
+            else:
+                self.action_prefix_prefilled = True
+            if self.action_prefix_prefilled:
+                self._prefilled_action_prefix_namespaces.add(
+                    session_category_namespace
+                )
+            emit_structured_log(
+                "performance",
+                "session_category_prefix_prefill_completed",
+                session_id=session_id,
+                prefix_cache_namespace=session_category_namespace,
+                global_catalog_ready=locale_prewarm.category_ready,
+                prefill_skipped=not needs_session_category_prefill,
+                prewarmed=self.action_prefix_prefilled,
+                elapsed_ms=round(
+                    (time.perf_counter() - session_prefill_started) * 1000.0,
+                    3,
+                ),
+            )
         elif candidates and callable(prefill):
             if (
                 categories
@@ -608,28 +701,51 @@ class SessionStartComponent:
                     for item in candidates
                 ]
                 prefill_stage = "single"
-            self.action_prefix_prefilled = await prefill(
+            session_instruction = self._build_session_action_profile_instruction(
+                prefill_stage, turn_origin=TURN_ORIGIN_USER
+            )
+            session_prefix_namespace = self._session_action_prefix_namespace(
+                base_namespace=self.action_prefix_cache_namespace,
+                stage=prefill_stage,
+                turn_origin=TURN_ORIGIN_USER,
+                session_instruction=session_instruction,
+            )
+            self.action_prefix_prefilled = await self._prefill_action_catalog_degraded(
+                prefill,
                 model=self.model_name,
                 system_prompt=self.action_system_prompt,
                 candidates=prefill_candidates,
-                prefix_cache_namespace=self.action_prefix_cache_namespace,
+                prefix_cache_namespace=session_prefix_namespace,
                 stage=prefill_stage,
                 language=self.language,
+                session_instruction=session_instruction,
             )
             if self.action_prefix_prefilled:
                 self._prefilled_action_prefix_namespaces.add(
-                    self.action_prefix_cache_namespace
+                    session_prefix_namespace
                 )
             if categories:
                 category_by_id = {item.category_id: item for item in categories}
                 for category_id in self.prewarm_child_category_ids:
                     category = category_by_id[category_id]
                     child_candidates = list(category.children)
-                    child_namespace = (
+                    child_base_namespace = (
                         f"{self.action_prefix_cache_namespace}:child:{category_id}"
                     )
+                    child_session_instruction = (
+                        self._build_session_action_profile_instruction(
+                            "child", turn_origin=TURN_ORIGIN_USER
+                        )
+                    )
+                    child_namespace = self._session_action_prefix_namespace(
+                        base_namespace=child_base_namespace,
+                        stage="child",
+                        turn_origin=TURN_ORIGIN_USER,
+                        session_instruction=child_session_instruction,
+                    )
                     child_prewarm_started = time.perf_counter()
-                    prewarmed = await prefill(
+                    prewarmed = await self._prefill_action_catalog_degraded(
+                        prefill,
                         request_id=(
                             f"session-{session_id}-child-prewarm-{category_id}"
                         ),
@@ -649,6 +765,7 @@ class SessionStartComponent:
                         prefix_cache_namespace=child_namespace,
                         stage="child",
                         language=self.language,
+                        session_instruction=child_session_instruction,
                     )
                     elapsed_ms = round(
                         (time.perf_counter() - child_prewarm_started) * 1000.0,

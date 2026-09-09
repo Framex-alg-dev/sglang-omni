@@ -319,6 +319,20 @@ def test_no_expression_and_no_body_result_remains_empty() -> None:
     assert fused.action_error is None
 
 
+def test_expression_only_scope_does_not_override_supported_body_action() -> None:
+    body_action = _body_action()
+    fused = fuse_performance_decision(
+        action=body_action,
+        action_error=None,
+        performance=_decision("expression_only", expression=_expression()),
+        expression_enabled=True,
+    )
+
+    assert fused.action == body_action
+    assert fused.action_error is None
+    assert fused.expression == _expression()
+
+
 def test_optional_expression_is_suppressed_when_requested_body_is_unsupported() -> None:
     fused = fuse_performance_decision(
         action=_body_action(support_status="unsupported", execute=False),
@@ -344,7 +358,7 @@ def test_expression_only_without_supported_expression_is_unsupported(
     expression_unsupported: bool,
 ) -> None:
     fused = fuse_performance_decision(
-        action=_body_action(),
+        action=_body_action(support_status="unsupported", execute=False),
         action_error=None,
         performance=_decision(
             "expression_only",

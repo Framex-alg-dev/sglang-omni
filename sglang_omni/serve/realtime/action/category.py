@@ -155,6 +155,17 @@ class ActionCategoryComponent:
                 ),
             }
         )
+        category_session_instruction = (
+            self._build_session_action_profile_instruction(
+                "category", turn_origin=turn_origin
+            )
+        )
+        category_prefix_namespace = self._session_action_prefix_namespace(
+            base_namespace=self.action_prefix_cache_namespace,
+            stage="category",
+            turn_origin=turn_origin,
+            session_instruction=category_session_instruction,
+        )
         common = dict(
             model=self.model_name,
             language=self.language,
@@ -165,13 +176,14 @@ class ActionCategoryComponent:
             session_id=self.session_id,
             history=action_history,
             stage="category",
+            admission_priority=0,
             logical_request_id=request_base,
             turn_origin=turn_origin,
             text_role=text_role,
             trigger=trigger,
             action_context_cache_key=request_base,
-            prefix_cache_namespace=self.action_prefix_cache_namespace,
-            cache_static_system_only=self.global_action_catalog is not None,
+            prefix_cache_namespace=category_prefix_namespace,
+            cache_static_system_only=not bool(category_session_instruction),
             history_audios=action_history_audios,
             history_images=action_history_images,
             avatar_state=effective_avatar_state,
@@ -245,11 +257,9 @@ class ActionCategoryComponent:
                 )
             category_request = ActionSuffixScoreRequest(
                 request_id=request_base + "-category",
+                session_instruction=category_session_instruction,
                 prefix=(
-                    self._build_session_action_profile_instruction(
-                        "category", turn_origin=turn_origin
-                    )
-                    + last_user_action_reference
+                    last_user_action_reference
                     + proactive_repeat_instruction
                     + base
                     + self._category_whitelist_instruction()
@@ -741,15 +751,15 @@ class ActionCategoryComponent:
         child_namespace = ",".join(selected_category_ids)
         if len(selected_categories) == 1:
             child_system_prompt = self._build_child_system_prompt(
-                execution_category, child_candidates
+                execution_category, child_candidates, turn_origin
             )
         else:
             child_system_prompt = self._build_child_system_prompt(
-                selected_categories, child_candidates
+                selected_categories, child_candidates, turn_origin
             )
         if self.global_action_catalog is not None and len(selected_categories) == 1:
             child_namespace = self.global_action_catalog.child_cache_namespace(
-                execution_category.category_id, self.locale
+                execution_category.category_id, self.locale, turn_origin
             )
         elif self.global_action_catalog is not None:
             combined_prompt_hash = hashlib.sha256(
@@ -757,18 +767,31 @@ class ActionCategoryComponent:
             ).hexdigest()
             child_namespace = (
                 f"hierarchical:{self.locale}:child:{child_namespace}:"
-                f"sha256:{combined_prompt_hash}"
+                f"{turn_origin}:sha256:{combined_prompt_hash}"
             )
         else:
             child_namespace = (
                 f"{self.action_prefix_cache_namespace}:child:{child_namespace}"
             )
 
+        child_session_instruction = self._build_session_action_profile_instruction(
+            "child", turn_origin=turn_origin
+        )
+        child_session_namespace = self._session_action_prefix_namespace(
+            base_namespace=child_namespace,
+            stage="child",
+            turn_origin=turn_origin,
+            session_instruction=child_session_instruction,
+        )
+
         # Global Child catalogs are prewarmed before the server starts. The
-        # legacy/session-local path retains its lazy first-use prefill.
+        # Session-specific extension is populated by the first real Child
+        # score and then reused. The legacy/session-local path retains its
+        # explicit lazy first-use prefill.
         child_prefix_prefilled = (
             len(selected_categories) == 1
             and self.global_action_catalog is not None
+            and turn_origin == TURN_ORIGIN_USER
             and execution_category.category_id
             in self.global_action_prewarm.for_locale(
                 self.locale
@@ -779,7 +802,8 @@ class ActionCategoryComponent:
         if (
             callable(prefill)
             and self.global_action_catalog is None
-            and child_namespace not in self._prefilled_action_prefix_namespaces
+            and child_session_namespace
+            not in self._prefilled_action_prefix_namespaces
         ):
             child_prefill_started = time.perf_counter()
             prefill_request_id = request_base + "-child-prefill"
@@ -799,15 +823,18 @@ class ActionCategoryComponent:
                         )
                         for item in child_candidates
                     ],
-                    prefix_cache_namespace=child_namespace,
+                    prefix_cache_namespace=child_session_namespace,
                     stage="child",
                     language=self.language,
+                    session_instruction=child_session_instruction,
                 )
             finally:
                 self._unregister_turn_request(turn, prefill_request_id)
             self._ensure_turn_processing(turn)
             if child_prefix_prefilled:
-                self._prefilled_action_prefix_namespaces.add(child_namespace)
+                self._prefilled_action_prefix_namespaces.add(
+                    child_session_namespace
+                )
             child_catalog_prefill_ms = round(
                 (time.perf_counter() - child_prefill_started) * 1000.0, 3
             )
@@ -815,16 +842,18 @@ class ActionCategoryComponent:
         action_common = {
             **common,
             "stage": "child",
+            "admission_priority": 1,
             "micro_batch_size": self.action_micro_batch_size,
-            "prefix_cache_namespace": child_namespace,
+            "prefix_cache_namespace": child_session_namespace,
         }
+        action_common["cache_static_system_only"] = not bool(
+            child_session_instruction
+        )
         action_request = ActionSuffixScoreRequest(
             request_id=request_base + "-child",
+            session_instruction=child_session_instruction,
             prefix=(
-                self._build_session_action_profile_instruction(
-                    "child", turn_origin=turn_origin
-                )
-                + last_user_action_reference
+                last_user_action_reference
                 + proactive_repeat_instruction
                 + base
                 + self._system_accompaniment_child_instruction(
@@ -957,6 +986,9 @@ class ActionCategoryComponent:
                         "fallback_applied": category_unsupported,
                     }
                 )
+        selected_candidate = self.candidate_by_id.get(
+            action["candidate_id"]
+        )
         action_context.update({
             "selection_stages": 2,
             "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,
@@ -988,6 +1020,20 @@ class ActionCategoryComponent:
             "child_scoring_candidate_id": ranked[0].candidate_id,
             "support_status": action.get("support_status"),
             "fallback_applied": action.get("fallback_applied"),
+            "selection_definition_source": (
+                selected_candidate.definition_source(turn_origin)
+                if selected_candidate is not None
+                else None
+            ),
+            "selection_definition_hash": (
+                "sha256:" + hashlib.sha256(
+                    selected_candidate.effective_definition(
+                        turn_origin
+                    ).encode("utf-8")
+                ).hexdigest()
+                if selected_candidate is not None
+                else None
+            ),
             "selected_category_ids": selected_category_ids,
             "category_top_k": self.action_category_top_k,
             "state_description_excluded_category_ids": list(
@@ -1008,7 +1054,7 @@ class ActionCategoryComponent:
             "category_compute_ms": category_ms,
             "child_compute_ms": child_ms,
             "child_prefix_prefilled": child_prefix_prefilled,
-            "child_prefix_cache_namespace": child_namespace,
+            "child_prefix_cache_namespace": child_session_namespace,
             "child_catalog_prefill_ms": child_catalog_prefill_ms,
             "action_timing_breakdown": {
                 "selection_mode": ACTION_SELECTION_MODE_HIERARCHICAL,

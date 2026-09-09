@@ -228,6 +228,7 @@ class PerformancePipeline:
             micro_batch_size=min(self.action_micro_batch_size, len(choices)),
             session_id=self.session_id,
             stage="performance",
+            admission_priority=1,
             logical_request_id=turn.request_base,
             turn_origin=turn.turn_origin,
             text_role=turn.text_role,

@@ -465,7 +465,28 @@ def user_turn_commit(turn_id: str, **fields) -> dict:
             "P201", "你好", True, "supported", True, id="body-with-optional-expression"
         ),
         pytest.param(
-            "P101", "笑一个", True, "not_required", False, id="expression-only"
+            "P101",
+            "你可以给我打个招呼吗",
+            True,
+            "supported",
+            True,
+            id="expression-only-misclassification-keeps-polite-greeting-body",
+        ),
+        pytest.param(
+            "P101",
+            "给我打个招呼",
+            True,
+            "supported",
+            True,
+            id="expression-only-misclassification-keeps-greeting-body",
+        ),
+        pytest.param(
+            "P101",
+            "挥挥手",
+            True,
+            "supported",
+            True,
+            id="expression-only-misclassification-keeps-wave-body",
         ),
         pytest.param(
             "P301", "笑着挥挥手", True, "supported", True, id="expression-and-body"
@@ -1504,7 +1525,8 @@ def test_realtime_action_input_places_current_semantics_near_generation() -> Non
     messages = Client._build_action_context_messages(
         [],
         "[动作约束]\n人设、当前状态、允许范围和选择规则。",
-        avatar_state=None,
+        session_instruction="[会话固定信息]\n角色、实体和动作偏好。",
+        avatar_state={"pose": "standing"},
         system_prompt="固定动作目录",
         audios=["pcm"],
         images=["avatar"],
@@ -1524,7 +1546,15 @@ def test_realtime_action_input_places_current_semantics_near_generation() -> Non
         "text",
         "text",
     ]
-    assert parts[0]["text"].startswith("[动作约束]")
+    assert parts[0]["text"].startswith("[会话固定信息]")
+    assert parts[0]["text"].index("[会话固定信息]") < parts[0]["text"].index(
+        "本轮动作选择补充信息"
+    )
+    assert parts[0]["text"].index(
+        "本轮动作选择补充信息"
+    ) < parts[0]["text"].index(
+        "[动作约束]"
+    )
     assert parts[1]["text"].startswith("[当前图片用途]")
     assert parts[-2]["text"] == "[当前用户文本]\n你能靠近镜头吗"
     assert parts[-1]["text"] == "最合适的 category_id："
@@ -4716,6 +4746,10 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "Match response length to the amount of information" in prompt
     assert "add at most one brief question" in prompt
     assert "Do not append a continuation question" in prompt
+    assert "[Conversation continuation and ending boundary]" in prompt
+    assert "does not mean the current conversation has ended" in prompt
+    assert "greeting, welcome, salutation, or self-introduction" in prompt
+    assert "do not extend it into a farewell" in prompt
 
 
 def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None:
@@ -4751,6 +4785,10 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "回复长度应与当前请求需要的信息量相匹配" in prompt
     assert "每次最多一个" in prompt
     assert "不得为了延续对话而追加问题" in prompt
+    assert "[会话延续与结束语义边界]" in prompt
+    assert "完成当前回答或当前话题，不代表当前会话结束" in prompt
+    assert "用户要求问候、欢迎、打招呼或自我介绍时" in prompt
+    assert "不得将其扩展为告别" in prompt
     assert "[全局对话角色、人称指代与语义保持规则]" in prompt
     assert "情绪或状态体验者、意愿主体，以及事实和经历的归属" in prompt
     assert "用户用“我”陈述情绪、身体状态、意愿、经历或处境" in prompt
@@ -4841,6 +4879,7 @@ def test_joint_reply_route_prompt_defines_complete_decision_boundaries() -> None
     assert "“翻开下一页”→R2" in prompt
     assert "“你可以撒个娇吗”→R2" in prompt
     assert "“能挥挥手吗”→R2" in prompt
+    assert "“你可以给我打个招呼吗”“给我打个招呼”“挥挥手”→R2" in prompt
     assert "“可以转一圈给我看吗”→R2" in prompt
     assert "“给我唱一首”“现在唱一段吧”→R2" in prompt
     assert "“再做一次刚才那个动作”" in prompt
@@ -4864,6 +4903,9 @@ def test_joint_reply_route_prompt_has_equivalent_english_history_boundaries() ->
     assert "'Sure', 'Okay, start'" in prompt
     assert "immediate vocal performance such as singing" in prompt
     assert "'Sing me a song' and 'Sing something now' -> R2" in prompt
+    assert "'Can you greet me?'" in prompt
+    assert "'Give me a greeting'" in prompt
+    assert "'Wave to me'" in prompt
     assert "'I am unhappy today'" in prompt
     assert "'No, I am still very unhappy'" in prompt
     assert "'That also did not work; try another way'" in prompt
@@ -4886,6 +4928,7 @@ def test_reply_speech_mode_prompt_distinguishes_polite_action_requests() -> None
     assert "‘你能做哪些动作’→S0" in prompt
     assert "‘你可以撒个娇吗’→S1" in prompt
     assert "‘能挥挥手吗’→S1" in prompt
+    assert "‘你可以给我打个招呼吗’‘给我打个招呼’‘挥挥手’→S1" in prompt
     assert "‘给我唱一首’→S1" in prompt
     assert "立即进行唱歌等声音表演" in prompt
 
@@ -4903,6 +4946,9 @@ def test_reply_route_prompts_have_equivalent_english_question_boundary() -> None
         assert "Can you act cute for me?" in prompt
         assert "Can you sing?" in prompt
         assert "Can you tell me a story?" in prompt
+        assert "Can you greet me?" in prompt
+        assert "Give me a greeting" in prompt
+        assert "Wave to me" in prompt
 
 
 def test_pure_action_short_reply_prompt_forbids_state_and_action_narration() -> None:
@@ -4917,6 +4963,11 @@ def test_pure_action_short_reply_prompt_forbids_state_and_action_narration() -> 
     assert "不得描述镜头、画面、姿势、表情或动作过程" in prompt
     assert "‘我正’‘我在’‘我已经’‘我刚刚’‘我有点’" in prompt
     assert "不得复述或描述具体动作" in prompt
+    assert "动作执行者、动作对象、目标、受益者和人称关系" in prompt
+    assert "不得把要求当前角色执行的动作改成让用户执行" in prompt
+    assert "不得擅自解释为用户或第三方的身体部位" in prompt
+    assert "不得把原请求改写成新的命令、问题或建议" in prompt
+    assert "无法确定回应是否保持原意时，返回空文本" in prompt
 
 
 def test_pure_action_short_reply_prompt_has_equivalent_english_constraints() -> None:
@@ -4930,6 +4981,55 @@ def test_pure_action_short_reply_prompt_has_equivalent_english_constraints() -> 
     assert "Do not invent your current emotion, feeling, or state" in prompt
     assert "camera, scene, pose, facial expression, or action process" in prompt
     assert "do not narrate what you are doing, have done, just did" in prompt
+    assert "Preserve the action actor, object, target, beneficiary" in prompt
+    assert "Do not turn an action for the current character to perform" in prompt
+    assert "do not invent such ownership" in prompt
+    assert "do not rewrite it as a new command, question, or suggestion" in prompt
+    assert "Return empty text if semantic preservation is uncertain" in prompt
+
+
+@pytest.mark.parametrize(
+    ("locale", "language", "required_fragments"),
+    [
+        (
+            "zh-CN",
+            "zh",
+            (
+                "V1=动作语义改变",
+                "动作执行者、动作对象、目标、受益者或身体部位归属",
+                "如果内容已经属于 V1，则选择 V1，不再选择 V3",
+                "任何一项违规存在时都不得选择 V0",
+                "按 V4、V1、V2、V3 的顺序选择",
+                "以下示例只用于判定违规类型，不是回复模板",
+            ),
+        ),
+        (
+            "en-US",
+            "en",
+            (
+                "V1=changed action semantics",
+                "actor, object, target, beneficiary, or ownership of a body part",
+                "If V1 applies, choose V1 rather than V3",
+                "Never choose V0 when any violation applies",
+                "V4, V1, V2, then V3",
+                "classify violations and are not response templates",
+            ),
+        ),
+    ],
+)
+def test_pure_action_validation_prompt_preserves_semantic_roles(
+    locale: str,
+    language: str,
+    required_fragments: tuple[str, ...],
+) -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.locale = locale
+    session.language = language
+
+    prompt = session._pure_action_reply_validation_system_prompt()
+
+    for fragment in required_fragments:
+        assert fragment in prompt
 
 
 @pytest.mark.asyncio
@@ -5235,6 +5335,81 @@ async def test_low_margin_route_uses_speech_mode_disambiguation() -> None:
     assert route.stats["speech_mode_disambiguation"]["reply_mode"] == (
         "LANGUAGE_REQUIRED"
     )
+
+
+@pytest.mark.asyncio
+async def test_speech_mode_timeout_preserves_initial_pure_action_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HangingSpeechModeClient(FakeClient):
+        async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+            self.score_requests.append(request)
+            if request.stage == multimodal_module.REPLY_SPEECH_MODE_STAGE:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+            assert request.stage == multimodal_module.REPLY_HISTORY_ROUTE_STAGE
+            selected_scores = {
+                "R0": -0.2,
+                "R1": -2.0,
+                "R2": -0.1,
+                "R3": -2.1,
+            }
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=candidate_id,
+                        token_count=1,
+                        mean_logprob=score,
+                        mean_nll=-score,
+                        ppl=math.exp(-score),
+                        token_scores=[
+                            TokenScore(token_id=601 + index, logprob=score)
+                        ],
+                    )
+                    for index, (candidate_id, score) in enumerate(
+                        selected_scores.items()
+                    )
+                ],
+            )
+
+    monkeypatch.setenv(
+        multimodal_module.REPLY_HISTORY_ROUTE_TIMEOUT_ENV, "0.05"
+    )
+    client = HangingSpeechModeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-speech-mode-timeout",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-speech-mode-timeout"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-speech-mode-timeout"
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        [],
+        current_text="给我打个招呼",
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "PURE_ACTION"
+    assert [request.stage for request in client.score_requests] == [
+        multimodal_module.REPLY_HISTORY_ROUTE_STAGE,
+        multimodal_module.REPLY_SPEECH_MODE_STAGE,
+    ]
+    disambiguation = route.stats["speech_mode_disambiguation"]
+    assert disambiguation["reply_mode"] == "PURE_ACTION"
+    assert disambiguation["fallback_reason"] == "timeout"
+    assert turn.active_request_ids == set()
 
 
 @pytest.mark.asyncio
@@ -6478,6 +6653,7 @@ async def test_concrete_action_cannot_override_language_required_route() -> None
         ("我正在做飞吻的动作呢。", "", "forbidden_phrase:动作"),
         ("我有点害羞呢。", "", "forbidden_phrase:我有点"),
         ("我正对着镜头眨眼呢。", "", "forbidden_phrase:我正"),
+        ("你也挥挥手吧。", "", "forbidden_phrase:挥手"),
         ("我是一个数字人，无法做这个。", "", "forbidden_phrase:数字人"),
         ("第一行\n第二行", "", "multiline"),
     ],
@@ -6544,6 +6720,75 @@ async def test_invalid_pure_action_reply_falls_back_before_provisional_delta() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_text", "invalid_reply"),
+    [
+        ("你跳个舞吧", "你挑个舞吧。"),
+        ("你摸下额头", "我帮你摸摸。"),
+        ("给我挥挥手", "你也来一下吧。"),
+    ],
+)
+async def test_semantic_role_reversal_is_dropped_without_suppressing_action(
+    request_text: str,
+    invalid_reply: str,
+) -> None:
+    class RoleReversalReplyClient(PureActionFusionClient):
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text=invalid_reply,
+                finish_reason="stop",
+            )
+
+    ws = FakeWebSocket()
+    client = RoleReversalReplyClient(validation_candidate="V1")
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-role-reversal-pure-action-reply",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "unsupported_action_text": "暂时做不了。",
+            "fallback_category_ids": ["B000"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(
+        user_turn_start("turn-role-reversal-pure-action-reply")
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(
+            "turn-role-reversal-pure-action-reply",
+            text=request_text,
+        )
+    )
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == ""
+    assert result["reply"].get("reason") != "unsupported_action"
+    assert result.get("outputs", result.get("modalities"))["action"] == "completed"
+    action_ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["execute"] is True
+    semantic_request = next(
+        request
+        for request in client.score_requests
+        if request.stage == multimodal_module.PURE_ACTION_REPLY_VALIDATION_STAGE
+    )
+    assert request_text in semantic_request.current_text
+    assert invalid_reply in semantic_request.current_text
+    assert not any(
+        event["type"] == "response.text.delta" and event.get("delta")
+        for event in ws.events
+    )
+
+
+@pytest.mark.asyncio
 async def test_semantically_invalid_pure_action_reply_falls_back_to_empty() -> None:
     ws = FakeWebSocket()
     client = PureActionFusionClient(validation_candidate="V3")
@@ -6577,6 +6822,13 @@ async def test_semantically_invalid_pure_action_reply_falls_back_to_empty() -> N
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["reply"]["text"] == ""
+    action_ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["execute"] is True
+    assert result.get("outputs", result.get("modalities"))["action"] == "completed"
+    assert result.get("outputs", result.get("modalities"))["text"] == "completed"
+    assert result["reply"].get("reason") != "unsupported_action"
     semantic_request = next(
         request
         for request in client.score_requests
@@ -8163,6 +8415,9 @@ async def test_session_start_prefills_hierarchical_category_catalog() -> None:
         "modalities": ["action"],
         "session_id": "session-prefill-hierarchical",
         "language": "zh",
+        "action_profile": {
+            "visual_behavior_preferences": "动作自然、克制。",
+        },
         "action_candidates": [
             {
                 "category_id": "B1",
@@ -8193,8 +8448,120 @@ async def test_session_start_prefills_hierarchical_category_catalog() -> None:
         in prefill["system_prompt"]
     )
     assert "candidate_id=A1" not in prefill["system_prompt"]
+    assert "动作自然、克制" in prefill["session_instruction"]
+    assert ":session:" in prefill["prefix_cache_namespace"]
     started = next(event for event in ws.events if event["type"] == "session.started")
     assert started["action_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
+async def test_global_catalog_session_start_extends_category_prefix_before_started(
+) -> None:
+    catalog = load_global_action_catalog()
+    client = PrefillFakeClient()
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        client,
+        global_action_catalog=catalog,
+    )
+
+    await start_system_route_session(session, catalog)
+
+    assert len(client.prefill_requests) == 1
+    prefill = client.prefill_requests[0]
+    assert prefill["stage"] == "category"
+    assert prefill["request_id"] == "session-system-route-session-category-prefill"
+    assert prefill["candidates"][-1].candidate_id == "B000"
+    started = next(event for event in ws.events if event["type"] == "session.started")
+    assert started["action_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
+async def test_session_start_prefill_failure_degrades_without_rejecting() -> None:
+    class BrokenPrefillClient(PrefillFakeClient):
+        async def prefill_action_catalog(self, **kwargs):
+            self.prefill_requests.append(kwargs)
+            raise RuntimeError("prefill unavailable")
+
+    ws = FakeWebSocket()
+    client = BrokenPrefillClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "modalities": ["action"],
+            "session_id": "session-prefill-degraded",
+            "language": "zh",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave",
+                    "source_label": "挥手",
+                    "short_definition": "挥手问候",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前姿态",
+                },
+            ],
+        }
+    )
+
+    started = next(event for event in ws.events if event["type"] == "session.started")
+    assert started["action_prefix_prefilled"] is False
+    assert session.started is True
+
+
+@pytest.mark.asyncio
+async def test_session_started_waits_for_category_prefix_prefill() -> None:
+    class WaitingPrefillClient(PrefillFakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prefill_started = asyncio.Event()
+            self.release_prefill = asyncio.Event()
+
+        async def prefill_action_catalog(self, **kwargs):
+            self.prefill_requests.append(kwargs)
+            self.prefill_started.set()
+            await self.release_prefill.wait()
+            return True
+
+    ws = FakeWebSocket()
+    client = WaitingPrefillClient()
+    session = make_session(ws, client)
+    start_task = asyncio.create_task(
+        session.handle_session_start(
+            {
+                "type": "session.start",
+                "modalities": ["action"],
+                "session_id": "session-prefill-barrier",
+                "language": "zh",
+                "action_candidates": [
+                    {
+                        "candidate_id": "a01",
+                        "action_id": "wave",
+                        "source_label": "挥手",
+                        "short_definition": "挥手问候",
+                    },
+                    {
+                        "candidate_id": "none",
+                        "action_id": "no_action",
+                        "source_label": "不做动作",
+                        "short_definition": "保持当前姿态",
+                    },
+                ],
+            }
+        )
+    )
+
+    await asyncio.wait_for(client.prefill_started.wait(), timeout=1)
+    assert not any(event["type"] == "session.started" for event in ws.events)
+    client.release_prefill.set()
+    await asyncio.wait_for(start_task, timeout=1)
+    assert any(event["type"] == "session.started" for event in ws.events)
 
 
 @pytest.mark.asyncio

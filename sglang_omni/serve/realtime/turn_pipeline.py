@@ -1043,22 +1043,6 @@ class TurnPipeline:
                     ),
                 )
 
-            if "expression" in self.modalities or "audio" in self.modalities:
-                if "audio" in self.modalities:
-                    turn.tts_instruction_future = (
-                        asyncio.get_running_loop().create_future()
-                    )
-                performance_task = track_branch(
-                    self._infer_turn_performance(
-                        turn,
-                        current_audio_list,
-                        current_text=turn.text,
-                    ),
-                    name=(
-                        f"session-performance-{self.session_id}-{turn.turn_id}"
-                    ),
-                )
-
             action_task: asyncio.Task[Any] | None = None
             action_started: float | None = None
 
@@ -1100,15 +1084,32 @@ class TurnPipeline:
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
                 )
 
-            if (
-                self.route_action_parallel
-                and reply_history_route_task is not None
-                and "action" in self.modalities
-            ):
-                # Let the history-route task submit its request first, then
-                # admit action scoring without waiting for the route result.
-                await asyncio.sleep(0)
+            if self.route_action_parallel and "action" in self.modalities:
+                # History routing and Category are the latency-critical
+                # branches.  Give a previously-created route task one event
+                # loop turn to submit, then start Category without waiting for
+                # the route result.  Performance/TTS control is created only
+                # afterwards so admission priority, rather than create_task
+                # timing, governs contention.
+                if reply_history_route_task is not None:
+                    await asyncio.sleep(0)
                 start_action_scoring()
+
+            if "expression" in self.modalities or "audio" in self.modalities:
+                if "audio" in self.modalities:
+                    turn.tts_instruction_future = (
+                        asyncio.get_running_loop().create_future()
+                    )
+                performance_task = track_branch(
+                    self._infer_turn_performance(
+                        turn,
+                        current_audio_list,
+                        current_text=turn.text,
+                    ),
+                    name=(
+                        f"session-performance-{self.session_id}-{turn.turn_id}"
+                    ),
+                )
 
             knowledge_eligible = bool(
                 self.knowledge_binding is not None

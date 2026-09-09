@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import os
 import time
-from typing import Any
+from typing import Any, Literal
 
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
@@ -93,6 +93,7 @@ class ReplyRoutingComponent:
                 "“请翻个跟头”“喝口水吧，别渴着”“做个鬼脸逗我开心”→R2；"
                 "“展示一下这个杯子”→R2；“拿起这本书”→R2；“翻开下一页”→R2；"
                 "“你可以撒个娇吗”→R2；“能挥挥手吗”→R2；"
+                "“你可以给我打个招呼吗”“给我打个招呼”“挥挥手”→R2；"
                 "“可以转一圈给我看吗”→R2；“给我唱一首”“现在唱一段吧”→R2。\n"
                 "“再做一次刚才那个动作”“换成上一个动作”→R3。"
             ),
@@ -179,7 +180,8 @@ class ReplyRoutingComponent:
                 "'Do a somersault', 'Drink some water so you do not get thirsty', and "
                 "'Make a funny face to cheer me up' -> R2. 'Show me this cup', 'Pick up "
                 "this book', 'Turn to the next page', 'Can you act cute for me?', "
-                "'Could you wave?', and 'Could you turn around so I can see?' -> R2.\n"
+                "'Could you wave?', 'Can you greet me?', 'Give me a greeting', 'Wave to me', "
+                "and 'Could you turn around so I can see?' -> R2.\n"
                 "'Sing me a song' and 'Sing something now' -> R2.\n"
                 "'Do that previous action again' and 'Switch to the preceding action' -> R3."
             ),
@@ -206,7 +208,9 @@ class ReplyRoutingComponent:
                 "‘你会撒娇吗’→S0；‘你可以唱歌吗’→S0；‘你能做哪些动作’→S0；"
                 "‘可以给我讲个故事吗’→S0；"
                 "‘挥手欢迎我’→S1；‘拿起杯子让我看看’→S1；"
-                "‘你可以撒个娇吗’→S1；‘能挥挥手吗’→S1；‘给我唱一首’→S1。"
+                "‘你可以撒个娇吗’→S1；‘能挥挥手吗’→S1；"
+                "‘你可以给我打个招呼吗’‘给我打个招呼’‘挥挥手’→S1；"
+                "‘给我唱一首’→S1。"
                 "只输出 S0 或 S1，不要回答用户请求，也不要解释。"
             ),
             en=(
@@ -234,8 +238,9 @@ class ReplyRoutingComponent:
                 "introducing yourself', 'Pick up the cup and explain its material', 'Do you know "
                 "how to act cute?', 'Can you sing?', 'Can you tell me a story?', and 'What "
                 "actions can you perform?' -> S0; 'Wave to welcome "
-                "me', 'Pick up the cup so I can see it', 'Can you act cute for me?', and 'Could "
-                "you wave?', and 'Sing me a song' -> S1. Output only S0 or S1 without explanation."
+                "me', 'Pick up the cup so I can see it', 'Can you act cute for me?', 'Could "
+                "you wave?', 'Can you greet me?', 'Give me a greeting', 'Wave to me', and "
+                "'Sing me a song' -> S1. Output only S0 or S1 without explanation."
             ),
         )
     async def _disambiguate_reply_speech_mode(
@@ -244,8 +249,9 @@ class ReplyRoutingComponent:
         audios: list[str],
         *,
         current_text: str | None,
+        fallback_reply_mode: Literal["LANGUAGE_REQUIRED", "PURE_ACTION"],
     ) -> ReplySpeechModeResult:
-        """Resolve only the language-vs-action dimension for a low-margin route."""
+        """Resolve language-vs-action, preserving the initial route on failure."""
         request_id = f"{turn.request_base}-reply-speech-mode"
         system_prompt = self._reply_speech_mode_system_prompt()
         normalized_text = current_text.strip() if isinstance(current_text, str) else ""
@@ -277,6 +283,7 @@ class ReplyRoutingComponent:
             micro_batch_size=2,
             session_id=self.session_id,
             stage=REPLY_SPEECH_MODE_STAGE,
+            admission_priority=2,
             logical_request_id=turn.request_base,
             turn_origin=turn.turn_origin,
             text_role=turn.text_role,
@@ -364,12 +371,12 @@ class ReplyRoutingComponent:
             trace_id=turn.trace_id,
             logical_request_id=turn.request_base,
             request_id=request_id,
-            reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+            reply_mode=fallback_reply_mode,
             classification_ms=elapsed_ms,
             fallback_reason=fallback_reason,
         )
         return ReplySpeechModeResult(
-            reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+            reply_mode=fallback_reply_mode,
             elapsed_ms=elapsed_ms,
             fallback_reason=fallback_reason,
         )
@@ -436,6 +443,7 @@ class ReplyRoutingComponent:
             micro_batch_size=4,
             session_id=self.session_id,
             stage=REPLY_HISTORY_ROUTE_STAGE,
+            admission_priority=0,
             logical_request_id=turn.request_base,
             turn_origin=turn.turn_origin,
             text_role=turn.text_role,
@@ -516,6 +524,7 @@ class ReplyRoutingComponent:
                         turn,
                         audios,
                         current_text=normalized_text,
+                        fallback_reply_mode=initial_reply_mode,
                     )
                 )
             reply_mode = (

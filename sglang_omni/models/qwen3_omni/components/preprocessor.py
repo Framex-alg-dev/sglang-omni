@@ -483,14 +483,15 @@ class Qwen3OmniPreprocessor:
         audios: list[Any],
         images: list[Any],
         input_ids: "torch.Tensor",
+        prompt_text: str,
     ) -> dict[str, Any] | None:
         """Find the safe reusable boundary for an action-scoring prompt.
 
-        The catalog system message and completed history precede the current
-        turn.  Only that prefix is safe to reuse across turns; current media
-        and the current avatar state must remain outside the reusable range.
-        The boundary is measured from the exact processor output rather than
-        reconstructed from text, because audio/image placeholders expand to
+        The catalog system message and an explicitly separated Session
+        instruction precede current state/media/text. Only that prefix is safe
+        to reuse across turns. Legacy callers without a Session instruction
+        retain the former system/history boundary. The boundary is measured
+        from exact processor output because audio/image placeholders expand to
         model-specific token spans.
         """
         if not messages_mm:
@@ -500,6 +501,48 @@ class Qwen3OmniPreprocessor:
         action_spec = payload.request.params.get("action_scoring")
         if not isinstance(action_spec, dict):
             return None
+        session_instruction = action_spec.get("session_instruction")
+        if (
+            action_spec.get("cache_static_system_only") is not True
+            and isinstance(session_instruction, str)
+            and session_instruction
+        ):
+            rendered_session = session_instruction
+            if not rendered_session.endswith("\n"):
+                rendered_session += "\n"
+            start = prompt_text.find(rendered_session)
+            if start >= 0:
+                boundary_text = prompt_text[: start + len(rendered_session)]
+                boundary_ids = self.tokenizer(
+                    boundary_text,
+                    add_special_tokens=False,
+                    return_tensors="pt",
+                )["input_ids"][0]
+                max_common = min(
+                    int(boundary_ids.numel()),
+                    int(input_ids.numel()),
+                )
+                boundary_len = 0
+                while (
+                    boundary_len < max_common
+                    and int(boundary_ids[boundary_len])
+                    == int(input_ids[boundary_len])
+                ):
+                    boundary_len += 1
+                if boundary_len == int(boundary_ids.numel()) and boundary_len > 0:
+                    return {
+                        "cache_prefix_token_count": boundary_len,
+                        "history_message_count": 0,
+                        "history_audio_count": 0,
+                        "history_image_count": 0,
+                        "session_instruction_cached": True,
+                    }
+            logger.warning(
+                "session action prefix boundary was not found or did not match "
+                "the rendered prompt; "
+                "falling back to static system boundary request_id=%s",
+                payload.request_id,
+            )
         history_count = action_spec.get("history_message_count")
         if not isinstance(history_count, int) or history_count < 0:
             return None
@@ -1082,6 +1125,7 @@ class Qwen3OmniPreprocessor:
             audios=audios,
             images=images,
             input_ids=input_ids,
+            prompt_text=prompt_text,
         )
         return self._finalize_state(
             payload,

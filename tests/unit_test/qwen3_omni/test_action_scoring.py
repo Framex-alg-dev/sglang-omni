@@ -96,6 +96,12 @@ def test_contract_validation_and_limits():
         validate_action_suffix_request(request(request_id="bad id"))
     with pytest.raises(ValueError, match="micro_batch_size"):
         validate_action_suffix_request(request(micro_batch_size=0))
+    with pytest.raises(ValueError, match="session_instruction"):
+        validate_action_suffix_request(request(session_instruction=None))
+    with pytest.raises(ValueError, match="admission_priority"):
+        validate_action_suffix_request(request(admission_priority=-1))
+    with pytest.raises(ValueError, match="admission_priority"):
+        validate_action_suffix_request(request(admission_priority=101))
     validate_action_suffix_request(
         request(images=["image"], image_roles=["avatar_state"])
     )

@@ -244,7 +244,7 @@ Category 完成后才能确定 Child 候选集合，当前两阶段串行执行�
 
 ## 8. 2026-08-27 动作就绪延迟优化计划
 
-状态：**待实施**。本节基于 `sess_fc1c4bae` 的结构化日志和当前实现，记录在尽量不影响回复首包与动作准确率的前提下继续压缩动作就绪时间的实施方案。
+状态：**原始规划，已由 8.5 的实际落地边界取代**。本节基于 `sess_fc1c4bae` 的结构化日志记录当时的候选方案。
 
 ### 8.1 当前基线与目标
 
@@ -338,6 +338,34 @@ Category 完成后，Child 直接续用该 Turn 的公共前缀 KV。临时 KV �
 - 先在 GPU6 依次开启音频复用、会话缓存和公共 KV；指标和准确率通过后再部署 GPU7。Trie 仅在前三项未达到 400 ms 目标时启用。
 
 本计划只修改 `sglang-omni` 的缓存、调度和评分实现，不修改 `D_video_call`、动作目录、客户端事件或字段。
+
+### 8.5 2026-09-08 实际落地边界
+
+本轮实施采用保守版本，不为了性能重排或合并业务规则：
+
+- Category Prompt 仅把 Session 固定的人设、实体和动作偏好移到当前
+  `avatar_state/state_description` 之前；其余 Turn 规则、白名单、媒体、文本和输出提示顺序
+  保持原语义。
+- 服务启动继续预热全局 Category/Child 静态目录；`session.start` 在
+  `session.started` 前同步扩展用户 Turn 的 Category Session 前缀。失败只退化为首轮 miss，
+  不拒绝会话。普通 Child 的 Session 前缀在第一次真实评分时建立，由底层 KV 缓存淘汰机制
+  管理。
+- 不实施 8.2 阶段三所述的 Category→Child 本轮模型 KV 强制续接，因为两级 System Prompt
+  和动态约束并不完全相同；当前仍只复用安全的 Session 前缀与已有媒体编码结果。
+- 同一 Turn 的媒体仍按原有内容 Hash 和预处理参数进入编码缓存/同批 singleflight；不修改
+  媒体保留轮数、选图、历史裁剪、可见性、跨 Turn 或跨 Session 生命周期。
+- 评分准入默认容量为 2，并按优先级排队：历史路由和 Category 为 0，Child 与表现控制为 1，
+  S0/S1 等二次判定为 2，Session 预填为 3。环境变量
+  `SGLANG_OMNI_ACTION_SCORE_MAX_INFLIGHT` 可在 1–4 范围调整，设为 1 即恢复串行准入。
+- Category 不等待回复历史路由；“再做一遍刚刚那个动作”使用独立的最近用户触发动作锚点。
+  客户端后续提供的 `last_executed_action_id` 用于校正当前物理动作锚点，不把动作历史混入
+  回复历史。
+- provisional 提升/丢弃、纯动作不支持提示、语言意图保留、纯表情和组合表演的融合规则均
+  保持不变；`turn.action.ready` 仍可先于 TTS 完成事件。
+
+上线前必须分别测量容量 1 和 2 下的文本/音频首包、Category/Child、动作 ready、GPU queue
+wait、显存与 P50/P95/P99；容量 2 若造成竞争或尾延迟回归，应先回退并发上限，而不是改变
+Prompt 语义。
 
 相关实现和算法说明：
 
