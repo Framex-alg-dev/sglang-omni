@@ -11,7 +11,7 @@
 | FP8 模型 | `/data/models/Qwen3-Omni-30B-A3B-FP8` |
 | Chat template 模型 | `/data/models/Qwen3-Omni-30B-A3B-Instruct` |
 | TTS WebSocket | `ws://127.0.0.1:40001/api-ws/v1/realtime` |
-| 默认音色 | `benchmark_qwen_cherry_zh` |
+| 默认音色 | `spk_691b97a24dcc` |
 | 模型服务端口 | `18001`，可通过启动参数改为 `18101` 等空闲端口 |
 | 测试 GPU | 宿主机 GPU 5 |
 | Docker 镜像 | `sglang-omni-realtime:b3f53c9` |
@@ -143,7 +143,7 @@ sgl-omni serve \
   --port 18101 \
   --mem-fraction-static 0.82 \
   --realtime-tts-url ws://127.0.0.1:40001/api-ws/v1/realtime \
-  --realtime-tts-voice benchmark_qwen_cherry_zh \
+  --realtime-tts-voice spk_691b97a24dcc \
   --log-level info
 ```
 

@@ -98,7 +98,7 @@ ssh -N -L 51000:127.0.0.1:50001 -p 246 user@124.221.190.139
 .venv\Scripts\python.exe -m sglang_omni.serve.realtime.dev_server `
   --host 127.0.0.1 --port 18080 `
   --realtime-tts-url "ws://127.0.0.1:51000/api-ws/v1/realtime" `
-  --realtime-tts-voice "benchmark_qwen_cherry_zh" `
+  --realtime-tts-voice "spk_691b97a24dcc" `
   --log-level debug
 ```
 

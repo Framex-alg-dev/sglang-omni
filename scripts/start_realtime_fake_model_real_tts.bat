@@ -8,7 +8,7 @@ set "PYTHON_EXE=.venv\Scripts\python.exe"
 set "TTS_HOST=127.0.0.1"
 set "TTS_PORT=51000"
 set "TTS_URL=ws://127.0.0.1:51000/api-ws/v1/realtime"
-set "TTS_VOICE=benchmark_qwen_cherry_zh"
+set "TTS_VOICE=spk_691b97a24dcc"
 
 if not exist "%PYTHON_EXE%" (
   echo [ERROR] Python virtual environment was not found: %PYTHON_EXE%
