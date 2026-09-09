@@ -368,6 +368,26 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "动作请求不必明确描述身体部位、运动方向或执行方式" in (
         catalog.category_system_prompt
     )
+
+
+def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
+    payload = _catalog_payload()
+    child = payload["categories"][1]["children"][0]
+    child["proactive_expression"] = "数字人主动问候时挥手"
+    child["user_reaction_expression"] = "用户要求问候时挥手"
+    catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
+
+    user_prompt = catalog.child_system_prompt_for("zh-CN", "B001", "user")
+    proactive_prompt = catalog.child_system_prompt_for(
+        "zh-CN", "B001", "proactive"
+    )
+
+    assert "说明=用户要求问候时挥手" in user_prompt
+    assert "说明=数字人主动问候时挥手" in proactive_prompt
+    assert "说明=单手自然挥动" not in user_prompt
+    assert catalog.child_cache_namespace("B001", turn_origin="user") != (
+        catalog.child_cache_namespace("B001", turn_origin="proactive")
+    )
     assert "动作请求由语义目标决定，不由命令句形式决定" in (
         catalog.category_system_prompt
     )
@@ -1117,9 +1137,9 @@ async def test_english_session_uses_isolated_english_prompts_without_translating
     assert category_request.current_text == "你好"
     assert child_request.current_text == "你好"
     assert "Action categories allowed in this conversation" in category_request.prefix
-    assert "海洋科学家" in category_request.prefix
-    assert "优先低打扰类别" in category_request.prefix
-    assert "避免大幅位移" in child_request.prefix
+    assert "海洋科学家" in category_request.session_instruction
+    assert "优先低打扰类别" in category_request.session_instruction
+    assert "避免大幅位移" in child_request.session_instruction
     assert session.action_prefix_cache_namespace == catalog.category_cache_namespace(
         "en-US"
     )
@@ -1823,10 +1843,20 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
     assert first.action_prefix_cache_namespace == second.action_prefix_cache_namespace
     assert first.action_prefix_cache_namespace == catalog.category_cache_namespace()
     assert first_client.requests[0].system_prompt == second_client.requests[0].system_prompt
-    assert "职业或角色定位=海洋科学家" in first_client.requests[0].prefix
-    assert "卡通主持人" not in first_client.requests[0].prefix
-    assert "职业或角色定位=卡通主持人" in second_client.requests[0].prefix
-    assert "海洋科学家" not in second_client.requests[0].prefix
+    assert (
+        "职业或角色定位=海洋科学家"
+        in first_client.requests[0].session_instruction
+    )
+    assert "卡通主持人" not in first_client.requests[0].session_instruction
+    assert (
+        "职业或角色定位=卡通主持人"
+        in second_client.requests[0].session_instruction
+    )
+    assert "海洋科学家" not in second_client.requests[0].session_instruction
+    assert (
+        first_client.requests[0].prefix_cache_namespace
+        != second_client.requests[0].prefix_cache_namespace
+    )
     assert [item.candidate_id for item in first_client.requests[0].candidates] == [
         "B008",
         "B001",
@@ -1837,16 +1867,22 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
         "B002",
         UNSUPPORTED_CATEGORY_SCORE_ID,
     ]
-    assert first_client.requests[1].prefix_cache_namespace == (
-        catalog.child_cache_namespace("B001")
+    assert first_client.requests[1].prefix_cache_namespace.startswith(
+        catalog.child_cache_namespace("B001") + ":session:"
     )
-    assert "海洋科学家动作偏好" in first_client.requests[1].prefix
-    assert "卡通主持人" not in first_client.requests[1].prefix
-    assert second_client.requests[1].prefix_cache_namespace == (
-        catalog.child_cache_namespace("B002")
+    assert (
+        "海洋科学家动作偏好"
+        in first_client.requests[1].session_instruction
     )
-    assert "卡通主持人动作偏好" in second_client.requests[1].prefix
-    assert "海洋科学家" not in second_client.requests[1].prefix
+    assert "卡通主持人" not in first_client.requests[1].session_instruction
+    assert second_client.requests[1].prefix_cache_namespace.startswith(
+        catalog.child_cache_namespace("B002") + ":session:"
+    )
+    assert (
+        "卡通主持人动作偏好"
+        in second_client.requests[1].session_instruction
+    )
+    assert "海洋科学家" not in second_client.requests[1].session_instruction
     assert first.candidate_by_id["A001"].execution_binding == {
         "asset_id": "asset-a"
     }

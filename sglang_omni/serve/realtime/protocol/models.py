@@ -33,6 +33,8 @@ class SessionActionCandidate:
     short_definition: str
     execution_binding: dict[str, str]
     category_id: str | None = None
+    proactive_expression: str = ""
+    user_reaction_expression: str = ""
 
     @classmethod
     def from_payload(cls, value: Any) -> "SessionActionCandidate":
@@ -42,6 +44,10 @@ class SessionActionCandidate:
         action_id = value.get("action_id")
         source_label = value.get("source_label") or action_id
         short_definition = value.get("short_definition") or source_label
+        proactive_expression = value.get("proactive_expression", "")
+        user_reaction_expression = value.get(
+            "user_reaction_expression", ""
+        )
         binding = value.get("execution_binding") or {}
         if not isinstance(candidate_id, str) or not candidate_id.strip():
             raise ValueError("candidate_id must be a non-empty string")
@@ -51,6 +57,18 @@ class SessionActionCandidate:
             raise ValueError(f"source_label must be non-empty: {candidate_id!r}")
         if not isinstance(short_definition, str) or not short_definition.strip():
             raise ValueError(f"short_definition must be non-empty: {candidate_id!r}")
+        if proactive_expression is None:
+            proactive_expression = ""
+        if user_reaction_expression is None:
+            user_reaction_expression = ""
+        if not isinstance(proactive_expression, str):
+            raise ValueError(
+                f"proactive_expression must be a string: {candidate_id!r}"
+            )
+        if not isinstance(user_reaction_expression, str):
+            raise ValueError(
+                f"user_reaction_expression must be a string: {candidate_id!r}"
+            )
         if not isinstance(binding, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in binding.items()
         ):
@@ -63,7 +81,24 @@ class SessionActionCandidate:
             source_label=source_label.strip(),
             short_definition=short_definition.strip(),
             execution_binding=dict(binding),
+            proactive_expression=proactive_expression.strip(),
+            user_reaction_expression=user_reaction_expression.strip(),
         )
+
+    def effective_definition(self, turn_origin: str) -> str:
+        contextual = (
+            self.proactive_expression
+            if turn_origin == "proactive"
+            else self.user_reaction_expression
+        )
+        return contextual.strip() or self.short_definition
+
+    def definition_source(self, turn_origin: str) -> str:
+        if turn_origin == "proactive" and self.proactive_expression.strip():
+            return "proactive_expression"
+        if turn_origin == "user" and self.user_reaction_expression.strip():
+            return "user_reaction_expression"
+        return "short_definition_fallback"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +106,8 @@ class SessionActionCandidate:
             "action_id": self.action_id,
             "source_label": self.source_label,
             "short_definition": self.short_definition,
+            "proactive_expression": self.proactive_expression,
+            "user_reaction_expression": self.user_reaction_expression,
             "execution_binding": dict(self.execution_binding),
             **({"category_id": self.category_id} if self.category_id else {}),
         }
@@ -261,6 +298,8 @@ class SessionActionCategory:
                     short_definition=item.short_definition,
                     execution_binding=dict(item.execution_binding),
                     category_id=category_id.strip(),
+                    proactive_expression=item.proactive_expression,
+                    user_reaction_expression=item.user_reaction_expression,
                 )
             )
         return cls(
@@ -326,9 +365,10 @@ class ReplyHistoryTurn:
 class ExecutedActionRecord:
     """An action result treated as executed for subsequent turns.
 
-    There is currently no client playback acknowledgement.  A successful
-    action inference is therefore the session's authoritative execution fact.
-    Failed action branches never create one of these records.
+    A successful action inference is recorded optimistically. When a later
+    Turn supplies ``last_executed_action_id``, that client report reconciles
+    the current physical anchor without coupling action history to reply
+    history. Failed action branches never create one of these records.
     """
 
     turn_id: str
@@ -418,6 +458,7 @@ class TurnBuffer:
     current_request_id: str | None = None
     active_request_ids: set[str] = field(default_factory=set)
     branch_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    tts_instruction_future: asyncio.Future[str] | None = None
     inference_task: asyncio.Task[None] | None = None
     trace_id: str = ""
     commit_started_at: float | None = None

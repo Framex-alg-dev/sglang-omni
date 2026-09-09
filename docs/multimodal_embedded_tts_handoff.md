@@ -80,7 +80,8 @@ ws://10.0.0.14:40001/api-ws/v1/realtime
 ```json
 {
   "type": "input_text_buffer.append",
-  "text": "你好，"
+  "text": "你好，",
+  "instruct": "语调温暖愉快，语速适中，吐字清楚"
 }
 ```
 
@@ -89,9 +90,14 @@ ws://10.0.0.14:40001/api-ws/v1/realtime
 ```json
 {
   "type": "input_text_buffer.append",
-  "text": "这是实时语音合成。"
+  "text": "这是实时语音合成。",
+  "instruct": "语调温暖愉快，语速适中，吐字清楚"
 }
 ```
+
+`instruct` 是当前 Turn 的动态表达控制，描述情绪、音调、语速和表达力度。同一 Turn 的所有
+append 必须使用同一条非空指令；它不承载固定音色基线，也不通过外部 Realtime WebSocket
+返回给客户端。服务端可以并行生成回复正文和该指令，但必须在发送首个 append 前取得指令。
 
 本轮文本彻底结束后必须提交：
 
@@ -508,4 +514,3 @@ response_done
   [`.env.example.d/10-qwen.internal.env`](../../../../.env.example.d/10-qwen.internal.env)
 - 原始 TTS 接入说明：
   [`ref/接入文档.md`](../../../../ref/接入文档.md)
-

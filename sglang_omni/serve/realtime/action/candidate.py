@@ -87,11 +87,11 @@ class ActionCandidateComponent:
             turn_origin=turn_origin,
             has_avatar_image=IMAGE_ROLE_AVATAR_STATE in action_image_roles,
         )
+        session_instruction = self._build_session_action_profile_instruction(
+            "single", turn_origin=turn_origin
+        )
         prefix = (
-            self._build_session_action_profile_instruction(
-                "single", turn_origin=turn_origin
-            )
-            + self._last_user_action_reference_instruction(
+            self._last_user_action_reference_instruction(
                 turn_origin=turn_origin,
             )
             + self._proactive_action_repeat_instruction(
@@ -117,7 +117,14 @@ class ActionCandidateComponent:
             )
         )
         eligible_candidates = self._filter_turn_action_candidates(
-            turn, list(self.candidates)
+            turn,
+            [
+                candidate
+                for candidate in self.candidates
+                if candidate.category_id != FACIAL_EXPRESSION_CATEGORY_ID
+                and candidate.candidate_id
+                not in self._facial_expression_candidate_ids()
+            ],
         )
         if not eligible_candidates:
             raise ValueError(
@@ -132,16 +139,21 @@ class ActionCandidateComponent:
             )
             for item in eligible_candidates
         ]
+        action_system_prompt = self._build_action_system_prompt(turn_origin)
+        prompt_hash = hashlib.sha256(
+            action_system_prompt.encode("utf-8")
+        ).hexdigest()
         request = ActionSuffixScoreRequest(
             request_id=request_base + "-single",
             model=self.model_name,
+            session_instruction=session_instruction,
             prefix=prefix,
             current_text=text or "",
             output_prompt=self._prompt(
                 zh="最合适的 candidate_id：",
                 en="Best matching candidate_id:",
             ),
-            system_prompt=self.action_system_prompt,
+            system_prompt=action_system_prompt,
             language=self.language,
             candidates=candidates,
             suffix_tokenization_mode="short_id",
@@ -150,8 +162,17 @@ class ActionCandidateComponent:
             image_roles=action_image_roles,
             sample_rate=16000,
             micro_batch_size=self.action_micro_batch_size,
-            prefix_cache_namespace=self.action_prefix_cache_namespace,
-            cache_static_system_only=self.global_action_catalog is not None,
+            prefix_cache_namespace=self._session_action_prefix_namespace(
+                base_namespace=(
+                    f"{self.action_prefix_cache_namespace}:{turn_origin}:"
+                    f"sha256:{prompt_hash}"
+                ),
+                stage="single",
+                turn_origin=turn_origin,
+                session_instruction=session_instruction,
+            ),
+            cache_static_system_only=not bool(session_instruction),
+            admission_priority=0,
             session_id=self.session_id,
             turn_origin=turn_origin,
             text_role=text_role,
@@ -202,6 +223,7 @@ class ActionCandidateComponent:
                 }
             )
         top = scores[0]
+        selected_candidate = self.candidate_by_id[top["candidate_id"]]
         action = {
             "candidate_id": top["candidate_id"],
             "action_id": top["action_id"],
@@ -228,6 +250,15 @@ class ActionCandidateComponent:
                     turn.action_excluded_candidate_ids
                 ),
                 "compute_ms": compute_ms,
+                "selection_definition_source": (
+                    selected_candidate.definition_source(turn_origin)
+                ),
+                "selection_definition_hash": "sha256:"
+                + hashlib.sha256(
+                    selected_candidate.effective_definition(turn_origin).encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
                 "action_timing_breakdown": {
                     "selection_mode": self.action_selection_mode,
                     "single": _action_timing_breakdown(result.stats),

@@ -1261,6 +1261,26 @@ class OmniScheduler:
             plan["prefix_prefill_ms"] = max(
                 (time.perf_counter() - float(prefix_started)) * 1000.0, 0.0
             )
+        terminal_at = time.perf_counter()
+        raw_chunks = list(plan.get("prefix_chunk_timings", []))
+        prefix_chunks: list[dict[str, Any]] = []
+        for index, raw_chunk in enumerate(raw_chunks):
+            chunk = dict(raw_chunk)
+            started_at = chunk.pop("started_at", None)
+            next_started_at = (
+                raw_chunks[index + 1].get("started_at")
+                if index + 1 < len(raw_chunks)
+                else terminal_at
+            )
+            if isinstance(started_at, (int, float)) and isinstance(
+                next_started_at, (int, float)
+            ):
+                chunk["elapsed_ms"] = max(
+                    (float(next_started_at) - float(started_at)) * 1000.0,
+                    0.0,
+                )
+            prefix_chunks.append(chunk)
+        plan["prefix_chunks"] = prefix_chunks
         plan["prefix_physical_prefill_chunk_count"] = max(
             int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             int(getattr(data, "generation_steps", 0)),
@@ -1306,6 +1326,15 @@ class OmniScheduler:
                 )
             )
         prefix_len = int(plan["prefix_token_count"])
+        reusable_boundary_len = min(
+            int(plan.get("cache_prefix_token_count", 0)),
+            prefix_len,
+        )
+        parent_cached_len = min(
+            int(plan.get("parent_radix_cached_token_count") or 0),
+            prefix_len,
+        )
+        parent_computed_len = max(prefix_len - parent_cached_len, 0)
         prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
             int(value) >= prefix_len
             for value in plan["candidate_cached_tokens"].values()
@@ -1365,7 +1394,19 @@ class OmniScheduler:
             "logical_prefix_request_count": 1,
             "physical_prefix_chunk_count": int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             "prefix_token_count": prefix_len,
+            "reusable_boundary_token_count": reusable_boundary_len,
+            "parent_radix_cached_token_count": parent_cached_len,
+            "parent_computed_token_count": parent_computed_len,
+            "parent_cache_hit_ratio": (
+                float(parent_cached_len) / float(prefix_len)
+                if prefix_len > 0
+                else 0.0
+            ),
+            "prefix_chunks": list(plan.get("prefix_chunks", [])),
             "cached_prefix_token_count": min(plan["candidate_cached_tokens"].values()),
+            "candidate_cached_prefix_token_count": min(
+                plan["candidate_cached_tokens"].values()
+            ),
             "candidate_prefix_recompute_tokens": recompute_tokens,
             "suffix_batch_count": len(plan["candidate_batches"]),
             "suffix_batch_sizes": list(plan.get("suffix_batch_sizes", [])),
@@ -1742,9 +1783,35 @@ class OmniScheduler:
                         if isinstance(entered, (int, float)):
                             wait_ms = max((now - float(entered)) * 1000.0, 0.0)
                             plan["scheduler_wait_ms"] = float(plan.get("scheduler_wait_ms", 0.0)) + wait_ms
-                    plan["prefix_physical_prefill_chunk_count"] = (
-                        int(plan.get("prefix_physical_prefill_chunk_count", 0)) + 1
+                    prefix_indices = getattr(req, "prefix_indices", ())
+                    cached_tokens_before = len(prefix_indices)
+                    if plan.get("parent_radix_cached_token_count") is None:
+                        plan["parent_radix_cached_token_count"] = (
+                            cached_tokens_before
+                        )
+                    extend_range = getattr(req, "extend_range", None)
+                    range_start = getattr(extend_range, "start", None)
+                    range_end = getattr(extend_range, "end", None)
+                    if isinstance(range_start, int) and isinstance(range_end, int):
+                        scheduled_tokens = max(range_end - range_start, 0)
+                    else:
+                        scheduled_tokens = max(
+                            len(getattr(req, "origin_input_ids", ()))
+                            - cached_tokens_before,
+                            0,
+                        )
+                    chunks = plan.setdefault("prefix_chunk_timings", [])
+                    chunks.append(
+                        {
+                            "index": len(chunks),
+                            "cached_tokens_before": cached_tokens_before,
+                            "scheduled_tokens": scheduled_tokens,
+                            "range_start": range_start,
+                            "range_end": range_end,
+                            "started_at": now,
+                        }
                     )
+                    plan["prefix_physical_prefill_chunk_count"] = len(chunks)
             elif action_role == "candidate":
                 parent = getattr(req_data, "action_scoring_parent", None)
                 plan = getattr(parent, "action_scoring_plan", None)

@@ -2,11 +2,15 @@
 
 ## 1. 变更目的
 
-服务端进行了两项内部调度优化：
+服务端进行了以下内部调度与缓存优化：
 
 1. 历史需求分类与动作 Category 评分并行启动，减少动作分支等待历史分类的时间；
 2. `turn.action.ready` 只等待 provisional 回复完成“提升或丢弃”的业务决议，不再等待 TTS
-   完成或 TTS 取消。
+   完成或 TTS 取消；
+3. `session.start` 在发送 `session.started` 前预填“全局 Category 目录 + 当前 Session 固定动作
+   信息”；普通 Child 的 Session 前缀在第一次命中对应类别时建立并由模型 KV 缓存管理；
+4. 动作评分使用带优先级的并发准入：历史路由与 Category 为高优先级，Child 和表现控制随后，
+   二次判定最低。默认最多同时放行两个评分请求。
 
 协议版本、`session.start` 字段和事件结构均未变化。变化仅体现在合法事件顺序更灵活，客户端
 必须分别驱动文本、音频和动作三个分支，不能互相等待。
@@ -176,21 +180,37 @@ turn.result(outputs.text=completed)
 
 ## 8. 服务端运行开关与观测
 
-两项优化默认开启，可在需要快速回滚时设置为 `0` 并重启服务：
+前两项并行/解耦优化默认开启，可在需要快速回滚时设置为 `0` 并重启服务：
 
 ```text
 SGLANG_OMNI_REALTIME_ACTION_READY_TTS_DECOUPLED=0
 SGLANG_OMNI_REALTIME_ROUTE_ACTION_PARALLEL=0
 ```
 
+动作评分并发上限可通过下列内部变量调整，合法范围为 `1`–`4`，默认 `2`：
+
+```text
+SGLANG_OMNI_ACTION_SCORE_MAX_INFLIGHT=2
+```
+
+设为 `1` 可快速回到单请求评分；更高数值不保证更低延迟，必须结合 GPU queue wait、显存和
+P95/P99 实测。`session.start` 前缀预填失败只会记录 warning 并退化为首个 Turn 现场计算，
+不会拒绝 Session。
+
 服务端结构化日志的 `session_started` 会记录 `action_ready_tts_decoupled` 和
 `route_action_parallel`。性能日志可对比：
 
 - `action_category_ready`、`action_child_ready`；
+- `session_category_prefix_prefill_completed` 及其 `prewarmed/elapsed_ms`；
 - `turn_action_ready_sent.after_commit_ms`；
 - TTS 首音频、`response.audio.done` 和 `turn_result_sent`；
 - Category 与历史路由请求的音频编码 `cache_status` 是否为 `shared` 或 `hit`；
 - 并发开启前后的 GPU queue wait、prefill 和总体 P50/P95/P99。
+
+动作 Prompt 的权威顺序为：全局静态规则 → Session 人设/实体/动作偏好 → 当前
+`avatar_state`/主动场景 → 最近一次用户触发动作指代锚点 → 当前 Turn 规则与白名单 → 当前
+媒体/文本 → 输出提示。这里只拆分并缓存 Session 固定部分，不合并或改写其业务语义，也不改变
+原有媒体保留轮数、历史裁剪、图片角色或跨 Turn 生命周期。
 
 并发优化不保证所有 Turn 都达到固定 800 ms；它消除的是可避免的串行等待。若 GPU 排队上升
 抵消收益，可只关闭 `SGLANG_OMNI_REALTIME_ROUTE_ACTION_PARALLEL`，保留 action ready 与 TTS

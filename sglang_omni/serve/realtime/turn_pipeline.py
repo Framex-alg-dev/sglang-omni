@@ -29,6 +29,10 @@ from sglang_omni.utils.structured_logs import (
 from sglang_omni.serve.realtime.proactive import proactive_scene_policy
 from sglang_omni.serve.realtime.knowledge import KnowledgeEntityHint
 from sglang_omni.serve.realtime.knowledge.models import PreparedKnowledgeTurn
+from sglang_omni.serve.realtime.performance import (
+    PerformanceDecision,
+    fuse_performance_decision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +80,8 @@ class TurnInferenceOutcome:
     reply_history_route: ReplyHistoryRouteResult | None
     suppress_reply_for_unsupported_action: bool
     silent_action_finished: bool
+    expression: dict[str, Any] | None
+    performance: PerformanceDecision | None
 
 
 class TurnPipeline:
@@ -516,6 +522,8 @@ class TurnPipeline:
             outcome.suppress_reply_for_unsupported_action
         )
         silent_action_finished = outcome.silent_action_finished
+        expression = outcome.expression
+        performance = outcome.performance
         action_unsupported = bool(
             action is not None and action.get("support_status") == "unsupported"
         )
@@ -570,7 +578,10 @@ class TurnPipeline:
                 else None
             ),
         )
-        if action is not None:
+        if (
+            action is not None
+            and action.get("candidate_id") in self.candidate_by_id
+        ):
             self._append_action_history(
                 current_audio_list,
                 current_images,
@@ -626,7 +637,11 @@ class TurnPipeline:
                             suppress_reply_for_unsupported_action
                             or silent_action_finished
                         )
-                        else "completed"
+                        else (
+                            "not_changed"
+                            if modality == "expression" and expression is None
+                            else "completed"
+                        )
                     )
                 )
                 for modality in self.modalities
@@ -667,6 +682,12 @@ class TurnPipeline:
                         "action_timing_breakdown", {}
                     ),
                 }
+            )
+        if expression is not None:
+            result["expression"] = dict(expression)
+        if performance is not None:
+            result["timing"]["server_performance_compute_ms"] = (
+                performance.elapsed_ms
             )
         if turn.knowledge_context is not None:
             result["knowledge"] = {
@@ -878,6 +899,9 @@ class TurnPipeline:
             reply_route_decision_ready = False
             knowledge_task: asyncio.Task[Any] | None = None
             knowledge_prepare_task: asyncio.Task[PreparedKnowledgeTurn] | None = None
+            performance_task: asyncio.Task[PerformanceDecision] | None = None
+            performance: PerformanceDecision | None = None
+            expression: dict[str, Any] | None = None
 
             def track_branch(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
                 task = asyncio.create_task(coroutine, name=name)
@@ -890,6 +914,7 @@ class TurnPipeline:
                 if (
                     reply_route_decision_ready
                     and category_support_status == "unsupported"
+                    and "expression" not in self.modalities
                     and not preserve_language_reply_on_unsupported_action
                     and provisional_state is not None
                     and provisional_state.status == "pending"
@@ -1059,15 +1084,32 @@ class TurnPipeline:
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
                 )
 
-            if (
-                self.route_action_parallel
-                and reply_history_route_task is not None
-                and "action" in self.modalities
-            ):
-                # Let the history-route task submit its request first, then
-                # admit action scoring without waiting for the route result.
-                await asyncio.sleep(0)
+            if self.route_action_parallel and "action" in self.modalities:
+                # History routing and Category are the latency-critical
+                # branches.  Give a previously-created route task one event
+                # loop turn to submit, then start Category without waiting for
+                # the route result.  Performance/TTS control is created only
+                # afterwards so admission priority, rather than create_task
+                # timing, governs contention.
+                if reply_history_route_task is not None:
+                    await asyncio.sleep(0)
                 start_action_scoring()
+
+            if "expression" in self.modalities or "audio" in self.modalities:
+                if "audio" in self.modalities:
+                    turn.tts_instruction_future = (
+                        asyncio.get_running_loop().create_future()
+                    )
+                performance_task = track_branch(
+                    self._infer_turn_performance(
+                        turn,
+                        current_audio_list,
+                        current_text=turn.text,
+                    ),
+                    name=(
+                        f"session-performance-{self.session_id}-{turn.turn_id}"
+                    ),
+                )
 
             knowledge_eligible = bool(
                 self.knowledge_binding is not None
@@ -1280,6 +1322,36 @@ class TurnPipeline:
                     name=f"session-reply-{self.session_id}-{turn.turn_id}",
                 )
 
+            if performance_task is not None:
+                try:
+                    performance = await performance_task
+                except asyncio.CancelledError:
+                    if (
+                        turn.tts_instruction_future is not None
+                        and not turn.tts_instruction_future.done()
+                    ):
+                        turn.tts_instruction_future.cancel()
+                    raise
+                except Exception as exc:
+                    performance = self._default_performance_decision()
+                    emit_structured_log(
+                        "error",
+                        "turn_performance_control_failed",
+                        level="error",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                if (
+                    turn.tts_instruction_future is not None
+                    and not turn.tts_instruction_future.done()
+                ):
+                    turn.tts_instruction_future.set_result(
+                        performance.tts_instruction
+                    )
+
             if "action" in self.modalities:
                 assert action_task is not None
                 assert action_started is not None
@@ -1316,6 +1388,17 @@ class TurnPipeline:
                         fallback_action_id=fallback.action_id,
                         fallback_category_id=fallback.category_id,
                     )
+
+                if performance is not None:
+                    fused = fuse_performance_decision(
+                        action=action,
+                        action_error=action_error,
+                        performance=performance,
+                        expression_enabled="expression" in self.modalities,
+                    )
+                    action = fused.action
+                    action_error = fused.action_error
+                    expression = fused.expression
                 emit_structured_log(
                     "performance",
                     "action_child_ready",
@@ -1397,6 +1480,15 @@ class TurnPipeline:
                 )
                 if action is not None:
                     self._ensure_turn_processing(turn)
+                    if expression is not None:
+                        await self.send(
+                            {
+                                "type": "turn.expression.ready",
+                                "session_id": self.session_id,
+                                "turn_id": turn_id,
+                                "expression": expression,
+                            }
+                        )
                     action_ready_payload: dict[str, Any] = {
                         "type": "turn.action.ready",
                         "session_id": self.session_id,
@@ -1411,7 +1503,10 @@ class TurnPipeline:
                             }
                         )
                     await self.send(action_ready_payload)
-                    if action_error is None:
+                    if (
+                        action_error is None
+                        and action.get("candidate_id") in self.candidate_by_id
+                    ):
                         self._record_action_as_executed(
                             turn=turn,
                             action=action,
@@ -1472,6 +1567,8 @@ class TurnPipeline:
                         suppress_reply_for_unsupported_action
                     ),
                     silent_action_finished=silent_action_finished,
+                    expression=expression,
+                    performance=performance,
                 ),
             )
             if turn_status is None:

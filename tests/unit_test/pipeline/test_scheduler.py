@@ -1569,6 +1569,74 @@ def test_omni_scheduler_distinguishes_queue_enter_from_prefill_start(
     assert model_path_starts == ["req-delayed"]
 
 
+def test_omni_scheduler_records_parent_prefix_cache_and_physical_chunks(
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "sglang_omni.scheduling.omni_scheduler._emit_event",
+        lambda **kwargs: events.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "sglang_omni.scheduling.omni_scheduler._emit_model_path_start",
+        lambda _request_id: None,
+    )
+    scheduler = object.__new__(OmniScheduler)
+    scheduler._prefill_start_done = set()
+    plan = {
+        "scheduler_queue_entered_at": None,
+        "scheduler_wait_ms": 0.0,
+        "prefix_scheduler_started_at": None,
+        "prefix_physical_prefill_chunk_count": 0,
+        "parent_radix_cached_token_count": None,
+        "prefix_chunk_timings": [],
+    }
+    req_data = SimpleNamespace(
+        action_scoring_role="prefix",
+        action_scoring_plan=plan,
+    )
+    req = SimpleNamespace(
+        rid="action-prefix",
+        _omni_data=req_data,
+        prefix_indices=[1, 2, 3],
+        origin_input_ids=list(range(10)),
+        extend_range=SimpleNamespace(start=3, end=7),
+    )
+    batch = SimpleNamespace(reqs=[req], is_prefill_only=True, is_extend_in_batch=True)
+
+    scheduler._emit_prefill_start_for_batch(batch)
+    req.prefix_indices = [1, 2, 3, 4, 5, 6, 7]
+    req.extend_range = SimpleNamespace(start=7, end=10)
+    scheduler._emit_prefill_start_for_batch(batch)
+
+    assert plan["parent_radix_cached_token_count"] == 3
+    assert plan["prefix_physical_prefill_chunk_count"] == 2
+    assert [
+        {
+            key: value
+            for key, value in chunk.items()
+            if key != "started_at"
+        }
+        for chunk in plan["prefix_chunk_timings"]
+    ] == [
+        {
+            "index": 0,
+            "cached_tokens_before": 3,
+            "scheduled_tokens": 4,
+            "range_start": 3,
+            "range_end": 7,
+        },
+        {
+            "index": 1,
+            "cached_tokens_before": 7,
+            "scheduled_tokens": 3,
+            "range_start": 7,
+            "range_end": 10,
+        },
+    ]
+    assert sum(event["event_name"] == "scheduler_prefill_start" for event in events) == 1
+
+
 def test_omni_scheduler_normalizes_req_token_arrays() -> None:
     origin = [1, 2, 3]
     req = SimpleNamespace(

@@ -53,6 +53,10 @@ class ActionSuffixScoreRequest:
     audios: list[str]
     images: list[Any]
     sample_rate: int
+    # Immutable, session-scoped guidance is kept separate from turn-local
+    # guidance so realtime callers can place it before current avatar state
+    # and expose an exact KV-cache boundary without parsing prompt prose.
+    session_instruction: str = ""
     # Realtime action scoring keeps turn-local constraints in ``prefix`` but
     # places the actual current text immediately before the short output cue.
     # Direct/legacy callers may leave both fields unset and retain the former
@@ -80,13 +84,16 @@ class ActionSuffixScoreRequest:
     # separate from the KV-cache namespace: the former identifies media and
     # prompt preparation, while the latter identifies immutable text tokens.
     action_context_cache_key: str | None = None
-    # Stable namespace for the immutable catalog prefix. The parent request
-    # limits cache matching to the static-catalog/history boundary.
+    # Stable namespace for the immutable catalog/Session prefix. The parent
+    # request limits cache matching before current state, media and text.
     prefix_cache_namespace: str | None = None
     # Global cross-session namespaces may reuse only the immutable system
     # catalog. History can contain multimodal placeholder token IDs whose
     # embeddings differ by session, so it must stay outside that boundary.
     cache_static_system_only: bool = False
+    # Lower values are admitted first by the API-process action scorer.  This
+    # controls queueing only; it does not alter candidate scores or prompts.
+    admission_priority: int = 10
     # Scheme B uses identifier-only suffixes (for example A328, A329, ...).
     # These can be tokenized independently of the long multimodal prefix.
     suffix_tokenization_mode: Literal["exact", "short_id"] = "exact"
@@ -165,7 +172,17 @@ class ActionScoringStats:
     logical_prefix_request_count: int = 0
     physical_prefix_chunk_count: int = 0
     prefix_token_count: int = 0
+    # Parent-prefix cache accounting is intentionally separate from candidate
+    # cache accounting.  The former reports what was already reusable before
+    # this scoring request ran; the latter reports how every candidate reused
+    # the shared prefix materialized by this request.
+    reusable_boundary_token_count: int = 0
+    parent_radix_cached_token_count: int = 0
+    parent_computed_token_count: int = 0
+    parent_cache_hit_ratio: float = 0.0
+    prefix_chunks: list[dict[str, Any]] = field(default_factory=list)
     cached_prefix_token_count: int = 0
+    candidate_cached_prefix_token_count: int = 0
     candidate_prefix_recompute_tokens: int = 0
     suffix_batch_count: int = 0
     suffix_batch_sizes: list[int] = field(default_factory=list)
@@ -190,7 +207,15 @@ class ActionScoringStats:
             "logical_prefix_request_count": self.logical_prefix_request_count,
             "physical_prefix_chunk_count": self.physical_prefix_chunk_count,
             "prefix_token_count": self.prefix_token_count,
+            "reusable_boundary_token_count": self.reusable_boundary_token_count,
+            "parent_radix_cached_token_count": self.parent_radix_cached_token_count,
+            "parent_computed_token_count": self.parent_computed_token_count,
+            "parent_cache_hit_ratio": self.parent_cache_hit_ratio,
+            "prefix_chunks": [dict(item) for item in self.prefix_chunks],
             "cached_prefix_token_count": self.cached_prefix_token_count,
+            "candidate_cached_prefix_token_count": (
+                self.candidate_cached_prefix_token_count
+            ),
             "candidate_prefix_recompute_tokens": self.candidate_prefix_recompute_tokens,
             "suffix_batch_count": self.suffix_batch_count,
             "suffix_batch_sizes": list(self.suffix_batch_sizes),
@@ -216,6 +241,12 @@ def validate_action_suffix_request(
         raise ValueError("suffix_tokenization_mode must be 'exact' or 'short_id'")
     if not request.prefix or not request.prefix.strip():
         raise ValueError("prefix must be non-empty")
+    if not isinstance(request.session_instruction, str):
+        raise ValueError("session_instruction must be a string")
+    if not isinstance(request.admission_priority, int) or not (
+        0 <= request.admission_priority <= 100
+    ):
+        raise ValueError("admission_priority must be between 0 and 100")
     for name, value in (
         ("current_text", request.current_text),
         ("output_prompt", request.output_prompt),

@@ -401,6 +401,10 @@ class ProtocolValidationComponent:
                         "action_id": candidate.action_id,
                         "source_label": candidate.source_label,
                         "short_definition": candidate.source_short_definition,
+                        "proactive_expression": candidate.proactive_expression,
+                        "user_reaction_expression": (
+                            candidate.user_reaction_expression
+                        ),
                         "execution_binding": bindings[candidate.candidate_id],
                     }
                 )
@@ -1421,6 +1425,18 @@ class ProtocolValidationComponent:
                 )
                 self._validate_catalog_semantic_field(
                     raw_child,
+                    "proactive_expression",
+                    global_child.proactive_expression,
+                    entity_id=parsed.candidate_id,
+                )
+                self._validate_catalog_semantic_field(
+                    raw_child,
+                    "user_reaction_expression",
+                    global_child.user_reaction_expression,
+                    entity_id=parsed.candidate_id,
+                )
+                self._validate_catalog_semantic_field(
+                    raw_child,
                     "short_definition",
                     global_child.source_short_definition,
                     entity_id=parsed.candidate_id,
@@ -1432,6 +1448,10 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=category_id,
+                    proactive_expression=global_child.proactive_expression,
+                    user_reaction_expression=(
+                        global_child.user_reaction_expression
+                    ),
                 )
                 session_children.append(child)
                 candidates.append(child)
@@ -1476,6 +1496,18 @@ class ProtocolValidationComponent:
             )
             self._validate_catalog_semantic_field(
                 raw_child,
+                "proactive_expression",
+                global_child.proactive_expression,
+                entity_id=parsed.candidate_id,
+            )
+            self._validate_catalog_semantic_field(
+                raw_child,
+                "user_reaction_expression",
+                global_child.user_reaction_expression,
+                entity_id=parsed.candidate_id,
+            )
+            self._validate_catalog_semantic_field(
+                raw_child,
                 "short_definition",
                 global_child.source_short_definition,
                 entity_id=parsed.candidate_id,
@@ -1488,6 +1520,10 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=global_child.category_id,
+                    proactive_expression=global_child.proactive_expression,
+                    user_reaction_expression=(
+                        global_child.user_reaction_expression
+                    ),
                 )
             )
         return candidates

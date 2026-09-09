@@ -74,6 +74,26 @@ from sglang_omni.serve.realtime.action.prompts import ActionPromptComponent
 
 @compose_components(ActionScoringPipeline, ActionPromptComponent)
 class ActionPipeline:
+    def _session_action_prefix_namespace(
+        self,
+        *,
+        base_namespace: str,
+        stage: str,
+        turn_origin: Literal["user", "proactive"],
+        session_instruction: str,
+    ) -> str:
+        """Return an invalidation-safe namespace for Session prompt KV."""
+
+        if not session_instruction:
+            return base_namespace
+        digest = hashlib.sha256(session_instruction.encode("utf-8")).hexdigest()[
+            :20
+        ]
+        return (
+            f"{base_namespace}:session:{self.session_instance_id}:"
+            f"{stage}:{turn_origin}:sha256:{digest}"
+        )
+
     def _build_bounded_action_context(
         self,
         audios: list[str],
@@ -1034,7 +1054,9 @@ class ActionPipeline:
             action_id=candidate.action_id,
             category_id=candidate.category_id,
             source_label=candidate.source_label,
-            short_definition=candidate.short_definition,
+            short_definition=candidate.effective_definition(
+                turn.turn_origin
+            ),
             execute=bool(action.get("execute", True)),
         )
         self.last_executed_action = record
@@ -1054,6 +1076,64 @@ class ActionPipeline:
             logical_request_id=turn.request_base,
             **log_fields,
             retained_execution_history_count=len(self.executed_action_history),
+        )
+
+    def _reconcile_client_executed_action(
+        self,
+        *,
+        turn: TurnBuffer,
+    ) -> None:
+        """Use the client's latest execution report as the physical anchor.
+
+        The report contains an action ID, while history is intentionally kept
+        independently from conversational messages. Unknown IDs are already
+        rejected by protocol validation; an ID absent from this Session's
+        bounded execution history is left as an anti-repeat hint only.
+        """
+
+        reported_action_id = turn.client_last_executed_action_id
+        if not reported_action_id:
+            return
+        if (
+            self.last_executed_action is not None
+            and self.last_executed_action.action_id == reported_action_id
+        ):
+            return
+        record = next(
+            (
+                item
+                for item in reversed(self.executed_action_history)
+                if item.action_id == reported_action_id
+            ),
+            None,
+        )
+        if record is None:
+            emit_structured_log(
+                "action",
+                "client_action_execution_anchor_unresolved",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                reported_action_id=reported_action_id,
+                retained_execution_history_count=len(
+                    self.executed_action_history
+                ),
+            )
+            return
+        self.last_executed_action = record
+        if record.turn_origin == TURN_ORIGIN_USER:
+            self.last_user_executed_action = record
+        emit_structured_log(
+            "action",
+            "client_action_execution_anchor_reconciled",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            reported_action_id=reported_action_id,
+            **(self._executed_action_log_fields(record) or {}),
         )
 
 
@@ -1086,6 +1166,8 @@ class ActionPipeline:
         compact["execute"] = action["execute"]
         if action.get("support_status"):
             compact["support_status"] = action["support_status"]
+        if action.get("reason_code"):
+            compact["reason_code"] = action["reason_code"]
         if "fallback_applied" in action:
             compact["fallback_applied"] = bool(action["fallback_applied"])
         execution_binding = action.get("execution_binding")

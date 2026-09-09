@@ -69,6 +69,7 @@ class ActionScoringPipeline:
             logical_request_id=request.logical_request_id,
             request_id=request.request_id,
             stage=request.stage,
+            admission_priority=request.admission_priority,
             locale=self.locale,
             language=request.language,
             candidate_count=len(request.candidates),
@@ -86,6 +87,7 @@ class ActionScoringPipeline:
                 logical_request_id=request.logical_request_id,
                 request_id=request.request_id,
                 stage=request.stage,
+                admission_priority=request.admission_priority,
                 locale=self.locale,
                 language=request.language,
                 candidate_count=len(request.candidates),
@@ -119,6 +121,7 @@ class ActionScoringPipeline:
                 logical_request_id=request.logical_request_id,
                 request_id=request.request_id,
                 stage=request.stage,
+                admission_priority=request.admission_priority,
                 locale=self.locale,
                 language=request.language,
                 elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
@@ -135,6 +138,7 @@ class ActionScoringPipeline:
                 logical_request_id=request.logical_request_id,
                 request_id=request.request_id,
                 stage=request.stage,
+                admission_priority=request.admission_priority,
                 locale=self.locale,
                 language=request.language,
                 elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
@@ -167,6 +171,7 @@ class ActionScoringPipeline:
             Callable[[SessionActionCategory | None, str], None] | None
         ) = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
+        self._reconcile_client_executed_action(turn=turn)
         if (
             self.categories
             and self.action_selection_mode == ACTION_SELECTION_MODE_HIERARCHICAL
@@ -202,5 +207,3 @@ class ActionScoringPipeline:
 
 
 MultimodalActionScoringMixin = ActionScoringPipeline
-
-

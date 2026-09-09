@@ -917,6 +917,11 @@ def _prepare_action_scoring_request(
         "micro_batch_size": int(action_spec.get("micro_batch_size", 64)),
         "prefix_cached": False,
         "prefix_physical_prefill_chunk_count": 0,
+        # Populated by the scheduler when the parent prefix first enters an
+        # executable batch.  Keep these distinct from candidate cache metrics:
+        # candidates are created only after this parent prefix completes.
+        "parent_radix_cached_token_count": None,
+        "prefix_chunk_timings": [],
         "started_at": float(action_spec.get("client_started_at", time.perf_counter())),
         "client_request_build_ms": float(action_spec.get("client_build_ms", 0.0)),
         "server_build_started_at": server_build_started,
