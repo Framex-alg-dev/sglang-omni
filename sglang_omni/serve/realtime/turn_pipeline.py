@@ -538,7 +538,7 @@ class TurnPipeline:
                 has_avatar_image=(IMAGE_ROLE_AVATAR_STATE in current_image_roles),
             )
         history_reply_text = (
-            self.unsupported_action_text
+            reply_text or self.unsupported_action_text
             if suppress_reply_for_unsupported_action
             else reply_text
         )
@@ -632,10 +632,15 @@ class TurnPipeline:
                     if modality == "action" and action_error is not None
                     else (
                         "suppressed"
-                        if modality == "text"
-                        and (
-                            suppress_reply_for_unsupported_action
-                            or silent_action_finished
+                        if (
+                            modality == "text"
+                            and (silent_action_finished or (
+                                suppress_reply_for_unsupported_action and reply_text is None
+                            ))
+                        ) or (
+                            modality == "audio"
+                            and suppress_reply_for_unsupported_action
+                            and reply_text is not None
                         )
                         else (
                             "not_changed"
@@ -650,7 +655,8 @@ class TurnPipeline:
             result["reply"] = {
                 "source": "client_prerecorded_audio",
                 "reason": "unsupported_action",
-                "recorded_in_history": bool(self.unsupported_action_text),
+                **({"text": history_reply_text} if reply_text is not None else {}),
+                "recorded_in_history": bool(history_reply_text),
             }
             result["timing"]["reply"] = reply_timing or {}
         elif reply_text is not None:
@@ -894,6 +900,7 @@ class TurnPipeline:
             reply_task: asyncio.Task[tuple[str, dict[str, Any]]] | None = None
             provisional_state: ProvisionalReplyState | None = None
             provisional_discard_task: asyncio.Task[Any] | None = None
+            rejection_task: asyncio.Task[Any] | None = None
             reply_history_route: ReplyHistoryRouteResult | None = None
             preserve_language_reply_on_unsupported_action = False
             reply_route_decision_ready = False
@@ -1470,6 +1477,18 @@ class TurnPipeline:
                                     not self.action_ready_tts_decoupled
                                 ),
                             )
+                if (
+                    suppress_reply_for_unsupported_action
+                    and turn.turn_origin == TURN_ORIGIN_USER
+                    and "text" in self.modalities
+                ):
+                    rejection_task = track_branch(
+                        self._run_action_rejection_reply(
+                            turn, current_audio_list, prepared_current_images,
+                            current_image_roles,
+                        ),
+                        name=f"session-action-rejection-{self.session_id}-{turn_id}",
+                    )
                 logger.info(
                     "[SESSION_ACTION_REALTIME] action completed session_id=%s "
                     "turn_id=%s elapsed_ms=%.3f top_action=%s",
@@ -1532,6 +1551,15 @@ class TurnPipeline:
             await self._wait_for_provisional_background_tasks(provisional_state)
             if provisional_state is not None and reply_timing is not None:
                 reply_timing = self._provisional_reply_timing(provisional_state)
+
+            if rejection_task is not None:
+                reply_text, reply_timing = await rejection_task
+                emit_structured_log(
+                    "reply", "action_rejection_reply_completed",
+                    session_id=self.session_id, turn_id=turn_id,
+                    trace_id=turn.trace_id, request_id=f"{turn.request_base}-action-rejection",
+                    output_text=reply_text, **reply_timing,
+                )
 
             if knowledge_script_started and not suppress_reply_for_unsupported_action:
                 assert self.knowledge_binding is not None

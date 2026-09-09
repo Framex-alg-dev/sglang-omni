@@ -1349,8 +1349,8 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
         }
     )
 
-    assert len(client.completion_requests) == 1
-    reply_request = client.completion_requests[0]
+    assert len(client.completion_requests) == 2
+    reply_request = client.completion_requests[-1]
     assert {"type": "text", "text": "做个后空翻"} in (
         reply_request.messages[-1].content
     )
@@ -1362,11 +1362,11 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
     assert resolved["status"] == "discarded"
     assert resolved["reason"] == "child_unsupported"
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert "text" not in result["reply"]
+    assert result["reply"]["text"] == client.completion_text
     assert result["reply"]["source"] == "client_prerecorded_audio"
     assert result["action"]["support_status"] == "unsupported"
     assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        "这个动作暂时做不了。"
+        result["reply"]["text"]
     )
     assert session.reply_history_turns[-1].model_visible is False
     assert (
@@ -1543,15 +1543,16 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
     assert resolved["reason"] == "child_unsupported"
     assert not any(item["type"] == "response.text.delta" for item in ws.events)
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["modalities"]["text"] == "suppressed"
+    assert result["modalities"]["text"] == "completed"
     assert result["reply"] == {
         "source": "client_prerecorded_audio",
         "reason": "unsupported_action",
+        "text": client.completion_text,
         "recorded_in_history": True,
     }
     assert result["action"]["support_status"] == "unsupported"
     assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        "这个动作暂时做不了。"
+        result["reply"]["text"]
     )
     assert session.reply_history_turns[-1].model_visible is False
     assert (
@@ -1891,3 +1892,58 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
     }
     assert "A003" not in first.candidate_by_id
     assert "A001" not in second.candidate_by_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_rejection_generation_does_not_block_fallback_action_or_emit_audio(tmp_path, cancel):
+    class GatedClient(_DecisionScoreClient):
+        def __init__(self):
+            super().__init__(category="B001", child=UNSUPPORTED_CHILD_SCORE_ID, reply_route="R2")
+            self.rejection_started = asyncio.Event()
+            self.release_rejection = asyncio.Event()
+
+        async def completion(self, request, *, request_id):
+            if request.metadata.get("task") == "session_action_rejection":
+                self.rejection_started.set()
+                await self.release_rejection.wait()
+            return await super().completion(request, request_id=request_id)
+
+    catalog = load_global_action_catalog(_write_catalog(tmp_path))
+    client = GatedClient()
+    ws = _WebSocket()
+    session = MultimodalSession(
+        ws, client=client, model_name="Qwen3-Omni", global_action_catalog=catalog,
+        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
+            True, frozenset({"B008", "B001", "B002"}), frozenset(), 1.0),
+        claim_session=lambda session_id, value: None,
+        release_session=lambda session_id, value: None,
+    )
+    payload = _session_start_payload()
+    payload["modalities"] = ["text", "action"]
+    payload["unsupported_action_text"] = "固定兜底句"
+    await session.handle_session_start(payload)
+    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-gated",
+                                    "turn_origin": "user", "text_role": "user_input"})
+    task = asyncio.create_task(session.handle_turn_commit({
+        "type": "turn.commit", "turn_id": "turn-gated", "text": "请做个后空翻",
+        "turn_origin": "user", "text_role": "user_input"}))
+    await asyncio.wait_for(client.rejection_started.wait(), timeout=2)
+    actions = [e for e in ws.events if e["type"] == "turn.action.ready"]
+    assert len(actions) == 1
+    assert actions[0]["action"]["support_status"] == "unsupported"
+    assert actions[0]["action"]["fallback_applied"] is True
+    assert not any(e["type"] == "turn.result" for e in ws.events)
+    assert not any(e["type"] in {"response.text.delta", "response.audio.delta"} for e in ws.events)
+    if cancel:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not any(e["type"] == "turn.result" for e in ws.events)
+        assert not session.reply_history_turns
+    else:
+        client.release_rejection.set()
+        await task
+        result = next(e for e in ws.events if e["type"] == "turn.result")
+        assert result["reply"]["text"] == client.completion_text
+        assert session.reply_history_turns[-1].messages[-1]["content"] == result["reply"]["text"]
