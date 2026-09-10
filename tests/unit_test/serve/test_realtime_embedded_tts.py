@@ -638,4 +638,7 @@ def test_fusion_unsupported_pure_action_discards_online_tts_audio() -> None:
     assert "response.done" not in types
     assert events[-1]["type"] == "turn.result"
     assert events[-1]["reply"]["source"] == "client_prerecorded_audio"
+    assert events[-1]["reply"]["text"].strip()
+    assert events[-1]["outputs"]["text"] == "completed"
+    assert events[-1]["outputs"]["audio"] == "suppressed"
     assert connector.contexts == []
