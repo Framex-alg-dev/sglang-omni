@@ -108,6 +108,12 @@ class SessionStartComponent:
         if output_capabilities.audio_enabled and self.embedded_tts_config is None:
             raise ValueError("embedded TTS provider is not configured")
         requested_output_audio_voice = event.get("_output_audio_voice")
+        effective_output_audio_voice = None
+        if output_capabilities.audio_enabled:
+            assert self.embedded_tts_config is not None
+            effective_output_audio_voice = (
+                requested_output_audio_voice or self.embedded_tts_config.voice
+            )
         raw_instructions = event.get("instructions")
         raw_unsupported_action_text = event.get(
             "_unsupported_action_text", event.get("unsupported_action_text")
@@ -427,12 +433,7 @@ class SessionStartComponent:
             outputs=list(output_capabilities.outputs),
             audio_enabled=output_capabilities.audio_enabled,
             requested_output_audio_voice=requested_output_audio_voice,
-            effective_output_audio_voice=(
-                self.embedded_tts_config.voice
-                if output_capabilities.audio_enabled
-                and self.embedded_tts_config is not None
-                else None
-            ),
+            effective_output_audio_voice=effective_output_audio_voice,
             action_candidate_count=len(candidates),
             action_category_count=len(categories),
         )
@@ -519,14 +520,7 @@ class SessionStartComponent:
                 session_id=session_id.strip(),
                 **tts_kwargs,
             )
-            # Temporary compatibility guard: keep the embedded TTS voice under
-            # server control while clients may still send cloud-provider voice IDs
-            # that are not registered by the configured local TTS provider. Remove
-            # this guard and restore the validated session voice override after the
-            # client and local TTS speaker namespaces are aligned.
-            self.output_audio_voice = self.embedded_tts_config.voice
-        else:
-            self.output_audio_voice = None
+        self.output_audio_voice = effective_output_audio_voice
         if instructions is not None:
             self.instructions = instructions
         if raw_unsupported_action_text is not None:
