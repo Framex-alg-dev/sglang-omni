@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from sglang_omni.serve.realtime.action.cache_observation import prompt_sha256
 import json
 import logging
 import random
@@ -762,9 +763,7 @@ class ActionCategoryComponent:
                 execution_category.category_id, self.locale, turn_origin
             )
         elif self.global_action_catalog is not None:
-            combined_prompt_hash = hashlib.sha256(
-                child_system_prompt.encode("utf-8")
-            ).hexdigest()
+            combined_prompt_hash = prompt_sha256(child_system_prompt)
             child_namespace = (
                 f"hierarchical:{self.locale}:child:{child_namespace}:"
                 f"{turn_origin}:sha256:{combined_prompt_hash}"
@@ -904,7 +903,9 @@ class ActionCategoryComponent:
             **action_common,
         )
         child_started = time.perf_counter()
-        child_result = await self._score_action_request(turn, action_request)
+        child_result = await self._score_action_request(
+            turn, action_request, child_category_ids=selected_category_ids,
+        )
         child_ms = round((time.perf_counter() - child_started) * 1000.0, 3)
         logger.info(
             "[SESSION_ACTION_REALTIME] action stage completed "

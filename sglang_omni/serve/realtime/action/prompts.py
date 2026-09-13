@@ -7,6 +7,7 @@ prompts, and action-history policy from protocol and reply orchestration.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import hashlib
 import json
 import logging
@@ -334,6 +335,38 @@ class ActionPromptComponent:
         )
         return "\n".join(lines)
     def _build_child_system_prompt(
+        self,
+        category: SessionActionCategory | list[SessionActionCategory],
+        candidates: list[SessionActionCandidate],
+        turn_origin: str = "user",
+    ) -> str:
+        categories = category if isinstance(category, list) else [category]
+        # Preserve all ordering and exact metadata. This caches rendering only;
+        # it never weakens the model's namespace or changes token sequences.
+        key = (
+            id(self.global_action_catalog), self.language, getattr(self, "locale", None),
+            turn_origin,
+            tuple((c.category_id, c.source_label, c.short_definition) for c in categories),
+            tuple((c.candidate_id, c.source_label, c.effective_definition(turn_origin))
+                  for c in candidates),
+        )
+        cache = getattr(self, "_child_prompt_render_cache", None)
+        if (
+            cache is None
+            or getattr(self, "_child_prompt_render_catalog", None) is not self.global_action_catalog
+        ):
+            cache = self._child_prompt_render_cache = OrderedDict()
+            self._child_prompt_render_catalog = self.global_action_catalog
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        prompt = self._render_child_system_prompt(category, candidates, turn_origin)
+        cache[key] = prompt
+        if len(cache) > 64:
+            cache.popitem(last=False)
+        return prompt
+
+    def _render_child_system_prompt(
         self,
         category: SessionActionCategory | list[SessionActionCategory],
         candidates: list[SessionActionCandidate],

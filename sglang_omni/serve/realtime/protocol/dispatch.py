@@ -81,6 +81,7 @@ class ProtocolDispatchComponent:
             "turn.commit": self.handle_turn_commit,
             "turn.cancel": self.handle_turn_cancel,
             "knowledge.script.event": self.handle_knowledge_script_event,
+            "knowledge.context.replace": self.handle_knowledge_context_replace,
             "session.close": self.handle_session_close,
         }
         handler = handlers.get(normalized_type)
@@ -106,4 +107,3 @@ class ProtocolDispatchComponent:
 
 
 MultimodalDispatchMixin = ProtocolDispatchComponent
-

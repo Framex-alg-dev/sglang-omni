@@ -57,6 +57,75 @@ from sglang_omni.serve.realtime.protocol.input import TurnInputComponent
 
 
 class ProtocolValidationComponent:
+    def _normalize_provided_entity_snapshot(
+        self,
+        value: Any,
+        name: str,
+    ) -> dict[str, Any]:
+        entity_snapshot = self._strict_object(
+            value,
+            name,
+            allowed={
+                "snapshot_id",
+                "revision",
+                "current_entity_id",
+                "current_entity_text",
+                "content_sha256",
+            },
+            required={
+                "snapshot_id",
+                "revision",
+                "current_entity_id",
+                "current_entity_text",
+                "content_sha256",
+            },
+        )
+        snapshot_id = self._bounded_optional_text(
+            entity_snapshot.get("snapshot_id"),
+            f"{name}.snapshot_id",
+            max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+            allow_empty=False,
+        )
+        entity_id = self._bounded_optional_text(
+            entity_snapshot.get("current_entity_id"),
+            f"{name}.current_entity_id",
+            max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+            allow_empty=False,
+        )
+        snapshot_revision = entity_snapshot.get("revision")
+        if (
+            not isinstance(snapshot_revision, int)
+            or isinstance(snapshot_revision, bool)
+            or snapshot_revision < 1
+        ):
+            raise ValueError(f"{name}.revision must be a positive integer")
+        entity_text = entity_snapshot.get("current_entity_text")
+        if not isinstance(entity_text, str) or not entity_text.strip():
+            raise ValueError(
+                f"{name}.current_entity_text must be a non-empty string"
+            )
+        supplied_content_hash = self._bounded_optional_text(
+            entity_snapshot.get("content_sha256"),
+            f"{name}.content_sha256",
+            max_chars=71,
+            allow_empty=False,
+        )
+        computed_content_hash = "sha256:" + hashlib.sha256(
+            entity_text.encode("utf-8")
+        ).hexdigest()
+        if supplied_content_hash != computed_content_hash:
+            raise ValueError(
+                f"{name}.content_sha256 does not match current_entity_text"
+            )
+        assert snapshot_id is not None and entity_id is not None
+        return {
+            "snapshot_id": snapshot_id.strip(),
+            "revision": snapshot_revision,
+            "current_entity_id": entity_id.strip(),
+            "current_entity_text": entity_text,
+            "content_sha256": computed_content_hash,
+        }
+
     @staticmethod
     def _strict_object(
         value: Any,
@@ -709,75 +778,10 @@ class ProtocolValidationComponent:
         normalized_entity_snapshot = None
         raw_entity_snapshot = knowledge.get("entity_snapshot")
         if knowledge_mode == "provided_context":
-            entity_snapshot = self._strict_object(
+            normalized_entity_snapshot = self._normalize_provided_entity_snapshot(
                 raw_entity_snapshot,
                 "knowledge.entity_snapshot",
-                allowed={
-                    "snapshot_id",
-                    "revision",
-                    "current_entity_id",
-                    "current_entity_text",
-                    "content_sha256",
-                },
-                required={
-                    "snapshot_id",
-                    "revision",
-                    "current_entity_id",
-                    "current_entity_text",
-                    "content_sha256",
-                },
             )
-            snapshot_id = self._bounded_optional_text(
-                entity_snapshot.get("snapshot_id"),
-                "knowledge.entity_snapshot.snapshot_id",
-                max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
-                allow_empty=False,
-            )
-            entity_id = self._bounded_optional_text(
-                entity_snapshot.get("current_entity_id"),
-                "knowledge.entity_snapshot.current_entity_id",
-                max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
-                allow_empty=False,
-            )
-            snapshot_revision = entity_snapshot.get("revision")
-            if (
-                not isinstance(snapshot_revision, int)
-                or isinstance(snapshot_revision, bool)
-                or snapshot_revision < 1
-            ):
-                raise ValueError(
-                    "knowledge.entity_snapshot.revision must be a positive integer"
-                )
-            entity_text = entity_snapshot.get("current_entity_text")
-            # Intentionally no business length limit in the single-entity phase.
-            # TODO(entity-context-size-limit): add measured character/token/request
-            # limits after production entity-size and prefill-latency observation.
-            if not isinstance(entity_text, str) or not entity_text.strip():
-                raise ValueError(
-                    "knowledge.entity_snapshot.current_entity_text must be a "
-                    "non-empty string"
-                )
-            supplied_content_hash = self._bounded_optional_text(
-                entity_snapshot.get("content_sha256"),
-                "knowledge.entity_snapshot.content_sha256",
-                max_chars=71,
-                allow_empty=False,
-            )
-            computed_content_hash = "sha256:" + hashlib.sha256(
-                entity_text.encode("utf-8")
-            ).hexdigest()
-            if supplied_content_hash != computed_content_hash:
-                raise ValueError(
-                    "knowledge.entity_snapshot.content_sha256 does not match "
-                    "current_entity_text"
-                )
-            normalized_entity_snapshot = {
-                "snapshot_id": snapshot_id.strip(),
-                "revision": snapshot_revision,
-                "current_entity_id": entity_id.strip(),
-                "current_entity_text": entity_text,
-                "content_sha256": computed_content_hash,
-            }
         elif raw_entity_snapshot is not None:
             raise ValueError(
                 "knowledge.entity_snapshot requires mode='provided_context'"
@@ -886,6 +890,125 @@ class ProtocolValidationComponent:
                 "checksum": checksum.lower(),
                 "event": lifecycle_event,
             }
+        if event_type == "knowledge.context.replace":
+            event = self._strict_object(
+                payload,
+                "knowledge.context.replace",
+                allowed={
+                    "type",
+                    "request_id",
+                    "expected_snapshot_id",
+                    "binding",
+                    "entity_snapshot",
+                    "script",
+                },
+                required={
+                    "type",
+                    "request_id",
+                    "expected_snapshot_id",
+                    "binding",
+                    "entity_snapshot",
+                    "script",
+                },
+            )
+            request_id = self._bounded_optional_text(
+                event.get("request_id"),
+                "knowledge.context.replace.request_id",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_EVENT_REQUEST_ID_CHARS,
+                allow_empty=False,
+            )
+            expected_snapshot_id = self._bounded_optional_text(
+                event.get("expected_snapshot_id"),
+                "knowledge.context.replace.expected_snapshot_id",
+                max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+                allow_empty=False,
+            )
+            binding = self._strict_object(
+                event.get("binding"),
+                "knowledge.context.replace.binding",
+                allowed={"id", "revision", "required"},
+                required={"id", "revision", "required"},
+            )
+            binding_id = self._bounded_optional_text(
+                binding.get("id"),
+                "knowledge.context.replace.binding.id",
+                max_chars=MAX_KNOWLEDGE_BINDING_ID_CHARS,
+                allow_empty=False,
+            )
+            binding_revision = binding.get("revision")
+            if (
+                not isinstance(binding_revision, int)
+                or isinstance(binding_revision, bool)
+                or binding_revision < 1
+            ):
+                raise ValueError(
+                    "knowledge.context.replace.binding.revision must be a positive integer"
+                )
+            if not isinstance(binding.get("required"), bool):
+                raise ValueError(
+                    "knowledge.context.replace.binding.required must be a boolean"
+                )
+            snapshot = self._normalize_provided_entity_snapshot(
+                event.get("entity_snapshot"),
+                "knowledge.context.replace.entity_snapshot",
+            )
+            script = self._strict_object(
+                event.get("script"),
+                "knowledge.context.replace.script",
+                allowed={"id", "version", "checksum"},
+                required={"id", "version", "checksum"},
+            )
+            script_id = self._bounded_optional_text(
+                script.get("id"),
+                "knowledge.context.replace.script.id",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_ID_CHARS,
+                allow_empty=False,
+            )
+            script_version = script.get("version")
+            if (
+                not isinstance(script_version, int)
+                or isinstance(script_version, bool)
+                or script_version < 1
+            ):
+                raise ValueError(
+                    "knowledge.context.replace.script.version must be a positive integer"
+                )
+            checksum = self._bounded_optional_text(
+                script.get("checksum"),
+                "knowledge.context.replace.script.checksum",
+                max_chars=MAX_KNOWLEDGE_SCRIPT_CHECKSUM_CHARS,
+                allow_empty=False,
+            )
+            if checksum is None or re.fullmatch(
+                r"sha256:[0-9a-fA-F]{64}", checksum
+            ) is None:
+                raise ValueError(
+                    "knowledge.context.replace.script.checksum must be sha256: followed by 64 hex characters"
+                )
+            assert request_id is not None and expected_snapshot_id is not None
+            assert binding_id is not None
+            assert script_id is not None
+            normalized = {
+                "type": "knowledge.context.replace",
+                "request_id": request_id.strip(),
+                "expected_snapshot_id": expected_snapshot_id.strip(),
+                "binding_id": binding_id.strip(),
+                "binding_revision": binding_revision,
+                "knowledge_required": binding["required"],
+                "entity_snapshot": snapshot,
+                "script_id": script_id.strip(),
+                "script_version": script_version,
+                "script_checksum": checksum.lower(),
+            }
+            normalized["request_sha256"] = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    normalized,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            return normalized
         if event_type == "turn.start":
             event = self._strict_object(
                 payload,

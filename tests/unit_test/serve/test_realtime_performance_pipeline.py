@@ -319,18 +319,41 @@ def test_no_expression_and_no_body_result_remains_empty() -> None:
     assert fused.action_error is None
 
 
-def test_expression_only_scope_does_not_override_supported_body_action() -> None:
+@pytest.mark.parametrize(
+    ("body_id", "expression_id"),
+    [
+        pytest.param("A460", "A159", id="fear"),
+        pytest.param("A444", "A160", id="aggrieved"),
+        pytest.param("A439", "A161", id="sad"),
+        pytest.param("A153", "A162", id="questioning"),
+        pytest.param("A442", "A164", id="vulnerable"),
+    ],
+)
+def test_expression_only_scope_suppresses_supported_body_action(
+    body_id: str, expression_id: str,
+) -> None:
     body_action = _body_action()
+    body_action.update(candidate_id=body_id, action_id=body_id)
+    expression = _expression(expression_id)
     fused = fuse_performance_decision(
         action=body_action,
         action_error=None,
-        performance=_decision("expression_only", expression=_expression()),
+        performance=_decision("expression_only", expression=expression),
         expression_enabled=True,
     )
 
-    assert fused.action == body_action
+    assert fused.action == {
+        "candidate_id": "expression_only",
+        "action_id": "no_action",
+        "execute": False,
+        "support_status": "not_required",
+        "fallback_applied": False,
+        "reason_code": "expression_only",
+    }
     assert fused.action_error is None
-    assert fused.expression == _expression()
+    assert fused.expression == expression
+    assert body_action["execute"] is True
+    assert body_action["action_id"] == body_id
 
 
 def test_optional_expression_is_suppressed_when_requested_body_is_unsupported() -> None:
@@ -353,12 +376,17 @@ def test_optional_expression_is_suppressed_when_requested_body_is_unsupported() 
         pytest.param(None, False, id="missing-expression"),
     ],
 )
+@pytest.mark.parametrize("body_supported", [False, True])
 def test_expression_only_without_supported_expression_is_unsupported(
     expression: dict[str, object] | None,
     expression_unsupported: bool,
+    body_supported: bool,
 ) -> None:
     fused = fuse_performance_decision(
-        action=_body_action(support_status="unsupported", execute=False),
+        action=_body_action(
+            support_status="supported" if body_supported else "unsupported",
+            execute=body_supported,
+        ),
         action_error=None,
         performance=_decision(
             "expression_only",

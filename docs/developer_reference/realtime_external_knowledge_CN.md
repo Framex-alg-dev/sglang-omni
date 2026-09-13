@@ -144,6 +144,41 @@ script id/version/checksum。Gateway 根据 Snapshot 中的稿件映射更新当
 协议仍兼容由提供文本的主动 Turn 携带稿件元数据，但 D_video_call 的持久化播放状态机使用
 独立事件，因为一次完整稿件会被拆成多个播放 segment，生命周期不应绑定到单个模型 Turn。
 
+### `provided_context` 播客热切换
+
+使用 `session.start.knowledge.mode=provided_context` 的长连接播客，在一轮完整稿件播放结束且
+下轮将采用新稿件时，客户端必须先在 Turn 之间发送完整快照替换事件：
+
+```json
+{
+  "type": "knowledge.context.replace",
+  "request_id": "knowledge-context-<请求内容哈希>",
+  "expected_snapshot_id": "package-1:39:item-1",
+  "binding": {"id": "package-1", "revision": 40, "required": true},
+  "entity_snapshot": {
+    "snapshot_id": "package-1:40:item-1",
+    "revision": 40,
+    "current_entity_id": "item-1",
+    "current_entity_text": "<新稿件的权威实体 JSON>",
+    "content_sha256": "sha256:<文本内容哈希>"
+  },
+  "script": {
+    "id": "script-40",
+    "version": 40,
+    "checksum": "sha256:<稿件校验和>"
+  }
+}
+```
+
+服务端校验旧快照 ID、实体文本哈希及稿件身份后，以一个临界区同时替换 Binding、实体快照和
+Knowledge Context，并返回 `knowledge.context.replace.ack`。客户端只有收到匹配 ACK 后才能
+提交本地轮换并播放新稿；失败时继续播放旧稿，不能只切换其中一侧。相同 `request_id` 与相同
+内容可安全重试；相同 ID 携带不同内容会被拒绝。该事件在活动 Turn 中也会被拒绝，避免回答
+生成期间混用两个知识版本。
+
+服务端为每次成功替换递增 `context_epoch`，并把新实体标记为覆盖旧实体；后续用户 Turn 的
+回答只采用当前权威快照。此操作不会改变会话动作目录，也不会清空对话历史或静态 Prompt KV。
+
 ## 决策和降级
 
 Gateway 返回 `SKIP / RETRIEVE / CLARIFY / DEGRADED`。Evidence 会被限制数量与长度、

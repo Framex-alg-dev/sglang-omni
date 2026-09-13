@@ -219,6 +219,10 @@ class MultimodalSession:
         self.knowledge_binding: KnowledgeBinding | None = None
         self.provided_entity_snapshot: ProvidedEntitySnapshot | None = None
         self.provided_entity_context: KnowledgeContext | None = None
+        self.knowledge_context_epoch = 0
+        self._knowledge_context_replace_results: dict[
+            str, tuple[str, dict[str, Any]]
+        ] = {}
         self.passive_action_policy_metadata: dict[str, Any] | None = None
         self._knowledge_state_lock = asyncio.Lock()
         self._knowledge_commit_task: asyncio.Task[Any] | None = None

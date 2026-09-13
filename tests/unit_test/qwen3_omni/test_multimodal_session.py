@@ -45,6 +45,17 @@ from sglang_omni.serve.realtime.session_memory import (
     SessionMemoryScheduler,
     SessionMemoryTurn,
 )
+from sglang_omni.serve.realtime.turn_pipeline import _build_request_base
+
+
+def test_turn_request_base_is_bounded_for_long_external_ids() -> None:
+    request_base = _build_request_base(
+        "sess_" + "a" * 256,
+        "podcast-session_profile_" + "b" * 256 + "-interstitial-1",
+    )
+
+    assert len(request_base + "-pure-action-reply-validation") <= 128
+    assert request_base.startswith("session-")
 
 
 class FakeWebSocket:
@@ -419,6 +430,134 @@ async def test_protocol_v1_accepts_provided_entity_context_without_gateway() -> 
     assert session.websocket.events[-1]["type"] == "knowledge.script.event.ack"
 
 
+@pytest.mark.asyncio
+async def test_protocol_v1_replaces_provided_entity_context_atomically() -> None:
+    websocket = FakeWebSocket()
+    session = make_session(websocket, FakeClient())
+    initial_text = '{"headline":"old"}'
+    await session.dispatch(
+        protocol_v1_session_start(
+            "provided-entity-replace",
+            knowledge={
+                "mode": "provided_context",
+                "binding_id": "package-1",
+                "binding_revision": 1,
+                "required": True,
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:1:item-1",
+                    "revision": 1,
+                    "current_entity_id": "item-1",
+                    "current_entity_text": initial_text,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(initial_text.encode()).hexdigest(),
+                },
+            },
+        )
+    )
+    replacement_text = '{"headline":"new"}'
+    replacement = {
+        "type": "knowledge.context.replace",
+        "request_id": "replace-1",
+        "expected_snapshot_id": "package-1:1:item-1",
+        "binding": {"id": "package-1", "revision": 2, "required": True},
+        "entity_snapshot": {
+            "snapshot_id": "package-1:2:item-1",
+            "revision": 2,
+            "current_entity_id": "item-1",
+            "current_entity_text": replacement_text,
+            "content_sha256": "sha256:"
+            + hashlib.sha256(replacement_text.encode()).hexdigest(),
+        },
+        "script": {
+            "id": "script-2",
+            "version": 2,
+            "checksum": "sha256:" + "b" * 64,
+        },
+    }
+
+    await session.dispatch(replacement)
+
+    assert session.knowledge_binding.binding_revision == 2
+    assert session.provided_entity_snapshot.current_entity_text == replacement_text
+    assert session.provided_entity_context.evidence[0].content == replacement_text
+    assert websocket.events[-1] == {
+        "type": "knowledge.context.replace.ack",
+        "session_id": "provided-entity-replace",
+        "request_id": "replace-1",
+        "status": "updated",
+        "previous_snapshot_id": "package-1:1:item-1",
+        "snapshot_id": "package-1:2:item-1",
+        "content_sha256": replacement["entity_snapshot"]["content_sha256"],
+        "script_id": "script-2",
+        "script_version": 2,
+        "script_checksum": "sha256:" + "b" * 64,
+        "context_epoch": 1,
+    }
+
+    await session.dispatch(replacement)
+    assert websocket.events[-1]["context_epoch"] == 1
+
+    stale_replacement = dict(replacement)
+    stale_replacement["request_id"] = "replace-stale"
+    with pytest.raises(ValueError, match="expected snapshot does not match"):
+        await session.dispatch(stale_replacement)
+
+
+@pytest.mark.asyncio
+async def test_protocol_v1_rejects_context_replace_during_active_turn() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    entity_text = '{"headline":"old"}'
+    await session.dispatch(
+        protocol_v1_session_start(
+            "provided-entity-active-turn",
+            knowledge={
+                "mode": "provided_context",
+                "binding_id": "package-1",
+                "binding_revision": 1,
+                "required": True,
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:1:item-1",
+                    "revision": 1,
+                    "current_entity_id": "item-1",
+                    "current_entity_text": entity_text,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(entity_text.encode()).hexdigest(),
+                },
+            },
+        )
+    )
+    await session.dispatch(
+        {"type": "turn.start", "turn_id": "turn-active", "origin": "user"}
+    )
+    replacement_text = '{"headline":"new"}'
+    with pytest.raises(ValueError, match="cannot run while a turn is active"):
+        await session.dispatch(
+            {
+                "type": "knowledge.context.replace",
+                "request_id": "replace-active",
+                "expected_snapshot_id": "package-1:1:item-1",
+                "binding": {
+                    "id": "package-1",
+                    "revision": 2,
+                    "required": True,
+                },
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:2:item-1",
+                    "revision": 2,
+                    "current_entity_id": "item-1",
+                    "current_entity_text": replacement_text,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(replacement_text.encode()).hexdigest(),
+                },
+                "script": {
+                    "id": "script-2",
+                    "version": 2,
+                    "checksum": "sha256:" + "b" * 64,
+                },
+            }
+        )
+
+
 def test_passive_action_policy_has_separate_protocol_safety_budget() -> None:
     policy = "被动动作约束" * 1000
     profile = SessionActionProfile.from_payload(
@@ -466,27 +605,27 @@ def user_turn_commit(turn_id: str, **fields) -> dict:
         ),
         pytest.param(
             "P101",
-            "你可以给我打个招呼吗",
+            "你做个害怕的表情",
             True,
-            "supported",
-            True,
-            id="expression-only-misclassification-keeps-polite-greeting-body",
+            "not_required",
+            False,
+            id="expression-only-fear-suppresses-body",
         ),
         pytest.param(
             "P101",
-            "给我打个招呼",
+            "你做个委屈的表情",
             True,
-            "supported",
-            True,
-            id="expression-only-misclassification-keeps-greeting-body",
+            "not_required",
+            False,
+            id="expression-only-aggrieved-suppresses-body",
         ),
         pytest.param(
             "P101",
-            "挥挥手",
+            "你做个装可怜的表情",
             True,
-            "supported",
-            True,
-            id="expression-only-misclassification-keeps-wave-body",
+            "not_required",
+            False,
+            id="expression-only-vulnerable-suppresses-body",
         ),
         pytest.param(
             "P301", "笑着挥挥手", True, "supported", True, id="expression-and-body"
@@ -8714,3 +8853,112 @@ async def test_session_start_prefills_flat_children_without_category_stage() -> 
     assert started["action_selection_mode"] == "flat_children"
     assert started["action_selection_stages"] == 1
     assert started["action_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked_stage", "route_parallel"),
+    [("category", True), ("child", True), ("route", True), ("route", False)],
+)
+async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
+    blocked_stage, route_parallel, monkeypatch,
+):
+    records = []
+    def capture(log_type, event, **fields):
+        records.append({"event": event, **fields})
+        return True
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    ready = asyncio.Event()
+    audio_ready = asyncio.Event()
+
+    class Socket(FakeWebSocket):
+        async def send_text(self, value):
+            await super().send_text(value)
+            if self.events[-1]["type"] == "turn.action.ready":
+                ready.set()
+            if self.events[-1]["type"] == "response.audio.delta":
+                audio_ready.set()
+
+    class TTS:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def synthesize_streaming(self, *, text_chunks, audio_sink, instruct, **kwargs):
+            await instruct
+            async for text in text_chunks:
+                await audio_sink(b"\x01\x00" * 240)
+
+    from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+    from sglang_omni.serve.realtime.protocol import session_start
+    monkeypatch.setattr(session_start, "EmbeddedTTSConnection", TTS)
+
+    class Client(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            stage = "route" if any(c.candidate_id == "R0" for c in request.candidates) else request.stage
+            if stage == "performance":
+                await blocked.wait()
+            if stage == blocked_stage:
+                blocked.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+                    # A slow provider abort must not delay the ready events.
+                    await release.wait()
+                    raise
+            return await super().score_action_suffixes(request)
+
+    catalog = load_global_action_catalog()
+    fallback = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    ws, client = Socket(), Client("P101")
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.embedded_tts_config = EmbeddedTTSConfig(url="ws://test.invalid/tts", voice="test")
+    await session.dispatch(protocol_v1_session_start(
+        "early-face", outputs=["text", "audio", "expression", "action"],
+        reply={"unsupported_action_text": "暂不支持。"},
+        action={"fallback_category_ids": [fallback.category_id], "allowed_candidates": [
+            {"candidate_id": c.candidate_id} for c in (
+                catalog.category_by_id["B019"].children[0],
+                catalog.category_by_id["B010"].children[0],
+                fallback.children[0], reply.children[0],
+            )
+        ]},
+    ))
+    session.route_action_parallel = route_parallel
+    await session.handle_turn_start(user_turn_start("early-face-turn"))
+    task = asyncio.create_task(session.handle_turn_commit(user_turn_commit("early-face-turn", text="笑一个")))
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=2)
+        types = [e["type"] for e in ws.events]
+        assert types.index("turn.expression.ready") < types.index("turn.action.ready")
+        assert "turn.result" not in types
+        action = next(e["action"] for e in ws.events if e["type"] == "turn.action.ready")
+        assert action["support_status"] == "not_required"
+        assert action["execute"] is False
+        if blocked_stage != "route":
+            await asyncio.wait_for(cancellation_seen.wait(), timeout=1)
+            await asyncio.wait_for(audio_ready.wait(), timeout=1)
+            types = [e["type"] for e in ws.events]
+            assert types.index("turn.action.ready") < types.index("response.audio.delta")
+            assert "turn.result" not in types
+        else:
+            assert not cancellation_seen.is_set()  # Do not abort reply routing.
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert sum(e["type"] == "turn.action.ready" for e in ws.events) == 1
+    assert sum(e["type"] == "turn.expression.ready" for e in ws.events) == 1
+    assert any(e["type"] == "turn.result" for e in ws.events)
+    assert session.executed_action_history == []
+    if blocked_stage == "child":
+        requests = [r for r in records if r["event"] == "child_cache_request"]
+        results = [r for r in records if r["event"] == "child_cache_result"]
+        assert len(requests) == len(results) == 1
+        assert requests[0]["request_id"] == results[0]["request_id"]
+        assert requests[0]["selected_category_ids"]
+        assert results[0]["status"] == "cancelled"
+        assert results[0]["parent_computed_token_count"] is None
