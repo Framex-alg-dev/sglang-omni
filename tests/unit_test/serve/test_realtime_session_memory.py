@@ -1562,3 +1562,52 @@ async def test_scheduler_many_sessions_stays_bounded_and_completes_fairly() -> N
     assert max_concurrent == 2
     assert scheduler.snapshot()["queued_session_count"] == 0
     assert scheduler.snapshot()["running_job_count"] == 0
+
+
+@pytest.mark.parametrize('item,reason', [
+    ('bad', 'item_not_object'),
+    ({'turn_seq': '1'}, 'invalid_turn_seq_type'),
+    ({'turn_seq': 7}, 'unexpected_turn_seq'),
+    ({'turn_seq': 1, 'turn_id': 'wrong', 'episode': {}}, 'turn_id_mismatch'),
+    ({'turn_seq': 1, 'turn_id': 't1'}, 'episode_not_object'),
+])
+def test_extraction_diagnostics_distinguish_rejected_items(item, reason):
+    diagnostics = {}
+    with pytest.raises(ValueError, match='invalid or duplicate'):
+        parse_memory_extraction(json.dumps({'turns': [item]}),
+            expected_turns=[memory_turn('t1', 1)], config=SessionMemoryConfig(),
+            diagnostics=diagnostics)
+    assert diagnostics['rejected_items'][0]['reason'] == reason
+    assert diagnostics['missing_turn_seqs'] == [1]
+
+
+def test_extraction_diagnostics_distinguish_true_omission_duplicate_and_bad_json():
+    d = {}
+    with pytest.raises(ValueError, match='omitted'):
+        parse_memory_extraction('{"turns":[]}', expected_turns=[memory_turn('t1', 1)],
+                                config=SessionMemoryConfig(), diagnostics=d)
+    assert d['rejected_items'] == [] and d['missing_turn_seqs'] == [1]
+    valid = {'turn_id': 't1', 'turn_seq': 1, 'episode': {}}
+    with pytest.raises(ValueError, match='invalid or duplicate'):
+        parse_memory_extraction(json.dumps({'turns': [valid, valid]}),
+            expected_turns=[memory_turn('t1', 1)], config=SessionMemoryConfig(), diagnostics=d)
+    assert d['stage'] == 'coverage' and d['rejected_items'][0]['reason'] == 'duplicate_turn_seq'
+    d = {}
+    with pytest.raises(json.JSONDecodeError):
+        parse_memory_extraction('{"turns": [}', expected_turns=[memory_turn('t1', 1)],
+                                config=SessionMemoryConfig(), diagnostics=d)
+    assert d['stage'] == 'json_decode' and d['json_error']['position'] > 0
+
+
+def test_compact_memory_claim_maps_identity_and_derives_display_content():
+    data = {'turns':[{'turn_seq':1, 'episode':{'user_summary':'用户自述姓名','artifact_kind':'none'},
+            'operations':[{'op':'add','subject':'user','predicate':'identity.self_reported_name',
+                'value':'范世德','lifecycle':'session','evidence':'我叫范世德','confidence':0.95}],
+            'thread_operations':[]}]}
+    parsed = parse_memory_extraction(json.dumps(data), expected_turns=[memory_turn('real-id',1)], config=SessionMemoryConfig())
+    assert parsed[0].turn_id == 'real-id'
+    assert parsed[0].operations[0].content == '范世德'
+    assert parsed[0].operations[0].value == '范世德'
+    data['turns'][0]['operations'][0]['lifecycle'] = 'confirmed'
+    with pytest.raises(ValueError, match='invalid memory operation'):
+        parse_memory_extraction(json.dumps(data), expected_turns=[memory_turn('real-id',1)], config=SessionMemoryConfig())

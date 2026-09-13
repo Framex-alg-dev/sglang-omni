@@ -66,6 +66,7 @@ class ActionSuffixScoreRequest:
     system_prompt: str | None = None
     micro_batch_size: int = 64
     session_id: str | None = None
+    session_instance_id: str | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
     history_audios: list[str] = field(default_factory=list)
     history_images: list[str] = field(default_factory=list)

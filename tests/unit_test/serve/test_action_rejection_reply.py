@@ -36,6 +36,7 @@ class _Session(ReplyPipeline):
         self.language = "Chinese"
         self.instructions = "你是一个说话温柔的角色。"
         self.session_id = "session-test"
+        self.session_instance_id = "instance-test"
         self.unsupported_action_text = "这个动作暂时做不了。"
         self.requests = set()
 

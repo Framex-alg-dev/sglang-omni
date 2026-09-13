@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
+from websockets.protocol import State
 
 from sglang_omni.serve.realtime.embedded_tts import (
     EmbeddedTTSConfig,
@@ -85,6 +86,79 @@ def _manager(
         session_id=session_id,
         connector=connector,
     )
+
+
+def test_asyncio_connection_state_without_closed_attribute():
+    manager = _manager(FakeConnector([]))
+    socket = FakeWebSocket([])
+    manager._websocket = socket
+    socket.state = State.OPEN
+    assert manager.connected
+    socket.state = State.CLOSING
+    assert not manager.connected
+    socket.state = State.CLOSED
+    assert not manager.connected
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_retries_once_without_consuming_text():
+    connector = FakeConnector([_successful_events()])
+    attempts = []
+
+    def unstable(url, **kwargs):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise OSError("connection refused")
+        return connector(url, **kwargs)
+
+    manager = _manager(unstable)
+    await manager.synthesize_streaming(
+        turn_id="retry", text_chunks=_chunks("what", "'s"),
+        audio_sink=lambda _: asyncio.sleep(0),
+    )
+    assert len(attempts) == 2
+    assert [event["text"] for event in connector.contexts[0].websocket.sent
+            if event["type"] == "input_text_buffer.append"] == ["what", "'s"]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_is_bounded():
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        calls.append(1)
+        raise OSError("offline")
+
+    manager = _manager(unavailable)
+    with pytest.raises(EmbeddedTTSError):
+        await manager.synthesize_streaming(
+            turn_id="offline", text_chunks=_chunks("hello"),
+            audio_sink=lambda _: asyncio.sleep(0),
+        )
+    assert len(calls) == 2
+    assert manager._active_owner is None
+
+
+@pytest.mark.asyncio
+async def test_uncertain_text_send_never_replays():
+    connector = FakeConnector([_successful_events()])
+    manager = _manager(connector)
+    socket = await manager._borrow_connection("voice-a", "prepare")
+    calls = []
+
+    async def uncertain(message):
+        calls.append(json.loads(message))
+        raise OSError("peer may have received the text")
+
+    socket.send = uncertain
+    with pytest.raises(EmbeddedTTSError):
+        await manager.synthesize_streaming(
+            turn_id="uncertain", text_chunks=_chunks("hello"),
+            audio_sink=lambda _: asyncio.sleep(0),
+        )
+    assert len(connector.urls) == 1
+    assert sum(e['type'] == 'input_text_buffer.append' for e in calls) == 1
 
 
 @pytest.mark.asyncio
@@ -604,3 +678,25 @@ async def test_different_sessions_never_share_connections() -> None:
         first_connector.contexts[0].websocket
         is not second_connector.contexts[0].websocket
     )
+
+
+@pytest.mark.asyncio
+async def test_standby_has_no_text_until_failover_and_both_lanes_close():
+    connector = FakeConnector([_successful_events(), _successful_events(), [_event('session.created')]])
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url='ws://tts.local/realtime', voice='voice-a', connection_count=2),
+        session_id='business', session_instance_id='instance-a', connector=connector,
+    )
+    await manager.synthesize_streaming(turn_id='first', text_chunks=_chunks('one'), audio_sink=lambda _: asyncio.sleep(0))
+    await manager._standby_task
+    assert len(connector.contexts) == 2
+    assert connector.contexts[1].websocket.sent == []
+    assert connector.urls[0] != connector.urls[1]
+    manager._websocket.state = State.CLOSED
+    await manager.synthesize_streaming(turn_id='second', text_chunks=_chunks('two'), audio_sink=lambda _: asyncio.sleep(0))
+    await manager._standby_task
+    assert [row['text'] for row in connector.contexts[1].websocket.sent if row['type'] == 'input_text_buffer.append'] == ['two']
+    assert len(connector.contexts) == 3  # dead primary closed before replenishment
+    assert connector.contexts[0].closed
+    await manager.close()
+    assert all(context.closed for context in connector.contexts)

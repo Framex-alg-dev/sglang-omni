@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
 import asyncio
 import hashlib
 import os
@@ -185,7 +187,7 @@ class ReplyRoutingComponent:
                 "'Sing me a song' and 'Sing something now' -> R2.\n"
                 "'Do that previous action again' and 'Switch to the preceding action' -> R3."
             ),
-        )
+        ) + mixed_instruction_policy(self.language, "route")
     def _reply_speech_mode_system_prompt(self) -> str:
         return self._prompt(
             zh=(
@@ -242,7 +244,7 @@ class ReplyRoutingComponent:
                 "you wave?', 'Can you greet me?', 'Give me a greeting', 'Wave to me', and "
                 "'Sing me a song' -> S1. Output only S0 or S1 without explanation."
             ),
-        )
+        ) + mixed_instruction_policy(self.language, "route")
     async def _disambiguate_reply_speech_mode(
         self,
         turn: TurnBuffer,
@@ -282,6 +284,7 @@ class ReplyRoutingComponent:
             sample_rate=16000,
             micro_batch_size=2,
             session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
             stage=REPLY_SPEECH_MODE_STAGE,
             admission_priority=2,
             logical_request_id=turn.request_base,
@@ -395,6 +398,13 @@ class ReplyRoutingComponent:
         cannot contaminate an otherwise independent turn and a legitimate
         reply is never suppressed.
         """
+        if turn.intent is not None:
+            return ReplyHistoryRouteResult(
+                decision="HISTORY_REQUIRED" if turn.intent.history else "CURRENT_ONLY",
+                reply_mode="PURE_ACTION" if turn.intent.speech == "none" else "LANGUAGE_REQUIRED",
+                elapsed_ms=turn.intent.elapsed_ms,
+                stats={"source": "shared_turn_intent"},
+            )
         normalized_text = current_text.strip() if isinstance(current_text, str) else ""
         if turn.turn_origin != TURN_ORIGIN_USER or not (audios or normalized_text):
             return ReplyHistoryRouteResult(
@@ -442,6 +452,7 @@ class ReplyRoutingComponent:
             sample_rate=16000,
             micro_batch_size=4,
             session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
             stage=REPLY_HISTORY_ROUTE_STAGE,
             admission_priority=0,
             logical_request_id=turn.request_base,

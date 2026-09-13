@@ -178,7 +178,13 @@ def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
         if not _NVML_INITIALIZED:
             nvml.nvmlInit()
             _NVML_INITIALIZED = True
-        handle = nvml.nvmlDeviceGetHandleByIndex(int(device_id))
+        from sglang_omni.utils.gpu_memory import parse_cuda_visible_devices, resolve_visible_device_id
+        physical = resolve_visible_device_id(int(device_id), parse_cuda_visible_devices())
+        if isinstance(physical, int):
+            handle = nvml.nvmlDeviceGetHandleByIndex(physical)
+        else:
+            handle = nvml.nvmlDeviceGetHandleByUUID(physical.encode())
+        snapshot["nvml_physical_device"] = physical
         utilization = nvml.nvmlDeviceGetUtilizationRates(handle)
         memory = nvml.nvmlDeviceGetMemoryInfo(handle)
         snapshot.update(
@@ -202,6 +208,10 @@ def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
 
 
 def _reset_gpu_peak_stats(device_id: int) -> bool:
+    # Peak counters are process-wide. Resetting per request corrupts metrics
+    # for concurrent sessions; permit it only in an explicit isolated probe.
+    if os.environ.get("SGLANG_OMNI_RESET_GPU_PEAK_STATS") != "1":
+        return False
     try:
         if not torch.cuda.is_available():
             return False
@@ -1381,6 +1391,9 @@ class OmniScheduler:
             "scheduler_admission_ms": float(plan.get("scheduler_admission_ms", 0.0)),
             "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "prefix_prefill_ms": float(plan.get("prefix_prefill_ms", 0.0)),
+            "suffix_total_tokens": plan.get("suffix_total_tokens"),
+            "suffix_unique_trie_edges": plan.get("suffix_unique_trie_edges"),
+            "suffix_unique_first_tokens": plan.get("suffix_unique_first_tokens"),
             "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
             "preprocessing_ms": preprocessing_ms,
             "image_encoder_ms": image_encoder_ms,
@@ -1395,6 +1408,8 @@ class OmniScheduler:
             "physical_prefix_chunk_count": int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             "prefix_token_count": prefix_len,
             "reusable_boundary_token_count": reusable_boundary_len,
+            "public_prefix_token_count": plan.get("public_prefix_token_count", 0),
+            "scoped_cache": plan.get("scoped_cache", False),
             "parent_radix_cached_token_count": parent_cached_len,
             "parent_computed_token_count": parent_computed_len,
             "parent_cache_hit_ratio": (
@@ -2151,6 +2166,9 @@ class OmniScheduler:
             }
 
     def _process_admin_requests(self) -> int:
+        cache = getattr(self, "tree_cache", None)
+        if hasattr(cache, "reap_closed_sessions"):
+            cache.reap_closed_sessions()
         processed = 0
         while True:
             try:
@@ -2174,6 +2192,13 @@ class OmniScheduler:
         self, action: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         payload = dict(payload or {})
+        if action == "release_session_cache":
+            cache = getattr(self, "tree_cache", None)
+            release = getattr(cache, "release_session", None)
+            if release is None:
+                return {"success": True, "data": {"skipped": True}}
+            released = release(payload.get("session_instance_id"))
+            return {"success": True, "data": {"released_tokens": released}}
         if action == ADMIN_MODEL_INFO:
             return self._admin_model_info()
         if action == ADMIN_PAUSE_GENERATION:

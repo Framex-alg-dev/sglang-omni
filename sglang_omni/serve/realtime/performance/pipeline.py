@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
 import hashlib
 import time
 from dataclasses import dataclass
@@ -152,7 +154,7 @@ class PerformancePipeline:
                 "from this list and no explanation.\n"
                 f"{mapping}{persona_context_en}"
             ),
-        )
+        ) + mixed_instruction_policy(self.language, "expression")
 
     @staticmethod
     def _choices(expression_ids: list[str]) -> dict[str, _Choice]:
@@ -203,6 +205,12 @@ class PerformancePipeline:
         expressions = self._expression_candidates()
         expression_by_id = {item.candidate_id: item for item in expressions}
         choices = self._choices(list(expression_by_id))
+        if turn.intent is not None:
+            if turn.intent.body_mode == "perform":
+                scope = "both" if turn.intent.face else "body_only"
+            else:
+                scope = "expression_only" if turn.intent.face else "none"
+            choices = {key: value for key, value in choices.items() if value.scope == scope}
         system_prompt = self._performance_system_prompt(choices)
         request = ActionSuffixScoreRequest(
             request_id=f"{turn.request_base}-performance",
@@ -228,6 +236,7 @@ class PerformancePipeline:
             micro_batch_size=min(self.action_micro_batch_size, len(choices)),
             session_id=self.session_id,
             stage="performance",
+            session_instance_id=self.session_instance_id,
             admission_priority=1,
             logical_request_id=turn.request_base,
             turn_origin=turn.turn_origin,

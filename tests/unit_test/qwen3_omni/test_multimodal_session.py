@@ -81,6 +81,16 @@ class DisconnectingFakeWebSocket(FakeWebSocket):
         return {"type": "websocket.disconnect"}
 
 
+@pytest.fixture(autouse=True)
+def isolate_existing_branch_decisions(monkeypatch):
+    # These tests inject route/action/face model scores. Test the shared parser
+    # separately instead of asking legacy fake clients to generate JSON.
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+    async def no_shared_parse(*args):
+        return None
+    monkeypatch.setattr(pipeline, "infer_turn_intent", no_shared_parse)
+
+
 class FakeClient:
     def __init__(self, *, select_none: bool = False) -> None:
         self.chat_requests = []
@@ -123,9 +133,11 @@ class FakeClient:
 
 
 class PerformanceMatrixClient(FakeClient):
-    def __init__(self, performance_winner: str) -> None:
+    def __init__(self, performance_winner: str, body_id: str = "A100", body_category: str = "B010") -> None:
         super().__init__()
         self.performance_winner = performance_winner
+        self.body_id = body_id
+        self.body_category = body_category
 
     async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
         self.score_requests.append(request)
@@ -135,9 +147,9 @@ class PerformanceMatrixClient(FakeClient):
         elif "R0" in candidate_ids:
             winner = "R0"
         elif request.stage == "category":
-            winner = "B010"
-        elif "A100" in candidate_ids:
-            winner = "A100"
+            winner = self.body_category
+        elif self.body_id in candidate_ids:
+            winner = self.body_id
         else:
             winner = candidate_ids[0]
         assert winner in candidate_ids
@@ -3153,9 +3165,9 @@ async def test_audio_entity_turn_injects_snapshot_into_reply_and_passive_action_
     ]
     assert {request.stage for request in action_requests} == {"category", "child"}
     for request in action_requests:
-        assert passive_policy in request.prefix
-        assert "桌面音箱" in request.prefix
-        assert "volume_level" in request.prefix
+        assert passive_policy in request.session_instruction
+        assert "桌面音箱" in request.session_instruction
+        assert "volume_level" in request.session_instruction
         assert len(request.audios) == 1
     assert len(client.reply_requests) == 1
     reply_request = client.reply_requests[0]
@@ -3590,7 +3602,7 @@ async def test_system_route_reconciles_empty_reply_to_silent_accompaniment() -> 
 
 
 @pytest.mark.asyncio
-async def test_system_route_uses_partial_reply_after_100ms() -> None:
+async def test_system_route_uses_partial_reply_after_30ms() -> None:
     catalog = load_global_action_catalog()
     reply_category, _ = system_accompaniment_categories(catalog)
     client = SystemRouteFusionClient(
@@ -3625,7 +3637,7 @@ async def test_system_route_uses_partial_reply_after_100ms() -> None:
     )
     action_context = result["media_summary"]["action_context"]
     assert action_context["reply_prefix_status"] == "partial_timeout"
-    assert 80 <= action_context["reply_prefix_wait_ms"] <= 180
+    assert 20 <= action_context["reply_prefix_wait_ms"] <= 100
 
 
 @pytest.mark.asyncio
@@ -3861,6 +3873,15 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     )
     monkeypatch.delenv(FULL_INSTRUCTIONS_LOG_ENV, raising=False)
     ws = FakeWebSocket()
+    official_delta = asyncio.Event()
+    original_send = ws.send_text
+
+    async def capture_send(value):
+        await original_send(value)
+        if json.loads(value)["type"] == "response.text.delta":
+            official_delta.set()
+
+    ws.send_text = capture_send
     client = FusionFakeClient(block_child=True)
     session = make_session(ws, client)
     await session.handle_session_start(
@@ -3901,6 +3922,9 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     await asyncio.wait_for(client.child_started.wait(), timeout=1)
     await asyncio.wait_for(client.reply_started.wait(), timeout=1)
     assert not turn_task.done()
+    await asyncio.wait_for(official_delta.wait(), timeout=1)
+    assert any(e["type"] == "response.text.delta" for e in ws.events)
+    assert not any(e["type"] == "turn.action.ready" for e in ws.events)
     client.release_child.set()
     await asyncio.wait_for(turn_task, timeout=1)
 
@@ -3939,17 +3963,17 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
         "数字人人设：性别表达=男性；画风=写实；"
         "职业或角色定位=海洋科学家；性格基调=沉稳克制"
     )
-    assert persona_prompt in category_request.prefix
+    assert persona_prompt in category_request.session_instruction
     assert (
         "类别偏好（动作类别选择的主要约束）：优先自然交流和低打扰类别"
-        in category_request.prefix
+        in category_request.session_instruction
     )
-    assert "动作偏好（动作类别选择的可行性约束）" in category_request.prefix
-    assert persona_prompt in child_request.prefix
-    assert "类别偏好（具体动作选择的背景约束）" in child_request.prefix
+    assert "动作偏好（动作类别选择的可行性约束）" in category_request.session_instruction
+    assert persona_prompt in child_request.session_instruction
+    assert "类别偏好（具体动作选择的背景约束）" in child_request.session_instruction
     assert (
         "动作偏好（具体动作选择的主要约束）：避免夸张舞蹈和大幅位移"
-        in child_request.prefix
+        in child_request.session_instruction
     )
     assert "海洋科学家" not in category_request.system_prompt
     assert "海洋科学家" not in child_request.system_prompt
@@ -3967,7 +3991,7 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
 
     event_types = [event["type"] for event in ws.events]
     assert "response.provisional.created" in event_types
-    assert "response.provisional.text.delta" in event_types
+    assert "response.provisional.text.delta" not in event_types
     assert "response.provisional.resolved" in event_types
     assert "response.text.delta" in event_types
     assert "turn.action.ready" in event_types
@@ -3976,6 +4000,8 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
         "text": "你好呀，今天过得怎么样？",
         "source": "generated",
     }
+    assert result["timing"]["reply"]["official_first_delta_after_commit_ms"] is not None
+    assert result["timing"]["reply"]["promoted_after_commit_ms"] <= result["timing"]["reply"]["official_first_delta_after_commit_ms"]
     assert result["action"]["action_id"] == "wave"
     assert result["modalities"] == {"text": "completed", "action": "completed"}
     resolved = next(
@@ -3984,7 +4010,7 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
         if event["type"] == "response.provisional.resolved"
     )
     assert resolved["status"] == "promoted"
-    assert resolved["reason"] == "action_supported"
+    assert resolved["reason"] == "language_required"
     completed = next(
         record
         for record in structured_records
@@ -4447,7 +4473,7 @@ async def test_concrete_action_promotes_reply_without_semantic_text_filter() -> 
         if event["type"] == "response.provisional.resolved"
     )
     assert resolved["status"] == "promoted"
-    assert resolved["reason"] == "action_supported"
+    assert resolved["reason"] == "language_required"
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["modalities"]["text"] == "completed"
     assert result["reply"] == {
@@ -4844,7 +4870,8 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "Do not merely agree, repeat or confirm the request" in prompt
     assert "'Can you tell me a story?'" in prompt
     assert "must be completed immediately" in prompt
-    assert "the requested content must follow in the same reply" in prompt
+    assert "Deliver the requested content in the same reply" in prompt
+    assert "Start with a short, complete sentence" in prompt
     assert "'Do you know how to tell stories?'" in prompt
     assert "are capability questions" in prompt
     assert "'Can you sing?' or 'Do you know how to sing?'" in prompt
@@ -4911,7 +4938,7 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "不得只表示同意" in prompt
     assert "“可以给我讲一个故事吗”" in prompt
     assert "必须立即完成" in prompt
-    assert "同一回复必须紧接实际内容" in prompt
+    assert "第一句直接给出有内容的答案或回应" in prompt
     assert "“你会讲故事吗”" in prompt
     assert "只是能力询问" in prompt
     assert "“你可以唱歌吗”“你会唱歌吗”只询问能力" in prompt
@@ -7742,9 +7769,9 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert child_request.suffix_tokenization_mode == "short_id"
     assert category_request.action_context_cache_key == child_request.action_context_cache_key
     assert category_request.action_context_cache_key == category_request.logical_request_id
-    assert category_request.prefix_cache_namespace == session.action_prefix_cache_namespace
-    assert child_request.prefix_cache_namespace == (
-        f"{session.action_prefix_cache_namespace}:child:B1,B2"
+    assert category_request.prefix_cache_namespace.startswith(session.action_prefix_cache_namespace + f":session:{session.session_instance_id}:")
+    assert child_request.prefix_cache_namespace.startswith(
+        f"{session.action_prefix_cache_namespace}:child:B1,B2:session:{session.session_instance_id}:"
     )
     assert category_request.micro_batch_size == 64
     assert child_request.micro_batch_size == 64
@@ -8962,3 +8989,249 @@ async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
         assert requests[0]["selected_category_ids"]
         assert results[0]["status"] == "cancelled"
         assert results[0]["parent_computed_token_count"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["P200", "P201", "P301"])
+@pytest.mark.parametrize("unsupported", [False, True])
+@pytest.mark.parametrize("shared_intent", [False, True])
+async def test_mixed_numeric_turn_preserves_reply_and_visual_channels(scope, unsupported, shared_intent, monkeypatch):
+    """Injected model decisions verify execution, not model comprehension."""
+    if shared_intent:
+        import sglang_omni.serve.realtime.turn_pipeline as pipeline
+        from sglang_omni.serve.realtime.turn_intent import infer_turn_intent
+        monkeypatch.setattr(pipeline, "infer_turn_intent", infer_turn_intent)
+    catalog = load_global_action_catalog()
+    body_category = next(c.category_id for c in catalog.categories if any(
+        child.candidate_id == "A259" for child in c.children
+    ))
+
+    class NumericClient(PerformanceMatrixClient):
+        async def completion(self, request, *, request_id):
+            self.chat_requests.append(request)
+            if request.metadata.get("task") == "session_turn_intent":
+                return CompletionResult(request_id=request_id, text=json.dumps({"speech":"verbatim", "text":"一。", "body":"数字二手势", "body_mode":"perform", "face":"微笑" if scope == "P301" else "", "history":False}, ensure_ascii=False))
+            return CompletionResult(request_id=request_id, text="一。")
+
+        async def score_action_suffixes(self, request):
+            result = await super().score_action_suffixes(request)
+            if unsupported and request.stage == "child":
+                assert any(s.candidate_id == "A000" for s in result.scores)
+                for score in result.scores:
+                    score.mean_logprob = -0.01 if score.candidate_id == "A000" else -10.0
+            return result
+
+    client = NumericClient(scope, "A259", body_category)
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    allowed = list(dict.fromkeys(["A259", "A154", silent.children[0].candidate_id, reply.children[0].candidate_id]))
+    await session.dispatch(protocol_v1_session_start(
+        "numeric-mixed", outputs=["text", "expression", "action"],
+        reply={"unsupported_action_text": "暂时无法执行。"},
+        action={"fallback_category_ids": [silent.category_id],
+                "allowed_candidates": [{"candidate_id": x} for x in allowed]},
+    ))
+    await session.handle_turn_start(user_turn_start("numeric"))
+    await session.handle_turn_commit(user_turn_commit(
+        "numeric", text="笑着说一比二" if scope == "P301" else "说一比二",
+    ))
+    result = next(e for e in ws.events if e["type"] == "turn.result")
+    assert result["reply"]["text"] == "一。"
+    assert result["action"]["execute"] is (not unsupported or scope != "P301")
+    if not unsupported:
+        assert result["action"]["candidate_id"] == "A259"
+    else:
+        assert result["action"]["support_status"] == "unsupported"
+    assert ("expression" in result) == (scope != "P200" and not unsupported)
+    if "expression" in result:
+        assert result["expression"]["candidate_id"] == "A154"
+    stages = [r.stage for r in client.score_requests]
+    assert stages.count("category") == (0 if shared_intent and not unsupported else 1)
+    assert stages.count("child") == (2 if shared_intent and unsupported else 1)
+    assert stages.count("performance") == 1
+    assert multimodal_module.PURE_ACTION_REPLY_VALIDATION_STAGE not in stages
+    assert len(client.chat_requests) == 1
+
+
+def test_runtime_reply_override_retains_mixed_instruction_contract(monkeypatch, tmp_path):
+    from sglang_omni.serve.realtime.runtime_prompt_overrides import write_runtime_prompt
+    from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
+    monkeypatch.setenv("SGLANG_OMNI_RUNTIME_PROMPT_DIR", str(tmp_path))
+    write_runtime_prompt("reply_rules", "使用简洁的角色语言。")
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.language = "zh"
+    effective = session._reply_role_and_agency_system_prompt()
+    assert "使用简洁的角色语言。" in effective
+    assert effective.count(mixed_instruction_policy("zh", "reply")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('winner,independent', [('P001', True), ('P201', False), ('P301', False)])
+async def test_optional_face_publishes_before_slow_body_only_when_independent(winner, independent):
+    child_entered, release, face_ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    class Socket(FakeWebSocket):
+        async def send_text(self, value):
+            await super().send_text(value)
+            if self.events[-1]['type'] == 'turn.expression.ready':
+                face_ready.set()
+    class Client(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            if request.stage == 'child':
+                child_entered.set()
+                await release.wait()
+            if request.stage == 'performance':
+                await child_entered.wait()
+            return await super().score_action_suffixes(request)
+    catalog = load_global_action_catalog()
+    fallback = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    ws = Socket()
+    session = make_session(ws, Client(winner), global_action_catalog=catalog)
+    await session.dispatch(protocol_v1_session_start('early-optional', outputs=['text', 'expression', 'action'],
+        reply={'unsupported_action_text': '暂不支持。'},
+        action={'fallback_category_ids': [fallback.category_id], 'allowed_candidates': [
+            {'candidate_id': c.candidate_id} for c in (catalog.category_by_id['B019'].children[0],
+             catalog.category_by_id['B010'].children[0], fallback.children[0],
+             catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT).children[0])]}))
+    await session.handle_turn_start(user_turn_start('early-optional-turn'))
+    task = asyncio.create_task(session.handle_turn_commit(user_turn_commit('early-optional-turn', text='你好')))
+    try:
+        await asyncio.wait_for(child_entered.wait(), 2)
+        if independent:
+            await asyncio.wait_for(face_ready.wait(), 1)
+            assert not any(event['type'] == 'turn.action.ready' for event in ws.events)
+        else:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(face_ready.wait(), .05)
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 2)
+    faces = [event for event in ws.events if event['type'] == 'turn.expression.ready']
+    assert len(faces) == 1
+    assert next(event for event in ws.events if event['type'] == 'turn.result')['expression'] == faces[0]['expression']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('target_available', [True, False])
+async def test_rejected_semantic_hint_recalls_ranked_categories_once(monkeypatch, target_available):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+    from sglang_omni.serve.realtime.turn_intent import TurnIntent
+    async def intent(*args):
+        return TurnIntent(speech='verbatim', text='一', body='数字二手势', body_mode='perform', face='', history=False)
+    monkeypatch.setattr(pipeline, 'infer_turn_intent', intent)
+    catalog = load_global_action_catalog()
+    body_category = next(c.category_id for c in catalog.categories if any(x.candidate_id == 'A259' for x in c.children))
+    class Client(PerformanceMatrixClient):
+        child_calls = 0
+        async def score_action_suffixes(self, request):
+            result = await super().score_action_suffixes(request)
+            if request.stage == 'child':
+                self.child_calls += 1
+                if self.child_calls == 1:
+                    for score in result.scores:
+                        score.mean_logprob = -0.01 if score.candidate_id == 'A000' else -10
+            return result
+    client = Client('P200', 'A259', body_category)
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    allowed = list(dict.fromkeys(['A258', *(['A259'] if target_available else []), silent.children[0].candidate_id, reply.children[0].candidate_id]))
+    await session.dispatch(protocol_v1_session_start('hint-recall', outputs=['text', 'action'],
+        reply={'unsupported_action_text': '暂时无法执行。'}, action={'fallback_category_ids': [silent.category_id],
+        'allowed_candidates': [{'candidate_id': item} for item in allowed]}))
+    await session.handle_turn_start(user_turn_start('hint-turn'))
+    await session.handle_turn_commit(user_turn_commit('hint-turn', text='说一比二'))
+    result = next(e for e in ws.events if e['type'] == 'turn.result')
+    assert result['reply']['text'] == '一'
+    if target_available:
+        assert result['action']['candidate_id'] == 'A259'
+        assert result['action']['support_status'] == 'supported'
+        assert client.child_calls == 2
+        assert [r.stage for r in client.score_requests].count('category') == 1
+        assert result['timing']['action_breakdown']['intent_hint_validation']['reason'] == 'child_unsupported'
+    else:
+        assert result['action']['support_status'] == 'unsupported'
+        assert client.child_calls == 1
+        assert [r.stage for r in client.score_requests].count('category') == 0
+        assert 'intent_hint_validation' not in result['timing']['action_breakdown']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stale', [False, True])
+async def test_memory_missing_only_recovery_is_atomic_and_revision_checked(stale):
+    from sglang_omni.serve.realtime.memory.models import SessionMemoryTurn
+    client = SessionMemoryIntegrationClient()
+    session = make_session(FakeWebSocket(), client,
+        session_memory_config=SessionMemoryConfig(batch_turns=3, max_retries=1))
+    await session.handle_session_start({'type': 'session.start', 'session_id': 'partial-recovery',
+                                       'language': 'zh', 'modalities': ['text']})
+    store = session.session_memory_store
+    calls = []
+    def item(seq):
+        return {'turn_seq': seq, 'episode': {'user_summary': '一次请求', 'artifact_kind': 'none'},
+                'operations': [], 'thread_operations': []}
+    async def complete(request, *, request_id):
+        ids = request.metadata['turn_ids']; calls.append(ids)
+        assert store.processed_through_turn_seq == 0
+        if len(ids) == 3:
+            text = json.dumps({'turns': [item(3)]})
+        else:
+            seq = int(ids[0][-1])
+            if stale and seq == 2:
+                store.revision += 1
+            text = json.dumps({'turns': [item(seq)]})
+        return CompletionResult(request_id=request_id, text=text)
+    client.completion = complete
+    for seq in range(1, 4):
+        session._session_memory_pending_turns.append(SessionMemoryTurn(
+            turn_id=f't{seq}', turn_seq=seq, user_text='你好', audios=(),
+            assistant_text='你好', reply_model_visible=True, reply_mode='LANGUAGE_REQUIRED'))
+    await session._run_session_memory_batch()
+    assert calls == [['t1', 't2', 't3'], ['t1'], ['t2']]
+    if stale:
+        assert not store.episodes
+        assert store.gap_turn_seqs == {1, 2, 3}
+    else:
+        assert store.complete_through_turn_seq == 3
+        assert [e.turn_seq for e in store.episodes] == [1, 2, 3]
+        assert not store.gap_turn_seqs
+
+
+@pytest.mark.asyncio
+async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkeypatch):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+    from sglang_omni.serve.realtime.turn_intent import infer_turn_intent
+    monkeypatch.setattr(pipeline, 'infer_turn_intent', infer_turn_intent)
+    catalog = load_global_action_catalog()
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    numeric = next(c for c in catalog.categories if any(x.candidate_id == 'A259' for x in c.children))
+    class Client(PerformanceMatrixClient):
+        async def completion(self, request, *, request_id):
+            if request.metadata.get('task') == 'session_turn_intent':
+                return CompletionResult(request_id=request_id, text=json.dumps(dict(
+                    speech='verbatim', text='一比二', body='', body_mode='none', face='', history=False)))
+            return CompletionResult(request_id=request_id, text='一比二')
+        async def score_action_suffixes(self, request):
+            if request.stage == 'child':
+                assert 'A259' not in [c.candidate_id for c in request.candidates]
+            result = await super().score_action_suffixes(request)
+            if request.stage == 'category':
+                for score in result.scores:
+                    score.mean_logprob = -1 if score.candidate_id == numeric.category_id else (-0.1 if score.candidate_id == reply.category_id else -20)
+            return result
+    client = Client('P200', 'A259', numeric.category_id)
+    ws = FakeWebSocket(); session = make_session(ws, client, global_action_catalog=catalog)
+    allowed = ['A259'] + [c.candidate_id for c in reply.children[:2]] + [silent.children[0].candidate_id]
+    await session.dispatch(protocol_v1_session_start('literal-no-body', outputs=['text','action'],
+        reply={'unsupported_action_text':'暂时无法执行'}, action={'fallback_category_ids':[silent.category_id],
+        'allowed_candidates':[{'candidate_id':cid} for cid in allowed]}))
+    await session.handle_turn_start(user_turn_start('literal'))
+    await session.handle_turn_commit(user_turn_commit('literal', text='说一比二这三个字'))
+    result = next(e for e in ws.events if e['type'] == 'turn.result')
+    assert result['reply']['text'] == '一比二'
+    assert result['action']['candidate_id'] != 'A259'
+    assert result['action']['category_id'] in [reply.category_id,silent.category_id]

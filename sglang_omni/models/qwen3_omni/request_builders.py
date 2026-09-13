@@ -669,6 +669,8 @@ def build_sglang_thinker_request(
         vocab_size=vocab_size,
     )
     req.tokenizer = tokenizer
+    if prompt.get("cache_owner"):
+        req.extra_key = "qwen3-omni-private:owner:" + str(prompt["cache_owner"])
 
     # Compute M-RoPE positions and attach multimodal_inputs to Req
     if thinker_config is not None and model_inputs:
@@ -745,6 +747,29 @@ def _resolve_action_terminal_token_id(tokenizer: Any) -> int:
     if token_id is None or int(token_id) < 0:
         raise ValueError("tokenizer does not define an <|im_end|>/EOS token")
     return int(token_id)
+
+
+def _verified_scope_boundaries(prompt_cache, positions, cache_prefix_token_count):
+    """Share only a published, ordinary-position prefix before private media.
+
+    Media after this causal prefix cannot affect its KV. Everything following
+    it stays request-private, including identical media in the same session.
+    The parent and its candidate suffixes still use that one request scope.
+    """
+    if not isinstance(prompt_cache, dict) or "public_prefix_token_count" not in prompt_cache:
+        return None
+    public_end = min(prompt_cache["public_prefix_token_count"], cache_prefix_token_count)
+    has_media = prompt_cache.get("scope_has_media", False)
+    session_end = public_end if has_media else cache_prefix_token_count
+    if positions is None:
+        return None if has_media else (public_end, session_end)
+    if positions.shape[-1] < session_end:
+        return None
+    prefix_positions = positions[..., :session_end]
+    ordinary = torch.arange(session_end, device=positions.device).expand_as(prefix_positions)
+    if not torch.equal(prefix_positions, ordinary):
+        return None
+    return public_end, session_end
 
 
 def _prepare_action_scoring_request(
@@ -839,6 +864,9 @@ def _prepare_action_scoring_request(
     if isinstance(cache_namespace, str) and cache_namespace.strip():
         cache_key = f"qwen3-omni-action-catalog:{cache_namespace.strip()}"
         cache_digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:16]
+    if (state.prompt or {}).get("cache_owner"):
+        cache_key += ":owner:" + str(state.prompt["cache_owner"])
+        cache_digest = hashlib.sha256(cache_key.encode()).hexdigest()[:16]
     cache_prefix_token_count = action_spec.get("cache_prefix_token_count")
     prompt_cache = (state.prompt or {}).get("action_scoring_cache")
     if (
@@ -868,6 +896,17 @@ def _prepare_action_scoring_request(
     else:
         cache_prefix_token_count = len(prefix_ids)
     prefix_req = prefix_data.req
+    positions = getattr(prefix_req.multimodal_inputs, "mrope_positions", None)
+    scope_boundaries = _verified_scope_boundaries(prompt_cache, positions, cache_prefix_token_count)
+    if scope_boundaries is not None and not getattr(prefix_req, "lora_id", None):
+        from sglang_omni.scheduling.sglang_backend.scoped_cache import PrefixScopes
+        public_end, session_end = scope_boundaries
+        cache_key = PrefixScopes(
+            family=prompt_cache["scope_family"], public_end=public_end,
+            session_end=session_end, session=prompt_cache["scope_session"],
+            request=prompt_cache["scope_request"],
+        ).encode()
+        cache_digest = hashlib.sha256(cache_key.encode()).hexdigest()[:16]
     prefix_req.extra_key = cache_key
     prefix_positions = None
     if prefix_req.multimodal_inputs is not None:
@@ -902,6 +941,9 @@ def _prepare_action_scoring_request(
             for item, ids in zip(candidates, suffix_ids, strict=True)
         },
         "terminal_token_id": terminal_token_id,
+        "suffix_total_tokens": sum(len(ids) for ids in suffix_ids),
+        "suffix_unique_trie_edges": len({tuple(ids[:end]) for ids in suffix_ids for end in range(1, len(ids) + 1)}),
+        "suffix_unique_first_tokens": len(first_token_ids),
         # Candidate Req objects are built lazily after the shared prefix
         # terminalizes. Keeping only suffix ids here avoids materializing
         # N full prefix+suffix token arrays before the prefix can enter the
@@ -912,6 +954,8 @@ def _prepare_action_scoring_request(
         "candidate_prefix_positions": prefix_positions,
         "prefix_token_count": len(prefix_ids),
         "cache_prefix_token_count": cache_prefix_token_count,
+        "public_prefix_token_count": (prompt_cache.get("public_prefix_token_count", 0) if isinstance(prompt_cache, dict) else 0),
+        "scoped_cache": cache_key.startswith("omni-scopes-v1:"),
         "cache_key": cache_key,
         "cache_digest": cache_digest,
         "micro_batch_size": int(action_spec.get("micro_batch_size", 64)),

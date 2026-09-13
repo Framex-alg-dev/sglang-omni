@@ -389,7 +389,7 @@ def test_speech_websocket_supports_non_streaming_sentence_frames() -> None:
         )
         assert websocket.receive_json()["type"] == "session.configured"
 
-        websocket.send_json({"type": "input.text", "text": "Hello."})
+        websocket.send_json({"type": "input.text", "text": "Hello. "})
         assert websocket.receive_json()["type"] == "audio.start"
         assert websocket.receive_bytes() == b"RIFF"
         assert websocket.receive_json()["type"] == "audio.done"
@@ -409,7 +409,7 @@ def test_speech_websocket_stream_audio_defaults_to_non_streaming() -> None:
         assert configured["type"] == "session.configured"
         assert configured["stream_audio"] is False
 
-        websocket.send_json({"type": "input.text", "text": "Hello."})
+        websocket.send_json({"type": "input.text", "text": "Hello. "})
         assert websocket.receive_json()["type"] == "audio.start"
         assert websocket.receive_bytes() == b"RIFF"
         assert websocket.receive_json()["type"] == "audio.done"
@@ -610,7 +610,7 @@ def test_speech_websocket_rejects_oversized_sentence_before_generation() -> None
         websocket.send_json(
             {
                 "type": "input.text",
-                "text": "x" * (MAX_SPEECH_INPUT_CHARS + 1) + ".",
+                "text": "x" * (MAX_SPEECH_INPUT_CHARS + 1) + ". ",
             }
         )
         error = websocket.receive_json()
@@ -639,7 +639,7 @@ def test_speech_websocket_stream_start_uses_chunk_sample_rate() -> None:
             }
         )
         assert websocket.receive_json()["type"] == "session.configured"
-        websocket.send_json({"type": "input.text", "text": "Hello."})
+        websocket.send_json({"type": "input.text", "text": "Hello. "})
         start = websocket.receive_json()
 
     assert start["type"] == "audio.start"
@@ -654,7 +654,7 @@ def test_speech_websocket_non_streaming_start_uses_result_sample_rate() -> None:
     with client.websocket_connect("/v1/audio/speech/stream") as websocket:
         websocket.send_json(_session_config(response_format="pcm"))
         assert websocket.receive_json()["type"] == "session.configured"
-        websocket.send_json({"type": "input.text", "text": "Hello."})
+        websocket.send_json({"type": "input.text", "text": "Hello. "})
         start = websocket.receive_json()
 
     assert start["type"] == "audio.start"

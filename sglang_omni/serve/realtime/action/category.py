@@ -65,6 +65,7 @@ class ActionCategoryComponent:
         on_category_selected: (
             Callable[[SessionActionCategory | None, str], None] | None
         ) = None,
+        allow_intent_shortcut: bool = True,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
         (
             action_history, action_history_audios, action_history_images,
@@ -176,6 +177,7 @@ class ActionCategoryComponent:
             image_roles=action_image_roles,
             session_id=self.session_id,
             history=action_history,
+            session_instance_id=self.session_instance_id,
             stage="category",
             admission_priority=0,
             logical_request_id=request_base,
@@ -212,12 +214,31 @@ class ActionCategoryComponent:
         category_by_id = {
             item.category_id: item for item in eligible_categories
         }
+        # Exact semantic labels from the shared parse can resolve a catalog
+        # category without another classification. Never substring-match raw
+        # speech or drop constraints; Child still checks state/support.
+        exact_body_ids: set[str] = set()
+        if allow_intent_shortcut and turn.intent is not None and self.global_action_catalog is not None and turn.intent.body_mode == "perform":
+            matches = [
+                (category.category_id, child.candidate_id)
+                for category in self.global_action_catalog.categories
+                for child in category.children
+                if child.source_label == turn.intent.body
+                and category.category_id != FACIAL_EXPRESSION_CATEGORY_ID
+            ]
+            ids = {candidate_id for _, candidate_id in matches}
+            if len(ids) == 1:
+                matching_categories = [category_by_id[cid] for cid, _ in matches if cid in category_by_id]
+                if matching_categories:
+                    forced_category = matching_categories[0]
+                    forced_semantic_tag = "shared_intent_exact_label"
+                    exact_body_ids = ids
         category_result = None
         category_ranked: list[Any] = []
         category_ms = 0.0
         category_scoring_skipped = forced_category is not None
         category_scoring_skip_reason = (
-            "trigger_policy" if forced_category is not None else None
+            ("shared_intent_exact_label" if exact_body_ids else "trigger_policy") if forced_category is not None else None
         )
         if forced_category is not None:
             category_unsupported = False
@@ -331,6 +352,26 @@ class ActionCategoryComponent:
                 )
             selected_category = selected_categories[0]
             category_scoring_candidate_id = category_ranked[0].candidate_id
+        if self._body_accompaniment_only(turn):
+            # Keep the raw category scores/top-k untouched for audit. The parsed
+            # task constrains the execution pool, including its fallback paths.
+            raw_category_ids = [item.category_id for item in selected_categories]
+            tag = (CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+                   if turn.intent.speech == "none"
+                   else CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+            accompaniment = self._category_with_semantic_tag(tag)
+            if accompaniment is None:
+                raise ValueError("session is missing the required accompaniment category")
+            selected_category = accompaniment
+            selected_categories = [accompaniment]
+            category_unsupported = False
+            emit_structured_log(
+                "action", "action_execution_scope_constrained",
+                session_id=self.session_id, turn_id=turn.turn_id,
+                raw_selected_category_ids=raw_category_ids,
+                execution_category_ids=[accompaniment.category_id],
+                reason="shared_intent_no_body_request",
+            )
         reply_prefix = ""
         reply_prefix_status: str | None = None
         reply_prefix_wait_ms = 0.0
@@ -368,7 +409,7 @@ class ActionCategoryComponent:
                 )
             desired_semantic_tag = (
                 CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
-                if reply_prefix
+                if reply_prefix or reply_prefix_status == "reply_pending"
                 else CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
             )
             resolved_category = self._category_with_semantic_tag(
@@ -416,6 +457,8 @@ class ActionCategoryComponent:
         )
 
         child_candidates = self._child_candidates_for_categories(selected_categories)
+        if exact_body_ids:
+            child_candidates = [item for item in child_candidates if item.candidate_id in exact_body_ids]
         child_candidates = self._filter_turn_action_candidates(
             turn, child_candidates
         )
@@ -811,6 +854,7 @@ class ActionCategoryComponent:
             try:
                 child_prefix_prefilled = await prefill(
                     request_id=prefill_request_id,
+                    session_instance_id=self.session_instance_id,
                     model=self.model_name,
                     system_prompt=child_system_prompt,
                     candidates=[
@@ -926,6 +970,36 @@ class ActionCategoryComponent:
         if not ranked:
             raise ValueError("child action score did not return a decision")
         child_unsupported = ranked[0].candidate_id == UNSUPPORTED_CHILD_SCORE_ID
+        if child_unsupported and exact_body_ids.intersection(child_by_id):
+            # A semantic hint is only a recall shortcut. If its narrowed child
+            # set fails validation, run the original ranked top-k path once.
+            # Do not force a hinted ID or discard state/negation constraints.
+            # A target removed by the allowlist/state filter is definitive;
+            # expanding recall must never work around that restriction.
+            hint_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            emit_structured_log(
+                "action", "action_intent_hint_rejected",
+                session_id=self.session_id, turn_id=turn.turn_id,
+                logical_request_id=request_base, reason="child_unsupported",
+                elapsed_ms=hint_ms,
+            )
+            action, scores, _, recalled_context = await self._score_action_hierarchical(
+                audios, images, image_roles, text, avatar_state,
+                turn_origin=turn_origin, text_role=text_role, trigger=trigger,
+                turn=turn, request_base=request_base + "-hint-recall",
+                provisional_reply=provisional_reply, turn_id=turn_id,
+                on_category_selected=on_category_selected,
+                allow_intent_shortcut=False,
+            )
+            total_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            breakdown = recalled_context.get("action_timing_breakdown", {})
+            breakdown["intent_hint_validation"] = {
+                "elapsed_ms": hint_ms, "reason": "child_unsupported",
+                "child": _action_timing_breakdown(child_result.stats),
+            }
+            breakdown["total_ms"] = total_ms
+            recalled_context["action_timing_breakdown"] = breakdown
+            return action, scores, total_ms, recalled_context
         if not child_unsupported and ranked[0].candidate_id not in child_by_id:
             raise ValueError("child action score did not return a valid candidate")
 
@@ -987,6 +1061,10 @@ class ActionCategoryComponent:
                         "fallback_applied": category_unsupported,
                     }
                 )
+        if self._body_accompaniment_only(turn):
+            candidate = self.candidate_by_id.get(action["candidate_id"])
+            if candidate is None or not self._is_accompaniment_candidate(candidate):
+                raise ValueError("action exceeds parsed accompaniment scope")
         selected_candidate = self.candidate_by_id.get(
             action["candidate_id"]
         )

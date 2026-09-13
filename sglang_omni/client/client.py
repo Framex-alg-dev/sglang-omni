@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import heapq
 import json
 import logging
 import os
@@ -90,32 +89,53 @@ _ACTION_SCORE_MAX_INFLIGHT = _bounded_int_env(
 
 
 class _PriorityAdmissionGate:
-    """Small FIFO-within-priority gate for action-scoring submissions."""
+    """Bounded admission with priority aging and per-session round robin."""
 
-    def __init__(self, capacity: int) -> None:
+    def __init__(self, capacity: int, *, max_waiting: int = 128,
+                 max_session_waiting: int = 16, aging_seconds: float = 1.0) -> None:
+        if capacity <= 0 or max_waiting <= 0 or max_session_waiting <= 0 or aging_seconds <= 0:
+            raise ValueError("admission limits must be positive")
         self.capacity = capacity
+        self.max_waiting = max_waiting
+        self.max_session_waiting = max_session_waiting
+        self.aging_seconds = aging_seconds
         self._active = 0
         self._sequence = 0
-        self._waiters: list[tuple[int, int, asyncio.Future[None]]] = []
+        self._waiters: list[tuple[int, int, str | None, float, asyncio.Future[None]]] = []
+        self._session_served: dict[str | None, int] = {}
+        self._service_sequence = 0
         self._condition = asyncio.Condition()
 
     def _wake_locked(self) -> None:
         while self._active < self.capacity and self._waiters:
-            _, _, waiter = heapq.heappop(self._waiters)
+            now = time.monotonic()
+            selected = min(range(len(self._waiters)), key=lambda i: (
+                self._waiters[i][0] - int((now - self._waiters[i][3]) / self.aging_seconds),
+                self._session_served.get(self._waiters[i][2], 0),
+                self._waiters[i][1],
+            ))
+            _, _, session, _, waiter = self._waiters.pop(selected)
             if waiter.cancelled():
                 continue
             self._active += 1
+            self._service_sequence += 1
+            self._session_served[session] = self._service_sequence
+            pending_sessions = {row[2] for row in self._waiters}
+            self._session_served = {key: value for key, value in self._session_served.items()
+                                    if key in pending_sessions or key == session}
             waiter.set_result(None)
 
-    async def acquire(self, priority: int) -> None:
+    async def acquire(self, priority: int, session: str | None = None) -> None:
         loop = asyncio.get_running_loop()
         waiter: asyncio.Future[None] = loop.create_future()
         async with self._condition:
+            if len(self._waiters) >= self.max_waiting or (
+                session is not None
+                and sum(row[2] == session for row in self._waiters) >= self.max_session_waiting
+            ):
+                raise RuntimeError("action-scoring admission queue is full")
             self._sequence += 1
-            heapq.heappush(
-                self._waiters,
-                (priority, self._sequence, waiter),
-            )
+            self._waiters.append((priority, self._sequence, session, time.monotonic(), waiter))
             self._wake_locked()
         try:
             await waiter
@@ -123,6 +143,8 @@ class _PriorityAdmissionGate:
             admitted = waiter.done() and not waiter.cancelled()
             if not admitted:
                 waiter.cancel()
+                async with self._condition:
+                    self._waiters = [row for row in self._waiters if row[4] is not waiter]
             else:
                 await self.release()
             raise
@@ -135,8 +157,8 @@ class _PriorityAdmissionGate:
             self._wake_locked()
 
     @asynccontextmanager
-    async def slot(self, priority: int):
-        await self.acquire(priority)
+    async def slot(self, priority: int, session: str | None = None):
+        await self.acquire(priority, session)
         try:
             yield
         finally:
@@ -194,6 +216,16 @@ def _action_request_debug_payload(
     omni_request: OmniRequest,
 ) -> dict[str, Any]:
     inputs = getattr(omni_request, "inputs", {}) or {}
+    if os.environ.get("SGLANG_OMNI_TRACE_PROMPTS") != "1" and not os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE"):
+        return {
+            "request_id": request.request_id,
+            "session_instance_id": request.session_instance_id,
+            "stage": request.stage,
+            "candidate_ids_ordered": [item.candidate_id for item in request.candidates],
+            "system_prompt_sha256": hashlib.sha256((request.system_prompt or "").encode()).hexdigest(),
+            "session_instruction_sha256": hashlib.sha256((request.session_instruction or "").encode()).hexdigest(),
+            "full_input_recorded": False,
+        }
     return {
         "request_id": request.request_id,
         "session_id": request.session_id,
@@ -325,7 +357,8 @@ class Client:
             self._action_scoring_waiting += 1
             try:
                 async with self._action_scoring_gate.slot(
-                    request.admission_priority
+                    request.admission_priority,
+                    request.session_instance_id or request.session_id,
                 ):
                     admitted = True
                     self._action_scoring_waiting -= 1
@@ -706,6 +739,7 @@ class Client:
         language: str = "zh",
         session_instruction: str = "",
         admission_priority: int = 3,
+        session_instance_id: str | None = None,
     ) -> bool:
         """Prefill one immutable action catalog prefix."""
         if not candidates:
@@ -724,6 +758,7 @@ class Client:
             audios=[],
             images=[],
             sample_rate=16000,
+            session_instance_id=session_instance_id,
             session_instruction=session_instruction,
             # Match the realtime Turn's list-form message layout so the
             # rendered tokens through the Session boundary are identical.
@@ -1143,6 +1178,8 @@ class Client:
             metadata["trigger"] = request.trigger
         if request.session_id is not None:
             metadata["session_id"] = request.session_id
+        if request.session_instance_id is not None:
+            metadata["session_instance_id"] = request.session_instance_id
         if request.avatar_state:
             metadata["avatar_state"] = dict(request.avatar_state)
         metadata["action_stage"] = request.stage
@@ -1439,6 +1476,11 @@ class Client:
             payload,
             stages=stages,
             timeout_s=timeout_s,
+        )
+
+    async def release_session_cache(self, session_instance_id: str):
+        return await self._coordinator.admin(
+            "release_session_cache", {"session_instance_id": session_instance_id}, timeout_s=5.0,
         )
 
     async def model_info(

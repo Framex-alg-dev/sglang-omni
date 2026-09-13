@@ -429,6 +429,17 @@ class SpeechWebSocketSession:
         start = 0
         for index, char in enumerate(self.buffer):
             if char in boundaries:
+                if char in '.,':
+                    before = self.buffer[index - 1] if index else ''
+                    after = self.buffer[index + 1] if index + 1 < len(self.buffer) else ''
+                    if before and before.isascii() and before.isalnum():
+                        if not after or (after.isascii() and after.isalnum()):
+                            continue
+                        word_start = index
+                        while word_start > start and self.buffer[word_start - 1].isascii() and self.buffer[word_start - 1].isalpha():
+                            word_start -= 1
+                        if char == '.' and self.buffer[word_start:index] in {'Dr', 'Mr', 'Mrs', 'Ms', 'Prof', 'St', 'vs', 'etc', 'e', 'g', 'i'}:
+                            continue
                 segment = self.buffer[start : index + 1].strip()
                 if segment:
                     segments.append(segment)

@@ -37,6 +37,7 @@ output.wav
 Thumbs.db
 .ruff_cache/
 results/
+/reports/
 .humanize/
 .benchmark-data/
 

@@ -9,12 +9,13 @@ import binascii
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
+from websockets.protocol import State
 
 from sglang_omni.utils.structured_logs import emit_structured_log
 
@@ -46,6 +47,7 @@ class EmbeddedTTSConfig:
     send_timeout_seconds: float = 10.0
     first_audio_timeout_seconds: float = 10.0
     turn_timeout_seconds: float = 30.0
+    connection_count: int = 1
     text_queue_max_chunks: int = 64
     max_audio_chunk_bytes: int = 1024 * 1024
     max_turn_audio_bytes: int = 32 * 1024 * 1024
@@ -53,6 +55,8 @@ class EmbeddedTTSConfig:
     provisional_audio_max_milliseconds: int = 10000
 
     def __post_init__(self) -> None:
+        if type(self.connection_count) is not int or self.connection_count not in (1, 2):
+            raise ValueError("TTS connection_count must be 1 or 2")
         parsed = urlsplit(self.url)
         if parsed.scheme not in {"ws", "wss"} or not parsed.netloc:
             raise ValueError("TTS URL must be an absolute ws:// or wss:// URL")
@@ -135,13 +139,17 @@ class EmbeddedTTSConnection:
         config: EmbeddedTTSConfig,
         *,
         session_id: str,
+        session_instance_id: str | None = None,
         connector: Callable[..., Any] = connect,
     ) -> None:
         if not session_id.strip():
             raise ValueError("external session_id must be non-empty")
         self._config = config
         self._session_id = session_id
+        self._provider_session_id = f"{session_id}:{session_instance_id}" if session_instance_id else session_id
         self._connector = connector
+        self._session_instance_id = session_instance_id
+        self._connection_epoch = 0
         self._turn_lock = asyncio.Lock()
         self._connection_context: Any | None = None
         self._websocket: Any | None = None
@@ -150,11 +158,18 @@ class EmbeddedTTSConnection:
         self._active_turn_id: str | None = None
         self._broken = False
         self._closed = False
+        self._standby = (EmbeddedTTSConnection(replace(config, connection_count=1),
+                         session_id=session_id + ":standby", session_instance_id=session_instance_id, connector=connector)
+                         if config.connection_count == 2 else None)
+        self._standby_task: asyncio.Task | None = None
 
     @property
     def connected(self) -> bool:
         if self._websocket is None or self._broken:
             return False
+        state = getattr(self._websocket, "state", None)
+        if state is not None:
+            return state == State.OPEN
         return not bool(getattr(self._websocket, "closed", False))
 
     async def synthesize_streaming(
@@ -180,6 +195,7 @@ class EmbeddedTTSConnection:
             producer: asyncio.Task[None] | None = None
             sender: asyncio.Task[None] | None = None
             receiver: asyncio.Task[EmbeddedTTSResult] | None = None
+            deadline = time.monotonic() + self._config.turn_timeout_seconds
             try:
                 emit_structured_log(
                     "performance",
@@ -187,7 +203,16 @@ class EmbeddedTTSConnection:
                     session_id=self._session_id,
                     turn_id=turn_id,
                 )
-                websocket = await self._borrow_connection(selected_voice, turn_id)
+                if (not self.connected and self._standby is not None
+                        and (self._standby_task is None or self._standby_task.done())
+                        and self._standby.connected and self._standby._connection_voice == selected_voice):
+                    await self._discard_connection()
+                    for name in ("_connection_context", "_websocket", "_connection_voice", "_broken"):
+                        current = getattr(self, name)
+                        setattr(self, name, getattr(self._standby, name))
+                        setattr(self._standby, name, current)
+                websocket = await self._borrow_with_retry(selected_voice, turn_id, deadline)
+                self._warm_standby(selected_voice)
                 logger.debug(
                     "Embedded TTS turn started session_id=%s turn_id=%s lifecycle=streaming",
                     self._session_id,
@@ -217,7 +242,7 @@ class EmbeddedTTSConnection:
                 )
                 result, _, _ = await _wait_for_phase(
                     asyncio.gather(receiver, producer, sender),
-                    timeout=self._config.turn_timeout_seconds,
+                    timeout=max(0.0, deadline - time.monotonic()),
                     phase="turn_timeout",
                 )
                 logger.debug(
@@ -296,13 +321,59 @@ class EmbeddedTTSConnection:
             owner.cancel()
             await asyncio.gather(owner, return_exceptions=True)
 
+    def _warm_standby(self, voice: str) -> None:
+        if self._standby is None or self._closed or (self._standby_task is not None and not self._standby_task.done()):
+            return
+        async def warm():
+            try:
+                await self._standby._borrow_with_retry(voice, "standby-warm", time.monotonic() + self._config.connect_timeout_seconds + self._config.ready_timeout_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.info("TTS standby warm failed; primary remains usable")
+        self._standby_task = asyncio.create_task(warm())
+
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         await self.cancel_active_turn()
+        if self._standby_task is not None:
+            self._standby_task.cancel()
+            await asyncio.gather(self._standby_task, return_exceptions=True)
+        if self._standby is not None:
+            await self._standby.close()
         async with self._turn_lock:
             await self._discard_connection()
+
+    async def _borrow_with_retry(self, voice: str, turn_id: str, deadline: float) -> Any:
+        """Retry transport failure once, before consuming or sending any text.
+
+        A send failure is deliberately outside this boundary: lack of audio
+        does not prove that the provider failed to accept the text.
+        """
+        for attempt in range(2):
+            if self._closed:
+                raise EmbeddedTTSError("TTS Session is closed", phase="borrow")
+            try:
+                websocket = await _wait_for_phase(
+                    self._borrow_connection(voice, turn_id),
+                    timeout=max(0.0, deadline - time.monotonic()),
+                    phase="turn_timeout",
+                )
+                if not self.connected:
+                    raise OSError("TTS connection closed during handshake")
+                return websocket
+            except (ConnectionClosed, OSError):
+                await self._discard_connection()
+                if attempt or time.monotonic() >= deadline:
+                    raise
+                emit_structured_log(
+                    "performance", "tts_connection_retry",
+                    session_id=self._session_id, turn_id=turn_id,
+                    attempt=attempt + 1, text_send_attempted=False,
+                )
+        raise AssertionError("unreachable TTS retry state")
 
     async def _borrow_connection(self, voice: str, turn_id: str) -> Any:
         if self.connected and self._connection_voice == voice:
@@ -327,8 +398,11 @@ class EmbeddedTTSConnection:
             turn_id=turn_id,
             provider="configured_tts",
         )
+        self._connection_epoch += 1
+        provider_identity = (f"{self._provider_session_id}:{self._connection_epoch}"
+                             if self._session_instance_id else self._provider_session_id)
         context = self._connector(
-            _session_url(self._config.url, voice=voice, session_id=self._session_id),
+            _session_url(self._config.url, voice=voice, session_id=provider_identity),
             max_size=self._config.max_audio_chunk_bytes * 2,
         )
         try:

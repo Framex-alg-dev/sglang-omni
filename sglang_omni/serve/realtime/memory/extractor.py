@@ -28,7 +28,7 @@ from sglang_omni.serve.realtime.memory.models import (
 )
 
 
-def memory_extraction_system_prompt(language: str) -> str:
+def _memory_extraction_policy_prompt(language: str) -> str:
     if language == "zh":
         return (
             "你是当前会话的高精度记忆提取器。输入包含一个或多个按 turn_seq 排序的"
@@ -126,6 +126,38 @@ def memory_extraction_system_prompt(language: str) -> str:
     )
 
 
+class IncompleteMemoryExtraction(ValueError):
+    """Validated subset of a structurally valid but incomplete model batch."""
+
+    def __init__(self, message, partial):
+        super().__init__(message)
+        self.partial = tuple(partial)
+
+
+def memory_extraction_system_prompt(language: str) -> str:
+    policy = _memory_extraction_policy_prompt(language)
+    policy = policy.split("格式：", 1)[0] if language == "zh" else policy.split("with shape:", 1)[0]
+    policy = policy.replace("时使用 noop", "时输出空 operations 数组").replace("否则输出 noop", "否则输出空 operations 数组").replace("没有变化时输出 noop", "没有变化时输出空 thread_operations 数组")
+    return policy + (
+        "\n输出协议：只输出一个单行紧凑JSON对象，不要缩进或Markdown；对象结束后输出空行并立即停止，禁止重复对象。必须逐一返回required_turn_seqs中的每一轮，"
+        "保留原turn_seq；禁止合并多轮、去重相似请求或只返回最后一轮。"
+        "不要输出turn_id，它由服务端映射。每轮必须包含episode、operations、thread_operations。"
+        "没有事实或未闭环事项时分别返回空数组[]，不要生成noop对象及其空字段。"
+        "episode只含user_summary和artifact_kind，不输出assistant_summary，服务端负责实际回复。"
+        "有变化时operation保留op、subject、predicate、value、lifecycle、target_memory_ids、evidence、confidence；lifecycle只允许session、until_replaced、historical，普通姓名自述用session。"
+        "thread_operation保留op、thread_id、content、evidence、confidence。"
+        '姓名自述是应保存的长期事实，例如用户说“我叫小林”，operations应为[{"op":"add","subject":"user","predicate":"identity.self_reported_name","value":"小林","lifecycle":"session","target_memory_ids":[],"evidence":"我叫小林","confidence":0.95}]。明确纠正使用supersede，明确遗忘使用retract，并引用有效memory_id。两轮均无可保存事实的形状示例（序号必须使用本次输入）：'
+        '{"turns":[{"turn_seq":1,"episode":{"user_summary":"一次性请求","artifact_kind":"none"},"operations":[],"thread_operations":[]},'
+        '{"turn_seq":2,"episode":{"user_summary":"另一请求","artifact_kind":"none"},"operations":[],"thread_operations":[]}]}'
+        if language == "zh" else
+        "\nWire format: exactly one single-line compact JSON object, no indentation or Markdown. End the object with a blank line and stop; never repeat the object. Return EVERY required_turn_seqs entry separately with its original turn_seq. Never merge, deduplicate, or omit turns. "
+        "Omit turn_id; the server maps identities. Every item requires episode, operations, thread_operations. "
+        "Use [] for unchanged operations and threads, never verbose noop objects. episode contains user_summary and artifact_kind only; omit assistant_summary. "
+        "For changed claims include op, subject, predicate, value, lifecycle, target_memory_ids, evidence, confidence. lifecycle must be session, until_replaced, or historical; use session for a stated name. A self-reported name must be added as identity.self_reported_name; a correction supersedes it and an explicit forgetting request retracts it. For supersede/retract, target_memory_ids is REQUIRED and must contain the exact active memory_id from active_session_claims; never return an empty target list for an existing fact. For changed threads include op, thread_id, content, evidence, confidence. "
+        'Example shape: {"turns":[{"turn_seq":1,"episode":{"user_summary":"one-shot request","artifact_kind":"none"},"operations":[],"thread_operations":[]}]}'
+    )
+
+
 def build_memory_extraction_request(
     *,
     model_name: str,
@@ -150,6 +182,7 @@ def build_memory_extraction_request(
             + json.dumps(active_threads, ensure_ascii=False, separators=(",", ":")),
         },
         {"type": "text", "text": f"base_store_revision={base_store_revision}"},
+        {"type": "text", "text": "required_turn_seqs=" + json.dumps([t.turn_seq for t in turns])},
     ]
     audios: list[str] = []
     for turn in turns:
@@ -201,6 +234,7 @@ def build_memory_extraction_request(
             temperature=0.0,
             top_p=1.0,
             max_new_tokens=config.max_new_tokens,
+            stop=["\n\n"],  # Single JSON record framing; the parser still requires full coverage.
         ),
         stream=False,
         output_modalities=["text"],
@@ -223,26 +257,71 @@ def parse_memory_extraction(
     *,
     expected_turns: Sequence[SessionMemoryTurn],
     config: SessionMemoryConfig,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[ExtractedTurnMemory]:
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics.update(
+        expected_turns=[{"turn_seq": t.turn_seq, "turn_id": t.turn_id} for t in expected_turns],
+        accepted_turn_seqs=[], rejected_items=[], stage="json_extraction",
+    )
     normalized = FENCE_RE.sub("", text.strip())
     start = normalized.find("{")
     end = normalized.rfind("}")
     if start < 0 or end < start:
         raise ValueError("session memory extraction did not return a JSON object")
-    payload = json.loads(normalized[start : end + 1])
+    diagnostics["stage"] = "json_decode"
+    try:
+        payload = json.loads(normalized[start : end + 1])
+    except json.JSONDecodeError as exc:
+        diagnostics["json_error"] = {
+            "message": exc.msg, "line": exc.lineno, "column": exc.colno,
+            "position": exc.pos,
+        }
+        raise
+    diagnostics["stage"] = "turns_schema"
     if not isinstance(payload, dict) or not isinstance(payload.get("turns"), list):
         raise ValueError("session memory extraction must contain a turns array")
     expected_by_seq = {turn.turn_seq: turn for turn in expected_turns}
     parsed: list[ExtractedTurnMemory] = []
     seen: set[int] = set()
-    for raw_turn in payload["turns"]:
+    diagnostics["returned_item_count"] = len(payload["turns"])
+    diagnostics["stage"] = "turn_validation"
+    for index, raw_turn in enumerate(payload["turns"]):
+        reason = None
+        seq = raw_turn.get("turn_seq") if isinstance(raw_turn, dict) else None
+        if not isinstance(raw_turn, dict):
+            reason = "item_not_object"
+        elif not isinstance(seq, int):
+            reason = "invalid_turn_seq_type"
+        elif seq in seen:
+            reason = "duplicate_turn_seq"
+        elif seq not in expected_by_seq:
+            reason = "unexpected_turn_seq"
+        elif "turn_id" in raw_turn and raw_turn["turn_id"] != expected_by_seq[seq].turn_id:
+            reason = "turn_id_mismatch"
+        elif not isinstance(raw_turn.get("episode"), dict):
+            reason = "episode_not_object"
+        if reason is not None:
+            diagnostics["rejected_items"].append({
+                "index": index, "reason": reason,
+                "returned_turn_seq": seq,
+                "returned_turn_id": raw_turn.get("turn_id") if isinstance(raw_turn, dict) else None,
+                "expected_turn_id": expected_by_seq[seq].turn_id if isinstance(seq, int) and seq in expected_by_seq else None,
+            })
         parsed_turn = _parse_turn(raw_turn, expected_by_seq, seen, config)
         if parsed_turn is not None:
             parsed.append(parsed_turn)
     missing = [turn for turn in expected_turns if turn.turn_seq not in seen]
+    diagnostics["accepted_turn_seqs"] = sorted(seen)
+    diagnostics["missing_turn_seqs"] = [t.turn_seq for t in missing]
+    diagnostics["stage"] = "coverage"
+    if diagnostics["rejected_items"]:
+        raise ValueError("session memory extraction contains invalid or duplicate turn entries")
     if missing:
         missing_ids = ", ".join(turn.turn_id for turn in missing)
-        raise ValueError("session memory extraction omitted expected turns: " + missing_ids)
+        raise IncompleteMemoryExtraction("session memory extraction omitted expected turns: " + missing_ids, parsed)
+    diagnostics["stage"] = "complete"
     return sorted(parsed, key=lambda item: item.turn_seq)
 
 
@@ -260,9 +339,10 @@ def _parse_turn(
         not isinstance(turn_seq, int)
         or turn_seq in seen
         or turn_seq not in expected_by_seq
-        or turn_id != expected_by_seq[turn_seq].turn_id
+        or ("turn_id" in raw_turn and turn_id != expected_by_seq[turn_seq].turn_id)
     ):
         return None
+    turn_id = expected_by_seq[turn_seq].turn_id
     episode = raw_turn.get("episode")
     if not isinstance(episode, dict):
         return None
@@ -275,8 +355,9 @@ def _parse_turn(
     if isinstance(raw_operations, list):
         for raw_operation in raw_operations[: config.max_operations_per_turn]:
             operation = _parse_operation(raw_operation, config)
-            if operation is not None:
-                operations.append(operation)
+            if operation is None:
+                raise ValueError(f"invalid memory operation at turn_seq={turn_seq}")
+            operations.append(operation)
     thread_operations: list[ExtractedOpenThreadOperation] = []
     raw_thread_operations = raw_turn.get("thread_operations")
     if isinstance(raw_thread_operations, list):
@@ -331,7 +412,7 @@ def _parse_operation(
     subject = value.get("subject")
     predicate = value.get("predicate")
     raw_value = value.get("value")
-    content = value.get("content")
+    content = value.get("content", raw_value)
     evidence = value.get("evidence", "")
     confidence = value.get("confidence", 0.0)
     lifecycle = value.get("lifecycle", MEMORY_LIFECYCLE_SESSION)

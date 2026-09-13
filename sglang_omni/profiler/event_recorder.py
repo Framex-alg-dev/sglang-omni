@@ -13,6 +13,7 @@ import functools
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -66,6 +67,7 @@ class RequestEvent:
     stage: str
     event_name: str
     timestamp_ns: int
+    monotonic_ns: int | None = None
     run_id: str | None = None
     pid: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -86,6 +88,8 @@ class RequestEventRecorder:
         self._fp: Any = None
         self._pid: int = os.getpid()
         self._dropped: int = 0
+        self._queue: queue.Queue[str | None] | None = None
+        self._writer: threading.Thread | None = None
 
     # ---- lifecycle -----------------------------------------------------
 
@@ -125,6 +129,9 @@ class RequestEventRecorder:
             # disambiguates owners once others join.
             path = directory / f"events_{stage}_{self._pid}.jsonl"
             self._fp = path.open("a", buffering=1, encoding="utf-8")
+            self._queue = queue.Queue(maxsize=2048)
+            self._writer = threading.Thread(target=self._write_events, args=(self._fp, self._queue), daemon=True)
+            self._writer.start()
             self._run_id = run_id
             self._stage = stage
             self._stages = {stage}
@@ -158,7 +165,24 @@ class RequestEventRecorder:
             self._close_unlocked()
             return path
 
+    def _write_events(self, fp, pending) -> None:
+        while True:
+            line = pending.get()
+            try:
+                if line is None:
+                    return
+                fp.write(line + "\n")
+            except Exception:
+                self._dropped += 1
+            finally:
+                pending.task_done()
+
     def _close_unlocked(self) -> None:
+        if self._queue is not None:
+            self._queue.put(None)
+            self._writer.join()
+            self._queue = None
+            self._writer = None
         if self._fp is not None:
             try:
                 self._fp.flush()
@@ -201,13 +225,15 @@ class RequestEventRecorder:
                 stage=stage,
                 event_name=event_name,
                 timestamp_ns=ts,
+                monotonic_ns=time.monotonic_ns(),
                 run_id=self._run_id,
                 pid=self._pid,
                 metadata=dict(metadata) if metadata else {},
             )
             try:
-                fp.write(json.dumps(event.to_dict(), default=_json_default))
-                fp.write("\n")
+                # Snapshot JSON on the producer; the worker never holds live tensors.
+                record = dict(event.__dict__)
+                self._queue.put_nowait(json.dumps(record, default=_json_default))
             except Exception:
                 self._dropped += 1
                 if self._dropped == 1:
@@ -230,7 +256,7 @@ def _json_default(obj: Any) -> Any:
     dtype = getattr(obj, "dtype", None)
     if shape is not None and dtype is not None:
         try:
-            if len(shape) == 0 and hasattr(obj, "item"):
+            if len(shape) == 0 and hasattr(obj, "item") and str(getattr(obj, "device", "cpu")).split(":")[0] == "cpu":
                 return obj.item()
         except TypeError:
             # ``.shape`` without ``__len__`` — skip the 0-D fast path

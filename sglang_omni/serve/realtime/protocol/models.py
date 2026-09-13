@@ -405,6 +405,8 @@ class ProvisionalReplyState:
     delta_count: int = 0
     first_token_ms: float | None = None
     first_delta_after_commit_ms: float | None = None
+    official_first_delta_after_commit_ms: float | None = None
+    promoted_after_commit_ms: float | None = None
     provisional_done_after_commit_ms: float | None = None
     official_text_done_after_commit_ms: float | None = None
     official_response_done_after_commit_ms: float | None = None
@@ -434,6 +436,7 @@ class TurnBuffer:
     image_frame_signatures: dict[int, str] = field(default_factory=dict)
     trigger: str | None = None
     text: str | None = None
+    intent: Any | None = None
     reply_provided: bool = False
     reply_context: str | None = None
     scene_context: str | None = None

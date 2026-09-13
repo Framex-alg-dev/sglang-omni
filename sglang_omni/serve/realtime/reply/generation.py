@@ -55,6 +55,10 @@ class ReplyGenerationComponent:
         provisional: ProvisionalReplyState | None = None,
         history_route: ReplyHistoryRouteResult | None = None,
     ) -> tuple[str, dict[str, Any]]:
+        if turn.intent is not None and turn.intent.speech == "verbatim" and not turn.intent.history:
+            return await self._run_provided_reply(
+                turn, turn.intent.text, provisional=provisional, source="generated",
+            )
         self._ensure_turn_processing(turn)
         request_id = f"{turn.request_base}-reply"
         response_id = (
@@ -528,6 +532,7 @@ class ReplyGenerationComponent:
         text: str,
         *,
         provisional: ProvisionalReplyState | None = None,
+        source: Literal["generated", "provided"] = "provided",
     ) -> tuple[str, dict[str, Any]]:
         self._ensure_turn_processing(turn)
         response_id = (
@@ -582,7 +587,7 @@ class ReplyGenerationComponent:
                 "response": {
                     "id": response_id,
                     "status": "in_progress",
-                    "source": "provided",
+                    "source": source,
                 },
             }
         )
@@ -605,7 +610,7 @@ class ReplyGenerationComponent:
                 turn,
                 response_id=response_id,
                 text=text,
-                source="provided",
+                source=source,
                 finish_reason="provided",
                 usage=None,
                 tts_state=tts_state,
@@ -615,7 +620,7 @@ class ReplyGenerationComponent:
         total_ms = (time.perf_counter() - started) * 1000.0
         text_done_after_commit_ms = done_timing["text_done_after_commit_ms"]
         timing = {
-            "source": "provided",
+            "source": source,
             "ttft_ms": 0.0,
             "total_ms": round(total_ms, 3),
             "chars": len(text),
@@ -836,6 +841,7 @@ class ReplyGenerationComponent:
             sample_rate=16000,
             micro_batch_size=5,
             session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
             stage=PURE_ACTION_REPLY_VALIDATION_STAGE,
             admission_priority=2,
             logical_request_id=turn.request_base,

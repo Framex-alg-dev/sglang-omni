@@ -145,3 +145,18 @@ def test_concurrent_remove_if_and_put_do_not_corrupt_state() -> None:
     assert not any(thread.is_alive() for thread in threads)
     assert not errors, errors
     assert cache.current_bytes == len(cache) * 8
+
+
+def test_owner_budget_and_close_rejects_late_cache_fill():
+    cache = StageOutputCache(max_bytes=100, max_owner_bytes=6, ttl_seconds=30, owner_fn=lambda key: key.split(':')[0])
+    cache.put('a:1', b'1234')
+    cache.put('b:1', b'1234')
+    cache.put('a:2', b'5678')
+    assert cache.get('a:1') is None
+    assert cache.get('b:1') == b'1234'
+    cache.release_owner('a')
+    cache.put('a:late', b'12')
+    assert cache.get('a:late') is None
+    assert cache.get('a:2') is None
+    assert cache.get('b:1') == b'1234'
+    assert cache.current_bytes == 4

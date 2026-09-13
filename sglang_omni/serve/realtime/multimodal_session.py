@@ -82,6 +82,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+MAX_CONCURRENT_SESSIONS = 4
+
+
+class SessionBusyError(RuntimeError):
+    """A valid session.start cannot reserve a session slot."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Maximum concurrent sessions reached (4). Please retry later."
+        )
+
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     """Route logs through the public facade so existing hooks keep working."""
@@ -295,6 +306,7 @@ class MultimodalSession:
         self.include_scores = False
 
     async def run(self) -> None:
+        close_code = 1000
         try:
             while not self.closed:
                 try:
@@ -338,7 +350,17 @@ class MultimodalSession:
                         payload.get("type"),
                     )
                     break
+                except SessionBusyError as exc:
+                    close_code = 1013
+                    self.closed = True
+                    await self.send_error(
+                        "server_error", "session_busy", str(exc),
+                        session_id=self._event_context_id(payload, "session_id"),
+                    )
+                    break
                 except (BufferOverflow, ValueError, KeyError) as exc:
+                    if self.session_id is not None and not self.started:
+                        self.closed = True
                     session_id = (
                         self._event_context_id(payload, "session_id") or self.session_id
                     )
@@ -355,6 +377,8 @@ class MultimodalSession:
                         turn_id=turn_id,
                     )
                 except Exception as exc:
+                    if self.session_id is not None and not self.started:
+                        self.closed = True
                     session_id = (
                         self._event_context_id(payload, "session_id") or self.session_id
                     )
@@ -372,15 +396,41 @@ class MultimodalSession:
                     )
         finally:
             self.closed = True
-            await self._cancel_active_turn(send_event=False)
-            await self._shutdown_session_memory()
-            if self.embedded_tts is not None:
-                await self.embedded_tts.close()
-            if self.session_id is not None:
-                self.release_session(self.session_id, self)
-            await self._close_websocket()
+            try:
+                await self._cleanup_session_resources()
+            finally:
+                try:
+                    if self.session_id is not None:
+                        self.release_session(self.session_id, self)
+                finally:
+                    await self._close_websocket(code=close_code)
 
-    async def _close_websocket(self) -> None:
+    async def _cleanup_session_resources(self) -> None:
+        # Each layer must run even when an earlier cleanup raises or is cancelled.
+        # The owner remains registered until every cleanup layer has been tried.
+        try:
+            await self._cancel_active_turn(send_event=False)
+        finally:
+            try:
+                await self._shutdown_session_memory()
+            finally:
+                try:
+                    if self.embedded_tts is not None:
+                        await self.embedded_tts.close()
+                finally:
+                    release_cache = getattr(self.client, "release_session_cache", None)
+                    if release_cache is not None and self.session_id is not None:
+                        try:
+                            await asyncio.wait_for(
+                                release_cache(self.session_instance_id), timeout=5.0
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Session cache release failed session_instance_id=%s",
+                                self.session_instance_id, exc_info=True,
+                            )
+
+    async def _close_websocket(self, *, code: int = 1000) -> None:
         """Close only when both sides still allow a close frame.
 
         Starlette tracks peer state and application state separately. A failed
@@ -393,7 +443,10 @@ class MultimodalSession:
         if self.websocket.application_state != WebSocketState.CONNECTED:
             return
         try:
-            await self.websocket.close()
+            if code == 1000:
+                await self.websocket.close()
+            else:
+                await self.websocket.close(code=code)
         except (OSError, WebSocketDisconnect, RuntimeError):
             logger.debug(
                 "[SESSION_ACTION_REALTIME] websocket already closed session_id=%s",
@@ -897,6 +950,16 @@ class MultimodalSessionManager:
     def claim(self, session_id: str, session: MultimodalSession) -> None:
         if session_id in self.sessions:
             raise ValueError(f"session_id is already active: {session_id}")
+        if len(self.sessions) >= MAX_CONCURRENT_SESSIONS:
+            emit_structured_log(
+                "lifecycle", "session_capacity_rejected",
+                session_id=session_id,
+                session_instance_id=session.session_instance_id,
+                active_session_count=len(self.sessions),
+                max_session_count=MAX_CONCURRENT_SESSIONS,
+            )
+            raise SessionBusyError()
+        # Synchronous check + registration: no await between these operations.
         self.sessions[session_id] = session
 
     def release(self, session_id: str, session: MultimodalSession) -> None:
@@ -957,6 +1020,8 @@ class MultimodalSessionManager:
                 turn_phase_counts[turn.phase] = turn_phase_counts.get(turn.phase, 0) + 1
         return {
             "active_session_count": len(self.sessions),
+            "max_session_count": MAX_CONCURRENT_SESSIONS,
+            "available_session_count": max(0, MAX_CONCURRENT_SESSIONS - len(self.sessions)),
             "started_session_count": started_session_count,
             "active_turn_count": active_turn_count,
             "turn_phase_counts": turn_phase_counts,

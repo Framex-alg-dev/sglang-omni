@@ -746,6 +746,23 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
 
 ## 10. 错误处理
 
+### Session 容量限制
+
+单个 API 服务实例最多同时接纳 **4 个 Session**。初始化中、空闲、执行 Turn 和正在清理的
+Session 均占名额；仅建立 WebSocket、尚未成功占位的连接不占名额。此限制不适用于其他 HTTP/TTS 接口。
+
+有效 `session.start` 超过容量时，服务端先发送以下错误，再以 WebSocket 关闭码 **1013** 关闭连接：
+
+```json
+{"type":"error","session_id":"<请求的 session_id>","error":{"type":"server_error","code":"session_busy","message":"Maximum concurrent sessions reached (4). Please retry later."}}
+```
+
+服务端不排队、不自动重试。已有 Session 不受影响；客户端等待容量恢复后重新连接并发送
+`session.start`。收到 `session.closed` 后可能仍有短暂的资源清理，名额在清理退出后释放。
+同名 Session 保持原重复 ID 错误，不改为 `session_busy`。占位后的初始化失败会返回对应错误、
+关闭连接并释放名额。
+
+
 ```json
 {
   "type": "error",

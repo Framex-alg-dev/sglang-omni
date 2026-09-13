@@ -72,7 +72,8 @@ class ActionRejectionComponent:
             output_modalities=["text"],
             metadata={
                 "audios": list(audios), "images": avatar_images,
-                "session_id": self.session_id, "turn_id": turn.turn_id,
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id, "turn_id": turn.turn_id,
                 "logical_request_id": turn.request_base,
                 "task": "session_action_rejection",
             },

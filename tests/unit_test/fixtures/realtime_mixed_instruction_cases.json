@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "真实模型评测用例；单元测试中的注入评分不能证明模型理解正确。",
+    "null 表示不指定唯一输出，保留现有策略；纯动作沿用短回应或静默。",
+    "body_targets 为语义目标，需按实际会话目录校验；相应动作必须在允许范围内。",
+    "reply_exact 仅允许句末标点差异，不可忽略额外应答；音频测试须提供对应真实录音。"
+  ],
+  "cases": [
+    {
+      "id": "say_one_show_two",
+      "text": "说一比二",
+      "expected": {
+        "reply_exact": "一",
+        "body_targets": [
+          "数字二手势"
+        ],
+        "expression_target": null,
+        "request_scope": "body_only",
+        "language_required": true
+      },
+      "group": "mixed"
+    },
+    {
+      "id": "say_two_show_one",
+      "text": "说二比一",
+      "expected": {
+        "reply_exact": "二",
+        "body_targets": [
+          "数字一手势"
+        ],
+        "expression_target": null,
+        "request_scope": "body_only",
+        "language_required": true
+      },
+      "group": "mixed"
+    },
+    {
+      "id": "smile_say_one_show_two",
+      "text": "笑着说一比二",
+      "expected": {
+        "reply_exact": "一",
+        "body_targets": [
+          "数字二手势"
+        ],
+        "expression_target": "微笑",
+        "request_scope": "both",
+        "language_required": true
+      },
+      "group": "mixed"
+    },
+    {
+      "id": "literal_ratio",
+      "text": "说一比二这三个字",
+      "expected": {
+        "reply_exact": "一比二",
+        "body_targets": null,
+        "expression_target": null,
+        "request_scope": "none",
+        "language_required": true,
+        "forbidden_body_targets": [
+          "数字二手势",
+          "数字一手势"
+        ]
+      },
+      "group": "boundaries"
+    },
+    {
+      "id": "literal_wave",
+      "text": "说挥手这两个字",
+      "expected": {
+        "reply_exact": "挥手",
+        "body_targets": null,
+        "expression_target": null,
+        "request_scope": "none",
+        "language_required": true
+      },
+      "group": "boundaries"
+    },
+    {
+      "id": "shake_agree",
+      "text": "摇头说同意",
+      "expected": {
+        "reply_exact": "同意",
+        "body_targets": [
+          "摇头"
+        ],
+        "expression_target": null,
+        "request_scope": "body_only",
+        "language_required": true
+      },
+      "group": "mixed"
+    },
+    {
+      "id": "wave_literal_negation",
+      "text": "挥手说别挥手",
+      "expected": {
+        "reply_exact": "别挥手",
+        "body_targets": [
+          "挥手"
+        ],
+        "expression_target": null,
+        "request_scope": "body_only",
+        "language_required": true
+      },
+      "group": "mixed"
+    },
+    {
+      "id": "prohibit_wave",
+      "text": "不要挥手，说你好",
+      "expected": {
+        "reply_exact": "你好",
+        "body_targets": null,
+        "expression_target": null,
+        "request_scope": "none",
+        "language_required": true,
+        "forbidden_body_targets": [
+          "挥手"
+        ]
+      },
+      "group": "boundaries"
+    },
+    {
+      "id": "smile_hello",
+      "text": "笑着说你好",
+      "expected": {
+        "reply_exact": "你好",
+        "body_targets": null,
+        "expression_target": "微笑",
+        "request_scope": "expression_only",
+        "language_required": true
+      },
+      "group": "boundaries"
+    },
+    {
+      "id": "generate_introduction",
+      "text": "挥手介绍自己",
+      "expected": {
+        "reply_exact": null,
+        "body_targets": [
+          "挥手"
+        ],
+        "expression_target": null,
+        "request_scope": "body_only",
+        "language_required": true
+      },
+      "group": "mixed"
+    },
+    {
+      "id": "pure_gesture",
+      "text": "比二",
+      "expected": {
+        "reply_exact": null,
+        "body_targets": [
+          "数字二手势"
+        ],
+        "expression_target": null,
+        "request_scope": "body_only",
+        "language_required": false
+      },
+      "group": "boundaries"
+    },
+    {
+      "id": "ordinary_chat",
+      "text": "今天过得怎么样",
+      "expected": {
+        "reply_exact": null,
+        "body_targets": null,
+        "expression_target": null,
+        "request_scope": "none",
+        "language_required": true
+      },
+      "group": "boundaries"
+    },
+    {
+      "id": "unsupported_two",
+      "text": "说一比二",
+      "group": "unsupported",
+      "excluded_candidate_ids": [
+        "A259"
+      ],
+      "expected": {
+        "reply_exact": "一",
+        "body_support": "unsupported",
+        "request_scope": "body_only",
+        "language_required": true
+      }
+    }
+  ]
+}

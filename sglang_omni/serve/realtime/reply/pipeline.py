@@ -245,6 +245,8 @@ class ReplyPipeline:
                 )
         if turn.turn_origin == TURN_ORIGIN_USER:
             parts.append(self._reply_current_turn_priority_part())
+        if turn.intent is not None:
+            parts.append({"type": "text", "text": "[Parsed task data] " + turn.intent.action_context(turn.text)})
         parts.extend({"type": "audio"} for _ in audios)
         if turn.turn_origin == TURN_ORIGIN_USER:
             if isinstance(turn.text, str) and turn.text.strip():
@@ -288,6 +290,7 @@ class ReplyPipeline:
                 "audios": [*history_audios, *audios],
                 "images": [*history_images, *reply_images],
                 "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
                 "turn_id": turn.turn_id,
                 "logical_request_id": turn.request_base,
                 "task": "session_reply",

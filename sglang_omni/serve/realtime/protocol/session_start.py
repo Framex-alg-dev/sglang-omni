@@ -69,6 +69,7 @@ class SessionStartComponent:
         """Warm an optimization-only prefix without rejecting the Session."""
 
         try:
+            kwargs["session_instance_id"] = self.session_instance_id
             return bool(await prefill(**kwargs))
         except Exception as exc:
             logger.warning(
@@ -438,6 +439,7 @@ class SessionStartComponent:
             action_category_count=len(categories),
         )
         knowledge_binding = None
+        knowledge_resolve_kwargs = None
         provided_entity_snapshot = None
         provided_entity_context = None
         if raw_knowledge is not None:
@@ -488,7 +490,7 @@ class SessionStartComponent:
                 headers = getattr(self.websocket, "headers", None)
                 if headers is not None:
                     tenant_id = headers.get("x-tenant-id")
-                knowledge_binding = await self.knowledge_controller.resolve_session(
+                knowledge_resolve_kwargs = dict(
                     session_id=session_id.strip(),
                     tenant_id=tenant_id,
                     binding_id=raw_knowledge["binding_id"],
@@ -501,6 +503,10 @@ class SessionStartComponent:
 
         self.claim_session(session_id, self)
         self.session_id = session_id
+        if knowledge_resolve_kwargs is not None:
+            knowledge_binding = await self.knowledge_controller.resolve_session(
+                **knowledge_resolve_kwargs
+            )
         self.protocol_version = event.get("_protocol_version")
         self.locale = event.get("_locale", "zh-CN" if language == "zh" else "en-US")
         self.language = language
@@ -518,6 +524,7 @@ class SessionStartComponent:
             self.embedded_tts = EmbeddedTTSConnection(
                 self.embedded_tts_config,
                 session_id=session_id.strip(),
+                session_instance_id=self.session_instance_id,
                 **tts_kwargs,
             )
         self.output_audio_voice = effective_output_audio_voice

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
 import asyncio
 import base64
 import hashlib
@@ -99,7 +101,7 @@ class ReplyPromptComponent:
         return effective_runtime_prompt(
             "reply_rules",
             self._repository_reply_role_and_agency_system_prompt(),
-        )
+        ) + mixed_instruction_policy(self.language, "reply")
 
     def _repository_reply_role_and_agency_system_prompt(self) -> str:
         return self._prompt(
@@ -136,7 +138,7 @@ class ReplyPromptComponent:
                 "请求，不得承诺稍后完成，不得询问是否开始，也不得用“好不好”“要不要听”"
                 "等反问代替实际内容。“可以给我讲一个故事吗”“能帮我写一段文案吗”"
                 "“读给我听可以吗”等礼貌问句已经明确要求向用户交付语言内容，必须立即"
-                "完成；可以先说一句简短且符合人设的开场，但同一回复必须紧接实际内容，"
+                "完成；第一句直接给出有内容的答案或回应，尽量简短完整，以自然句末标点结束；不要用空泛开场拖延实际内容，"
                 "不得在“好呀”“我来讲”“好不好”或“要不要听”处结束。“你会讲故事吗”"
                 "“你能写诗吗”等没有要求立即交付具体内容的表达只是能力询问，应直接回答"
                 "能力，不要擅自开始创作或表演。该边界同样适用于声音表演和其他能力："
@@ -269,8 +271,9 @@ class ReplyPromptComponent:
                 "question such as 'Would you like that?' or 'Do you want to hear it?'. Polite "
                 "questions such as 'Can you tell me a story?', 'Could you write some copy for "
                 "me?', or 'Could you read it to me?' already request delivery of spoken content "
-                "and must be completed immediately. One brief in-character lead-in is allowed, "
-                "but the requested content must follow in the same reply; do not stop after "
+                "and must be completed immediately. Start with a short, complete sentence "
+                "that contains the actual answer or response and ends naturally; avoid empty lead-ins. "
+                "Deliver the requested content in the same reply; do not stop after "
                 "'Sure', 'I'll tell you', 'Would you like that?', or 'Do you want to hear it?'. "
                 "Bare questions such as 'Do you know how to tell stories?' or 'Can you write "
                 "poetry?' that do not ask for immediate delivery are capability questions: answer "

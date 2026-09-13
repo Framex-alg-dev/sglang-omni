@@ -825,6 +825,8 @@ class Stage:
             request_id=request_id,
             stage=self.name,
             event_name="stage_dispatch",
+            metadata={key: getattr(getattr(payload, "request", None), "metadata", {}).get(key)
+                      for key in ("session_instance_id", "session_id", "turn_id", "logical_request_id", "task", "action_stage")},
         )
         if (
             self.role == "leader"

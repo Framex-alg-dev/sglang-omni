@@ -1044,8 +1044,8 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     ]
     assert category_request.candidates[-1].suffix == "B000"
     assert category_request.candidates[-1].action_id == "UNSUPPORTED"
-    assert category_request.prefix_cache_namespace == (
-        catalog.category_cache_namespace()
+    assert category_request.prefix_cache_namespace.startswith(
+        catalog.category_cache_namespace() + f":session:{session.session_instance_id}:"
     )
     category_omni_request = Client._build_action_scoring_request(
         category_request
@@ -1063,9 +1063,9 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     ]
     assert child_request.candidates[-1].suffix == "A000"
     assert child_request.candidates[-1].action_id == "UNSUPPORTED"
-    assert child_request.prefix_cache_namespace == catalog.child_cache_namespace(
+    assert child_request.prefix_cache_namespace.startswith(catalog.child_cache_namespace(
         "B001"
-    )
+    ) + f":session:{session.session_instance_id}:")
     started = next(item for item in ws.events if item["type"] == "session.started")
     assert started["fallback_category_ids"] == ["B008"]
     assert started["global_action_catalog_hash"] == catalog.catalog_hash
@@ -1349,7 +1349,7 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
         }
     )
 
-    assert len(client.completion_requests) == 2
+    assert len([r for r in client.completion_requests if r.metadata.get("task") != "session_turn_intent"]) == 2
     reply_request = client.completion_requests[-1]
     assert {"type": "text", "text": "做个后空翻"} in (
         reply_request.messages[-1].content

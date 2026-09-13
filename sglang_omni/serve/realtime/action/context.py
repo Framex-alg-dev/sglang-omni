@@ -70,6 +70,7 @@ from sglang_omni.serve.realtime.action.pipeline import ActionScoringPipeline
 
 
 from sglang_omni.serve.realtime.action.prompts import ActionPromptComponent
+from sglang_omni.serve.realtime.action.entity_view import action_entity_text
 
 
 @compose_components(ActionScoringPipeline, ActionPromptComponent)
@@ -84,8 +85,6 @@ class ActionPipeline:
     ) -> str:
         """Return an invalidation-safe namespace for Session prompt KV."""
 
-        if not session_instruction:
-            return base_namespace
         digest = hashlib.sha256(session_instruction.encode("utf-8")).hexdigest()[
             :20
         ]
@@ -885,7 +884,7 @@ class ActionPipeline:
                     "size, state, or physical affordances; use a safe action independent "
                     "of unknown attributes when data is insufficient): "
                     + "<entity_data>"
-                    + escape(entity_snapshot.current_entity_text)
+                    + escape(action_entity_text(entity_snapshot.current_entity_text))
                     + "</entity_data>"
                 )
             if stage == "category":
@@ -974,7 +973,7 @@ class ActionPipeline:
                     ),
                 )
                 + "<entity_data>"
-                + escape(entity_snapshot.current_entity_text)
+                + escape(action_entity_text(entity_snapshot.current_entity_text))
                 + "</entity_data>"
             )
         if stage == "category":
