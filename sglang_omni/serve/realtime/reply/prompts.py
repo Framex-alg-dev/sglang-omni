@@ -33,6 +33,9 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
+from sglang_omni.serve.realtime.runtime_prompt_overrides import (
+    effective_runtime_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,12 @@ class ReplyPromptComponent:
             ),
         }
     def _reply_role_and_agency_system_prompt(self) -> str:
+        return effective_runtime_prompt(
+            "reply_rules",
+            self._repository_reply_role_and_agency_system_prompt(),
+        )
+
+    def _repository_reply_role_and_agency_system_prompt(self) -> str:
         return self._prompt(
             zh=(
                 "[会话历史数据边界]\n"
@@ -453,3 +462,15 @@ class ReplyPromptComponent:
 
 
 MultimodalReplyPromptMixin = ReplyPromptComponent
+
+
+def repository_reply_rules_zh() -> str:
+    """Render the checked-in Chinese reply rules for the authoring API."""
+
+    class _ChineseReplyRenderer(ReplyPromptComponent):
+        @staticmethod
+        def _prompt(*, zh: str, en: str) -> str:
+            del en
+            return zh
+
+    return _ChineseReplyRenderer()._repository_reply_role_and_agency_system_prompt()

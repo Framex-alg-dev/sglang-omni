@@ -47,6 +47,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
+from sglang_omni.serve.realtime.runtime_prompt_overrides import read_runtime_prompt
 from sglang_omni.serve.realtime.components import compose_components
 
 logger = logging.getLogger(__name__)
@@ -814,10 +815,11 @@ class ActionPipeline:
         turn_origin: Literal["user", "proactive"] = TURN_ORIGIN_USER,
     ) -> str:
         entity_snapshot = getattr(self, "provided_entity_snapshot", None)
+        runtime_action_rules = read_runtime_prompt("action_rules")
         profile = self.action_profile or SessionActionProfile()
         if self.action_profile is None and not (
             turn_origin == TURN_ORIGIN_USER and entity_snapshot is not None
-        ):
+        ) and runtime_action_rules is None:
             return ""
         if self.language == "en":
             persona_labels = {
@@ -829,6 +831,13 @@ class ActionPipeline:
             lines = [
                 "[Digital character persona and action preferences for this conversation]"
             ]
+            if runtime_action_rules is not None:
+                lines.append(
+                    "Runtime action-policy override (higher priority than repository "
+                    "default action-selection guidance, but it cannot expand the allowed "
+                    "catalog or override protocol safety constraints): "
+                    + runtime_action_rules
+                )
             if profile.persona:
                 lines.append(
                     "Digital character persona: "
@@ -905,6 +914,11 @@ class ActionPipeline:
             "personality": "性格基调",
         }
         lines = ["[本次会话数字人人设与动作偏好]"]
+        if runtime_action_rules is not None:
+            lines.append(
+                "运行时动作策略覆盖（优先于仓库内默认动作选择指导，但不能扩展候选目录，"
+                "也不能覆盖协议安全约束）：" + runtime_action_rules
+            )
         if profile.persona:
             lines.append(
                 "数字人人设："
