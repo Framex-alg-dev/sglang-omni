@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from sglang.srt.mem_cache.cache_init_params import CacheInitParams
 from sglang.srt.mem_cache.radix_cache import RadixCache
 
@@ -30,4 +32,7 @@ def create_tree_cache(
 
         return ChunkCache(params)
 
+    if os.environ.get("SGLANG_OMNI_SCOPED_RADIX_CACHE") == "1":
+        from .scoped_cache import ScopedRadixCache
+        return ScopedRadixCache(params)
     return RadixCache(params)

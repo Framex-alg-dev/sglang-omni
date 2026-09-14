@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
 import asyncio
 import base64
 import hashlib
@@ -60,6 +62,12 @@ class ReplyPromptComponent:
                     "镜头、画面、姿势、表情或动作过程，不得使用‘我正’‘我在’‘我已经’"
                     "‘我刚刚’‘我有点’等状态叙述。不得复述或描述具体动作，不得包含"
                     "动作名称、身体部位、物体、方向、执行方式、正在执行或已经完成的状态；"
+                    "必须保持当前用户请求中的动作执行者、动作对象、目标、受益者和人称关系。"
+                    "不得把要求当前角色执行的动作改成让用户执行、让用户重新选择，或者由"
+                    "当前角色对用户或第三方执行原请求中没有要求的动作。当用户明确要求当前"
+                    "角色触碰或移动某个身体部位，且没有指定该身体部位属于用户或第三方时，"
+                    "不得擅自解释为用户或第三方的身体部位。短回应只能回应当前请求，不得把"
+                    "原请求改写成新的命令、问题或建议；无法确定回应是否保持原意时，返回空文本。"
                     "不得输出 Markdown、星号、括号舞台说明、换行、解释或技术身份。"
                     "通常不超过18个汉字。"
                 ),
@@ -73,7 +81,17 @@ class ReplyPromptComponent:
                     "pose, facial expression, or action process, and do not narrate what you "
                     "are doing, have done, just did, or currently feel. Do not repeat or "
                     "describe the action; do not mention its name, body parts, objects, "
-                    "direction, execution, progress, or completion. Do not output Markdown, "
+                    "direction, execution, progress, or completion. "
+                    "Preserve the action actor, object, target, beneficiary, and pronoun "
+                    "relationships in the current user's request. Do not turn an action for "
+                    "the current character to perform into an instruction for the user, ask "
+                    "the user to choose again, or make the character perform an unrequested "
+                    "action on the user or a third party. When the user clearly asks the "
+                    "current character to touch or move a body part without assigning that "
+                    "body part to the user or a third party, do not invent such ownership. "
+                    "Respond only to the current request; do not rewrite it as a new command, "
+                    "question, or suggestion. Return empty text if semantic preservation is "
+                    "uncertain. Do not output Markdown, "
                     "asterisks, parenthesized stage directions, line breaks, explanations, "
                     "or technical identity."
                 ),
@@ -83,7 +101,7 @@ class ReplyPromptComponent:
         return effective_runtime_prompt(
             "reply_rules",
             self._repository_reply_role_and_agency_system_prompt(),
-        )
+        ) + mixed_instruction_policy(self.language, "reply")
 
     def _repository_reply_role_and_agency_system_prompt(self) -> str:
         return self._prompt(
@@ -120,7 +138,7 @@ class ReplyPromptComponent:
                 "请求，不得承诺稍后完成，不得询问是否开始，也不得用“好不好”“要不要听”"
                 "等反问代替实际内容。“可以给我讲一个故事吗”“能帮我写一段文案吗”"
                 "“读给我听可以吗”等礼貌问句已经明确要求向用户交付语言内容，必须立即"
-                "完成；可以先说一句简短且符合人设的开场，但同一回复必须紧接实际内容，"
+                "完成；第一句直接给出有内容的答案或回应，尽量简短完整，以自然句末标点结束；不要用空泛开场拖延实际内容，"
                 "不得在“好呀”“我来讲”“好不好”或“要不要听”处结束。“你会讲故事吗”"
                 "“你能写诗吗”等没有要求立即交付具体内容的表达只是能力询问，应直接回答"
                 "能力，不要擅自开始创作或表演。该边界同样适用于声音表演和其他能力："
@@ -143,6 +161,14 @@ class ReplyPromptComponent:
                 "机械反问，也不得询问用户已经明确说明的内容。纯动作请求、原样复述、朗读、"
                 "翻译结果、固定格式输出，以及用户明确拒绝继续、要求停止或结束交流时，"
                 "不得为了延续对话而追加问题。\n\n"
+                "[会话延续与结束语义边界]\n"
+                "完成当前回答或当前话题，不代表当前会话结束。除非当前用户明确表示要结束、"
+                "停止、离开或告别，或者服务端提供的当前主动场景明确说明会话即将结束，否则"
+                "不得主动把本轮表述为会话结束，不得自行生成“今天就到这里”“下次再聊”"
+                "“感谢收看”“再见”等告别或停止交流的内容。用户要求问候、欢迎、打招呼或"
+                "自我介绍时，只完成对应请求，不得将其扩展为告别。默认会话继续不意味着必须"
+                "追加问题或主动开启新话题。用户明确要求翻译、朗读、复述、解释、引用或创作"
+                "包含告别表达的内容时，不受本规则限制。\n\n"
                 "[全局对话角色、人称指代与语义保持规则]\n"
                 "默认情况下，用户话语中的“你”指当前角色，“我”指当前用户。"
                 "理解请求和生成回复时，必须保持原话中的说话者、动作执行者、动作对象、"
@@ -245,8 +271,9 @@ class ReplyPromptComponent:
                 "question such as 'Would you like that?' or 'Do you want to hear it?'. Polite "
                 "questions such as 'Can you tell me a story?', 'Could you write some copy for "
                 "me?', or 'Could you read it to me?' already request delivery of spoken content "
-                "and must be completed immediately. One brief in-character lead-in is allowed, "
-                "but the requested content must follow in the same reply; do not stop after "
+                "and must be completed immediately. Start with a short, complete sentence "
+                "that contains the actual answer or response and ends naturally; avoid empty lead-ins. "
+                "Deliver the requested content in the same reply; do not stop after "
                 "'Sure', 'I'll tell you', 'Would you like that?', or 'Do you want to hear it?'. "
                 "Bare questions such as 'Do you know how to tell stories?' or 'Can you write "
                 "poetry?' that do not ask for immediate delivery are capability questions: answer "
@@ -277,6 +304,18 @@ class ReplyPromptComponent:
                 "Do not append a continuation question to pure-action requests, verbatim repetition, "
                 "read-aloud content, translation results, fixed-format output, or when the user "
                 "explicitly refuses to continue, asks to stop, or ends the conversation.\n\n"
+                "[Conversation continuation and ending boundary]\n"
+                "Completing the current answer or topic does not mean the current conversation "
+                "has ended. Unless the current user explicitly asks to end, stop, leave, or say "
+                "goodbye, or the current server-provided proactive scene explicitly states that "
+                "the session is ending, do not frame the reply as ending the conversation and "
+                "do not spontaneously say that today's content is over, suggest talking next "
+                "time, thank the audience, or say goodbye. When the user asks for a greeting, "
+                "welcome, salutation, or self-introduction, complete only that request and do not "
+                "extend it into a farewell. Assuming the conversation continues does not require "
+                "adding a question or opening a new topic. This rule does not restrict an explicit "
+                "request to translate, read, repeat, explain, quote, or create content containing "
+                "farewell language.\n\n"
                 "[Global conversational roles, pronoun reference, and "
                 "semantic-preservation rule]\n"
                 "By default, 'you' in the user's utterance refers to the current "

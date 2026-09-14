@@ -11,8 +11,13 @@ from sglang_omni.serve.realtime.output_capabilities import SessionOutputCapabili
         (["text"], ("text",)),
         (["text", "audio"], ("text", "audio")),
         (["action"], ("action",)),
+        (["expression", "action"], ("expression", "action")),
         (["action", "text"], ("text", "action")),
         (["action", "audio", "text"], ("text", "audio", "action")),
+        (
+            ["action", "expression", "audio", "text"],
+            ("text", "audio", "expression", "action"),
+        ),
     ],
 )
 def test_parse_allowed_outputs(raw: list[str], expected: tuple[str, ...]) -> None:
@@ -21,12 +26,23 @@ def test_parse_allowed_outputs(raw: list[str], expected: tuple[str, ...]) -> Non
     assert capabilities.outputs == expected
     assert capabilities.text_enabled is ("text" in expected)
     assert capabilities.audio_enabled is ("audio" in expected)
+    assert capabilities.expression_enabled is ("expression" in expected)
     assert capabilities.action_enabled is ("action" in expected)
 
 
 @pytest.mark.parametrize(
     "raw",
-    [[], ["audio"], ["audio", "action"], ["text", "text"], ["video"], [""], "text"],
+    [
+        [],
+        ["audio"],
+        ["audio", "action"],
+        ["expression"],
+        ["text", "expression"],
+        ["text", "text"],
+        ["video"],
+        [""],
+        "text",
+    ],
 )
 def test_parse_rejects_invalid_outputs(raw: object) -> None:
     with pytest.raises(ValueError):

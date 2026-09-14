@@ -37,7 +37,7 @@
 | `MODEL_PATH` | `/data/models/Qwen3-Omni-30B-A3B-Instruct` | 服务器模型目录或 HF model ID |
 | `SERVICE_PORT` | `18001` | Session Realtime 服务端口 |
 | `TTS_URL` | `ws://127.0.0.1:40001/api-ws/v1/realtime` | 服务器同机真实 TTS |
-| `TTS_VOICE` | `benchmark_qwen_cherry_zh` | 已验证 voice |
+| `TTS_VOICE` | `spk_691b97a24dcc` | 默认音色 ID，部署前确认目标 TTS 已注册 |
 | `LOG_ROOT` | `/data/logs/sglang-omni-realtime` | 结构化日志持久化目录 |
 
 本手册假设 TTS 在多模态服务同一台 Linux 宿主机上监听 `127.0.0.1:40001`。
@@ -93,7 +93,7 @@ curl --http1.1 -i --max-time 5 \
   -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  "http://127.0.0.1:40001/api-ws/v1/realtime?voice=benchmark_qwen_cherry_zh&session_id=deploy-probe"
+  "http://127.0.0.1:40001/api-ws/v1/realtime?voice=spk_691b97a24dcc&session_id=deploy-probe"
 ```
 
 必须看到：
@@ -197,7 +197,7 @@ sgl-omni serve \
   --host 127.0.0.1 \
   --port 18001 \
   --realtime-tts-url "ws://127.0.0.1:40001/api-ws/v1/realtime" \
-  --realtime-tts-voice "benchmark_qwen_cherry_zh" \
+  --realtime-tts-voice "spk_691b97a24dcc" \
   --log-level info
 ```
 
@@ -400,7 +400,7 @@ docker run -d \
     --host 127.0.0.1 \
     --port 18001 \
     --realtime-tts-url "ws://127.0.0.1:40001/api-ws/v1/realtime" \
-    --realtime-tts-voice "benchmark_qwen_cherry_zh" \
+    --realtime-tts-voice "spk_691b97a24dcc" \
     --log-level info
 ```
 

@@ -45,6 +45,17 @@ from sglang_omni.serve.realtime.session_memory import (
     SessionMemoryScheduler,
     SessionMemoryTurn,
 )
+from sglang_omni.serve.realtime.turn_pipeline import _build_request_base
+
+
+def test_turn_request_base_is_bounded_for_long_external_ids() -> None:
+    request_base = _build_request_base(
+        "sess_" + "a" * 256,
+        "podcast-session_profile_" + "b" * 256 + "-interstitial-1",
+    )
+
+    assert len(request_base + "-pure-action-reply-validation") <= 128
+    assert request_base.startswith("session-")
 
 
 class FakeWebSocket:
@@ -68,6 +79,16 @@ class DisconnectingFakeWebSocket(FakeWebSocket):
     async def receive(self) -> dict:
         self.client_state = WebSocketState.DISCONNECTED
         return {"type": "websocket.disconnect"}
+
+
+@pytest.fixture(autouse=True)
+def isolate_existing_branch_decisions(monkeypatch):
+    # These tests inject route/action/face model scores. Test the shared parser
+    # separately instead of asking legacy fake clients to generate JSON.
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+    async def no_shared_parse(*args):
+        return None
+    monkeypatch.setattr(pipeline, "infer_turn_intent", no_shared_parse)
 
 
 class FakeClient:
@@ -149,6 +170,50 @@ class AvatarStateAnalysisClient(FakeClient):
         self.abort_calls.append(request_id)
         self.release_analysis.set()
         return None
+
+
+class PerformanceMatrixClient(FakeClient):
+    def __init__(self, performance_winner: str, body_id: str = "A100", body_category: str = "B010") -> None:
+        super().__init__()
+        self.performance_winner = performance_winner
+        self.body_id = body_id
+        self.body_category = body_category
+
+    async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+        self.score_requests.append(request)
+        candidate_ids = [candidate.candidate_id for candidate in request.candidates]
+        if request.stage == "performance":
+            winner = self.performance_winner
+        elif "R0" in candidate_ids:
+            winner = "R0"
+        elif request.stage == "category":
+            winner = self.body_category
+        elif self.body_id in candidate_ids:
+            winner = self.body_id
+        else:
+            winner = candidate_ids[0]
+        assert winner in candidate_ids
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=candidate_id,
+                    token_count=1,
+                    mean_logprob=-0.01 if candidate_id == winner else -10.0,
+                    mean_nll=0.01 if candidate_id == winner else 10.0,
+                    ppl=1.01 if candidate_id == winner else 22026.0,
+                    token_scores=[
+                        TokenScore(
+                            token_id=100 + index,
+                            logprob=-0.01 if candidate_id == winner else -10.0,
+                        )
+                    ],
+                )
+                for index, candidate_id in enumerate(candidate_ids)
+            ],
+        )
 
 
 class ReplyHistoryRouteClient(FakeClient):
@@ -417,6 +482,134 @@ async def test_protocol_v1_accepts_provided_entity_context_without_gateway() -> 
     assert session.websocket.events[-1]["type"] == "knowledge.script.event.ack"
 
 
+@pytest.mark.asyncio
+async def test_protocol_v1_replaces_provided_entity_context_atomically() -> None:
+    websocket = FakeWebSocket()
+    session = make_session(websocket, FakeClient())
+    initial_text = '{"headline":"old"}'
+    await session.dispatch(
+        protocol_v1_session_start(
+            "provided-entity-replace",
+            knowledge={
+                "mode": "provided_context",
+                "binding_id": "package-1",
+                "binding_revision": 1,
+                "required": True,
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:1:item-1",
+                    "revision": 1,
+                    "current_entity_id": "item-1",
+                    "current_entity_text": initial_text,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(initial_text.encode()).hexdigest(),
+                },
+            },
+        )
+    )
+    replacement_text = '{"headline":"new"}'
+    replacement = {
+        "type": "knowledge.context.replace",
+        "request_id": "replace-1",
+        "expected_snapshot_id": "package-1:1:item-1",
+        "binding": {"id": "package-1", "revision": 2, "required": True},
+        "entity_snapshot": {
+            "snapshot_id": "package-1:2:item-1",
+            "revision": 2,
+            "current_entity_id": "item-1",
+            "current_entity_text": replacement_text,
+            "content_sha256": "sha256:"
+            + hashlib.sha256(replacement_text.encode()).hexdigest(),
+        },
+        "script": {
+            "id": "script-2",
+            "version": 2,
+            "checksum": "sha256:" + "b" * 64,
+        },
+    }
+
+    await session.dispatch(replacement)
+
+    assert session.knowledge_binding.binding_revision == 2
+    assert session.provided_entity_snapshot.current_entity_text == replacement_text
+    assert session.provided_entity_context.evidence[0].content == replacement_text
+    assert websocket.events[-1] == {
+        "type": "knowledge.context.replace.ack",
+        "session_id": "provided-entity-replace",
+        "request_id": "replace-1",
+        "status": "updated",
+        "previous_snapshot_id": "package-1:1:item-1",
+        "snapshot_id": "package-1:2:item-1",
+        "content_sha256": replacement["entity_snapshot"]["content_sha256"],
+        "script_id": "script-2",
+        "script_version": 2,
+        "script_checksum": "sha256:" + "b" * 64,
+        "context_epoch": 1,
+    }
+
+    await session.dispatch(replacement)
+    assert websocket.events[-1]["context_epoch"] == 1
+
+    stale_replacement = dict(replacement)
+    stale_replacement["request_id"] = "replace-stale"
+    with pytest.raises(ValueError, match="expected snapshot does not match"):
+        await session.dispatch(stale_replacement)
+
+
+@pytest.mark.asyncio
+async def test_protocol_v1_rejects_context_replace_during_active_turn() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    entity_text = '{"headline":"old"}'
+    await session.dispatch(
+        protocol_v1_session_start(
+            "provided-entity-active-turn",
+            knowledge={
+                "mode": "provided_context",
+                "binding_id": "package-1",
+                "binding_revision": 1,
+                "required": True,
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:1:item-1",
+                    "revision": 1,
+                    "current_entity_id": "item-1",
+                    "current_entity_text": entity_text,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(entity_text.encode()).hexdigest(),
+                },
+            },
+        )
+    )
+    await session.dispatch(
+        {"type": "turn.start", "turn_id": "turn-active", "origin": "user"}
+    )
+    replacement_text = '{"headline":"new"}'
+    with pytest.raises(ValueError, match="cannot run while a turn is active"):
+        await session.dispatch(
+            {
+                "type": "knowledge.context.replace",
+                "request_id": "replace-active",
+                "expected_snapshot_id": "package-1:1:item-1",
+                "binding": {
+                    "id": "package-1",
+                    "revision": 2,
+                    "required": True,
+                },
+                "entity_snapshot": {
+                    "snapshot_id": "package-1:2:item-1",
+                    "revision": 2,
+                    "current_entity_id": "item-1",
+                    "current_entity_text": replacement_text,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(replacement_text.encode()).hexdigest(),
+                },
+                "script": {
+                    "id": "script-2",
+                    "version": 2,
+                    "checksum": "sha256:" + "b" * 64,
+                },
+            }
+        )
+
+
 def test_passive_action_policy_has_separate_protocol_safety_budget() -> None:
     policy = "被动动作约束" * 1000
     profile = SessionActionProfile.from_payload(
@@ -444,6 +637,134 @@ def user_turn_commit(turn_id: str, **fields) -> dict:
         "text_role": "user_input",
         **fields,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "performance_winner",
+        "text",
+        "expect_expression",
+        "expected_action_status",
+        "expected_action_execute",
+    ),
+    [
+        pytest.param(
+            "P200", "挥挥手", False, "supported", True, id="body-only"
+        ),
+        pytest.param(
+            "P201", "你好", True, "supported", True, id="body-with-optional-expression"
+        ),
+        pytest.param(
+            "P101",
+            "你做个害怕的表情",
+            True,
+            "not_required",
+            False,
+            id="expression-only-fear-suppresses-body",
+        ),
+        pytest.param(
+            "P101",
+            "你做个委屈的表情",
+            True,
+            "not_required",
+            False,
+            id="expression-only-aggrieved-suppresses-body",
+        ),
+        pytest.param(
+            "P101",
+            "你做个装可怜的表情",
+            True,
+            "not_required",
+            False,
+            id="expression-only-vulnerable-suppresses-body",
+        ),
+        pytest.param(
+            "P301", "笑着挥挥手", True, "supported", True, id="expression-and-body"
+        ),
+    ],
+)
+async def test_turn_expression_body_event_matrix(
+    performance_winner: str,
+    text: str,
+    expect_expression: bool,
+    expected_action_status: str,
+    expected_action_execute: bool,
+) -> None:
+    catalog = load_global_action_catalog()
+    expression = catalog.category_by_id["B019"].children[0]
+    body = catalog.category_by_id["B010"].children[0]
+    fallback_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback_category is not None
+    reply_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+    )
+    assert reply_category is not None
+    fallback = next(
+        child
+        for child in fallback_category.children
+        if child.candidate_id != expression.candidate_id
+    )
+    reply_accompaniment = next(
+        child
+        for child in reply_category.children
+        if child.candidate_id
+        not in {expression.candidate_id, fallback.candidate_id}
+    )
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        PerformanceMatrixClient(performance_winner),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            f"performance-matrix-{performance_winner}",
+            outputs=["text", "expression", "action"],
+            reply={"unsupported_action_text": "这个动作暂时无法执行。"},
+            action={
+                "fallback_category_ids": [fallback_category.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": expression.candidate_id},
+                    {"candidate_id": body.candidate_id},
+                    {"candidate_id": fallback.candidate_id},
+                    {"candidate_id": reply_accompaniment.candidate_id},
+                ],
+            },
+        )
+    )
+    turn_id = f"turn-{performance_winner}"
+
+    await session.handle_turn_start(user_turn_start(turn_id))
+    await session.handle_turn_commit(user_turn_commit(turn_id, text=text))
+
+    turn_events = [event for event in ws.events if event.get("turn_id") == turn_id]
+    event_types = [event["type"] for event in turn_events]
+    expression_events = [
+        event for event in turn_events if event["type"] == "turn.expression.ready"
+    ]
+    assert bool(expression_events) is expect_expression
+    assert event_types.count("turn.action.ready") == 1
+    if expect_expression:
+        assert event_types.index("turn.expression.ready") < event_types.index(
+            "turn.action.ready"
+        )
+        assert expression_events[0]["expression"]["category_id"] == "B019"
+        assert expression_events[0]["expression"]["candidate_id"] == "A154"
+
+    action_event = next(
+        event for event in turn_events if event["type"] == "turn.action.ready"
+    )
+    assert action_event["action"]["support_status"] == expected_action_status
+    assert action_event["action"]["execute"] is expected_action_execute
+    result = next(event for event in turn_events if event["type"] == "turn.result")
+    assert result["outputs"]["expression"] == (
+        "completed" if expect_expression else "not_changed"
+    )
+    assert ("expression" in result) is expect_expression
+    assert result["action"]["support_status"] == expected_action_status
 
 
 def test_character_profile_role_accepts_5000_chars_and_warns_above_recommended(
@@ -905,6 +1226,59 @@ async def test_protocol_v1_requires_fallback_categories_for_action() -> None:
 
 
 @pytest.mark.asyncio
+async def test_protocol_v1_expression_requires_b019_and_excludes_it_from_fallback() -> None:
+    catalog = load_global_action_catalog()
+    expression_category = catalog.category_by_id["B019"]
+    expression = expression_category.children[0]
+    fallback_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback_category is not None
+    fallback = fallback_category.children[0]
+    session = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+
+    await session.dispatch(
+        protocol_v1_session_start(
+            "expression-output",
+            outputs=["expression", "action"],
+            action={
+                "fallback_category_ids": [fallback_category.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": expression.candidate_id},
+                    {"candidate_id": fallback.candidate_id},
+                ],
+            },
+        )
+    )
+
+    assert session.output_capabilities.expression_enabled is True
+    assert "B019" not in session.fallback_category_ids
+
+    missing_expression = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+    with pytest.raises(ValueError, match="expression output requires"):
+        await missing_expression.dispatch(
+            protocol_v1_session_start(
+                "expression-output-missing-b019",
+                outputs=["expression", "action"],
+                action={
+                    "fallback_category_ids": [fallback_category.category_id],
+                    "allowed_candidates": [
+                        {"candidate_id": fallback.candidate_id}
+                    ],
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_protocol_v1_rejects_legacy_and_unknown_fields() -> None:
     session = make_session(FakeWebSocket(), FakeClient())
     with pytest.raises(ValueError, match="unsupported protocol_version"):
@@ -916,6 +1290,7 @@ async def test_protocol_v1_rejects_legacy_and_unknown_fields() -> None:
                 "outputs": ["text"],
             }
         )
+
     with pytest.raises(ValueError, match="unsupported fields: modalities"):
         await session.dispatch(
             {
@@ -933,6 +1308,19 @@ async def test_protocol_v1_rejects_legacy_and_unknown_fields() -> None:
                 "seq": 1,
                 "audio": "AA==",
             }
+        )
+
+
+def test_protocol_v1_rejects_removed_output_audio_base_instruction() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+
+    with pytest.raises(ValueError, match="output_audio contains unsupported fields"):
+        session._normalize_wire_event(
+            protocol_v1_session_start(
+                "removed-audio-base-instruction",
+                outputs=["text", "audio"],
+                output_audio={"base_instruction": "青年女性，中音"},
+            )
         )
 
 
@@ -1434,7 +1822,8 @@ def test_realtime_action_input_places_current_semantics_near_generation() -> Non
     messages = Client._build_action_context_messages(
         [],
         "[动作约束]\n人设、当前状态、允许范围和选择规则。",
-        avatar_state=None,
+        session_instruction="[会话固定信息]\n角色、实体和动作偏好。",
+        avatar_state={"pose": "standing"},
         system_prompt="固定动作目录",
         audios=["pcm"],
         images=["avatar"],
@@ -1454,7 +1843,15 @@ def test_realtime_action_input_places_current_semantics_near_generation() -> Non
         "text",
         "text",
     ]
-    assert parts[0]["text"].startswith("[动作约束]")
+    assert parts[0]["text"].startswith("[会话固定信息]")
+    assert parts[0]["text"].index("[会话固定信息]") < parts[0]["text"].index(
+        "本轮动作选择补充信息"
+    )
+    assert parts[0]["text"].index(
+        "本轮动作选择补充信息"
+    ) < parts[0]["text"].index(
+        "[动作约束]"
+    )
     assert parts[1]["text"].startswith("[当前图片用途]")
     assert parts[-2]["text"] == "[当前用户文本]\n你能靠近镜头吗"
     assert parts[-1]["text"] == "最合适的 category_id："
@@ -2914,9 +3311,9 @@ async def test_audio_entity_turn_injects_snapshot_into_reply_and_passive_action_
     ]
     assert {request.stage for request in action_requests} == {"category", "child"}
     for request in action_requests:
-        assert passive_policy in request.prefix
-        assert "桌面音箱" in request.prefix
-        assert "volume_level" in request.prefix
+        assert passive_policy in request.session_instruction
+        assert "桌面音箱" in request.session_instruction
+        assert "volume_level" in request.session_instruction
         assert len(request.audios) == 1
     assert len(client.reply_requests) == 1
     reply_request = client.reply_requests[0]
@@ -3351,7 +3748,7 @@ async def test_system_route_reconciles_empty_reply_to_silent_accompaniment() -> 
 
 
 @pytest.mark.asyncio
-async def test_system_route_uses_partial_reply_after_100ms() -> None:
+async def test_system_route_uses_partial_reply_after_30ms() -> None:
     catalog = load_global_action_catalog()
     reply_category, _ = system_accompaniment_categories(catalog)
     client = SystemRouteFusionClient(
@@ -3386,7 +3783,7 @@ async def test_system_route_uses_partial_reply_after_100ms() -> None:
     )
     action_context = result["media_summary"]["action_context"]
     assert action_context["reply_prefix_status"] == "partial_timeout"
-    assert 80 <= action_context["reply_prefix_wait_ms"] <= 180
+    assert 20 <= action_context["reply_prefix_wait_ms"] <= 100
 
 
 @pytest.mark.asyncio
@@ -3622,6 +4019,15 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     )
     monkeypatch.delenv(FULL_INSTRUCTIONS_LOG_ENV, raising=False)
     ws = FakeWebSocket()
+    official_delta = asyncio.Event()
+    original_send = ws.send_text
+
+    async def capture_send(value):
+        await original_send(value)
+        if json.loads(value)["type"] == "response.text.delta":
+            official_delta.set()
+
+    ws.send_text = capture_send
     client = FusionFakeClient(block_child=True)
     session = make_session(ws, client)
     await session.handle_session_start(
@@ -3662,6 +4068,9 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     await asyncio.wait_for(client.child_started.wait(), timeout=1)
     await asyncio.wait_for(client.reply_started.wait(), timeout=1)
     assert not turn_task.done()
+    await asyncio.wait_for(official_delta.wait(), timeout=1)
+    assert any(e["type"] == "response.text.delta" for e in ws.events)
+    assert not any(e["type"] == "turn.action.ready" for e in ws.events)
     client.release_child.set()
     await asyncio.wait_for(turn_task, timeout=1)
 
@@ -3700,17 +4109,17 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
         "数字人人设：性别表达=男性；画风=写实；"
         "职业或角色定位=海洋科学家；性格基调=沉稳克制"
     )
-    assert persona_prompt in category_request.prefix
+    assert persona_prompt in category_request.session_instruction
     assert (
         "类别偏好（动作类别选择的主要约束）：优先自然交流和低打扰类别"
-        in category_request.prefix
+        in category_request.session_instruction
     )
-    assert "动作偏好（动作类别选择的可行性约束）" in category_request.prefix
-    assert persona_prompt in child_request.prefix
-    assert "类别偏好（具体动作选择的背景约束）" in child_request.prefix
+    assert "动作偏好（动作类别选择的可行性约束）" in category_request.session_instruction
+    assert persona_prompt in child_request.session_instruction
+    assert "类别偏好（具体动作选择的背景约束）" in child_request.session_instruction
     assert (
         "动作偏好（具体动作选择的主要约束）：避免夸张舞蹈和大幅位移"
-        in child_request.prefix
+        in child_request.session_instruction
     )
     assert "海洋科学家" not in category_request.system_prompt
     assert "海洋科学家" not in child_request.system_prompt
@@ -3728,7 +4137,7 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
 
     event_types = [event["type"] for event in ws.events]
     assert "response.provisional.created" in event_types
-    assert "response.provisional.text.delta" in event_types
+    assert "response.provisional.text.delta" not in event_types
     assert "response.provisional.resolved" in event_types
     assert "response.text.delta" in event_types
     assert "turn.action.ready" in event_types
@@ -3737,6 +4146,8 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
         "text": "你好呀，今天过得怎么样？",
         "source": "generated",
     }
+    assert result["timing"]["reply"]["official_first_delta_after_commit_ms"] is not None
+    assert result["timing"]["reply"]["promoted_after_commit_ms"] <= result["timing"]["reply"]["official_first_delta_after_commit_ms"]
     assert result["action"]["action_id"] == "wave"
     assert result["modalities"] == {"text": "completed", "action": "completed"}
     resolved = next(
@@ -3745,7 +4156,7 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
         if event["type"] == "response.provisional.resolved"
     )
     assert resolved["status"] == "promoted"
-    assert resolved["reason"] == "action_supported"
+    assert resolved["reason"] == "language_required"
     completed = next(
         record
         for record in structured_records
@@ -4208,7 +4619,7 @@ async def test_concrete_action_promotes_reply_without_semantic_text_filter() -> 
         if event["type"] == "response.provisional.resolved"
     )
     assert resolved["status"] == "promoted"
-    assert resolved["reason"] == "action_supported"
+    assert resolved["reason"] == "language_required"
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["modalities"]["text"] == "completed"
     assert result["reply"] == {
@@ -4605,7 +5016,8 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "Do not merely agree, repeat or confirm the request" in prompt
     assert "'Can you tell me a story?'" in prompt
     assert "must be completed immediately" in prompt
-    assert "the requested content must follow in the same reply" in prompt
+    assert "Deliver the requested content in the same reply" in prompt
+    assert "Start with a short, complete sentence" in prompt
     assert "'Do you know how to tell stories?'" in prompt
     assert "are capability questions" in prompt
     assert "'Can you sing?' or 'Do you know how to sing?'" in prompt
@@ -4646,6 +5058,10 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "Match response length to the amount of information" in prompt
     assert "add at most one brief question" in prompt
     assert "Do not append a continuation question" in prompt
+    assert "[Conversation continuation and ending boundary]" in prompt
+    assert "does not mean the current conversation has ended" in prompt
+    assert "greeting, welcome, salutation, or self-introduction" in prompt
+    assert "do not extend it into a farewell" in prompt
 
 
 def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None:
@@ -4668,7 +5084,7 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "不得只表示同意" in prompt
     assert "“可以给我讲一个故事吗”" in prompt
     assert "必须立即完成" in prompt
-    assert "同一回复必须紧接实际内容" in prompt
+    assert "第一句直接给出有内容的答案或回应" in prompt
     assert "“你会讲故事吗”" in prompt
     assert "只是能力询问" in prompt
     assert "“你可以唱歌吗”“你会唱歌吗”只询问能力" in prompt
@@ -4681,6 +5097,10 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "回复长度应与当前请求需要的信息量相匹配" in prompt
     assert "每次最多一个" in prompt
     assert "不得为了延续对话而追加问题" in prompt
+    assert "[会话延续与结束语义边界]" in prompt
+    assert "完成当前回答或当前话题，不代表当前会话结束" in prompt
+    assert "用户要求问候、欢迎、打招呼或自我介绍时" in prompt
+    assert "不得将其扩展为告别" in prompt
     assert "[全局对话角色、人称指代与语义保持规则]" in prompt
     assert "情绪或状态体验者、意愿主体，以及事实和经历的归属" in prompt
     assert "用户用“我”陈述情绪、身体状态、意愿、经历或处境" in prompt
@@ -4771,6 +5191,7 @@ def test_joint_reply_route_prompt_defines_complete_decision_boundaries() -> None
     assert "“翻开下一页”→R2" in prompt
     assert "“你可以撒个娇吗”→R2" in prompt
     assert "“能挥挥手吗”→R2" in prompt
+    assert "“你可以给我打个招呼吗”“给我打个招呼”“挥挥手”→R2" in prompt
     assert "“可以转一圈给我看吗”→R2" in prompt
     assert "“给我唱一首”“现在唱一段吧”→R2" in prompt
     assert "“再做一次刚才那个动作”" in prompt
@@ -4794,6 +5215,9 @@ def test_joint_reply_route_prompt_has_equivalent_english_history_boundaries() ->
     assert "'Sure', 'Okay, start'" in prompt
     assert "immediate vocal performance such as singing" in prompt
     assert "'Sing me a song' and 'Sing something now' -> R2" in prompt
+    assert "'Can you greet me?'" in prompt
+    assert "'Give me a greeting'" in prompt
+    assert "'Wave to me'" in prompt
     assert "'I am unhappy today'" in prompt
     assert "'No, I am still very unhappy'" in prompt
     assert "'That also did not work; try another way'" in prompt
@@ -4816,6 +5240,7 @@ def test_reply_speech_mode_prompt_distinguishes_polite_action_requests() -> None
     assert "‘你能做哪些动作’→S0" in prompt
     assert "‘你可以撒个娇吗’→S1" in prompt
     assert "‘能挥挥手吗’→S1" in prompt
+    assert "‘你可以给我打个招呼吗’‘给我打个招呼’‘挥挥手’→S1" in prompt
     assert "‘给我唱一首’→S1" in prompt
     assert "立即进行唱歌等声音表演" in prompt
 
@@ -4833,6 +5258,9 @@ def test_reply_route_prompts_have_equivalent_english_question_boundary() -> None
         assert "Can you act cute for me?" in prompt
         assert "Can you sing?" in prompt
         assert "Can you tell me a story?" in prompt
+        assert "Can you greet me?" in prompt
+        assert "Give me a greeting" in prompt
+        assert "Wave to me" in prompt
 
 
 def test_pure_action_short_reply_prompt_forbids_state_and_action_narration() -> None:
@@ -4847,6 +5275,11 @@ def test_pure_action_short_reply_prompt_forbids_state_and_action_narration() -> 
     assert "不得描述镜头、画面、姿势、表情或动作过程" in prompt
     assert "‘我正’‘我在’‘我已经’‘我刚刚’‘我有点’" in prompt
     assert "不得复述或描述具体动作" in prompt
+    assert "动作执行者、动作对象、目标、受益者和人称关系" in prompt
+    assert "不得把要求当前角色执行的动作改成让用户执行" in prompt
+    assert "不得擅自解释为用户或第三方的身体部位" in prompt
+    assert "不得把原请求改写成新的命令、问题或建议" in prompt
+    assert "无法确定回应是否保持原意时，返回空文本" in prompt
 
 
 def test_pure_action_short_reply_prompt_has_equivalent_english_constraints() -> None:
@@ -4860,6 +5293,55 @@ def test_pure_action_short_reply_prompt_has_equivalent_english_constraints() -> 
     assert "Do not invent your current emotion, feeling, or state" in prompt
     assert "camera, scene, pose, facial expression, or action process" in prompt
     assert "do not narrate what you are doing, have done, just did" in prompt
+    assert "Preserve the action actor, object, target, beneficiary" in prompt
+    assert "Do not turn an action for the current character to perform" in prompt
+    assert "do not invent such ownership" in prompt
+    assert "do not rewrite it as a new command, question, or suggestion" in prompt
+    assert "Return empty text if semantic preservation is uncertain" in prompt
+
+
+@pytest.mark.parametrize(
+    ("locale", "language", "required_fragments"),
+    [
+        (
+            "zh-CN",
+            "zh",
+            (
+                "V1=动作语义改变",
+                "动作执行者、动作对象、目标、受益者或身体部位归属",
+                "如果内容已经属于 V1，则选择 V1，不再选择 V3",
+                "任何一项违规存在时都不得选择 V0",
+                "按 V4、V1、V2、V3 的顺序选择",
+                "以下示例只用于判定违规类型，不是回复模板",
+            ),
+        ),
+        (
+            "en-US",
+            "en",
+            (
+                "V1=changed action semantics",
+                "actor, object, target, beneficiary, or ownership of a body part",
+                "If V1 applies, choose V1 rather than V3",
+                "Never choose V0 when any violation applies",
+                "V4, V1, V2, then V3",
+                "classify violations and are not response templates",
+            ),
+        ),
+    ],
+)
+def test_pure_action_validation_prompt_preserves_semantic_roles(
+    locale: str,
+    language: str,
+    required_fragments: tuple[str, ...],
+) -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.locale = locale
+    session.language = language
+
+    prompt = session._pure_action_reply_validation_system_prompt()
+
+    for fragment in required_fragments:
+        assert fragment in prompt
 
 
 @pytest.mark.asyncio
@@ -5165,6 +5647,81 @@ async def test_low_margin_route_uses_speech_mode_disambiguation() -> None:
     assert route.stats["speech_mode_disambiguation"]["reply_mode"] == (
         "LANGUAGE_REQUIRED"
     )
+
+
+@pytest.mark.asyncio
+async def test_speech_mode_timeout_preserves_initial_pure_action_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HangingSpeechModeClient(FakeClient):
+        async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+            self.score_requests.append(request)
+            if request.stage == multimodal_module.REPLY_SPEECH_MODE_STAGE:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+            assert request.stage == multimodal_module.REPLY_HISTORY_ROUTE_STAGE
+            selected_scores = {
+                "R0": -0.2,
+                "R1": -2.0,
+                "R2": -0.1,
+                "R3": -2.1,
+            }
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=candidate_id,
+                        token_count=1,
+                        mean_logprob=score,
+                        mean_nll=-score,
+                        ppl=math.exp(-score),
+                        token_scores=[
+                            TokenScore(token_id=601 + index, logprob=score)
+                        ],
+                    )
+                    for index, (candidate_id, score) in enumerate(
+                        selected_scores.items()
+                    )
+                ],
+            )
+
+    monkeypatch.setenv(
+        multimodal_module.REPLY_HISTORY_ROUTE_TIMEOUT_ENV, "0.05"
+    )
+    client = HangingSpeechModeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-speech-mode-timeout",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-speech-mode-timeout"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-speech-mode-timeout"
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        [],
+        current_text="给我打个招呼",
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "PURE_ACTION"
+    assert [request.stage for request in client.score_requests] == [
+        multimodal_module.REPLY_HISTORY_ROUTE_STAGE,
+        multimodal_module.REPLY_SPEECH_MODE_STAGE,
+    ]
+    disambiguation = route.stats["speech_mode_disambiguation"]
+    assert disambiguation["reply_mode"] == "PURE_ACTION"
+    assert disambiguation["fallback_reason"] == "timeout"
+    assert turn.active_request_ids == set()
 
 
 @pytest.mark.asyncio
@@ -6408,6 +6965,7 @@ async def test_concrete_action_cannot_override_language_required_route() -> None
         ("我正在做飞吻的动作呢。", "", "forbidden_phrase:动作"),
         ("我有点害羞呢。", "", "forbidden_phrase:我有点"),
         ("我正对着镜头眨眼呢。", "", "forbidden_phrase:我正"),
+        ("你也挥挥手吧。", "", "forbidden_phrase:挥手"),
         ("我是一个数字人，无法做这个。", "", "forbidden_phrase:数字人"),
         ("第一行\n第二行", "", "multiline"),
     ],
@@ -6474,6 +7032,75 @@ async def test_invalid_pure_action_reply_falls_back_before_provisional_delta() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_text", "invalid_reply"),
+    [
+        ("你跳个舞吧", "你挑个舞吧。"),
+        ("你摸下额头", "我帮你摸摸。"),
+        ("给我挥挥手", "你也来一下吧。"),
+    ],
+)
+async def test_semantic_role_reversal_is_dropped_without_suppressing_action(
+    request_text: str,
+    invalid_reply: str,
+) -> None:
+    class RoleReversalReplyClient(PureActionFusionClient):
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text=invalid_reply,
+                finish_reason="stop",
+            )
+
+    ws = FakeWebSocket()
+    client = RoleReversalReplyClient(validation_candidate="V1")
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-role-reversal-pure-action-reply",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "unsupported_action_text": "暂时做不了。",
+            "fallback_category_ids": ["B000"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(
+        user_turn_start("turn-role-reversal-pure-action-reply")
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(
+            "turn-role-reversal-pure-action-reply",
+            text=request_text,
+        )
+    )
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == ""
+    assert result["reply"].get("reason") != "unsupported_action"
+    assert result.get("outputs", result.get("modalities"))["action"] == "completed"
+    action_ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["execute"] is True
+    semantic_request = next(
+        request
+        for request in client.score_requests
+        if request.stage == multimodal_module.PURE_ACTION_REPLY_VALIDATION_STAGE
+    )
+    assert request_text in semantic_request.current_text
+    assert invalid_reply in semantic_request.current_text
+    assert not any(
+        event["type"] == "response.text.delta" and event.get("delta")
+        for event in ws.events
+    )
+
+
+@pytest.mark.asyncio
 async def test_semantically_invalid_pure_action_reply_falls_back_to_empty() -> None:
     ws = FakeWebSocket()
     client = PureActionFusionClient(validation_candidate="V3")
@@ -6507,6 +7134,13 @@ async def test_semantically_invalid_pure_action_reply_falls_back_to_empty() -> N
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["reply"]["text"] == ""
+    action_ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["execute"] is True
+    assert result.get("outputs", result.get("modalities"))["action"] == "completed"
+    assert result.get("outputs", result.get("modalities"))["text"] == "completed"
+    assert result["reply"].get("reason") != "unsupported_action"
     semantic_request = next(
         request
         for request in client.score_requests
@@ -7281,9 +7915,9 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert child_request.suffix_tokenization_mode == "short_id"
     assert category_request.action_context_cache_key == child_request.action_context_cache_key
     assert category_request.action_context_cache_key == category_request.logical_request_id
-    assert category_request.prefix_cache_namespace == session.action_prefix_cache_namespace
-    assert child_request.prefix_cache_namespace == (
-        f"{session.action_prefix_cache_namespace}:child:B1,B2"
+    assert category_request.prefix_cache_namespace.startswith(session.action_prefix_cache_namespace + f":session:{session.session_instance_id}:")
+    assert child_request.prefix_cache_namespace.startswith(
+        f"{session.action_prefix_cache_namespace}:child:B1,B2:session:{session.session_instance_id}:"
     )
     assert category_request.micro_batch_size == 64
     assert child_request.micro_batch_size == 64
@@ -8093,6 +8727,9 @@ async def test_session_start_prefills_hierarchical_category_catalog() -> None:
         "modalities": ["action"],
         "session_id": "session-prefill-hierarchical",
         "language": "zh",
+        "action_profile": {
+            "visual_behavior_preferences": "动作自然、克制。",
+        },
         "action_candidates": [
             {
                 "category_id": "B1",
@@ -8123,8 +8760,120 @@ async def test_session_start_prefills_hierarchical_category_catalog() -> None:
         in prefill["system_prompt"]
     )
     assert "candidate_id=A1" not in prefill["system_prompt"]
+    assert "动作自然、克制" in prefill["session_instruction"]
+    assert ":session:" in prefill["prefix_cache_namespace"]
     started = next(event for event in ws.events if event["type"] == "session.started")
     assert started["action_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
+async def test_global_catalog_session_start_extends_category_prefix_before_started(
+) -> None:
+    catalog = load_global_action_catalog()
+    client = PrefillFakeClient()
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        client,
+        global_action_catalog=catalog,
+    )
+
+    await start_system_route_session(session, catalog)
+
+    assert len(client.prefill_requests) == 1
+    prefill = client.prefill_requests[0]
+    assert prefill["stage"] == "category"
+    assert prefill["request_id"] == "session-system-route-session-category-prefill"
+    assert prefill["candidates"][-1].candidate_id == "B000"
+    started = next(event for event in ws.events if event["type"] == "session.started")
+    assert started["action_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
+async def test_session_start_prefill_failure_degrades_without_rejecting() -> None:
+    class BrokenPrefillClient(PrefillFakeClient):
+        async def prefill_action_catalog(self, **kwargs):
+            self.prefill_requests.append(kwargs)
+            raise RuntimeError("prefill unavailable")
+
+    ws = FakeWebSocket()
+    client = BrokenPrefillClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "modalities": ["action"],
+            "session_id": "session-prefill-degraded",
+            "language": "zh",
+            "action_candidates": [
+                {
+                    "candidate_id": "a01",
+                    "action_id": "wave",
+                    "source_label": "挥手",
+                    "short_definition": "挥手问候",
+                },
+                {
+                    "candidate_id": "none",
+                    "action_id": "no_action",
+                    "source_label": "不做动作",
+                    "short_definition": "保持当前姿态",
+                },
+            ],
+        }
+    )
+
+    started = next(event for event in ws.events if event["type"] == "session.started")
+    assert started["action_prefix_prefilled"] is False
+    assert session.started is True
+
+
+@pytest.mark.asyncio
+async def test_session_started_waits_for_category_prefix_prefill() -> None:
+    class WaitingPrefillClient(PrefillFakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prefill_started = asyncio.Event()
+            self.release_prefill = asyncio.Event()
+
+        async def prefill_action_catalog(self, **kwargs):
+            self.prefill_requests.append(kwargs)
+            self.prefill_started.set()
+            await self.release_prefill.wait()
+            return True
+
+    ws = FakeWebSocket()
+    client = WaitingPrefillClient()
+    session = make_session(ws, client)
+    start_task = asyncio.create_task(
+        session.handle_session_start(
+            {
+                "type": "session.start",
+                "modalities": ["action"],
+                "session_id": "session-prefill-barrier",
+                "language": "zh",
+                "action_candidates": [
+                    {
+                        "candidate_id": "a01",
+                        "action_id": "wave",
+                        "source_label": "挥手",
+                        "short_definition": "挥手问候",
+                    },
+                    {
+                        "candidate_id": "none",
+                        "action_id": "no_action",
+                        "source_label": "不做动作",
+                        "short_definition": "保持当前姿态",
+                    },
+                ],
+            }
+        )
+    )
+
+    await asyncio.wait_for(client.prefill_started.wait(), timeout=1)
+    assert not any(event["type"] == "session.started" for event in ws.events)
+    client.release_prefill.set()
+    await asyncio.wait_for(start_task, timeout=1)
+    assert any(event["type"] == "session.started" for event in ws.events)
 
 
 @pytest.mark.asyncio
@@ -8277,3 +9026,358 @@ async def test_session_start_prefills_flat_children_without_category_stage() -> 
     assert started["action_selection_mode"] == "flat_children"
     assert started["action_selection_stages"] == 1
     assert started["action_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked_stage", "route_parallel"),
+    [("category", True), ("child", True), ("route", True), ("route", False)],
+)
+async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
+    blocked_stage, route_parallel, monkeypatch,
+):
+    records = []
+    def capture(log_type, event, **fields):
+        records.append({"event": event, **fields})
+        return True
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    ready = asyncio.Event()
+    audio_ready = asyncio.Event()
+
+    class Socket(FakeWebSocket):
+        async def send_text(self, value):
+            await super().send_text(value)
+            if self.events[-1]["type"] == "turn.action.ready":
+                ready.set()
+            if self.events[-1]["type"] == "response.audio.delta":
+                audio_ready.set()
+
+    class TTS:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def synthesize_streaming(self, *, text_chunks, audio_sink, instruct, **kwargs):
+            await instruct
+            async for text in text_chunks:
+                await audio_sink(b"\x01\x00" * 240)
+
+    from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+    from sglang_omni.serve.realtime.protocol import session_start
+    monkeypatch.setattr(session_start, "EmbeddedTTSConnection", TTS)
+
+    class Client(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            stage = "route" if any(c.candidate_id == "R0" for c in request.candidates) else request.stage
+            if stage == "performance":
+                await blocked.wait()
+            if stage == blocked_stage:
+                blocked.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+                    # A slow provider abort must not delay the ready events.
+                    await release.wait()
+                    raise
+            return await super().score_action_suffixes(request)
+
+    catalog = load_global_action_catalog()
+    fallback = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    ws, client = Socket(), Client("P101")
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.embedded_tts_config = EmbeddedTTSConfig(url="ws://test.invalid/tts", voice="test")
+    await session.dispatch(protocol_v1_session_start(
+        "early-face", outputs=["text", "audio", "expression", "action"],
+        reply={"unsupported_action_text": "暂不支持。"},
+        action={"fallback_category_ids": [fallback.category_id], "allowed_candidates": [
+            {"candidate_id": c.candidate_id} for c in (
+                catalog.category_by_id["B019"].children[0],
+                catalog.category_by_id["B010"].children[0],
+                fallback.children[0], reply.children[0],
+            )
+        ]},
+    ))
+    session.route_action_parallel = route_parallel
+    await session.handle_turn_start(user_turn_start("early-face-turn"))
+    task = asyncio.create_task(session.handle_turn_commit(user_turn_commit("early-face-turn", text="笑一个")))
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=2)
+        types = [e["type"] for e in ws.events]
+        assert types.index("turn.expression.ready") < types.index("turn.action.ready")
+        assert "turn.result" not in types
+        action = next(e["action"] for e in ws.events if e["type"] == "turn.action.ready")
+        assert action["support_status"] == "not_required"
+        assert action["execute"] is False
+        if blocked_stage != "route":
+            await asyncio.wait_for(cancellation_seen.wait(), timeout=1)
+            await asyncio.wait_for(audio_ready.wait(), timeout=1)
+            types = [e["type"] for e in ws.events]
+            assert types.index("turn.action.ready") < types.index("response.audio.delta")
+            assert "turn.result" not in types
+        else:
+            assert not cancellation_seen.is_set()  # Do not abort reply routing.
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert sum(e["type"] == "turn.action.ready" for e in ws.events) == 1
+    assert sum(e["type"] == "turn.expression.ready" for e in ws.events) == 1
+    assert any(e["type"] == "turn.result" for e in ws.events)
+    assert session.executed_action_history == []
+    if blocked_stage == "child":
+        requests = [r for r in records if r["event"] == "child_cache_request"]
+        results = [r for r in records if r["event"] == "child_cache_result"]
+        assert len(requests) == len(results) == 1
+        assert requests[0]["request_id"] == results[0]["request_id"]
+        assert requests[0]["selected_category_ids"]
+        assert results[0]["status"] == "cancelled"
+        assert results[0]["parent_computed_token_count"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["P200", "P201", "P301"])
+@pytest.mark.parametrize("unsupported", [False, True])
+@pytest.mark.parametrize("shared_intent", [False, True])
+async def test_mixed_numeric_turn_preserves_reply_and_visual_channels(scope, unsupported, shared_intent, monkeypatch):
+    """Injected model decisions verify execution, not model comprehension."""
+    if shared_intent:
+        import sglang_omni.serve.realtime.turn_pipeline as pipeline
+        from sglang_omni.serve.realtime.turn_intent import infer_turn_intent
+        monkeypatch.setattr(pipeline, "infer_turn_intent", infer_turn_intent)
+    catalog = load_global_action_catalog()
+    body_category = next(c.category_id for c in catalog.categories if any(
+        child.candidate_id == "A259" for child in c.children
+    ))
+
+    class NumericClient(PerformanceMatrixClient):
+        async def completion(self, request, *, request_id):
+            self.chat_requests.append(request)
+            if request.metadata.get("task") == "session_turn_intent":
+                return CompletionResult(request_id=request_id, text=json.dumps({"speech":"verbatim", "text":"一。", "body":"数字二手势", "body_mode":"perform", "face":"微笑" if scope == "P301" else "", "history":False}, ensure_ascii=False))
+            return CompletionResult(request_id=request_id, text="一。")
+
+        async def score_action_suffixes(self, request):
+            result = await super().score_action_suffixes(request)
+            if unsupported and request.stage == "child":
+                assert any(s.candidate_id == "A000" for s in result.scores)
+                for score in result.scores:
+                    score.mean_logprob = -0.01 if score.candidate_id == "A000" else -10.0
+            return result
+
+    client = NumericClient(scope, "A259", body_category)
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    allowed = list(dict.fromkeys(["A259", "A154", silent.children[0].candidate_id, reply.children[0].candidate_id]))
+    await session.dispatch(protocol_v1_session_start(
+        "numeric-mixed", outputs=["text", "expression", "action"],
+        reply={"unsupported_action_text": "暂时无法执行。"},
+        action={"fallback_category_ids": [silent.category_id],
+                "allowed_candidates": [{"candidate_id": x} for x in allowed]},
+    ))
+    await session.handle_turn_start(user_turn_start("numeric"))
+    await session.handle_turn_commit(user_turn_commit(
+        "numeric", text="笑着说一比二" if scope == "P301" else "说一比二",
+    ))
+    result = next(e for e in ws.events if e["type"] == "turn.result")
+    assert result["reply"]["text"] == "一。"
+    assert result["action"]["execute"] is (not unsupported or scope != "P301")
+    if not unsupported:
+        assert result["action"]["candidate_id"] == "A259"
+    else:
+        assert result["action"]["support_status"] == "unsupported"
+    assert ("expression" in result) == (scope != "P200" and not unsupported)
+    if "expression" in result:
+        assert result["expression"]["candidate_id"] == "A154"
+    stages = [r.stage for r in client.score_requests]
+    assert stages.count("category") == (0 if shared_intent and not unsupported else 1)
+    assert stages.count("child") == (2 if shared_intent and unsupported else 1)
+    assert stages.count("performance") == 1
+    assert multimodal_module.PURE_ACTION_REPLY_VALIDATION_STAGE not in stages
+    assert len(client.chat_requests) == 1
+
+
+def test_runtime_reply_override_retains_mixed_instruction_contract(monkeypatch, tmp_path):
+    from sglang_omni.serve.realtime.runtime_prompt_overrides import write_runtime_prompt
+    from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
+    monkeypatch.setenv("SGLANG_OMNI_RUNTIME_PROMPT_DIR", str(tmp_path))
+    write_runtime_prompt("reply_rules", "使用简洁的角色语言。")
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.language = "zh"
+    effective = session._reply_role_and_agency_system_prompt()
+    assert "使用简洁的角色语言。" in effective
+    assert effective.count(mixed_instruction_policy("zh", "reply")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('winner,independent', [('P001', True), ('P201', False), ('P301', False)])
+async def test_optional_face_publishes_before_slow_body_only_when_independent(winner, independent):
+    child_entered, release, face_ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    class Socket(FakeWebSocket):
+        async def send_text(self, value):
+            await super().send_text(value)
+            if self.events[-1]['type'] == 'turn.expression.ready':
+                face_ready.set()
+    class Client(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            if request.stage == 'child':
+                child_entered.set()
+                await release.wait()
+            if request.stage == 'performance':
+                await child_entered.wait()
+            return await super().score_action_suffixes(request)
+    catalog = load_global_action_catalog()
+    fallback = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    ws = Socket()
+    session = make_session(ws, Client(winner), global_action_catalog=catalog)
+    await session.dispatch(protocol_v1_session_start('early-optional', outputs=['text', 'expression', 'action'],
+        reply={'unsupported_action_text': '暂不支持。'},
+        action={'fallback_category_ids': [fallback.category_id], 'allowed_candidates': [
+            {'candidate_id': c.candidate_id} for c in (catalog.category_by_id['B019'].children[0],
+             catalog.category_by_id['B010'].children[0], fallback.children[0],
+             catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT).children[0])]}))
+    await session.handle_turn_start(user_turn_start('early-optional-turn'))
+    task = asyncio.create_task(session.handle_turn_commit(user_turn_commit('early-optional-turn', text='你好')))
+    try:
+        await asyncio.wait_for(child_entered.wait(), 2)
+        if independent:
+            await asyncio.wait_for(face_ready.wait(), 1)
+            assert not any(event['type'] == 'turn.action.ready' for event in ws.events)
+        else:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(face_ready.wait(), .05)
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 2)
+    faces = [event for event in ws.events if event['type'] == 'turn.expression.ready']
+    assert len(faces) == 1
+    assert next(event for event in ws.events if event['type'] == 'turn.result')['expression'] == faces[0]['expression']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('target_available', [True, False])
+async def test_rejected_semantic_hint_recalls_ranked_categories_once(monkeypatch, target_available):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+    from sglang_omni.serve.realtime.turn_intent import TurnIntent
+    async def intent(*args):
+        return TurnIntent(speech='verbatim', text='一', body='数字二手势', body_mode='perform', face='', history=False)
+    monkeypatch.setattr(pipeline, 'infer_turn_intent', intent)
+    catalog = load_global_action_catalog()
+    body_category = next(c.category_id for c in catalog.categories if any(x.candidate_id == 'A259' for x in c.children))
+    class Client(PerformanceMatrixClient):
+        child_calls = 0
+        async def score_action_suffixes(self, request):
+            result = await super().score_action_suffixes(request)
+            if request.stage == 'child':
+                self.child_calls += 1
+                if self.child_calls == 1:
+                    for score in result.scores:
+                        score.mean_logprob = -0.01 if score.candidate_id == 'A000' else -10
+            return result
+    client = Client('P200', 'A259', body_category)
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    allowed = list(dict.fromkeys(['A258', *(['A259'] if target_available else []), silent.children[0].candidate_id, reply.children[0].candidate_id]))
+    await session.dispatch(protocol_v1_session_start('hint-recall', outputs=['text', 'action'],
+        reply={'unsupported_action_text': '暂时无法执行。'}, action={'fallback_category_ids': [silent.category_id],
+        'allowed_candidates': [{'candidate_id': item} for item in allowed]}))
+    await session.handle_turn_start(user_turn_start('hint-turn'))
+    await session.handle_turn_commit(user_turn_commit('hint-turn', text='说一比二'))
+    result = next(e for e in ws.events if e['type'] == 'turn.result')
+    assert result['reply']['text'] == '一'
+    if target_available:
+        assert result['action']['candidate_id'] == 'A259'
+        assert result['action']['support_status'] == 'supported'
+        assert client.child_calls == 2
+        assert [r.stage for r in client.score_requests].count('category') == 1
+        assert result['timing']['action_breakdown']['intent_hint_validation']['reason'] == 'child_unsupported'
+    else:
+        assert result['action']['support_status'] == 'unsupported'
+        assert client.child_calls == 1
+        assert [r.stage for r in client.score_requests].count('category') == 0
+        assert 'intent_hint_validation' not in result['timing']['action_breakdown']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stale', [False, True])
+async def test_memory_missing_only_recovery_is_atomic_and_revision_checked(stale):
+    from sglang_omni.serve.realtime.memory.models import SessionMemoryTurn
+    client = SessionMemoryIntegrationClient()
+    session = make_session(FakeWebSocket(), client,
+        session_memory_config=SessionMemoryConfig(batch_turns=3, max_retries=1))
+    await session.handle_session_start({'type': 'session.start', 'session_id': 'partial-recovery',
+                                       'language': 'zh', 'modalities': ['text']})
+    store = session.session_memory_store
+    calls = []
+    def item(seq):
+        return {'turn_seq': seq, 'episode': {'user_summary': '一次请求', 'artifact_kind': 'none'},
+                'operations': [], 'thread_operations': []}
+    async def complete(request, *, request_id):
+        ids = request.metadata['turn_ids']; calls.append(ids)
+        assert store.processed_through_turn_seq == 0
+        if len(ids) == 3:
+            text = json.dumps({'turns': [item(3)]})
+        else:
+            seq = int(ids[0][-1])
+            if stale and seq == 2:
+                store.revision += 1
+            text = json.dumps({'turns': [item(seq)]})
+        return CompletionResult(request_id=request_id, text=text)
+    client.completion = complete
+    for seq in range(1, 4):
+        session._session_memory_pending_turns.append(SessionMemoryTurn(
+            turn_id=f't{seq}', turn_seq=seq, user_text='你好', audios=(),
+            assistant_text='你好', reply_model_visible=True, reply_mode='LANGUAGE_REQUIRED'))
+    await session._run_session_memory_batch()
+    assert calls == [['t1', 't2', 't3'], ['t1'], ['t2']]
+    if stale:
+        assert not store.episodes
+        assert store.gap_turn_seqs == {1, 2, 3}
+    else:
+        assert store.complete_through_turn_seq == 3
+        assert [e.turn_seq for e in store.episodes] == [1, 2, 3]
+        assert not store.gap_turn_seqs
+
+
+@pytest.mark.asyncio
+async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkeypatch):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+    from sglang_omni.serve.realtime.turn_intent import infer_turn_intent
+    monkeypatch.setattr(pipeline, 'infer_turn_intent', infer_turn_intent)
+    catalog = load_global_action_catalog()
+    reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+    silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
+    numeric = next(c for c in catalog.categories if any(x.candidate_id == 'A259' for x in c.children))
+    class Client(PerformanceMatrixClient):
+        async def completion(self, request, *, request_id):
+            if request.metadata.get('task') == 'session_turn_intent':
+                return CompletionResult(request_id=request_id, text=json.dumps(dict(
+                    speech='verbatim', text='一比二', body='', body_mode='none', face='', history=False)))
+            return CompletionResult(request_id=request_id, text='一比二')
+        async def score_action_suffixes(self, request):
+            if request.stage == 'child':
+                assert 'A259' not in [c.candidate_id for c in request.candidates]
+            result = await super().score_action_suffixes(request)
+            if request.stage == 'category':
+                for score in result.scores:
+                    score.mean_logprob = -1 if score.candidate_id == numeric.category_id else (-0.1 if score.candidate_id == reply.category_id else -20)
+            return result
+    client = Client('P200', 'A259', numeric.category_id)
+    ws = FakeWebSocket(); session = make_session(ws, client, global_action_catalog=catalog)
+    allowed = ['A259'] + [c.candidate_id for c in reply.children[:2]] + [silent.children[0].candidate_id]
+    await session.dispatch(protocol_v1_session_start('literal-no-body', outputs=['text','action'],
+        reply={'unsupported_action_text':'暂时无法执行'}, action={'fallback_category_ids':[silent.category_id],
+        'allowed_candidates':[{'candidate_id':cid} for cid in allowed]}))
+    await session.handle_turn_start(user_turn_start('literal'))
+    await session.handle_turn_commit(user_turn_commit('literal', text='说一比二这三个字'))
+    result = next(e for e in ws.events if e['type'] == 'turn.result')
+    assert result['reply']['text'] == '一比二'
+    assert result['action']['candidate_id'] != 'A259'
+    assert result['action']['category_id'] in [reply.category_id,silent.category_id]

@@ -37,6 +37,7 @@ output.wav
 Thumbs.db
 .ruff_cache/
 results/
+/reports/
 .humanize/
 .benchmark-data/
 
@@ -54,3 +55,6 @@ logs/*
 
 deploy/sglang-omni-18001.service
 deploy/realtime-knowledge.env
+
+runtime/*
+!runtime/.gitkeep

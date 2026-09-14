@@ -41,6 +41,7 @@ class SimpleScheduler:
         max_batch_cost: int | None = None,
         max_concurrency: int = 1,
         abort_callback: Callable[[str], None] | None = None,
+        release_session_callback: Callable[[str], None] | None = None,
     ):
         self.inbox: _queue_mod.Queue[IncomingMessage] = _queue_mod.Queue()
         self.outbox: _queue_mod.Queue[OutgoingMessage] = _queue_mod.Queue()
@@ -64,10 +65,20 @@ class SimpleScheduler:
                 "max_concurrency > 1 and batch_compute_fn are mutually exclusive"
             )
         self._abort_callback = abort_callback
+        self._release_session_callback = release_session_callback
         self._aborted: set[str] = set()
         self._abort_lock = threading.Lock()
         self._running = False
         self._pending_messages: collections.deque[IncomingMessage] = collections.deque()
+
+    def admin(self, action, payload):
+        if action != "release_session_cache" or self._release_session_callback is None:
+            return {"success": True, "data": {"skipped": True, "unsupported": True}}
+        owner = payload.get("session_instance_id")
+        if not isinstance(owner, str) or not owner:
+            raise ValueError("session instance is required")
+        self._release_session_callback(owner)
+        return {"success": True, "data": {"released": True}}
 
     def _cleanup_aborted_request(self, request_id: str) -> None:
         if self._abort_callback is None:

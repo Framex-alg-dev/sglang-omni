@@ -42,6 +42,13 @@ def render_knowledge_context(context: KnowledgeContext, *, language: str) -> str
         f"snapshot_id: {context.snapshot_id}",
         f"result_id: {context.result_id}",
     ]
+    if any(item.metadata.get("supersedes_previous") is True for item in context.evidence):
+        parts.append(
+            "当前快照是现行权威播客上下文；与更早会话内容冲突时以当前快照为准。"
+            if language == "zh"
+            else "This snapshot is the current authoritative podcast context; "
+            "it supersedes conflicting factual context from earlier revisions."
+        )
     for index, item in enumerate(context.evidence, start=1):
         attrs = (
             f'rank="{index}" source_type={quoteattr(item.source_type)} '

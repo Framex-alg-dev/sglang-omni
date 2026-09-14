@@ -50,10 +50,11 @@ def test_plain_and_sectioned_proactive_overrides() -> None:
 
         write_runtime_prompt(
             "proactive_action_rules",
-            "[session_enter]\n入场动作\n[idle_timeout]\n空闲动作",
+            "[session_enter]\n[动作意图：首次问候]\n入场动作\n"
+            "[idle_timeout]\n[动作意图：低打扰提醒]\n空闲动作",
         )
         assert (
             read_runtime_prompt_section("proactive_action_rules", "idle_timeout")
-            == "空闲动作"
+            == "[动作意图：低打扰提醒]\n空闲动作"
         )
         assert read_runtime_prompt_section("proactive_action_rules", "farewell") is None

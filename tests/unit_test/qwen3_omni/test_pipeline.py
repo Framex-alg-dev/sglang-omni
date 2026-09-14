@@ -1536,6 +1536,8 @@ def test_action_scoring_candidate_requests_are_materialized_lazily():
         plan = req_data.action_scoring_plan
         assert plan["candidate_data"] == []
         assert plan["candidate_ids"] == ["A1", "A2"]
+        assert plan["parent_radix_cached_token_count"] is None
+        assert plan["prefix_chunk_timings"] == []
 
         candidate_data = build_action_scoring_candidate_data(req_data, "A1")
         assert candidate_data.req.origin_input_ids == [11, 12, 13, 1001, 99]

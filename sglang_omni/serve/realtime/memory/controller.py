@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from collections import deque
 from typing import Any
@@ -18,6 +19,7 @@ from sglang_omni.serve.realtime.memory import (
     build_memory_extraction_request,
     parse_memory_extraction,
 )
+from sglang_omni.serve.realtime.memory.extractor import IncompleteMemoryExtraction
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 
@@ -268,18 +270,104 @@ class SessionMemoryController:
             attempt=attempt,
             queue_wait_ms=queue_wait_ms,
         )
-        try:
+        async def extract_batch(batch, rid, model_attempt):
+            self._session_memory_request_id = rid
+            batch_request = request if rid == request_id else build_memory_extraction_request(
+                model_name=self.model_name, session_id=self.session_id or "",
+                session_instance_id=self.session_instance_id, language=self.language,
+                turns=batch, active_claims=store.extraction_state(), config=config,
+                base_store_revision=base_store_revision,
+                active_threads=store.open_thread_extraction_state(),
+            )
             result = await asyncio.wait_for(
-                self.client.completion(request, request_id=request_id),
+                self.client.completion(batch_request, request_id=rid),
                 timeout=config.extraction_timeout_s,
             )
             if self.closed:
+                raise asyncio.CancelledError
+            diagnostics: dict[str, Any] = {}
+            try:
+                extracted = parse_memory_extraction(
+                    result.text, expected_turns=batch, config=config,
+                    diagnostics=diagnostics,
+                )
+            except Exception as parse_error:
+                # Bounded raw output is needed to distinguish actual omissions
+                # from invalid identities/schema and malformed/truncated JSON.
+                diagnostics.update(
+                    parse_error_type=type(parse_error).__name__,
+                    parse_error_message=str(parse_error),
+                    raw_output=result.text[:32768],
+                    raw_output_truncated=len(result.text) > 32768,
+                )
+                raise
+            finally:
+                usage = getattr(result, "usage", None)
+                emit_structured_log(
+                    "diagnostic", "session_memory_extraction_parse_diagnostic",
+                    session_id=self.session_id,
+                    session_instance_id=self.session_instance_id,
+                    request_id=rid, attempt=model_attempt,
+                    base_store_revision=base_store_revision,
+                    input_turns=[{
+                        "turn_id": t.turn_id, "turn_seq": t.turn_seq,
+                        "user_text_chars": len(t.user_text or ""),
+                        "audio_count": len(t.audios),
+                    } for t in batch],
+                    finish_reason=getattr(result, "finish_reason", None),
+                    completion_tokens=getattr(usage, "completion_tokens", None),
+                    prompt_tokens=getattr(usage, "prompt_tokens", None),
+                    max_new_tokens=config.max_new_tokens,
+                    output_chars=len(result.text),
+                    output_sha256=hashlib.sha256(result.text.encode()).hexdigest(),
+                    parse_diagnostics=diagnostics,
+                )
+            return extracted
+
+        recovery_consumed = False
+        try:
+            try:
+                extracted = await extract_batch(turns, request_id, attempt)
+            except Exception as initial_error:
+                if config.max_retries < attempt or self.closed:
+                    raise
+                recovery_consumed = True
+                abort = getattr(self.client, "abort", None)
+                if callable(abort):
+                    await asyncio.gather(abort(request_id), return_exceptions=True)
+                staged = {
+                    item.turn_seq: item
+                    for item in (initial_error.partial if isinstance(initial_error, IncompleteMemoryExtraction) else ())
+                }
+                # All results stay local until complete coverage and revision
+                # validation in store.apply. Nothing advances the watermark here.
+                for memory_turn in turns:
+                    if memory_turn.turn_seq in staged:
+                        continue
+                    for retry in range(attempt, config.max_retries + 1):
+                        rid = f"{request_id}-recover-{memory_turn.turn_seq}-{retry}"
+                        emit_structured_log(
+                            "performance", "session_memory_recovery_started",
+                            session_id=self.session_id, session_instance_id=self.session_instance_id,
+                            request_id=rid, parent_request_id=request_id,
+                            turn_seq=memory_turn.turn_seq, attempt=retry + 1,
+                            retained_turn_seqs=sorted(staged),
+                            reason=type(initial_error).__name__,
+                        )
+                        try:
+                            # Bounded backoff yields the event loop before retrying.
+                            await asyncio.sleep(min(0.05 * (2 ** min(retry - 1, 4)), 0.5))
+                            recovered = await extract_batch([memory_turn], rid, retry + 1)
+                            staged[memory_turn.turn_seq] = recovered[0]
+                            break
+                        except Exception:
+                            if callable(abort):
+                                await asyncio.gather(abort(rid), return_exceptions=True)
+                            if retry == config.max_retries:
+                                raise
+                extracted = [staged[t.turn_seq] for t in turns]
+            if self.closed:
                 return False
-            extracted = parse_memory_extraction(
-                result.text,
-                expected_turns=turns,
-                config=config,
-            )
             apply_stats = store.apply(
                 extracted,
                 {turn.turn_seq: turn for turn in turns},
@@ -335,6 +423,7 @@ class SessionMemoryController:
                 )
             should_retry = (
                 not self.closed
+                and not recovery_consumed
                 and attempt <= config.max_retries
             )
             if should_retry:

@@ -17,7 +17,7 @@ MAX_ACTION_CANDIDATES = 700
 MAX_ACTION_CATEGORIES = 128
 MAX_ACTION_CHILDREN_PER_CATEGORY = 128
 SYSTEM_REPLY_PREFIX_MAX_CHARS = 256
-SYSTEM_REPLY_SENTENCE_WAIT_S = 0.1
+SYSTEM_REPLY_SENTENCE_WAIT_S = 0.03
 SYSTEM_REPLY_SENTENCE_END_RE = re.compile(r"[。！？!?；;\.\n]")
 MAX_PREWARM_CHILD_CATEGORIES = 16  # Internal legacy handler limit; not wire-visible.
 REALTIME_PROTOCOL_VERSION = 1
@@ -52,6 +52,7 @@ ACTION_PERSONA_FIELDS = (
 CHARACTER_PROFILE_FIELDS = ACTION_PERSONA_FIELDS + (
     "visual_behavior_preferences",
 )
+FACIAL_EXPRESSION_CATEGORY_ID = "B019"
 DEFAULT_REPLY_MAX_NEW_TOKENS = 512
 DEFAULT_REPLY_TEMPERATURE = 0.4
 PURE_ACTION_REPLY_MAX_NEW_TOKENS = 48
@@ -245,6 +246,30 @@ def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
             "admission_ms": float(stats.get("scheduler_admission_ms", 0.0)),
             "wait_ms": float(stats.get("scheduler_wait_ms", 0.0)),
             "prefix_prefill_ms": float(stats.get("prefix_prefill_ms", 0.0)),
+            "prefix_cache": {
+                "prefix_token_count": int(stats.get("prefix_token_count", 0)),
+                "reusable_boundary_token_count": int(
+                    stats.get("reusable_boundary_token_count", 0)
+                ),
+                "parent_radix_cached_token_count": int(
+                    stats.get("parent_radix_cached_token_count", 0)
+                ),
+                "parent_computed_token_count": int(
+                    stats.get("parent_computed_token_count", 0)
+                ),
+                "parent_cache_hit_ratio": float(
+                    stats.get("parent_cache_hit_ratio", 0.0)
+                ),
+                "candidate_cached_prefix_token_count": int(
+                    stats.get(
+                        "candidate_cached_prefix_token_count",
+                        stats.get("cached_prefix_token_count", 0),
+                    )
+                ),
+            },
+            "prefix_chunks": [
+                dict(item) for item in stats.get("prefix_chunks", [])
+            ],
         },
         "suffix": {
             "batch_count": int(stats.get("suffix_batch_count", len(suffix_batch_ms))),

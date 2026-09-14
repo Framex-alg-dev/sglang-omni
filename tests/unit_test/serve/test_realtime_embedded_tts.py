@@ -4,6 +4,8 @@ import asyncio
 import base64
 import json
 from typing import Any
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 
@@ -97,7 +99,12 @@ class ProgrammableTTSConnector:
         return context
 
 
-def _app(connector: ProgrammableTTSConnector, *, interval_ms: int = 0):
+def _app(
+    connector: ProgrammableTTSConnector,
+    *,
+    interval_ms: int = 0,
+    tts_config: EmbeddedTTSConfig | None = None,
+):
     client = DevRealtimeModelClient(
         DevRealtimeModelConfig(
             enabled=True,
@@ -109,9 +116,8 @@ def _app(connector: ProgrammableTTSConnector, *, interval_ms: int = 0):
     return create_dev_app(
         client,
         model_name="dev-model",
-        embedded_tts_config=EmbeddedTTSConfig(
-            url="ws://tts.local/realtime", voice="test-voice"
-        ),
+        embedded_tts_config=tts_config
+        or EmbeddedTTSConfig(url="ws://tts.local/realtime", voice="test-voice"),
         embedded_tts_connector=connector,
     )
 
@@ -147,11 +153,13 @@ def _fusion_app(
     )
 
 
-def _start_session(ws: Any, *, voice: str | None = None) -> None:
+def _start_session(
+    ws: Any, *, voice: str | None = None, session_id: str = "tts-session"
+) -> None:
     payload: dict[str, Any] = {
         "type": "session.start",
         "protocol_version": 1,
-        "session_id": "tts-session",
+        "session_id": session_id,
         "outputs": ["text", "audio"],
         "locale": "zh-CN",
         "reply": {"instructions": "简短回复"},
@@ -162,8 +170,7 @@ def _start_session(ws: Any, *, voice: str | None = None) -> None:
     started = ws.receive_json()
     assert started["type"] == "session.started"
     assert started["outputs"] == ["text", "audio"]
-    if voice is not None:
-        assert started["output_audio"] == {"voice": "test-voice"}
+    assert started["output_audio"] == {"voice": voice or "test-voice"}
 
 
 def _start_fusion_session(ws: Any) -> None:
@@ -211,6 +218,7 @@ def test_text_audio_streams_pcm_and_reuses_connection_across_turns() -> None:
         second = _run_turn(ws, "turn-2")
 
     assert len(connector.contexts) == 1
+    assert parse_qs(urlsplit(connector.urls[0]).query)["voice"] == ["test-voice"]
     assert connector.contexts[0].websocket.committed_texts == [
         "固定流式回复",
         "固定流式回复",
@@ -242,10 +250,75 @@ def test_text_audio_streams_pcm_and_reuses_connection_across_turns() -> None:
         assert events[-1]["outputs"] == {"text": "completed", "audio": "completed"}
 
 
-def test_session_voice_does_not_override_server_tts_voice() -> None:
+def test_session_voice_overrides_default_in_ack_log_and_tts_across_turns() -> None:
     connector = ProgrammableTTSConnector()
-    with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
+    with (
+        patch("sglang_omni.serve.realtime.multimodal.emit_structured_log") as log,
+        TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws,
+    ):
         _start_session(ws, voice="spk_character_1")
+        first = _run_turn(ws, "turn-1")
+        second = _run_turn(ws, "turn-2")
+
+    assert first[-1]["type"] == second[-1]["type"] == "turn.result"
+    assert len(connector.urls) == 1
+    assert parse_qs(urlsplit(connector.urls[0]).query)["voice"] == ["spk_character_1"]
+    validation = [
+        call.kwargs
+        for call in log.call_args_list
+        if call.args[1] == "session_validation_completed"
+    ]
+    assert len(validation) == 1
+    assert validation[0]["requested_output_audio_voice"] == "spk_character_1"
+    assert validation[0]["effective_output_audio_voice"] == "spk_character_1"
+
+
+def test_session_voices_are_isolated_with_shared_default_config() -> None:
+    connector = ProgrammableTTSConnector()
+    config = EmbeddedTTSConfig(url="ws://tts.local/realtime", voice="test-voice")
+    with (
+        TestClient(_app(connector, tts_config=config)) as client,
+        client.websocket_connect("/v1/session/realtime") as first,
+        client.websocket_connect("/v1/session/realtime") as second,
+    ):
+        _start_session(first, voice="spk_one", session_id="one")
+        _start_session(second, voice="spk_two", session_id="two")
+        assert _run_turn(first, "one-1")[-1]["type"] == "turn.result"
+        assert _run_turn(second, "two-1")[-1]["type"] == "turn.result"
+        assert _run_turn(first, "one-2")[-1]["type"] == "turn.result"
+    assert [parse_qs(urlsplit(url).query)["voice"] for url in connector.urls] == [
+        ["spk_one"],
+        ["spk_two"],
+    ]
+    assert config.voice == "test-voice"
+
+
+def test_missing_provider_voice_fails_without_default_voice_retry() -> None:
+    class MissingVoiceConnector(ProgrammableTTSConnector):
+        def __call__(self, url: str, **kwargs: object) -> ProgrammableTTSContext:
+            context = super().__call__(url, **kwargs)
+            context.websocket.events.get_nowait()
+            context.websocket.events.put_nowait(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "code": "speaker_not_found",
+                            "message": "unknown speaker",
+                        },
+                    }
+                )
+            )
+            return context
+
+    connector = MissingVoiceConnector()
+    with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
+        _start_session(ws, voice="spk_missing")
+        events = _run_turn(ws, "missing")
+    assert events[-1]["type"] == "error"
+    assert all(event["type"] != "turn.result" for event in events)
+    assert len(connector.urls) == 1
+    assert parse_qs(urlsplit(connector.urls[0]).query)["voice"] == ["spk_missing"]
 
 
 def test_session_rejects_invalid_output_audio_voice() -> None:
@@ -309,7 +382,10 @@ def test_provider_protocol_failure_fails_turn_without_success_terminal() -> None
 
 def test_text_only_session_has_zero_tts_side_effects() -> None:
     connector = ProgrammableTTSConnector()
-    with TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws:
+    with (
+        patch("sglang_omni.serve.realtime.multimodal.emit_structured_log") as log,
+        TestClient(_app(connector)).websocket_connect("/v1/session/realtime") as ws,
+    ):
         ws.send_json(
             {
                 "type": "session.start",
@@ -320,11 +396,19 @@ def test_text_only_session_has_zero_tts_side_effects() -> None:
                 "reply": {"instructions": "简短回复"},
             }
         )
-        assert ws.receive_json()["type"] == "session.started"
+        started = ws.receive_json()
+        assert started["type"] == "session.started"
+        assert "output_audio" not in started
         events = _run_turn(ws, "turn-text")
 
     assert events[-1]["type"] == "turn.result"
     assert connector.contexts == []
+    validation = next(
+        call.kwargs
+        for call in log.call_args_list
+        if call.args[1] == "session_validation_completed"
+    )
+    assert validation["effective_output_audio_voice"] is None
 
 
 def test_cancel_closes_provider_and_next_turn_reconnects() -> None:
@@ -408,9 +492,20 @@ def test_fusion_buffers_audio_until_promotion_and_synthesizes_text_once() -> Non
         )
         == "固定流式回复"
     )
+    append_events = [
+        event
+        for event in provider.sent
+        if event["type"] == "input_text_buffer.append"
+    ]
+    assert append_events
+    assert all(
+        isinstance(event.get("instruct"), str) and event["instruct"].strip()
+        for event in append_events
+    )
+    assert len({event["instruct"] for event in append_events}) == 1
 
 
-def test_fusion_provisional_audio_overflow_fails_without_audio_leak() -> None:
+def test_language_reply_bypasses_pending_audio_byte_limit() -> None:
     connector = ProgrammableTTSConnector()
     with TestClient(
         _fusion_app(connector, provisional_audio_max_bytes=1)
@@ -419,15 +514,15 @@ def test_fusion_provisional_audio_overflow_fails_without_audio_leak() -> None:
         events = _run_turn(ws, "turn-overflow")
 
     types = [event["type"] for event in events]
-    assert types[-1] == "error"
-    assert "response.audio.delta" not in types
-    assert "response.audio.done" not in types
-    assert "response.done" not in types
-    assert "turn.result" not in types
+    assert types[-1] == "turn.result"
+    assert "response.audio.delta" in types
+    assert "response.audio.done" in types
+    assert "response.done" in types
+    assert "turn.result" in types
     assert connector.contexts[0].closed is True
 
 
-def test_fusion_provisional_audio_duration_limit_uses_pcm_duration() -> None:
+def test_language_reply_bypasses_pending_audio_duration_limit() -> None:
     connector = ProgrammableTTSConnector(audio_payload=b"\x00" * 96)
     with TestClient(
         _fusion_app(connector, provisional_audio_max_milliseconds=1)
@@ -436,11 +531,11 @@ def test_fusion_provisional_audio_duration_limit_uses_pcm_duration() -> None:
         events = _run_turn(ws, "turn-duration-overflow")
 
     types = [event["type"] for event in events]
-    assert types[-1] == "error"
-    assert "response.audio.delta" not in types
-    assert "response.audio.done" not in types
-    assert "response.done" not in types
-    assert "turn.result" not in types
+    assert types[-1] == "turn.result"
+    assert "response.audio.delta" in types
+    assert "response.audio.done" in types
+    assert "response.done" in types
+    assert "turn.result" in types
     assert connector.contexts[0].closed is True
 
 
@@ -484,8 +579,8 @@ def test_tts_failure_aborts_model_while_model_stream_is_stalled() -> None:
         events = _run_turn(ws, "turn-stalled-model")
 
     assert events[-1]["type"] == "error"
-    assert len(client.abort_calls) == 1
-    assert client.abort_calls[0].endswith("-reply")
+    reply_aborts = [request_id for request_id in client.abort_calls if request_id.endswith("-reply")]
+    assert len(reply_aborts) == 1
     assert connector.contexts[0].closed is True
 
 
@@ -512,7 +607,7 @@ def test_fusion_cancel_discards_buffered_audio_without_leak() -> None:
         while True:
             event = ws.receive_json()
             before_cancel.append(event)
-            if event["type"] == "response.provisional.text.delta":
+            if event["type"] == "response.text.delta":
                 break
         ws.send_json({"type": "turn.cancel", "turn_id": "turn-cancel-fusion"})
         after_cancel: list[dict[str, Any]] = []
@@ -521,12 +616,11 @@ def test_fusion_cancel_discards_buffered_audio_without_leak() -> None:
             after_cancel.append(event)
             if event["type"] == "turn.cancelled":
                 break
+        ws.send_json({"type": "turn.start", "turn_id": "after-cancel", "origin": "user"})
+        assert ws.receive_json()["type"] == "turn.started"
 
-    all_types = [event["type"] for event in before_cancel + after_cancel]
-    assert "response.audio.delta" not in all_types
-    assert "response.audio.done" not in all_types
-    assert "response.done" not in all_types
-    assert "turn.result" not in all_types
+    # Deltas already in flight may precede the cancellation acknowledgement.
+    assert after_cancel[-1]["type"] == "turn.cancelled"
     assert connector.contexts[0].closed is True
 
 
@@ -627,4 +721,7 @@ def test_fusion_unsupported_pure_action_discards_online_tts_audio() -> None:
     assert "response.done" not in types
     assert events[-1]["type"] == "turn.result"
     assert events[-1]["reply"]["source"] == "client_prerecorded_audio"
+    assert events[-1]["reply"]["text"].strip()
+    assert events[-1]["outputs"]["text"] == "completed"
+    assert events[-1]["outputs"]["audio"] == "suppressed"
     assert connector.contexts == []

@@ -38,6 +38,7 @@ from sglang_omni.preprocessing import (
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.proto import StagePayload
 from sglang_omni.utils.async_jsonl import enqueue_jsonl
+from sglang_omni.utils.prepared_media_cache import PreparedMediaCache
 from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -315,11 +316,9 @@ class Qwen3OmniPreprocessor:
         # Category and child requests in one logical turn have identical
         # media/history. Keep only a small, one-shot cache of the prepared
         # media objects so child preprocessing does not decode them again.
-        self._action_context_cache: dict[str, dict[str, Any]] = {}
-        self._action_context_cache_lock = threading.Lock()
-        self._action_context_cache_max_entries = 4
+        self._action_context_cache = PreparedMediaCache()
 
-    def _action_context_cache_key(self, payload: StagePayload) -> str | None:
+    def _action_context_cache_key(self, payload: StagePayload) -> tuple[str, str] | None:
         metadata = getattr(payload.request, "metadata", None)
         if not isinstance(metadata, dict) or metadata.get("task") != "action_suffix_scoring":
             return None
@@ -330,24 +329,17 @@ class Qwen3OmniPreprocessor:
         stage = metadata.get("action_stage")
         if not isinstance(key, str) or not key.strip() or stage not in {"category", "child"}:
             return None
-        return key.strip()
+        owner = metadata.get("session_instance_id")
+        return (owner, key.strip()) if owner else None
 
-    def _get_action_context_cache(self, key: str | None) -> dict[str, Any] | None:
+    def _get_action_context_cache(self, key: tuple[str, str] | None) -> dict[str, Any] | None:
         if key is None:
             return None
-        with self._action_context_cache_lock:
-            # A context is consumed by the child stage exactly once. This
-            # prevents a stale turn from retaining decoded media in memory.
-            return self._action_context_cache.pop(key, None)
+        return self._action_context_cache.pop(key)
 
-    def _put_action_context_cache(self, key: str | None, value: dict[str, Any]) -> None:
-        if key is None:
-            return
-        with self._action_context_cache_lock:
-            self._action_context_cache[key] = value
-            while len(self._action_context_cache) > self._action_context_cache_max_entries:
-                oldest = next(iter(self._action_context_cache))
-                self._action_context_cache.pop(oldest, None)
+    def _put_action_context_cache(self, key, value: dict[str, Any]) -> None:
+        if key is not None:
+            self._action_context_cache.put(key, value)
 
     def _build_multimodal_messages(
         self,
@@ -483,14 +475,15 @@ class Qwen3OmniPreprocessor:
         audios: list[Any],
         images: list[Any],
         input_ids: "torch.Tensor",
+        prompt_text: str,
     ) -> dict[str, Any] | None:
         """Find the safe reusable boundary for an action-scoring prompt.
 
-        The catalog system message and completed history precede the current
-        turn.  Only that prefix is safe to reuse across turns; current media
-        and the current avatar state must remain outside the reusable range.
-        The boundary is measured from the exact processor output rather than
-        reconstructed from text, because audio/image placeholders expand to
+        The catalog system message and an explicitly separated Session
+        instruction precede current state/media/text. Only that prefix is safe
+        to reuse across turns. Legacy callers without a Session instruction
+        retain the former system/history boundary. The boundary is measured
+        from exact processor output because audio/image placeholders expand to
         model-specific token spans.
         """
         if not messages_mm:
@@ -500,6 +493,48 @@ class Qwen3OmniPreprocessor:
         action_spec = payload.request.params.get("action_scoring")
         if not isinstance(action_spec, dict):
             return None
+        session_instruction = action_spec.get("session_instruction")
+        if (
+            action_spec.get("cache_static_system_only") is not True
+            and isinstance(session_instruction, str)
+            and session_instruction
+        ):
+            rendered_session = session_instruction
+            if not rendered_session.endswith("\n"):
+                rendered_session += "\n"
+            start = prompt_text.find(rendered_session)
+            if start >= 0:
+                boundary_text = prompt_text[: start + len(rendered_session)]
+                boundary_ids = self.tokenizer(
+                    boundary_text,
+                    add_special_tokens=False,
+                    return_tensors="pt",
+                )["input_ids"][0]
+                max_common = min(
+                    int(boundary_ids.numel()),
+                    int(input_ids.numel()),
+                )
+                boundary_len = 0
+                while (
+                    boundary_len < max_common
+                    and int(boundary_ids[boundary_len])
+                    == int(input_ids[boundary_len])
+                ):
+                    boundary_len += 1
+                if boundary_len == int(boundary_ids.numel()) and boundary_len > 0:
+                    return {
+                        "cache_prefix_token_count": boundary_len,
+                        "history_message_count": 0,
+                        "history_audio_count": 0,
+                        "history_image_count": 0,
+                        "session_instruction_cached": True,
+                    }
+            logger.warning(
+                "session action prefix boundary was not found or did not match "
+                "the rendered prompt; "
+                "falling back to static system boundary request_id=%s",
+                payload.request_id,
+            )
         history_count = action_spec.get("history_message_count")
         if not isinstance(history_count, int) or history_count < 0:
             return None
@@ -571,11 +606,34 @@ class Qwen3OmniPreprocessor:
                 for key in ("audios", "audio", "images", "videos", "video", "audio_target_sr")
                 if key in request_inputs
             }
+        if (os.environ.get("SGLANG_OMNI_SCOPED_RADIX_CACHE") == "1"
+                and action_cache_metadata is not None):
+            from sglang_omni.models.qwen3_omni.public_prefix import PublicPrefixVerifier
+            if not hasattr(self, "_public_prefix_verifier"):
+                self._public_prefix_verifier = PublicPrefixVerifier(self.tokenizer, self.processor)
+            spec = payload.request.params.get("action_scoring", {})
+            public_end = self._public_prefix_verifier.boundary(
+                spec.get("static_system_prompt"), input_ids.tolist())
+            action_cache_metadata = dict(action_cache_metadata)
+            action_cache_metadata.update(
+                public_prefix_token_count=public_end,
+                scope_family=str(self.model_dir),
+                scope_session=payload.request.metadata.get("session_instance_id") or payload.request_id,
+                scope_request=payload.request_id,
+                scope_has_media=any(not values.get("_skip") for values in encoder_inputs.values()),
+            )
+        # Media is private even when byte-identical across sessions. Requests
+        # without a session instance only reuse inside their own request.
+        owner = payload.request.metadata.get("session_instance_id") or payload.request_id
+        for values in encoder_inputs.values():
+            if values.get("cache_key"):
+                values["cache_key"] = _contextualize_cache_key(values["cache_key"], owner=owner)
         state = Qwen3OmniPipelineState(
             raw_inputs=raw_inputs,
             mm_inputs=build_lightweight_mm_inputs(full_mm_inputs),
             prompt={
                 "prompt_text": prompt_text,
+                "cache_owner": owner,
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 **(
@@ -944,26 +1002,24 @@ class Qwen3OmniPreprocessor:
         if request_task in {"action_suffix_scoring", "session_reply"}:
             is_action = request_task == "action_suffix_scoring"
             prompt_diagnostics = {
-                "event": (
-                    "action_scoring_prompt_rendered"
-                    if is_action
-                    else "reply_prompt_rendered"
-                ),
+                "event": "action_scoring_prompt_rendered" if is_action else "reply_prompt_rendered",
                 "timestamp_unix_ms": round(time.time() * 1000.0),
                 "request_id": payload.request_id,
                 "session_id": payload.request.metadata.get("session_id"),
+                "session_instance_id": payload.request.metadata.get("session_instance_id"),
+                "logical_request_id": payload.request.metadata.get("logical_request_id"),
                 "prompt_tokens": int(input_ids.numel()),
-                "full_prompt": prompt_text,
-                "messages": (payload.request.inputs or {}).get("messages", []) if isinstance(payload.request.inputs, dict) else [],
-                "audios": _summarize_prompt_media((payload.request.inputs or {}).get("audios", []) if isinstance(payload.request.inputs, dict) else []),
-                "images": _summarize_prompt_media((payload.request.inputs or {}).get("images", []) if isinstance(payload.request.inputs, dict) else []),
-                "params": payload.request.params,
-                "metadata": payload.request.metadata,
             }
+            if os.environ.get("SGLANG_OMNI_TRACE_PROMPTS") == "1" or os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE"):
+                prompt_diagnostics.update(
+                    full_prompt=prompt_text, params=payload.request.params,
+                    metadata=payload.request.metadata,
+                    messages=(payload.request.inputs or {}).get("messages", []),
+                )
             if is_action:
                 logger.info(
                     "Qwen3-Omni action scoring prompt rendered=%s",
-                    json.dumps(prompt_diagnostics, ensure_ascii=False, default=str),
+                    {key: value for key, value in prompt_diagnostics.items() if key not in {"full_prompt", "messages", "params", "metadata"}},
                 )
                 _write_action_prompt_debug_record(prompt_diagnostics)
             else:
@@ -1082,6 +1138,7 @@ class Qwen3OmniPreprocessor:
             audios=audios,
             images=images,
             input_ids=input_ids,
+            prompt_text=prompt_text,
         )
         return self._finalize_state(
             payload,

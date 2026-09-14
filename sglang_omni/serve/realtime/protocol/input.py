@@ -14,6 +14,12 @@ from sglang_omni.preprocessing.image import prepare_image_bytes_for_wire
 from sglang_omni.serve.realtime.audio_buffer import RealtimeAudioBuffer
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.models import ImageFrame, TurnBuffer
+from sglang_omni.serve.realtime.knowledge import (
+    KnowledgeBinding,
+    KnowledgeContext,
+    KnowledgeEvidence,
+    ProvidedEntitySnapshot,
+)
 from sglang_omni.utils.structured_logs import (
     emit_structured_log as _base_emit_structured_log,
     new_trace_id,
@@ -506,6 +512,146 @@ class TurnInputComponent:
                 "snapshot_id": self.knowledge_binding.snapshot_id,
             }
         )
+
+    async def handle_knowledge_context_replace(
+        self,
+        event: dict[str, Any],
+    ) -> None:
+        """Atomically replace one client-provided entity snapshot."""
+        self._require_started()
+        if self.active_turn is not None:
+            raise ValueError(
+                "knowledge.context.replace cannot run while a turn is active"
+            )
+        if self.knowledge_binding is None:
+            raise ValueError(
+                "knowledge.context.replace requires a bound knowledge session"
+            )
+        if self.knowledge_binding.mode != "provided_context":
+            raise ValueError(
+                "knowledge.context.replace requires provided_context mode"
+            )
+
+        request_id = event["request_id"]
+        request_sha256 = event["request_sha256"]
+        previous_result = self._knowledge_context_replace_results.get(request_id)
+        if previous_result is not None:
+            previous_hash, previous_ack = previous_result
+            if previous_hash != request_sha256:
+                raise ValueError(
+                    "knowledge.context.replace request_id was reused with different content"
+                )
+            await self.send(dict(previous_ack))
+            return
+
+        current_snapshot = self.provided_entity_snapshot
+        if current_snapshot is None:
+            raise ValueError(
+                "knowledge.context.replace requires an existing entity snapshot"
+            )
+        if current_snapshot.snapshot_id != event["expected_snapshot_id"]:
+            raise ValueError(
+                "knowledge.context.replace expected snapshot does not match current snapshot"
+            )
+
+        raw_snapshot = event["entity_snapshot"]
+        new_snapshot = ProvidedEntitySnapshot(
+            snapshot_id=raw_snapshot["snapshot_id"],
+            revision=raw_snapshot["revision"],
+            current_entity_id=raw_snapshot["current_entity_id"],
+            current_entity_text=raw_snapshot["current_entity_text"],
+            content_sha256=raw_snapshot["content_sha256"],
+        )
+        new_binding = KnowledgeBinding(
+            binding_id=event["binding_id"],
+            binding_revision=event["binding_revision"],
+            required=event["knowledge_required"],
+            tenant_id="",
+            snapshot_id=new_snapshot.snapshot_id,
+            state_token="",
+            status="ready",
+            mode="provided_context",
+        )
+        previous_snapshot = current_snapshot
+        status = (
+            "unchanged"
+            if previous_snapshot is not None
+            and previous_snapshot.snapshot_id == new_snapshot.snapshot_id
+            and previous_snapshot.content_sha256 == new_snapshot.content_sha256
+            and self.knowledge_binding.binding_id == new_binding.binding_id
+            and self.knowledge_binding.binding_revision
+            == new_binding.binding_revision
+            else "updated"
+        )
+
+        async with self._knowledge_state_lock:
+            self.knowledge_context_epoch += 1
+            new_context = KnowledgeContext(
+                decision="RETRIEVE",
+                reason="client_replaced_entity_snapshot",
+                result_id=new_snapshot.content_sha256,
+                state_token="",
+                snapshot_id=new_snapshot.snapshot_id,
+                evidence=(
+                    KnowledgeEvidence(
+                        evidence_id=new_snapshot.content_sha256,
+                        source_type="provided_entity_snapshot",
+                        source_id=new_snapshot.current_entity_id,
+                        title="Current authoritative entity",
+                        content=new_snapshot.current_entity_text,
+                        authority=100,
+                        metadata={
+                            "provided_context": True,
+                            "supersedes_previous": True,
+                            "context_epoch": self.knowledge_context_epoch,
+                        },
+                    ),
+                ),
+            )
+            self.knowledge_binding = new_binding
+            self.provided_entity_snapshot = new_snapshot
+            self.provided_entity_context = new_context
+
+        ack = {
+            "type": "knowledge.context.replace.ack",
+            "session_id": self.session_id,
+            "request_id": request_id,
+            "status": status,
+            "previous_snapshot_id": (
+                previous_snapshot.snapshot_id
+                if previous_snapshot is not None
+                else None
+            ),
+            "snapshot_id": new_snapshot.snapshot_id,
+            "content_sha256": new_snapshot.content_sha256,
+            "script_id": event["script_id"],
+            "script_version": event["script_version"],
+            "script_checksum": event["script_checksum"],
+            "context_epoch": self.knowledge_context_epoch,
+        }
+        if len(self._knowledge_context_replace_results) >= 32:
+            oldest = next(iter(self._knowledge_context_replace_results))
+            self._knowledge_context_replace_results.pop(oldest, None)
+        self._knowledge_context_replace_results[request_id] = (
+            request_sha256,
+            dict(ack),
+        )
+        emit_structured_log(
+            "lifecycle",
+            "knowledge_context_replaced",
+            session_id=self.session_id,
+            request_id=request_id,
+            status=status,
+            previous_snapshot_id=ack["previous_snapshot_id"],
+            snapshot_id=new_snapshot.snapshot_id,
+            content_sha256=new_snapshot.content_sha256,
+            script_id=event["script_id"],
+            script_version=event["script_version"],
+            context_epoch=self.knowledge_context_epoch,
+        )
+        await self.send(ack)
+
+
     async def handle_session_close(self, event: dict[str, Any]) -> None:
         reason = event.get("reason")
         self.closed = True

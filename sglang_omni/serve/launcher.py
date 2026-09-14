@@ -424,6 +424,7 @@ async def _run_server(
     """
     embedded_tts_config = (
         EmbeddedTTSConfig(
+            connection_count=int(os.environ.get("SGLANG_OMNI_TTS_CONNECTION_COUNT", "1")),
             url=realtime_tts_url,
             voice=realtime_tts_voice,
             connect_timeout_seconds=realtime_tts_connect_timeout_seconds,

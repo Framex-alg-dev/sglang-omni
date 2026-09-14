@@ -939,7 +939,7 @@ def create_preprocessing_executor(
     async def _preprocess(payload: StagePayload) -> StagePayload:
         return await preprocessor(payload)
 
-    return SimpleScheduler(_preprocess)
+    return SimpleScheduler(_preprocess, release_session_callback=preprocessor._action_context_cache.release_session)
 
 
 def create_aggregate_executor():
@@ -976,6 +976,9 @@ def create_image_encoder_executor(
         max_size=QWEN3_ENCODER_CACHE_MAX_ENTRIES,
         max_bytes=QWEN3_ENCODER_CACHE_MAX_BYTES,
         cache_device="cpu",
+        ttl_seconds=60,
+        max_owner_bytes=512 << 20,
+        owner_fn=lambda key: key.rsplit("|owner=", 1)[-1] if "|owner=" in key else None,
     )
 
     def _encode(payload: StagePayload) -> StagePayload:
@@ -1042,6 +1045,7 @@ def create_image_encoder_executor(
     return SimpleScheduler(
         _encode,
         batch_compute_fn=_encode_batch,
+        release_session_callback=cache.release_owner,
         max_batch_size=32,
         max_batch_wait_ms=max_batch_wait_ms,
         request_cost_fn=_create_image_encoder_request_cost_fn(model),
@@ -1063,6 +1067,9 @@ def create_audio_encoder_executor(
         max_size=QWEN3_ENCODER_CACHE_MAX_ENTRIES,
         max_bytes=QWEN3_ENCODER_CACHE_MAX_BYTES,
         cache_device="cpu",
+        ttl_seconds=60,
+        max_owner_bytes=512 << 20,
+        owner_fn=lambda key: key.rsplit("|owner=", 1)[-1] if "|owner=" in key else None,
     )
 
     def _encode(payload: StagePayload) -> StagePayload:
@@ -1127,6 +1134,7 @@ def create_audio_encoder_executor(
     return SimpleScheduler(
         _encode,
         batch_compute_fn=_encode_batch,
+        release_session_callback=cache.release_owner,
         max_batch_size=32,
         max_batch_wait_ms=max_batch_wait_ms,
     )

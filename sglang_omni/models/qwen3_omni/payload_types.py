@@ -17,6 +17,7 @@ class PromptInputs(TypedDict, total=False):
     input_ids: Any
     attention_mask: Any
     prompt_text: str
+    cache_owner: str
     action_scoring_cache: dict[str, Any]
 
 

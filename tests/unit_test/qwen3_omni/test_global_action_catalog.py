@@ -368,6 +368,26 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert "动作请求不必明确描述身体部位、运动方向或执行方式" in (
         catalog.category_system_prompt
     )
+
+
+def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
+    payload = _catalog_payload()
+    child = payload["categories"][1]["children"][0]
+    child["proactive_expression"] = "数字人主动问候时挥手"
+    child["user_reaction_expression"] = "用户要求问候时挥手"
+    catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
+
+    user_prompt = catalog.child_system_prompt_for("zh-CN", "B001", "user")
+    proactive_prompt = catalog.child_system_prompt_for(
+        "zh-CN", "B001", "proactive"
+    )
+
+    assert "说明=用户要求问候时挥手" in user_prompt
+    assert "说明=数字人主动问候时挥手" in proactive_prompt
+    assert "说明=单手自然挥动" not in user_prompt
+    assert catalog.child_cache_namespace("B001", turn_origin="user") != (
+        catalog.child_cache_namespace("B001", turn_origin="proactive")
+    )
     assert "动作请求由语义目标决定，不由命令句形式决定" in (
         catalog.category_system_prompt
     )
@@ -1024,8 +1044,8 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     ]
     assert category_request.candidates[-1].suffix == "B000"
     assert category_request.candidates[-1].action_id == "UNSUPPORTED"
-    assert category_request.prefix_cache_namespace == (
-        catalog.category_cache_namespace()
+    assert category_request.prefix_cache_namespace.startswith(
+        catalog.category_cache_namespace() + f":session:{session.session_instance_id}:"
     )
     category_omni_request = Client._build_action_scoring_request(
         category_request
@@ -1043,9 +1063,9 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     ]
     assert child_request.candidates[-1].suffix == "A000"
     assert child_request.candidates[-1].action_id == "UNSUPPORTED"
-    assert child_request.prefix_cache_namespace == catalog.child_cache_namespace(
+    assert child_request.prefix_cache_namespace.startswith(catalog.child_cache_namespace(
         "B001"
-    )
+    ) + f":session:{session.session_instance_id}:")
     started = next(item for item in ws.events if item["type"] == "session.started")
     assert started["fallback_category_ids"] == ["B008"]
     assert started["global_action_catalog_hash"] == catalog.catalog_hash
@@ -1117,9 +1137,9 @@ async def test_english_session_uses_isolated_english_prompts_without_translating
     assert category_request.current_text == "你好"
     assert child_request.current_text == "你好"
     assert "Action categories allowed in this conversation" in category_request.prefix
-    assert "海洋科学家" in category_request.prefix
-    assert "优先低打扰类别" in category_request.prefix
-    assert "避免大幅位移" in child_request.prefix
+    assert "海洋科学家" in category_request.session_instruction
+    assert "优先低打扰类别" in category_request.session_instruction
+    assert "避免大幅位移" in child_request.session_instruction
     assert session.action_prefix_cache_namespace == catalog.category_cache_namespace(
         "en-US"
     )
@@ -1329,8 +1349,8 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
         }
     )
 
-    assert len(client.completion_requests) == 1
-    reply_request = client.completion_requests[0]
+    assert len([r for r in client.completion_requests if r.metadata.get("task") != "session_turn_intent"]) == 2
+    reply_request = client.completion_requests[-1]
     assert {"type": "text", "text": "做个后空翻"} in (
         reply_request.messages[-1].content
     )
@@ -1342,11 +1362,11 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
     assert resolved["status"] == "discarded"
     assert resolved["reason"] == "child_unsupported"
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert "text" not in result["reply"]
+    assert result["reply"]["text"] == client.completion_text
     assert result["reply"]["source"] == "client_prerecorded_audio"
     assert result["action"]["support_status"] == "unsupported"
     assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        "这个动作暂时做不了。"
+        result["reply"]["text"]
     )
     assert session.reply_history_turns[-1].model_visible is False
     assert (
@@ -1523,15 +1543,16 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
     assert resolved["reason"] == "child_unsupported"
     assert not any(item["type"] == "response.text.delta" for item in ws.events)
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["modalities"]["text"] == "suppressed"
+    assert result["modalities"]["text"] == "completed"
     assert result["reply"] == {
         "source": "client_prerecorded_audio",
         "reason": "unsupported_action",
+        "text": client.completion_text,
         "recorded_in_history": True,
     }
     assert result["action"]["support_status"] == "unsupported"
     assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        "这个动作暂时做不了。"
+        result["reply"]["text"]
     )
     assert session.reply_history_turns[-1].model_visible is False
     assert (
@@ -1823,10 +1844,20 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
     assert first.action_prefix_cache_namespace == second.action_prefix_cache_namespace
     assert first.action_prefix_cache_namespace == catalog.category_cache_namespace()
     assert first_client.requests[0].system_prompt == second_client.requests[0].system_prompt
-    assert "职业或角色定位=海洋科学家" in first_client.requests[0].prefix
-    assert "卡通主持人" not in first_client.requests[0].prefix
-    assert "职业或角色定位=卡通主持人" in second_client.requests[0].prefix
-    assert "海洋科学家" not in second_client.requests[0].prefix
+    assert (
+        "职业或角色定位=海洋科学家"
+        in first_client.requests[0].session_instruction
+    )
+    assert "卡通主持人" not in first_client.requests[0].session_instruction
+    assert (
+        "职业或角色定位=卡通主持人"
+        in second_client.requests[0].session_instruction
+    )
+    assert "海洋科学家" not in second_client.requests[0].session_instruction
+    assert (
+        first_client.requests[0].prefix_cache_namespace
+        != second_client.requests[0].prefix_cache_namespace
+    )
     assert [item.candidate_id for item in first_client.requests[0].candidates] == [
         "B008",
         "B001",
@@ -1837,16 +1868,22 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
         "B002",
         UNSUPPORTED_CATEGORY_SCORE_ID,
     ]
-    assert first_client.requests[1].prefix_cache_namespace == (
-        catalog.child_cache_namespace("B001")
+    assert first_client.requests[1].prefix_cache_namespace.startswith(
+        catalog.child_cache_namespace("B001") + ":session:"
     )
-    assert "海洋科学家动作偏好" in first_client.requests[1].prefix
-    assert "卡通主持人" not in first_client.requests[1].prefix
-    assert second_client.requests[1].prefix_cache_namespace == (
-        catalog.child_cache_namespace("B002")
+    assert (
+        "海洋科学家动作偏好"
+        in first_client.requests[1].session_instruction
     )
-    assert "卡通主持人动作偏好" in second_client.requests[1].prefix
-    assert "海洋科学家" not in second_client.requests[1].prefix
+    assert "卡通主持人" not in first_client.requests[1].session_instruction
+    assert second_client.requests[1].prefix_cache_namespace.startswith(
+        catalog.child_cache_namespace("B002") + ":session:"
+    )
+    assert (
+        "卡通主持人动作偏好"
+        in second_client.requests[1].session_instruction
+    )
+    assert "海洋科学家" not in second_client.requests[1].session_instruction
     assert first.candidate_by_id["A001"].execution_binding == {
         "asset_id": "asset-a"
     }
@@ -1855,3 +1892,58 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
     }
     assert "A003" not in first.candidate_by_id
     assert "A001" not in second.candidate_by_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_rejection_generation_does_not_block_fallback_action_or_emit_audio(tmp_path, cancel):
+    class GatedClient(_DecisionScoreClient):
+        def __init__(self):
+            super().__init__(category="B001", child=UNSUPPORTED_CHILD_SCORE_ID, reply_route="R2")
+            self.rejection_started = asyncio.Event()
+            self.release_rejection = asyncio.Event()
+
+        async def completion(self, request, *, request_id):
+            if request.metadata.get("task") == "session_action_rejection":
+                self.rejection_started.set()
+                await self.release_rejection.wait()
+            return await super().completion(request, request_id=request_id)
+
+    catalog = load_global_action_catalog(_write_catalog(tmp_path))
+    client = GatedClient()
+    ws = _WebSocket()
+    session = MultimodalSession(
+        ws, client=client, model_name="Qwen3-Omni", global_action_catalog=catalog,
+        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
+            True, frozenset({"B008", "B001", "B002"}), frozenset(), 1.0),
+        claim_session=lambda session_id, value: None,
+        release_session=lambda session_id, value: None,
+    )
+    payload = _session_start_payload()
+    payload["modalities"] = ["text", "action"]
+    payload["unsupported_action_text"] = "固定兜底句"
+    await session.handle_session_start(payload)
+    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-gated",
+                                    "turn_origin": "user", "text_role": "user_input"})
+    task = asyncio.create_task(session.handle_turn_commit({
+        "type": "turn.commit", "turn_id": "turn-gated", "text": "请做个后空翻",
+        "turn_origin": "user", "text_role": "user_input"}))
+    await asyncio.wait_for(client.rejection_started.wait(), timeout=2)
+    actions = [e for e in ws.events if e["type"] == "turn.action.ready"]
+    assert len(actions) == 1
+    assert actions[0]["action"]["support_status"] == "unsupported"
+    assert actions[0]["action"]["fallback_applied"] is True
+    assert not any(e["type"] == "turn.result" for e in ws.events)
+    assert not any(e["type"] in {"response.text.delta", "response.audio.delta"} for e in ws.events)
+    if cancel:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not any(e["type"] == "turn.result" for e in ws.events)
+        assert not session.reply_history_turns
+    else:
+        client.release_rejection.set()
+        await task
+        result = next(e for e in ws.events if e["type"] == "turn.result")
+        assert result["reply"]["text"] == client.completion_text
+        assert session.reply_history_turns[-1].messages[-1]["content"] == result["reply"]["text"]

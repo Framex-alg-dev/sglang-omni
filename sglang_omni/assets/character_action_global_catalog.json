@@ -2,7 +2,7 @@
   "schema_version": 1,
   "catalog_version": "v2-permanent-category-ids-r1",
   "action_catalog_version": "v6-permanent-action-ids-r1",
-  "action_catalog_hash": "sha256:915469e3d86fcf7b425e316e3bdb0f7082e14b4f1560ea281313dcb9508d37e9",
+  "action_catalog_hash": "sha256:a3d148aa2ca6b1c9b84c8af9e73a6252f3567e8e10ebb78c3c289b47e417cf76",
   "categories": [
     {
       "category_id": "B001",
@@ -290,7 +290,9 @@
           "candidate_id": "A154",
           "action_id": "A154",
           "source_label": "微笑",
-          "short_definition": "嘴角两侧上扬，眼部随之轻微上挑的愉悦表情。"
+          "short_definition": "嘴角两侧上扬，眼部随之轻微上挑的愉悦表情。",
+          "proactive_expression": "适用于主动欢迎用户、表达认可、分享积极内容或鼓励用户时触发，例如“你好呀”“很开心见到你”“今天给你分享一个有趣的内容”",
+          "user_reaction_expression": "适用于用户表达感谢、夸奖、分享开心经历或给予正向反馈时触发，用户表达道谢、赞美、友善寒暄、传递轻松正向态度时常触发该动作，例如“谢谢你”“你真的很贴心”“我今天特别开心”“Thanks a lot”；适用于情感陪伴、电商直播、客服服务、日常互动等正向交流场景。对话中礼貌寒暄、接受赞美、表达感谢、氛围轻松友好时普遍使用微笑。"
         },
         {
           "candidate_id": "A123",
@@ -737,13 +739,17 @@
           "candidate_id": "A152",
           "action_id": "A152",
           "source_label": "挑眉",
-          "short_definition": "单侧或双侧眉毛快速向上挑起。"
+          "short_definition": "单侧或双侧眉毛快速向上挑起。",
+          "proactive_expression": "适用于陈述出人意料信息、表达玩味质疑、恍然大悟、略带戏谑吐槽时触发，例如“Oh really?”",
+          "user_reaction_expression": "用户说出离谱、意外、反转、出人意料、略带调侃质疑类内容时触发，例如“Guess what I did”“Is that true?”；适用于日常闲聊、娱乐对话、轻松辩论、朋友式陪伴场景。"
         },
         {
           "candidate_id": "A153",
           "action_id": "A153",
           "source_label": "皱眉",
-          "short_definition": "双眉向中间收拢，眉心下压聚拢。"
+          "short_definition": "双眉向中间收拢，眉心下压聚拢。",
+          "proactive_expression": "适用于分析困难问题、表达担忧、讨论复杂棘手情况、对说法存疑时触发，例如“这个情况确实有点复杂”",
+          "user_reaction_expression": "用户描述困境、遭遇麻烦错误、讲述不合理矛盾事件、提出费解疑惑问题、表达不满顾虑，或是说出逻辑矛盾、令人费解的内容时触发，例如“Why did this happen?”“Something is wrong here”；适用于问题分析、客服沟通、情绪陪伴、专业讨论等场景。用户倾诉糟心经历、提出质疑反驳、描述矛盾费解事态均容易触发该动作，区别于挑眉表达惊讶玩味的语义。"
         }
       ]
     },
@@ -760,67 +766,89 @@
           "candidate_id": "A154",
           "action_id": "A154",
           "source_label": "微笑",
-          "short_definition": "嘴角两侧上扬，眼部随之轻微上挑的愉悦表情。"
+          "short_definition": "嘴角两侧上扬，眼部随之轻微上挑的愉悦表情。",
+          "proactive_expression": "适用于主动欢迎用户、表达认可、分享积极内容或鼓励用户时触发，例如“你好呀”“很开心见到你”“今天给你分享一个有趣的内容”",
+          "user_reaction_expression": "适用于用户表达感谢、夸奖、分享开心经历或给予正向反馈时触发，用户表达道谢、赞美、友善寒暄、传递轻松正向态度时常触发该动作，例如“谢谢你”“你真的很贴心”“我今天特别开心”“Thanks a lot”；适用于情感陪伴、电商直播、客服服务、日常互动等正向交流场景。对话中礼貌寒暄、接受赞美、表达感谢、氛围轻松友好时普遍使用微笑。"
         },
         {
           "candidate_id": "A155",
           "action_id": "A155",
           "source_label": "大笑",
-          "short_definition": "嘴部大幅张开，肩部随笑意起伏的开怀表情。"
+          "short_definition": "嘴部大幅张开，肩部随笑意起伏的开怀表情。",
+          "proactive_expression": "适用于讲述幽默故事、进行轻松玩笑、分享趣味内容时触发，例如“这个事情真的太有意思了”“哈哈哈”“笑死我了”",
+          "user_reaction_expression": "适用于用户讲笑话、分享搞笑经历、调侃数字人或制造轻松氛围时触发，用户吐槽玩梗、讲滑稽糗事、发出幽默戏谑表达时常触发该动作，例如“刚刚发生了一件特别搞笑的事情”“That was hilarious”；适用于娱乐互动、朋友聊天、轻松陪伴等欢乐场景。"
         },
         {
           "candidate_id": "A156",
           "action_id": "A156",
           "source_label": "严肃",
-          "short_definition": "眉头收紧下压，嘴角平直收拢的庄重表情。"
+          "short_definition": "眉头收紧下压，嘴角平直收拢的庄重表情。",
+          "proactive_expression": "适用于讲述重要信息、风险提示、严肃观点或专业内容时触发，例如“这件事情需要特别注意”",
+          "user_reaction_expression": "适用于用户讨论重大问题、投诉事件、严肃话题或需要专业回应时触发，例如“这个问题很严重”；适用于新闻播报、客服投诉、专业咨询、重要提醒等场景。"
         },
         {
           "candidate_id": "A157",
           "action_id": "A157",
           "source_label": "惊讶",
-          "short_definition": "眉毛快速上扬，双眼睁大嘴微张的意外表情。"
+          "short_definition": "眉毛快速上扬，双眼睁大嘴微张的意外表情。",
+          "proactive_expression": "适用于讲述意外信息、制造悬念、分享令人惊奇的内容时触发，例如“天啊”“太令人震惊了”",
+          "user_reaction_expression": "适用于用户分享惊喜事件、突然消息或超出预期的信息时触发，用户爆出劲爆消息、反转经历、出人意料的爆料、重大突发趣事时常触发该动作，例如“我送你一束花”“我中奖了”“我升职了”“Wait till you hear what happened”；适用于情感互动、故事分享、娱乐聊天、惊喜反馈等场景。日常对话中听到反转八卦、意外见闻、突发好消息、匪夷所思的经历容易做出惊讶动作。"
         },
         {
           "candidate_id": "A158",
           "action_id": "A158",
           "source_label": "扮鬼脸",
-          "short_definition": "五官夸张挤压，吐舌歪嘴的俏皮变形表情。"
+          "short_definition": "五官夸张挤压，吐舌歪嘴的俏皮变形表情。",
+          "proactive_expression": "适用于耍小坏、开玩笑打趣、小游戏互动时触发，例如“猜猜我在打什么鬼主意”“嘿嘿，逗你玩的”",
+          "user_reaction_expression": "适用于用户调侃、逗弄、打趣数字人，带戏谑玩笑语气时触发，例如“你竟然在偷偷算计我”“信不信我揍你”；适用于年轻化娱乐聊天、玩梗打趣等轻松戏谑场景。"
         },
         {
           "candidate_id": "A159",
           "action_id": "A159",
           "source_label": "害怕",
-          "short_definition": "双眼瞪大后缩，眉头上挑嘴角下拉的恐惧表情。"
+          "short_definition": "双眼瞪大后缩，眉头上挑嘴角下拉的恐惧表情。",
+          "proactive_expression": "适用于讲述恐怖故事、危险事件或提醒风险时触发，例如“这个故事可能有一点吓人”“竟然会发生这样的事”“恐怖的事”",
+          "user_reaction_expression": "用户描述危险经历、恐怖内容或表达害怕情绪时触发，例如“昨天差点出事故”“那里真的很可怕”“太吓人了”；适用于故事讲述、悬疑主题、安全提醒等场景。"
         },
         {
           "candidate_id": "A160",
           "action_id": "A160",
           "source_label": "委屈",
-          "short_definition": "嘴角下撇，眉头微皱眼眶泛红的表情。"
+          "short_definition": "嘴角下撇，眉头微皱眼眶泛红的表情。",
+          "proactive_expression": "适用于进行轻度撒娇、表达想被关注时触发，例如“你都好久没有陪我聊天了”“你理理我嘛”",
+          "user_reaction_expression": "适用于用户拒绝互动、责怪数字人或表达冷淡态度时触发，例如“我不跟你玩了”“我讨厌你”“我不喜欢你了”；适用于情感陪伴、亲密互动、撒娇交流等场景。"
         },
         {
           "candidate_id": "A161",
           "action_id": "A161",
           "source_label": "悲伤",
-          "short_definition": "眉头内聚下垂，嘴角下拉眼神黯淡的表情。"
+          "short_definition": "眉头内聚下垂，嘴角下拉眼神黯淡的表情。",
+          "proactive_expression": "适用于讲述伤感故事、表达遗憾或回忆失落经历时触发，例如“我好难过”“我不开心”",
+          "user_reaction_expression": "用户表达伤心、失落、孤独或经历不好的事情时触发，用户倾诉失意遭遇、失去、委屈、沮丧难过的心事时常触发该动作，例如“我不想再理你了”“不要见了”“I feel so down”“我遭遇了一些不堪的事情”；适用于情感陪伴、安慰聊天、悲伤话题交流等场景。"
         },
         {
           "candidate_id": "A162",
           "action_id": "A162",
           "source_label": "疑惑",
-          "short_definition": "单眉上挑，嘴角微歪头部略侧的表情。"
+          "short_definition": "单眉上挑，嘴角微歪头部略侧的表情。",
+          "proactive_expression": "适用于主动提出疑问、引导用户思考、发现矛盾信息时触发，例如“这个问题你有没有想过呢？”“听起来好像有一点不一样”",
+          "user_reaction_expression": "用户表达模糊、不完整、前后矛盾的信息，或提出需要进一步确认的问题时触发，例如“我该怎么办呢”“你觉得呢”；适用于多轮聊天、探索式交流、信息确认等需要表现疑问的场景。"
         },
         {
           "candidate_id": "A163",
           "action_id": "A163",
           "source_label": "生气",
-          "short_definition": "眉头紧锁下压，鼻翼微张嘴角绷紧的愤怒表情伴随瞪眼。"
+          "short_definition": "眉头紧锁下压，鼻翼微张嘴角绷紧的愤怒表情伴随瞪眼。",
+          "proactive_expression": "适用于表达强烈立场、批判不合理行为或讨论愤怒事件时触发，例如“我真的生气了”“你竟然说出这种话”“这些人太坏了”",
+          "user_reaction_expression": "适用于用户描述被欺骗、不公平待遇、愤怒事件时触发，用户诉说遭遇不公、被冒犯、受委屈、宣泄怒火、吐槽恶劣行为时常触发该动作，例如“他们真的太过分了”“他们竟然欺负我”“That makes me furious”；适用于新闻评论、投诉反馈、情绪共鸣等场景。用户讲述被冒犯、遭遇不公对待、宣泄愤怒时会产生生气神态。"
         },
         {
           "candidate_id": "A164",
           "action_id": "A164",
           "source_label": "装可怜（低头咬唇抬眼）",
-          "short_definition": "用于明确要求装可怜、委屈或楚楚可怜；低头咬唇并抬眼，不等同于明确要求的卖萌动作。"
+          "short_definition": "用于明确要求装可怜、委屈或楚楚可怜；低头咬唇并抬眼，不等同于明确要求的卖萌动作。",
+          "proactive_expression": "适用于希望拉近关系、请求用户继续互动时触发，例如“陪我聊一会儿嘛”“不要不理我嘛”",
+          "user_reaction_expression": "适用于用户长时间不回应、拒绝交流或表现疏远时触发，例如“我不想聊了”；适用于恋人型陪伴、亲密互动、轻度撒娇等场景。"
         }
       ]
     },

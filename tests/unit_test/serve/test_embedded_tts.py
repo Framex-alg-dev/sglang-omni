@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
+from websockets.protocol import State
 
 from sglang_omni.serve.realtime.embedded_tts import (
     EmbeddedTTSConfig,
@@ -87,6 +88,79 @@ def _manager(
     )
 
 
+def test_asyncio_connection_state_without_closed_attribute():
+    manager = _manager(FakeConnector([]))
+    socket = FakeWebSocket([])
+    manager._websocket = socket
+    socket.state = State.OPEN
+    assert manager.connected
+    socket.state = State.CLOSING
+    assert not manager.connected
+    socket.state = State.CLOSED
+    assert not manager.connected
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_retries_once_without_consuming_text():
+    connector = FakeConnector([_successful_events()])
+    attempts = []
+
+    def unstable(url, **kwargs):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise OSError("connection refused")
+        return connector(url, **kwargs)
+
+    manager = _manager(unstable)
+    await manager.synthesize_streaming(
+        turn_id="retry", text_chunks=_chunks("what", "'s"),
+        audio_sink=lambda _: asyncio.sleep(0),
+    )
+    assert len(attempts) == 2
+    assert [event["text"] for event in connector.contexts[0].websocket.sent
+            if event["type"] == "input_text_buffer.append"] == ["what", "'s"]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_is_bounded():
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        calls.append(1)
+        raise OSError("offline")
+
+    manager = _manager(unavailable)
+    with pytest.raises(EmbeddedTTSError):
+        await manager.synthesize_streaming(
+            turn_id="offline", text_chunks=_chunks("hello"),
+            audio_sink=lambda _: asyncio.sleep(0),
+        )
+    assert len(calls) == 2
+    assert manager._active_owner is None
+
+
+@pytest.mark.asyncio
+async def test_uncertain_text_send_never_replays():
+    connector = FakeConnector([_successful_events()])
+    manager = _manager(connector)
+    socket = await manager._borrow_connection("voice-a", "prepare")
+    calls = []
+
+    async def uncertain(message):
+        calls.append(json.loads(message))
+        raise OSError("peer may have received the text")
+
+    socket.send = uncertain
+    with pytest.raises(EmbeddedTTSError):
+        await manager.synthesize_streaming(
+            turn_id="uncertain", text_chunks=_chunks("hello"),
+            audio_sink=lambda _: asyncio.sleep(0),
+        )
+    assert len(connector.urls) == 1
+    assert sum(e['type'] == 'input_text_buffer.append' for e in calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_streaming_protocol_and_connection_reuse() -> None:
     connector = FakeConnector([_successful_events() + _successful_events()[1:]])
@@ -97,10 +171,16 @@ async def test_streaming_protocol_and_connection_reuse() -> None:
         audio.append(chunk)
 
     first = await manager.synthesize_streaming(
-        turn_id="turn-1", text_chunks=_chunks("你", "好"), audio_sink=collect
+        turn_id="turn-1",
+        text_chunks=_chunks("你", "好"),
+        audio_sink=collect,
+        instruct="请开心、清晰地说。",
     )
     second = await manager.synthesize_streaming(
-        turn_id="turn-2", text_chunks=_chunks("再见"), audio_sink=collect
+        turn_id="turn-2",
+        text_chunks=_chunks("再见"),
+        audio_sink=collect,
+        instruct="请温柔、舒缓地说。",
     )
 
     assert first.audio_bytes == second.audio_bytes == 2
@@ -117,8 +197,96 @@ async def test_streaming_protocol_and_connection_reuse() -> None:
         "input_text_buffer.append",
         "input_text_buffer.commit",
     ]
+    appends = [
+        item
+        for item in connector.contexts[0].websocket.sent
+        if item["type"] == "input_text_buffer.append"
+    ]
+    assert appends == [
+        {
+            "type": "input_text_buffer.append",
+            "text": "你",
+            "instruct": "请开心、清晰地说。",
+        },
+        {
+            "type": "input_text_buffer.append",
+            "text": "好",
+            "instruct": "请开心、清晰地说。",
+        },
+        {
+            "type": "input_text_buffer.append",
+            "text": "再见",
+            "instruct": "请温柔、舒缓地说。",
+        },
+    ]
     await manager.close()
     assert connector.contexts[0].closed is True
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_streaming_waits_for_delayed_instruction_before_first_append() -> None:
+    connector = FakeConnector([_successful_events()])
+    manager = _manager(connector)
+    instruction: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+    task = asyncio.create_task(
+        manager.synthesize_streaming(
+            turn_id="turn-delayed-instruct",
+            text_chunks=_chunks("太好了", "！"),
+            audio_sink=lambda _chunk: asyncio.sleep(0),
+            instruct=instruction,
+        )
+    )
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert connector.contexts
+    assert not any(
+        item["type"] == "input_text_buffer.append"
+        for item in connector.contexts[0].websocket.sent
+    )
+
+    instruction.set_result("请非常开心地说一句话。")
+    await task
+
+    appends = [
+        item
+        for item in connector.contexts[0].websocket.sent
+        if item["type"] == "input_text_buffer.append"
+    ]
+    assert appends == [
+        {
+            "type": "input_text_buffer.append",
+            "text": "太好了",
+            "instruct": "请非常开心地说一句话。",
+        },
+        {
+            "type": "input_text_buffer.append",
+            "text": "！",
+            "instruct": "请非常开心地说一句话。",
+        },
+    ]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("instruct", ["   ", "x" * 1001])
+async def test_streaming_rejects_invalid_instruction(instruct: str) -> None:
+    connector = FakeConnector([_successful_events()])
+    manager = _manager(connector)
+
+    with pytest.raises(EmbeddedTTSError, match="TTS instruct"):
+        await manager.synthesize_streaming(
+            turn_id="turn-invalid-instruct",
+            text_chunks=_chunks("不会发送"),
+            audio_sink=lambda _chunk: asyncio.sleep(0),
+            instruct=instruct,
+        )
+
+    assert not any(
+        item["type"] == "input_text_buffer.append"
+        for item in connector.contexts[0].websocket.sent
+    )
     await manager.close()
 
 
@@ -510,3 +678,25 @@ async def test_different_sessions_never_share_connections() -> None:
         first_connector.contexts[0].websocket
         is not second_connector.contexts[0].websocket
     )
+
+
+@pytest.mark.asyncio
+async def test_standby_has_no_text_until_failover_and_both_lanes_close():
+    connector = FakeConnector([_successful_events(), _successful_events(), [_event('session.created')]])
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url='ws://tts.local/realtime', voice='voice-a', connection_count=2),
+        session_id='business', session_instance_id='instance-a', connector=connector,
+    )
+    await manager.synthesize_streaming(turn_id='first', text_chunks=_chunks('one'), audio_sink=lambda _: asyncio.sleep(0))
+    await manager._standby_task
+    assert len(connector.contexts) == 2
+    assert connector.contexts[1].websocket.sent == []
+    assert connector.urls[0] != connector.urls[1]
+    manager._websocket.state = State.CLOSED
+    await manager.synthesize_streaming(turn_id='second', text_chunks=_chunks('two'), audio_sink=lambda _: asyncio.sleep(0))
+    await manager._standby_task
+    assert [row['text'] for row in connector.contexts[1].websocket.sent if row['type'] == 'input_text_buffer.append'] == ['two']
+    assert len(connector.contexts) == 3  # dead primary closed before replenishment
+    assert connector.contexts[0].closed
+    await manager.close()
+    assert all(context.closed for context in connector.contexts)

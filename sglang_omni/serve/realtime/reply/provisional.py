@@ -113,6 +113,8 @@ class ProvisionalReplyComponent:
                 "delta": delta,
             }
             await self.send(payload)
+            if state.status == "promoted" and state.official_first_delta_after_commit_ms is None:
+                state.official_first_delta_after_commit_ms = self._after_commit_ms(turn)
             if is_first_delta:
                 state.first_delta_after_commit_ms = self._after_commit_ms(turn)
                 emit_structured_log(
@@ -228,7 +230,17 @@ class ProvisionalReplyComponent:
         state: ProvisionalReplyState,
     ) -> tuple[str, str, float]:
         wait_started = time.perf_counter()
-        await state.content_available.wait()
+        # A producer that hasn't emitted text yet isn't a silent response.
+        # Bound this first wait independently of the sentence-tail budget.
+        try:
+            await asyncio.wait_for(state.content_available.wait(), timeout=0.1)
+        except TimeoutError:
+            self._ensure_turn_processing(turn)
+            async with state.lock:
+                if not state.completed and not state.failed and not state.cancelled:
+                    return "", "reply_pending", round(
+                        (time.perf_counter() - wait_started) * 1000.0, 3
+                    )
         self._ensure_turn_processing(turn)
 
         async with state.lock:
@@ -312,6 +324,8 @@ class ProvisionalReplyComponent:
             "chars": len("".join(state.text_parts)),
             "created_after_commit_ms": state.created_after_commit_ms,
             "first_delta_after_commit_ms": state.first_delta_after_commit_ms,
+            "official_first_delta_after_commit_ms": state.official_first_delta_after_commit_ms,
+            "promoted_after_commit_ms": state.promoted_after_commit_ms,
             "text_done_after_commit_ms": text_done_after_commit_ms,
             "response_done_after_commit_ms": (
                 state.official_response_done_after_commit_ms
@@ -345,6 +359,7 @@ class ProvisionalReplyComponent:
             if state.status != "pending":
                 return
             state.status = "promoted"
+            state.promoted_after_commit_ms = self._after_commit_ms(turn)
             state.resolution_reason = reason
             buffered_text = "".join(state.text_parts)
             await self.send(
@@ -385,6 +400,8 @@ class ProvisionalReplyComponent:
                         "replayed_from_provisional": True,
                     }
                 )
+            if buffered_text and state.official_first_delta_after_commit_ms is None:
+                state.official_first_delta_after_commit_ms = self._after_commit_ms(turn)
             if state.tts_state is not None:
                 for chunk in state.tts_state.buffered_audio:
                     await self._send_reply_audio_delta(turn, state.tts_state, chunk)
@@ -571,4 +588,3 @@ class ProvisionalReplyComponent:
 
 
 MultimodalReplyProvisionalMixin = ProvisionalReplyComponent
-

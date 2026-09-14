@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ import torch
 class _CacheEntry:
     data: Any
     size_bytes: int
+    created_at: float = 0.0
 
 
 def _detach_value(value: Any, *, device: torch.device | None) -> Any:
@@ -50,6 +52,9 @@ class StageOutputCache:
         max_bytes: int | None = None,
         cache_device: torch.device | str | None = None,
         size_fn: Callable[[Any], int] | None = None,
+        ttl_seconds: float | None = None,
+        max_owner_bytes: int | None = None,
+        owner_fn: Callable[[str], str | None] | None = None,
     ) -> None:
         if max_size is not None and max_size < 0:
             raise ValueError("max_size must be non-negative")
@@ -65,12 +70,37 @@ class StageOutputCache:
         self.eviction_count = 0
         self._size_fn = size_fn or _value_size_bytes
         self._lock = threading.Lock()
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            raise ValueError("cache TTL must be positive")
+        if max_owner_bytes is not None and max_owner_bytes <= 0:
+            raise ValueError("owner budget must be positive")
+        self.ttl_seconds, self.max_owner_bytes = ttl_seconds, max_owner_bytes
+        self.owner_fn = owner_fn or (lambda key: None)
+        self._closed_owners = {}
+
+    def _expire_locked(self):
+        now = time.monotonic()
+        self._closed_owners = {owner: expiry for owner, expiry in self._closed_owners.items() if expiry > now}
+        if self.ttl_seconds is not None:
+            for key, entry in list(self._cache.items()):
+                if now - entry.created_at >= self.ttl_seconds:
+                    self.current_bytes -= self._cache.pop(key).size_bytes
+
+    def release_owner(self, owner):
+        with self._lock:
+            self._expire_locked()
+            self._closed_owners[owner] = time.monotonic() + max(self.ttl_seconds or 0, 300)
+            for key in list(self._cache):
+                if self.owner_fn(key) == owner:
+                    self.current_bytes -= self._cache.pop(key).size_bytes
+
 
     def get(self, key: str | None) -> Any | None:
         if key is None:
             return None
         key = str(key)
         with self._lock:
+            self._expire_locked()
             entry = self._cache.get(key)
             if entry is None:
                 return None
@@ -83,6 +113,10 @@ class StageOutputCache:
         key = str(key)
         size_bytes = self._size_fn(data)
         with self._lock:
+            self._expire_locked()
+            owner = self.owner_fn(key)
+            if owner in self._closed_owners:
+                return
             old_entry = self._cache.pop(key, None)
             if old_entry is not None:
                 self.current_bytes -= old_entry.size_bytes
@@ -91,10 +125,16 @@ class StageOutputCache:
             self._cache[key] = _CacheEntry(
                 data=_detach_value(data, device=self.cache_device),
                 size_bytes=size_bytes,
+                created_at=time.monotonic(),
             )
             self.current_bytes += size_bytes
             self._cache.move_to_end(key)
             self._evict_over_budget()
+            if owner is not None and self.max_owner_bytes is not None:
+                while sum(row.size_bytes for item, row in self._cache.items() if self.owner_fn(item) == owner) > self.max_owner_bytes:
+                    oldest = next(item for item in self._cache if self.owner_fn(item) == owner)
+                    self.current_bytes -= self._cache.pop(oldest).size_bytes
+                    self.eviction_count += 1
 
     def clear(self) -> None:
         with self._lock:

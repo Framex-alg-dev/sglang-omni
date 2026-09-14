@@ -9,12 +9,13 @@ import binascii
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
+from websockets.protocol import State
 
 from sglang_omni.utils.structured_logs import emit_structured_log
 
@@ -46,6 +47,7 @@ class EmbeddedTTSConfig:
     send_timeout_seconds: float = 10.0
     first_audio_timeout_seconds: float = 10.0
     turn_timeout_seconds: float = 30.0
+    connection_count: int = 1
     text_queue_max_chunks: int = 64
     max_audio_chunk_bytes: int = 1024 * 1024
     max_turn_audio_bytes: int = 32 * 1024 * 1024
@@ -53,6 +55,8 @@ class EmbeddedTTSConfig:
     provisional_audio_max_milliseconds: int = 10000
 
     def __post_init__(self) -> None:
+        if type(self.connection_count) is not int or self.connection_count not in (1, 2):
+            raise ValueError("TTS connection_count must be 1 or 2")
         parsed = urlsplit(self.url)
         if parsed.scheme not in {"ws", "wss"} or not parsed.netloc:
             raise ValueError("TTS URL must be an absolute ws:// or wss:// URL")
@@ -135,13 +139,17 @@ class EmbeddedTTSConnection:
         config: EmbeddedTTSConfig,
         *,
         session_id: str,
+        session_instance_id: str | None = None,
         connector: Callable[..., Any] = connect,
     ) -> None:
         if not session_id.strip():
             raise ValueError("external session_id must be non-empty")
         self._config = config
         self._session_id = session_id
+        self._provider_session_id = f"{session_id}:{session_instance_id}" if session_instance_id else session_id
         self._connector = connector
+        self._session_instance_id = session_instance_id
+        self._connection_epoch = 0
         self._turn_lock = asyncio.Lock()
         self._connection_context: Any | None = None
         self._websocket: Any | None = None
@@ -150,11 +158,18 @@ class EmbeddedTTSConnection:
         self._active_turn_id: str | None = None
         self._broken = False
         self._closed = False
+        self._standby = (EmbeddedTTSConnection(replace(config, connection_count=1),
+                         session_id=session_id + ":standby", session_instance_id=session_instance_id, connector=connector)
+                         if config.connection_count == 2 else None)
+        self._standby_task: asyncio.Task | None = None
 
     @property
     def connected(self) -> bool:
         if self._websocket is None or self._broken:
             return False
+        state = getattr(self._websocket, "state", None)
+        if state is not None:
+            return state == State.OPEN
         return not bool(getattr(self._websocket, "closed", False))
 
     async def synthesize_streaming(
@@ -164,6 +179,7 @@ class EmbeddedTTSConnection:
         text_chunks: AsyncIterator[str],
         audio_sink: AudioSink,
         voice: str | None = None,
+        instruct: str | Awaitable[str] | None = None,
     ) -> EmbeddedTTSResult:
         if not turn_id.strip():
             raise ValueError("TTS turn_id must be non-empty")
@@ -179,6 +195,7 @@ class EmbeddedTTSConnection:
             producer: asyncio.Task[None] | None = None
             sender: asyncio.Task[None] | None = None
             receiver: asyncio.Task[EmbeddedTTSResult] | None = None
+            deadline = time.monotonic() + self._config.turn_timeout_seconds
             try:
                 emit_structured_log(
                     "performance",
@@ -186,7 +203,16 @@ class EmbeddedTTSConnection:
                     session_id=self._session_id,
                     turn_id=turn_id,
                 )
-                websocket = await self._borrow_connection(selected_voice, turn_id)
+                if (not self.connected and self._standby is not None
+                        and (self._standby_task is None or self._standby_task.done())
+                        and self._standby.connected and self._standby._connection_voice == selected_voice):
+                    await self._discard_connection()
+                    for name in ("_connection_context", "_websocket", "_connection_voice", "_broken"):
+                        current = getattr(self, name)
+                        setattr(self, name, getattr(self._standby, name))
+                        setattr(self._standby, name, current)
+                websocket = await self._borrow_with_retry(selected_voice, turn_id, deadline)
+                self._warm_standby(selected_voice)
                 logger.debug(
                     "Embedded TTS turn started session_id=%s turn_id=%s lifecycle=streaming",
                     self._session_id,
@@ -201,7 +227,13 @@ class EmbeddedTTSConnection:
                     name=f"embedded-tts-producer:{turn_id}",
                 )
                 sender = asyncio.create_task(
-                    self._send_text(websocket, queue, first_text_sent, turn_id),
+                    self._send_text(
+                        websocket,
+                        queue,
+                        first_text_sent,
+                        turn_id,
+                        instruct=instruct,
+                    ),
                     name=f"embedded-tts-sender:{turn_id}",
                 )
                 receiver = asyncio.create_task(
@@ -210,7 +242,7 @@ class EmbeddedTTSConnection:
                 )
                 result, _, _ = await _wait_for_phase(
                     asyncio.gather(receiver, producer, sender),
-                    timeout=self._config.turn_timeout_seconds,
+                    timeout=max(0.0, deadline - time.monotonic()),
                     phase="turn_timeout",
                 )
                 logger.debug(
@@ -289,13 +321,59 @@ class EmbeddedTTSConnection:
             owner.cancel()
             await asyncio.gather(owner, return_exceptions=True)
 
+    def _warm_standby(self, voice: str) -> None:
+        if self._standby is None or self._closed or (self._standby_task is not None and not self._standby_task.done()):
+            return
+        async def warm():
+            try:
+                await self._standby._borrow_with_retry(voice, "standby-warm", time.monotonic() + self._config.connect_timeout_seconds + self._config.ready_timeout_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.info("TTS standby warm failed; primary remains usable")
+        self._standby_task = asyncio.create_task(warm())
+
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         await self.cancel_active_turn()
+        if self._standby_task is not None:
+            self._standby_task.cancel()
+            await asyncio.gather(self._standby_task, return_exceptions=True)
+        if self._standby is not None:
+            await self._standby.close()
         async with self._turn_lock:
             await self._discard_connection()
+
+    async def _borrow_with_retry(self, voice: str, turn_id: str, deadline: float) -> Any:
+        """Retry transport failure once, before consuming or sending any text.
+
+        A send failure is deliberately outside this boundary: lack of audio
+        does not prove that the provider failed to accept the text.
+        """
+        for attempt in range(2):
+            if self._closed:
+                raise EmbeddedTTSError("TTS Session is closed", phase="borrow")
+            try:
+                websocket = await _wait_for_phase(
+                    self._borrow_connection(voice, turn_id),
+                    timeout=max(0.0, deadline - time.monotonic()),
+                    phase="turn_timeout",
+                )
+                if not self.connected:
+                    raise OSError("TTS connection closed during handshake")
+                return websocket
+            except (ConnectionClosed, OSError):
+                await self._discard_connection()
+                if attempt or time.monotonic() >= deadline:
+                    raise
+                emit_structured_log(
+                    "performance", "tts_connection_retry",
+                    session_id=self._session_id, turn_id=turn_id,
+                    attempt=attempt + 1, text_send_attempted=False,
+                )
+        raise AssertionError("unreachable TTS retry state")
 
     async def _borrow_connection(self, voice: str, turn_id: str) -> Any:
         if self.connected and self._connection_voice == voice:
@@ -320,8 +398,11 @@ class EmbeddedTTSConnection:
             turn_id=turn_id,
             provider="configured_tts",
         )
+        self._connection_epoch += 1
+        provider_identity = (f"{self._provider_session_id}:{self._connection_epoch}"
+                             if self._session_instance_id else self._provider_session_id)
         context = self._connector(
-            _session_url(self._config.url, voice=voice, session_id=self._session_id),
+            _session_url(self._config.url, voice=voice, session_id=provider_identity),
             max_size=self._config.max_audio_chunk_bytes * 2,
         )
         try:
@@ -376,7 +457,15 @@ class EmbeddedTTSConnection:
         queue: asyncio.Queue[str | None],
         first_text_sent: asyncio.Event,
         turn_id: str,
+        *,
+        instruct: str | Awaitable[str] | None,
     ) -> None:
+        instruct_wait_started = time.monotonic()
+        resolved_instruct = await self._resolve_instruct(instruct)
+        instruct_wait_ms = round(
+            (time.monotonic() - instruct_wait_started) * 1000,
+            3,
+        )
         saw_text = False
         text_chunks = 0
         text_chars = 0
@@ -388,13 +477,14 @@ class EmbeddedTTSConnection:
             saw_text = True
             if first_append_started is None:
                 first_append_started = time.monotonic()
+            append_event = {
+                "type": "input_text_buffer.append",
+                "text": chunk,
+            }
+            if resolved_instruct is not None:
+                append_event["instruct"] = resolved_instruct
             await _wait_for_phase(
-                websocket.send(
-                    json.dumps(
-                        {"type": "input_text_buffer.append", "text": chunk},
-                        ensure_ascii=False,
-                    )
-                ),
+                websocket.send(json.dumps(append_event, ensure_ascii=False)),
                 timeout=self._config.send_timeout_seconds,
                 phase="send_timeout",
             )
@@ -407,6 +497,11 @@ class EmbeddedTTSConnection:
                     session_id=self._session_id,
                     turn_id=turn_id,
                     chars=len(chunk),
+                    instruct_applied=resolved_instruct is not None,
+                    instruct_chars=(
+                        len(resolved_instruct) if resolved_instruct is not None else 0
+                    ),
+                    instruct_wait_ms=instruct_wait_ms,
                     elapsed_ms=round(
                         (time.monotonic() - first_append_started) * 1000, 3
                     ),
@@ -427,6 +522,32 @@ class EmbeddedTTSConnection:
             text_chunks=text_chunks,
             text_chars=text_chars,
         )
+
+    @staticmethod
+    async def _resolve_instruct(
+        instruct: str | Awaitable[str] | None,
+    ) -> str | None:
+        if instruct is None:
+            return None
+        value = (
+            instruct
+            if isinstance(instruct, str)
+            else await asyncio.shield(instruct)
+        )
+        if not isinstance(value, str):
+            raise EmbeddedTTSError(
+                "TTS instruct must resolve to a string",
+                phase="send",
+            )
+        value = value.strip()
+        if not value:
+            raise EmbeddedTTSError("TTS instruct must be non-empty", phase="send")
+        if len(value) > 1000:
+            raise EmbeddedTTSError(
+                "TTS instruct exceeds 1000 characters",
+                phase="send",
+            )
+        return value
 
     async def _receive_turn(
         self,

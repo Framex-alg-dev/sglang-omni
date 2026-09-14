@@ -178,7 +178,13 @@ def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
         if not _NVML_INITIALIZED:
             nvml.nvmlInit()
             _NVML_INITIALIZED = True
-        handle = nvml.nvmlDeviceGetHandleByIndex(int(device_id))
+        from sglang_omni.utils.gpu_memory import parse_cuda_visible_devices, resolve_visible_device_id
+        physical = resolve_visible_device_id(int(device_id), parse_cuda_visible_devices())
+        if isinstance(physical, int):
+            handle = nvml.nvmlDeviceGetHandleByIndex(physical)
+        else:
+            handle = nvml.nvmlDeviceGetHandleByUUID(physical.encode())
+        snapshot["nvml_physical_device"] = physical
         utilization = nvml.nvmlDeviceGetUtilizationRates(handle)
         memory = nvml.nvmlDeviceGetMemoryInfo(handle)
         snapshot.update(
@@ -202,6 +208,10 @@ def _gpu_resource_snapshot(device_id: int) -> dict[str, Any]:
 
 
 def _reset_gpu_peak_stats(device_id: int) -> bool:
+    # Peak counters are process-wide. Resetting per request corrupts metrics
+    # for concurrent sessions; permit it only in an explicit isolated probe.
+    if os.environ.get("SGLANG_OMNI_RESET_GPU_PEAK_STATS") != "1":
+        return False
     try:
         if not torch.cuda.is_available():
             return False
@@ -1261,6 +1271,26 @@ class OmniScheduler:
             plan["prefix_prefill_ms"] = max(
                 (time.perf_counter() - float(prefix_started)) * 1000.0, 0.0
             )
+        terminal_at = time.perf_counter()
+        raw_chunks = list(plan.get("prefix_chunk_timings", []))
+        prefix_chunks: list[dict[str, Any]] = []
+        for index, raw_chunk in enumerate(raw_chunks):
+            chunk = dict(raw_chunk)
+            started_at = chunk.pop("started_at", None)
+            next_started_at = (
+                raw_chunks[index + 1].get("started_at")
+                if index + 1 < len(raw_chunks)
+                else terminal_at
+            )
+            if isinstance(started_at, (int, float)) and isinstance(
+                next_started_at, (int, float)
+            ):
+                chunk["elapsed_ms"] = max(
+                    (float(next_started_at) - float(started_at)) * 1000.0,
+                    0.0,
+                )
+            prefix_chunks.append(chunk)
+        plan["prefix_chunks"] = prefix_chunks
         plan["prefix_physical_prefill_chunk_count"] = max(
             int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             int(getattr(data, "generation_steps", 0)),
@@ -1306,6 +1336,15 @@ class OmniScheduler:
                 )
             )
         prefix_len = int(plan["prefix_token_count"])
+        reusable_boundary_len = min(
+            int(plan.get("cache_prefix_token_count", 0)),
+            prefix_len,
+        )
+        parent_cached_len = min(
+            int(plan.get("parent_radix_cached_token_count") or 0),
+            prefix_len,
+        )
+        parent_computed_len = max(prefix_len - parent_cached_len, 0)
         prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
             int(value) >= prefix_len
             for value in plan["candidate_cached_tokens"].values()
@@ -1352,6 +1391,9 @@ class OmniScheduler:
             "scheduler_admission_ms": float(plan.get("scheduler_admission_ms", 0.0)),
             "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "prefix_prefill_ms": float(plan.get("prefix_prefill_ms", 0.0)),
+            "suffix_total_tokens": plan.get("suffix_total_tokens"),
+            "suffix_unique_trie_edges": plan.get("suffix_unique_trie_edges"),
+            "suffix_unique_first_tokens": plan.get("suffix_unique_first_tokens"),
             "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
             "preprocessing_ms": preprocessing_ms,
             "image_encoder_ms": image_encoder_ms,
@@ -1365,7 +1407,21 @@ class OmniScheduler:
             "logical_prefix_request_count": 1,
             "physical_prefix_chunk_count": int(plan.get("prefix_physical_prefill_chunk_count", 0)),
             "prefix_token_count": prefix_len,
+            "reusable_boundary_token_count": reusable_boundary_len,
+            "public_prefix_token_count": plan.get("public_prefix_token_count", 0),
+            "scoped_cache": plan.get("scoped_cache", False),
+            "parent_radix_cached_token_count": parent_cached_len,
+            "parent_computed_token_count": parent_computed_len,
+            "parent_cache_hit_ratio": (
+                float(parent_cached_len) / float(prefix_len)
+                if prefix_len > 0
+                else 0.0
+            ),
+            "prefix_chunks": list(plan.get("prefix_chunks", [])),
             "cached_prefix_token_count": min(plan["candidate_cached_tokens"].values()),
+            "candidate_cached_prefix_token_count": min(
+                plan["candidate_cached_tokens"].values()
+            ),
             "candidate_prefix_recompute_tokens": recompute_tokens,
             "suffix_batch_count": len(plan["candidate_batches"]),
             "suffix_batch_sizes": list(plan.get("suffix_batch_sizes", [])),
@@ -1742,9 +1798,35 @@ class OmniScheduler:
                         if isinstance(entered, (int, float)):
                             wait_ms = max((now - float(entered)) * 1000.0, 0.0)
                             plan["scheduler_wait_ms"] = float(plan.get("scheduler_wait_ms", 0.0)) + wait_ms
-                    plan["prefix_physical_prefill_chunk_count"] = (
-                        int(plan.get("prefix_physical_prefill_chunk_count", 0)) + 1
+                    prefix_indices = getattr(req, "prefix_indices", ())
+                    cached_tokens_before = len(prefix_indices)
+                    if plan.get("parent_radix_cached_token_count") is None:
+                        plan["parent_radix_cached_token_count"] = (
+                            cached_tokens_before
+                        )
+                    extend_range = getattr(req, "extend_range", None)
+                    range_start = getattr(extend_range, "start", None)
+                    range_end = getattr(extend_range, "end", None)
+                    if isinstance(range_start, int) and isinstance(range_end, int):
+                        scheduled_tokens = max(range_end - range_start, 0)
+                    else:
+                        scheduled_tokens = max(
+                            len(getattr(req, "origin_input_ids", ()))
+                            - cached_tokens_before,
+                            0,
+                        )
+                    chunks = plan.setdefault("prefix_chunk_timings", [])
+                    chunks.append(
+                        {
+                            "index": len(chunks),
+                            "cached_tokens_before": cached_tokens_before,
+                            "scheduled_tokens": scheduled_tokens,
+                            "range_start": range_start,
+                            "range_end": range_end,
+                            "started_at": now,
+                        }
                     )
+                    plan["prefix_physical_prefill_chunk_count"] = len(chunks)
             elif action_role == "candidate":
                 parent = getattr(req_data, "action_scoring_parent", None)
                 plan = getattr(parent, "action_scoring_plan", None)
@@ -2084,6 +2166,9 @@ class OmniScheduler:
             }
 
     def _process_admin_requests(self) -> int:
+        cache = getattr(self, "tree_cache", None)
+        if hasattr(cache, "reap_closed_sessions"):
+            cache.reap_closed_sessions()
         processed = 0
         while True:
             try:
@@ -2107,6 +2192,13 @@ class OmniScheduler:
         self, action: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         payload = dict(payload or {})
+        if action == "release_session_cache":
+            cache = getattr(self, "tree_cache", None)
+            release = getattr(cache, "release_session", None)
+            if release is None:
+                return {"success": True, "data": {"skipped": True}}
+            released = release(payload.get("session_instance_id"))
+            return {"success": True, "data": {"released_tokens": released}}
         if action == ADMIN_MODEL_INFO:
             return self._admin_model_info()
         if action == ADMIN_PAUSE_GENERATION:

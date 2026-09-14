@@ -14,6 +14,19 @@ _FILENAMES = {
     "proactive_reply_rules": "proactive_reply_rules.txt",
     "proactive_action_rules": "proactive_action_rules.txt",
 }
+_PROACTIVE_SECTION_NAMES = frozenset(
+    {
+        "session_enter",
+        "idle_timeout",
+        "user_returned",
+        "character_proactive",
+        "session_ending",
+    }
+)
+_SECTION_NAMES = {
+    "proactive_reply_rules": _PROACTIVE_SECTION_NAMES,
+    "proactive_action_rules": _PROACTIVE_SECTION_NAMES,
+}
 
 
 def runtime_prompt_dir() -> Path:
@@ -41,7 +54,7 @@ def read_runtime_prompt_section(key: str, section: str) -> str | None:
     content = read_runtime_prompt(key)
     if content is None:
         return None
-    sections = _parse_sections(content)
+    sections = _parse_sections(content, _SECTION_NAMES.get(key, frozenset()))
     if not sections:
         return content
     return sections.get(section)
@@ -98,14 +111,14 @@ def _prompt_path(key: str) -> Path:
     return runtime_prompt_dir() / filename
 
 
-def _parse_sections(content: str) -> dict[str, str]:
+def _parse_sections(content: str, allowed_names: frozenset[str]) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             name = stripped[1:-1].strip()
-            if name:
+            if name in allowed_names:
                 current = name
                 sections.setdefault(name, [])
                 continue

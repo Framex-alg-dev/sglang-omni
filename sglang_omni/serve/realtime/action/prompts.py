@@ -6,7 +6,10 @@ prompts, and action-history policy from protocol and reply orchestration.
 
 from __future__ import annotations
 
+from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+
 import asyncio
+from collections import OrderedDict
 import hashlib
 import json
 import logging
@@ -65,6 +68,15 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 
 
 class ActionPromptComponent:
+    def _facial_expression_candidate_ids(self) -> frozenset[str]:
+        return frozenset(
+            child.candidate_id
+            for category in self.categories
+            if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID
+            for child in category.children
+        )
+
+
     def _no_action_candidate(self) -> SessionActionCandidate:
         for candidate in self.candidates:
             if candidate.action_id == "no_action":
@@ -160,7 +172,21 @@ class ActionPromptComponent:
 
     def _default_fallback_candidate(self) -> SessionActionCandidate:
         """Return the stable executable action from the primary fallback category."""
-        return self._primary_fallback_category().children[0]
+        category = self._primary_fallback_category()
+        if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID:
+            raise ValueError("facial expressions cannot be body-action fallbacks")
+        expression_ids = self._facial_expression_candidate_ids()
+        candidate = next(
+            (
+                child
+                for child in category.children
+                if child.candidate_id not in expression_ids
+            ),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("body-action fallback contains only facial expressions")
+        return candidate
 
 
     @staticmethod
@@ -188,14 +214,41 @@ class ActionPromptComponent:
         ]
 
 
+    def _body_accompaniment_only(self, turn: TurnBuffer) -> bool:
+        return (
+            turn.turn_origin != TURN_ORIGIN_PROACTIVE
+            and self.global_action_catalog is not None
+            and turn.intent is not None
+            and turn.intent.body_mode == "none"
+            and not turn.intent.history
+        )
+
+    def _is_accompaniment_candidate(self, candidate: SessionActionCandidate) -> bool:
+        return any(
+            self._is_system_accompaniment_category(category)
+            and any(child.candidate_id == candidate.candidate_id for child in category.children)
+            for category in self.categories
+        )
+
     def _default_fallback_candidate_for_turn(
         self,
         turn: TurnBuffer,
     ) -> SessionActionCandidate:
         fallback = self._default_fallback_candidate()
-        if self._turn_candidate_is_allowed(turn, fallback):
+        if self._turn_candidate_is_allowed(turn, fallback) and (
+            not self._body_accompaniment_only(turn) or self._is_accompaniment_candidate(fallback)
+        ):
             return fallback
-        eligible = self._filter_turn_action_candidates(turn, list(self.candidates))
+        expression_ids = self._facial_expression_candidate_ids()
+        eligible = self._filter_turn_action_candidates(
+            turn,
+            [
+                candidate
+                for candidate in self.candidates
+                if candidate.candidate_id not in expression_ids
+                and (not self._body_accompaniment_only(turn) or self._is_accompaniment_candidate(candidate))
+            ],
+        )
         if not eligible:
             raise ValueError(
                 "per-turn action candidate constraints leave no executable action"
@@ -207,15 +260,18 @@ class ActionPromptComponent:
         return self._no_action_candidate().candidate_id
 
 
-    def _format_candidate_for_prompt(self, candidate: SessionActionCandidate) -> str:
+    def _format_candidate_for_prompt(
+        self, candidate: SessionActionCandidate, turn_origin: str = "user"
+    ) -> str:
+        definition = candidate.effective_definition(turn_origin)
         return self._prompt(
             zh=(
                 f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
-                f"说明={candidate.short_definition}"
+                f"说明={definition}"
             ),
             en=(
                 f"candidate_id={candidate.candidate_id} | action={candidate.source_label} | "
-                f"description={candidate.short_definition}"
+                f"description={definition}"
             ),
         )
 
@@ -228,8 +284,13 @@ class ActionPromptComponent:
         # which follows category rank and therefore supplies the result's
         # category_id.
         candidates_by_id: dict[str, SessionActionCandidate] = {}
+        expression_ids = self._facial_expression_candidate_ids()
         for category in categories:
+            if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID:
+                continue
             for child in category.children:
+                if child.candidate_id in expression_ids:
+                    continue
                 candidates_by_id.setdefault(child.candidate_id, child)
         return list(candidates_by_id.values())
 
@@ -263,7 +324,7 @@ class ActionPromptComponent:
                 "Select the category_id that best matches the current input. Output "
                 "exactly one category_id and stop immediately. Do not explain."
             )
-            return "\n".join(lines)
+            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
         lines = [
             "你是数字人动作类别识别器。请从固定类别集合中选择一个 category_id。",
             CATEGORY_CONTEXT_POLICY,
@@ -293,17 +354,50 @@ class ActionPromptComponent:
             "请根据当前输入选择最匹配的 category_id；只输出一个 category_id，"
             "输出后立即结束，不要解释。"
         )
-        return "\n".join(lines)
+        return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
     def _build_child_system_prompt(
         self,
         category: SessionActionCategory | list[SessionActionCategory],
         candidates: list[SessionActionCandidate],
+        turn_origin: str = "user",
+    ) -> str:
+        categories = category if isinstance(category, list) else [category]
+        # Preserve all ordering and exact metadata. This caches rendering only;
+        # it never weakens the model's namespace or changes token sequences.
+        key = (
+            id(self.global_action_catalog), self.language, getattr(self, "locale", None),
+            turn_origin,
+            tuple((c.category_id, c.source_label, c.short_definition) for c in categories),
+            tuple((c.candidate_id, c.source_label, c.effective_definition(turn_origin))
+                  for c in candidates),
+        )
+        cache = getattr(self, "_child_prompt_render_cache", None)
+        if (
+            cache is None
+            or getattr(self, "_child_prompt_render_catalog", None) is not self.global_action_catalog
+        ):
+            cache = self._child_prompt_render_cache = OrderedDict()
+            self._child_prompt_render_catalog = self.global_action_catalog
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        prompt = self._render_child_system_prompt(category, candidates, turn_origin)
+        cache[key] = prompt
+        if len(cache) > 64:
+            cache.popitem(last=False)
+        return prompt
+
+    def _render_child_system_prompt(
+        self,
+        category: SessionActionCategory | list[SessionActionCategory],
+        candidates: list[SessionActionCandidate],
+        turn_origin: str = "user",
     ) -> str:
         categories = category if isinstance(category, list) else [category]
         if self.global_action_catalog is not None:
             if len(categories) == 1:
                 return self.global_action_catalog.child_system_prompt_for(
-                    self.locale, categories[0].category_id
+                    self.locale, categories[0].category_id, turn_origin
                 )
             lines = [
                 self._prompt(
@@ -329,7 +423,10 @@ class ActionPromptComponent:
                     )
                 )
             lines.append(child_unsupported_policy(self.locale))
-            lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+            lines.extend(
+                self._format_candidate_for_prompt(item, turn_origin)
+                for item in candidates
+            )
             lines.append(
                 self._prompt(
                     zh=(
@@ -342,7 +439,7 @@ class ActionPromptComponent:
                     ),
                 )
             )
-            return "\n".join(lines)
+            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
         if self.language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the following set.",
@@ -351,13 +448,16 @@ class ActionPromptComponent:
                 f"Selected category: category_id={selected.category_id} | category={selected.source_label} | description={selected.short_definition}"
                 for selected in categories
             )
-            lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+            lines.extend(
+                self._format_candidate_for_prompt(item, turn_origin)
+                for item in candidates
+            )
             lines.append(
                 "Select the candidate_id that best matches from the candidates in the "
                 "selected category above. Do not introduce another category or an "
                 "extra default action."
             )
-            return "\n".join(lines)
+            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
         lines = [
             "你是数字人动作识别器。请从以下集合中选择一个 candidate_id。",
         ]
@@ -366,12 +466,15 @@ class ActionPromptComponent:
                 f"已选类别：category_id={selected.category_id}｜类别={selected.source_label}｜"
                 f"说明={selected.short_definition}"
             )
-        lines.extend(self._format_candidate_for_prompt(item) for item in candidates)
+        lines.extend(
+            self._format_candidate_for_prompt(item, turn_origin)
+            for item in candidates
+        )
         lines.append(
             "只能从以上已选类别的候选动作中选择最匹配的 candidate_id；"
             "不得引入其他类别或系统兜底动作。"
         )
-        return "\n".join(lines)
+        return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
 
 
     def _category_whitelist_instruction(self) -> str:
@@ -538,31 +641,33 @@ class ActionPromptComponent:
         return ""
 
 
-    def _build_action_system_prompt(self) -> str:
+    def _build_action_system_prompt(self, turn_origin: str = "user") -> str:
         if self.language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the fixed set for this conversation.",
             ]
             lines.extend(
-                self._format_candidate_for_prompt(item) for item in self.candidates
+                self._format_candidate_for_prompt(item, turn_origin)
+                for item in self.candidates
             )
             lines.append(
                 "If no candidate satisfies the input and state constraints, or a "
                 "conflict must be avoided, select the "
                 f"default candidate_id={self._no_action_candidate_id()}."
             )
-            return "\n".join(lines)
+            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
         lines = [
             "你是数字人动作识别器。请从本次会话的固定集合中选择一个 candidate_id。",
         ]
         lines.extend(
-            self._format_candidate_for_prompt(item) for item in self.candidates
+            self._format_candidate_for_prompt(item, turn_origin)
+            for item in self.candidates
         )
         lines.append(
             "没有候选动作满足输入与状态约束，或需要避免冲突时，选择兜底 "
             f"candidate_id={self._no_action_candidate_id()}。"
         )
-        return "\n".join(lines)
+        return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
 
 
 MultimodalActionPromptMixin = ActionPromptComponent

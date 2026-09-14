@@ -1,6 +1,7 @@
 """Architecture contracts for the package-based realtime implementation."""
 
 from pathlib import Path
+from sglang_omni.serve.realtime.performance.pipeline import PerformancePipeline
 
 from sglang_omni.serve.realtime.action import ActionPipeline
 from sglang_omni.serve.realtime.action.pipeline import ActionScoringPipeline
@@ -57,6 +58,7 @@ def test_multimodal_session_uses_explicit_component_composition() -> None:
         SessionMemoryController,
         ReplyPipeline,
         ActionPipeline,
+        PerformancePipeline,
     )
 
 

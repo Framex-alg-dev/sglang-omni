@@ -11,7 +11,7 @@ import os
 import time
 import traceback
 import uuid
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import replace
 from typing import Any, AsyncIterator, Callable
 
@@ -60,6 +60,109 @@ logger = logging.getLogger(__name__)
 
 _ACTION_SCORE_TIMEOUT_S = float(os.environ.get("SGLANG_OMNI_ACTION_SCORE_TIMEOUT_S", "120"))
 _ACTION_DEBUG_LOG_FILE = os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE")
+
+
+def _bounded_int_env(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("invalid %s=%r; using %d", name, raw_value, default)
+        return default
+    return max(minimum, min(maximum, value))
+
+
+_ACTION_SCORE_MAX_INFLIGHT = _bounded_int_env(
+    "SGLANG_OMNI_ACTION_SCORE_MAX_INFLIGHT",
+    2,
+    minimum=1,
+    maximum=4,
+)
+
+
+class _PriorityAdmissionGate:
+    """Bounded admission with priority aging and per-session round robin."""
+
+    def __init__(self, capacity: int, *, max_waiting: int = 128,
+                 max_session_waiting: int = 16, aging_seconds: float = 1.0) -> None:
+        if capacity <= 0 or max_waiting <= 0 or max_session_waiting <= 0 or aging_seconds <= 0:
+            raise ValueError("admission limits must be positive")
+        self.capacity = capacity
+        self.max_waiting = max_waiting
+        self.max_session_waiting = max_session_waiting
+        self.aging_seconds = aging_seconds
+        self._active = 0
+        self._sequence = 0
+        self._waiters: list[tuple[int, int, str | None, float, asyncio.Future[None]]] = []
+        self._session_served: dict[str | None, int] = {}
+        self._service_sequence = 0
+        self._condition = asyncio.Condition()
+
+    def _wake_locked(self) -> None:
+        while self._active < self.capacity and self._waiters:
+            now = time.monotonic()
+            selected = min(range(len(self._waiters)), key=lambda i: (
+                self._waiters[i][0] - int((now - self._waiters[i][3]) / self.aging_seconds),
+                self._session_served.get(self._waiters[i][2], 0),
+                self._waiters[i][1],
+            ))
+            _, _, session, _, waiter = self._waiters.pop(selected)
+            if waiter.cancelled():
+                continue
+            self._active += 1
+            self._service_sequence += 1
+            self._session_served[session] = self._service_sequence
+            pending_sessions = {row[2] for row in self._waiters}
+            self._session_served = {key: value for key, value in self._session_served.items()
+                                    if key in pending_sessions or key == session}
+            waiter.set_result(None)
+
+    async def acquire(self, priority: int, session: str | None = None) -> None:
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[None] = loop.create_future()
+        async with self._condition:
+            if len(self._waiters) >= self.max_waiting or (
+                session is not None
+                and sum(row[2] == session for row in self._waiters) >= self.max_session_waiting
+            ):
+                raise RuntimeError("action-scoring admission queue is full")
+            self._sequence += 1
+            self._waiters.append((priority, self._sequence, session, time.monotonic(), waiter))
+            self._wake_locked()
+        try:
+            await waiter
+        except BaseException:
+            admitted = waiter.done() and not waiter.cancelled()
+            if not admitted:
+                waiter.cancel()
+                async with self._condition:
+                    self._waiters = [row for row in self._waiters if row[4] is not waiter]
+            else:
+                await self.release()
+            raise
+
+    async def release(self) -> None:
+        async with self._condition:
+            if self._active <= 0:
+                raise RuntimeError("action-scoring admission gate released too often")
+            self._active -= 1
+            self._wake_locked()
+
+    @asynccontextmanager
+    async def slot(self, priority: int, session: str | None = None):
+        await self.acquire(priority, session)
+        try:
+            yield
+        finally:
+            await self.release()
 
 
 def _summarize_debug_media(values: Any) -> list[dict[str, Any]]:
@@ -113,12 +216,24 @@ def _action_request_debug_payload(
     omni_request: OmniRequest,
 ) -> dict[str, Any]:
     inputs = getattr(omni_request, "inputs", {}) or {}
+    if os.environ.get("SGLANG_OMNI_TRACE_PROMPTS") != "1" and not os.environ.get("SGLANG_OMNI_ACTION_DEBUG_LOG_FILE"):
+        return {
+            "request_id": request.request_id,
+            "session_instance_id": request.session_instance_id,
+            "stage": request.stage,
+            "candidate_ids_ordered": [item.candidate_id for item in request.candidates],
+            "system_prompt_sha256": hashlib.sha256((request.system_prompt or "").encode()).hexdigest(),
+            "session_instruction_sha256": hashlib.sha256((request.session_instruction or "").encode()).hexdigest(),
+            "full_input_recorded": False,
+        }
     return {
         "request_id": request.request_id,
         "session_id": request.session_id,
         "stage": request.stage,
+        "admission_priority": request.admission_priority,
         "logical_request_id": request.logical_request_id,
         "prefix": request.prefix,
+        "session_instruction": request.session_instruction,
         "current_text": request.current_text,
         "output_prompt": request.output_prompt,
         "system_prompt": request.system_prompt,
@@ -175,8 +290,10 @@ class Client:
         self._coordinator = coordinator
         self._result_builder = result_builder or self._default_result_builder
         self._stream_builder = stream_builder or self._default_stream_builder
-        self._action_scoring_semaphore = asyncio.Semaphore(1)
-        self._action_scoring_capacity = 1
+        self._action_scoring_gate = _PriorityAdmissionGate(
+            _ACTION_SCORE_MAX_INFLIGHT
+        )
+        self._action_scoring_capacity = _ACTION_SCORE_MAX_INFLIGHT
         self._action_scoring_waiting = 0
         self._action_scoring_inflight = 0
         self._action_scoring_submitted_total = 0
@@ -223,6 +340,8 @@ class Client:
             "name": "waiting_for_action_score_slot",
             "slot_wait_ms": None,
             "pipeline_ms": None,
+            "admission_priority": request.admission_priority,
+            "admission_capacity": self._action_scoring_capacity,
         }
         request_started = time.perf_counter()
         _write_action_debug_record({
@@ -237,7 +356,10 @@ class Client:
             self._action_scoring_submitted_total += 1
             self._action_scoring_waiting += 1
             try:
-                async with self._action_scoring_semaphore:
+                async with self._action_scoring_gate.slot(
+                    request.admission_priority,
+                    request.session_instance_id or request.session_id,
+                ):
                     admitted = True
                     self._action_scoring_waiting -= 1
                     self._action_scoring_inflight += 1
@@ -335,6 +457,8 @@ class Client:
         result.stats.update(
             {
                 "action_slot_wait_ms": float(phase["slot_wait_ms"] or 0.0),
+                "action_admission_priority": request.admission_priority,
+                "action_admission_capacity": self._action_scoring_capacity,
                 "coordinator_pipeline_ms": float(phase["pipeline_ms"] or 0.0),
                 "client_result_processing_ms": round(result_processing_ms, 3),
                 "client_total_ms": round(
@@ -613,6 +737,9 @@ class Client:
         prefix_cache_namespace: str,
         stage: str,
         language: str = "zh",
+        session_instruction: str = "",
+        admission_priority: int = 3,
+        session_instance_id: str | None = None,
     ) -> bool:
         """Prefill one immutable action catalog prefix."""
         if not candidates:
@@ -631,10 +758,17 @@ class Client:
             audios=[],
             images=[],
             sample_rate=16000,
+            session_instance_id=session_instance_id,
+            session_instruction=session_instruction,
+            # Match the realtime Turn's list-form message layout so the
+            # rendered tokens through the Session boundary are identical.
+            current_text="",
             system_prompt=system_prompt,
             stage=stage,
+            admission_priority=admission_priority,
             logical_request_id=f"catalog-prefill-{prefix_cache_namespace}",
             prefix_cache_namespace=prefix_cache_namespace,
+            cache_static_system_only=not bool(session_instruction),
             suffix_tokenization_mode="short_id",
         )
         try:
@@ -825,6 +959,7 @@ class Client:
         history: list[dict[str, Any]],
         instruction: str,
         *,
+        session_instruction: str = "",
         avatar_state: dict[str, Any] | None,
         system_prompt: str | None,
         audios: list[str],
@@ -848,7 +983,12 @@ class Client:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
 
-        current_instruction = instruction
+        # Keep immutable Session guidance first and turn-local state directly
+        # after it.  This preserves the intended authority order and gives the
+        # preprocessor an exact, explicit Session KV-cache boundary.
+        current_instruction = session_instruction
+        if current_instruction and not current_instruction.endswith("\n"):
+            current_instruction += "\n"
         has_avatar_image = "avatar_state" in image_roles
         # Current structured state complements the current avatar image. A
         # previous-action ID is deliberately never model-visible: animation
@@ -892,9 +1032,8 @@ class Client:
                 ),
             )
             delimiter = localized_prompt(language, zh="：", en=": ")
-            current_instruction = (
-                f"{state_label}{delimiter}{state_text}\n{instruction}"
-            )
+            current_instruction += f"{state_label}{delimiter}{state_text}\n"
+        current_instruction += instruction
 
         messages.extend(dict(message) for message in history)
 
@@ -984,6 +1123,7 @@ class Client:
         messages = Client._build_action_context_messages(
             request.history,
             request.prefix,
+            session_instruction=request.session_instruction,
             avatar_state=request.avatar_state,
             system_prompt=request.system_prompt,
             audios=[*request.history_audios, *request.audios],
@@ -1038,6 +1178,8 @@ class Client:
             metadata["trigger"] = request.trigger
         if request.session_id is not None:
             metadata["session_id"] = request.session_id
+        if request.session_instance_id is not None:
+            metadata["session_instance_id"] = request.session_instance_id
         if request.avatar_state:
             metadata["avatar_state"] = dict(request.avatar_state)
         metadata["action_stage"] = request.stage
@@ -1054,6 +1196,7 @@ class Client:
                 "max_new_tokens": 0,
                 "action_scoring": {
                     "prefix": request.prefix,
+                    "session_instruction": request.session_instruction,
                     "language": request.language,
                     "candidates": candidates,
                     "micro_batch_size": request.micro_batch_size,
@@ -1062,6 +1205,7 @@ class Client:
                     "static_system_prompt": request.system_prompt,
                     "prefix_cache_namespace": request.prefix_cache_namespace,
                     "cache_static_system_only": request.cache_static_system_only,
+                    "admission_priority": request.admission_priority,
                     "action_context_cache_key": request.action_context_cache_key,
                     "turn_origin": request.turn_origin,
                     "text_role": request.text_role,
@@ -1332,6 +1476,11 @@ class Client:
             payload,
             stages=stages,
             timeout_s=timeout_s,
+        )
+
+    async def release_session_cache(self, session_instance_id: str):
+        return await self._coordinator.admin(
+            "release_session_cache", {"session_instance_id": session_instance_id}, timeout_s=5.0,
         )
 
     async def model_info(

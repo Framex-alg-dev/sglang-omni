@@ -48,6 +48,7 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     return hook(log_type, event, **fields)
 
 
+from sglang_omni.serve.realtime.reply.action_rejection import ActionRejectionComponent
 from sglang_omni.serve.realtime.reply.routing import ReplyRoutingComponent
 
 
@@ -63,6 +64,7 @@ from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
 
 
 @compose_components(
+    ActionRejectionComponent,
     ReplyGenerationComponent,
     ProvisionalReplyComponent,
     ReplyRoutingComponent,
@@ -81,6 +83,10 @@ class ReplyPipeline:
         support_status: str = "supported",
         history_route: ReplyHistoryRouteResult | None = None,
     ) -> tuple[GenerateRequest, list[str]]:
+        if support_status == "unsupported":
+            return self._build_action_rejection_request(
+                turn, audios, images, image_roles
+            )
         reply_images, reply_image_roles = self._select_reply_user_camera_images(
             images, image_roles
         )
@@ -239,6 +245,8 @@ class ReplyPipeline:
                 )
         if turn.turn_origin == TURN_ORIGIN_USER:
             parts.append(self._reply_current_turn_priority_part())
+        if turn.intent is not None:
+            parts.append({"type": "text", "text": "[Parsed task data] " + turn.intent.action_context(turn.text)})
         parts.extend({"type": "audio"} for _ in audios)
         if turn.turn_origin == TURN_ORIGIN_USER:
             if isinstance(turn.text, str) and turn.text.strip():
@@ -282,6 +290,7 @@ class ReplyPipeline:
                 "audios": [*history_audios, *audios],
                 "images": [*history_images, *reply_images],
                 "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
                 "turn_id": turn.turn_id,
                 "logical_request_id": turn.request_base,
                 "task": "session_reply",
