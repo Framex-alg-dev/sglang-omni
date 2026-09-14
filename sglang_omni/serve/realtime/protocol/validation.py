@@ -658,7 +658,7 @@ class ProtocolValidationComponent:
         diagnostics = self._strict_object(
             event.get("diagnostics", {}),
             "diagnostics",
-            allowed={"include_action_scores"},
+            allowed={"include_action_scores", "analyze_avatar_state"},
         )
         include_scores = diagnostics.get("include_action_scores", False)
         if not isinstance(include_scores, bool):
@@ -667,6 +667,9 @@ class ProtocolValidationComponent:
             raise ValueError(
                 "diagnostics.include_action_scores requires the action output"
             )
+        analyze_avatar_state = diagnostics.get("analyze_avatar_state", False)
+        if not isinstance(analyze_avatar_state, bool):
+            raise ValueError("diagnostics.analyze_avatar_state must be a boolean")
 
         knowledge = self._strict_object(
             event.get("knowledge", {}),
@@ -790,6 +793,7 @@ class ProtocolValidationComponent:
             "sample_rate": sample_rate,
             "channels": channels,
             "include_scores": include_scores,
+            "analyze_avatar_state": analyze_avatar_state,
             "_protocol_version": version,
             "_locale": locale,
             "_reply_instructions_provided": "instructions" in reply_config,

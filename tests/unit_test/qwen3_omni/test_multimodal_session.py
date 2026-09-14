@@ -111,6 +111,46 @@ class FakeClient:
         )
 
 
+class AvatarStateAnalysisClient(FakeClient):
+    def __init__(self, *, block: bool = False) -> None:
+        super().__init__()
+        self.analysis_requests = []
+        self.analysis_started = asyncio.Event()
+        self.release_analysis = asyncio.Event()
+        self.abort_calls: list[str] = []
+        self.block = block
+
+    def completion_stream(self, request, *, request_id: str):
+        async def stream():
+            self.analysis_requests.append(request)
+            self.analysis_started.set()
+            if self.block:
+                await self.release_analysis.wait()
+            text = (
+                '{"pose":"standing","gaze":"camera",'
+                '"left_hand":"relaxed","right_hand":"raised",'
+                '"held_object":""}'
+            )
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=text[:24],
+                modality="text",
+            )
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=text[24:],
+                modality="text",
+                finish_reason="stop",
+            )
+
+        return stream()
+
+    async def abort(self, request_id: str):
+        self.abort_calls.append(request_id)
+        self.release_analysis.set()
+        return None
+
+
 class ReplyHistoryRouteClient(FakeClient):
     def __init__(
         self,
@@ -964,6 +1004,112 @@ async def test_protocol_v1_rejects_conflicting_media_retries() -> None:
                 "data": second,
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_avatar_state_analysis_returns_before_turn_commit() -> None:
+    ws = FakeWebSocket()
+    client = AvatarStateAnalysisClient()
+    session = make_session(ws, client)
+
+    async def prepare_image(*_args, **_kwargs):
+        return {"status": "prepared", "elapsed_ms": 0.0, "prepared_bytes": 0}
+
+    session._prepare_image_frame = prepare_image
+    await session.dispatch(
+        protocol_v1_session_start(
+            "avatar-state-session",
+            diagnostics={"analyze_avatar_state": True},
+        )
+    )
+    assert ws.events[-1]["diagnostics"] == {
+        "avatar_state_analysis_enabled": True
+    }
+
+    await session.handle_turn_start(user_turn_start("avatar-state-turn"))
+    encoded = BytesIO()
+    Image.new("RGB", (2, 2), color=(17, 34, 51)).save(encoded, format="JPEG")
+    image = base64.b64encode(encoded.getvalue()).decode()
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": "avatar-state-turn",
+            "seq": 1,
+            "timestamp_ms": 7,
+            "image_role": "avatar_state",
+            "mime_type": "image/jpeg",
+            "image": image,
+        }
+    )
+    assert session.active_turn is not None
+    await session.active_turn.images[0].preprocess_task
+    await session.active_turn.avatar_state_analysis_task
+
+    ready = next(
+        event for event in ws.events if event["type"] == "turn.avatar_state.ready"
+    )
+    assert ready["turn_id"] == "avatar-state-turn"
+    assert ready["image_seq"] == 1
+    assert ready["avatar_state"] == {
+        "pose": "standing",
+        "gaze": "camera",
+        "left_hand": "relaxed",
+        "right_hand": "raised",
+        "held_object": "",
+    }
+    assert ready["timing"]["image_received_to_first_token_ms"] >= 0
+    assert ready["timing"]["image_received_to_ready_ms"] >= 0
+    assert not any(event["type"] == "turn.committed" for event in ws.events)
+    assert client.analysis_requests[0].metadata["task"] == "avatar_state_analysis"
+
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "avatar-state-turn"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_avatar_state_analysis_is_cancelled_with_collecting_turn() -> None:
+    ws = FakeWebSocket()
+    client = AvatarStateAnalysisClient(block=True)
+    session = make_session(ws, client)
+
+    async def prepare_image(*_args, **_kwargs):
+        return {"status": "prepared", "elapsed_ms": 0.0, "prepared_bytes": 0}
+
+    session._prepare_image_frame = prepare_image
+    await session.dispatch(
+        protocol_v1_session_start(
+            "avatar-state-cancel-session",
+            diagnostics={"analyze_avatar_state": True},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("avatar-state-cancel-turn"))
+    encoded = BytesIO()
+    Image.new("RGB", (2, 2), color=(17, 34, 51)).save(encoded, format="JPEG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": "avatar-state-cancel-turn",
+            "seq": 1,
+            "timestamp_ms": 7,
+            "image_role": "avatar_state",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+    assert session.active_turn is not None
+    await session.active_turn.images[0].preprocess_task
+    await client.analysis_started.wait()
+    request_id = session.active_turn.avatar_state_analysis_request_id
+
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "avatar-state-cancel-turn"}
+    )
+
+    assert request_id in client.abort_calls
+    assert not any(
+        event["type"] in {"turn.avatar_state.ready", "turn.avatar_state.failed"}
+        for event in ws.events
+    )
 
 
 def test_action_profile_validation_and_normalization() -> None:

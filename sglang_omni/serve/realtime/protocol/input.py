@@ -312,6 +312,7 @@ class TurnInputComponent:
         )
         return images, stats
     async def handle_image_append(self, event: dict[str, Any]) -> None:
+        received_at = time.perf_counter()
         turn = self._require_collecting_turn(event)
         seq = self._positive_int(event.get("seq"), "seq")
         image_role = event.get(
@@ -386,7 +387,7 @@ class TurnInputComponent:
         turn.image_seqs.add(seq)
         turn.image_frame_signatures[seq] = frame_signature
         if turn.first_image_received_at is None:
-            turn.first_image_received_at = time.perf_counter()
+            turn.first_image_received_at = received_at
             emit_structured_log(
                 "lifecycle",
                 "turn_first_image_received",
@@ -398,6 +399,11 @@ class TurnInputComponent:
                 mime_type=mime_type,
             )
         await self._ack_media(turn, "image", seq, image_role=image_role)
+        self._start_avatar_state_analysis(
+            turn,
+            frame,
+            received_at=received_at,
+        )
     async def handle_text_update(self, event: dict[str, Any]) -> None:
         turn = self._require_collecting_turn(event)
         text = event.get("text")
@@ -554,6 +560,10 @@ class TurnInputComponent:
             return
 
         cancel_started = time.perf_counter()
+        avatar_state_task = turn.avatar_state_analysis_task
+        if avatar_state_task is not None and not avatar_state_task.done():
+            avatar_state_task.cancel()
+            await asyncio.gather(avatar_state_task, return_exceptions=True)
         if turn.phase == TURN_PHASE_PROCESSING:
             request_ids = list(turn.active_request_ids)
             turn.phase = TURN_PHASE_CANCELLING

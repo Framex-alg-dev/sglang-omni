@@ -1438,6 +1438,11 @@ class TurnPipeline:
             if provisional_state is not None and reply_timing is not None:
                 reply_timing = self._provisional_reply_timing(provisional_state)
 
+            # The frame analysis starts at input.image.append (Space down),
+            # independently of commit/reply/action. Keep turn.result as the
+            # terminal barrier so its ready/failed event cannot arrive later.
+            await self._wait_for_avatar_state_analysis(turn)
+
             if knowledge_script_started and not suppress_reply_for_unsupported_action:
                 assert self.knowledge_binding is not None
                 assert self.knowledge_controller is not None

@@ -32,6 +32,10 @@ _DEFAULT_CHUNK_SIZE = 4
 _DEFAULT_CHUNK_INTERVAL_MS = 0
 _ACTION_CANDIDATE_ENV = "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID"
 _RESERVED_ACTION_IDS = frozenset({"A000", "B000", "UNSUPPORTED"})
+_FAKE_AVATAR_STATE = (
+    '{"pose":"standing","gaze":"camera","left_hand":"relaxed",'
+    '"right_hand":"relaxed","held_object":""}'
+)
 _SUPPORTED_HTTP_ROUTES = frozenset({"/health", "/v1/models"})
 _SUPPORTED_WEBSOCKET_ROUTES = frozenset({"/v1/session/realtime"})
 
@@ -206,6 +210,8 @@ class DevRealtimeModelClient:
             raise DevRealtimeModelRequestError(
                 "messages must contain system and user roles"
             )
+        if request.metadata.get("task") == "avatar_state_analysis":
+            return _FAKE_AVATAR_STATE
         return self.config.response_text
 
     async def score_action_suffixes(

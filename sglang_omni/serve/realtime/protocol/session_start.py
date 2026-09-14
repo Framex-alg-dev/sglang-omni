@@ -300,6 +300,9 @@ class SessionStartComponent:
         include_scores = event.get("include_scores", False)
         if not isinstance(include_scores, bool):
             raise ValueError("include_scores must be a boolean")
+        analyze_avatar_state = event.get("analyze_avatar_state", False)
+        if not isinstance(analyze_avatar_state, bool):
+            raise ValueError("analyze_avatar_state must be a boolean")
         if event.get("input_audio_format", "pcm16") != "pcm16":
             raise ValueError("only pcm16 audio is supported")
         try:
@@ -506,6 +509,7 @@ class SessionStartComponent:
                     **action_profile_audit,
                 )
         self.include_scores = include_scores
+        self.avatar_state_analysis_enabled = analyze_avatar_state
         self.candidates = candidates
         self.categories = categories
         self.fallback_category_ids = tuple(fallback_category_ids)
@@ -702,6 +706,11 @@ class SessionStartComponent:
                     "protocol_version": self.protocol_version,
                     "outputs": list(self.modalities),
                     "locale": self.locale,
+                    "diagnostics": {
+                        "avatar_state_analysis_enabled": (
+                            self.avatar_state_analysis_enabled
+                        )
+                    },
                 }
             )
             if self.output_audio_voice is not None:

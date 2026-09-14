@@ -104,7 +104,8 @@
     "channels": 1
   },
   "diagnostics": {
-    "include_action_scores": false
+    "include_action_scores": false,
+    "analyze_avatar_state": true
   }
 }
 ```
@@ -123,6 +124,10 @@
 | `action` | 启用 action 时是 | 动作偏好和 Session 动作白名单 |
 | `input_audio` | 否 | 输入音频格式；缺省即 PCM16LE、16 kHz、单声道 |
 | `diagnostics` | 否 | 诊断输出开关 |
+
+`diagnostics.analyze_avatar_state=true` 会让每个 Turn 的第一张
+`avatar_current` 图片在接收后立即启动独立状态分析，不等待 `turn.commit`。该支路不参与
+回复或动作选择，失败也不会终止主 Turn。
 
 `outputs` 支持 `text`、`audio`、`action` 的组合，但 `audio` 必须与 `text` 同时启用。
 需要服务端 TTS 的融合会话使用 `["text", "audio", "action"]`；生产客户端建议始终显式
@@ -259,7 +264,8 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
   "fallback_category_ids": ["B002"],
   "action_prefix_prefilled": true,
   "unsupported_action_text_configured": true,
-  "unsupported_action_text_sha256": "sha256:..."
+  "unsupported_action_text_sha256": "sha256:...",
+  "diagnostics": {"avatar_state_analysis_enabled": true}
 }
 ```
 
@@ -368,7 +374,9 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
 - 回复只使用当前 Turn 时间最新的一张 `user_camera`；图片作为视觉依据排列在用户语音/文本
   之前，且不会写入后续回复历史；
 - `user_camera` 仍可进入动作推理；
-- `avatar_current` 只进入动作推理，每个 Turn 最多使用时间最新的一张，不进入回复或动作历史；
+- `avatar_current` 进入动作推理，每个 Turn 最多使用时间最新的一张，不进入回复或动作历史；
+- 开启 `diagnostics.analyze_avatar_state` 时，第一张 `avatar_current` 还会立即进入独立的状态
+  分析支路；
 - Category 与 Child 使用同一张当前数字人图片，并复用相同的图片编码结果；
 - 当前 Turn 没有 `user_camera` 时，回复模型会收到“未提供用户摄像头画面”的事实；只有用户
   明确询问用户本人或用户环境中的可见内容时才说明没有可用画面，不会把数字人的靠近镜头、
@@ -391,6 +399,34 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
 
 图片 ACK 还包含归一化后的 `image_source`。`duplicate=true` 表示这是内容一致的重传，
 服务端没有重复写入。
+
+### 5.5 数字人当前帧状态事件
+
+成功时返回：
+
+```json
+{
+  "type": "turn.avatar_state.ready",
+  "session_id": "session-20260822-001",
+  "turn_id": "turn-user-001",
+  "analysis_id": "avatar-state-...",
+  "image_seq": 1,
+  "avatar_state": {
+    "pose": "standing",
+    "gaze": "camera",
+    "left_hand": "relaxed",
+    "right_hand": "raised",
+    "held_object": ""
+  },
+  "timing": {
+    "image_received_to_first_token_ms": 120.5,
+    "image_received_to_ready_ms": 245.8
+  }
+}
+```
+
+两个耗时都以服务端接收 `input.image.append` 为起点，分别落到模型首个非空文本块和完整
+JSON 校验完成。失败时返回 `turn.avatar_state.failed`；它是独立支路结果，不是 Turn 终态。
 
 ## 6. 提交 Turn
 

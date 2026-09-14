@@ -428,6 +428,11 @@ class TurnBuffer:
     first_audio_received_at: float | None = None
     first_image_received_at: float | None = None
     session_turn_seq: int = 0
+    avatar_state_analysis_task: asyncio.Task[Any] | None = None
+    avatar_state_analysis_request_id: str | None = None
+    avatar_state_analysis_result: dict[str, str] | None = None
+    avatar_state_analysis_timing: dict[str, float | None] | None = None
+    avatar_state_analysis_error: str | None = None
 
 
 @dataclass(slots=True)

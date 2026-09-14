@@ -117,6 +117,10 @@ from sglang_omni.serve.realtime.protocol.models import (
 
 from sglang_omni.serve.realtime.action import ActionPipeline
 
+from sglang_omni.serve.realtime.avatar_state_analysis import (
+    AvatarStateAnalysisPipeline,
+)
+
 
 from sglang_omni.serve.realtime.reply import ReplyPipeline
 
@@ -136,6 +140,7 @@ from sglang_omni.serve.realtime.turn_pipeline import TurnPipeline
     SessionMemoryController,
     ReplyPipeline,
     ActionPipeline,
+    AvatarStateAnalysisPipeline,
 )
 class MultimodalSession:
     """Manual-turn, multimodal session for audio chunks and image frames.
@@ -287,6 +292,11 @@ class MultimodalSession:
         self.last_avatar_state: dict[str, Any] = {}
         self._send_lock = asyncio.Lock()
         self.include_scores = False
+        self.avatar_state_analysis_enabled = False
+        self.avatar_state_analysis_timeout_s = max(
+            0.1,
+            float(os.getenv("SGLANG_OMNI_AVATAR_STATE_ANALYSIS_TIMEOUT_S", "10.0")),
+        )
 
     async def run(self) -> None:
         try:
