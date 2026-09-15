@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from sglang_omni.serve.realtime.audio_buffer import RealtimeAudioBuffer
+from sglang_omni.serve.realtime.knowledge.turn_context_gate import TurnKnowledgeGate
 
 # Kept local to make protocol-state parsing independent from the session
 # orchestrator. The façade still exports the established constants.
@@ -437,6 +438,7 @@ class TurnBuffer:
     trigger: str | None = None
     text: str | None = None
     intent: Any | None = None
+    knowledge_gate: TurnKnowledgeGate | None = None
     reply_provided: bool = False
     reply_context: str | None = None
     scene_context: str | None = None

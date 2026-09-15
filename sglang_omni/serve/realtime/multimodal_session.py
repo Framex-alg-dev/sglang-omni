@@ -139,6 +139,7 @@ from sglang_omni.serve.realtime.protocol.validation import ProtocolComponent
 
 
 from sglang_omni.serve.realtime.turn_pipeline import TurnPipeline
+from sglang_omni.serve.realtime.knowledge.turn_context_gate import USER_KNOWLEDGE_GATE_ENV
 from sglang_omni.serve.realtime.performance import PerformancePipeline
 
 
@@ -209,6 +210,9 @@ class MultimodalSession:
         self.route_action_parallel = _env_flag(
             ROUTE_ACTION_PARALLEL_ENV,
             default=True,
+        )
+        self.user_knowledge_gate_enabled = _env_flag(
+            USER_KNOWLEDGE_GATE_ENV, default=False,
         )
         self.session_instance_id = uuid.uuid4().hex
         self.session_memory_config = (
