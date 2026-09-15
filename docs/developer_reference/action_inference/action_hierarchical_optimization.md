@@ -25,13 +25,13 @@
         ▼
 category 阶段
   固定 system prompt：所有一级类别
-  suffix：B001、B002、...、B000（语义映射为 UNSUPPORTED）
+  suffix：01、02、...、00（语义映射为 UNSUPPORTED）
   选择 Top-1 类别或不支持判断
         │
         ▼
 child 阶段
   固定 system prompt：选中类别的全局 children
-  suffix：Session 白名单 A001、A002、...、A000（语义映射为 UNSUPPORTED）
+  suffix：Session 白名单 001、002、...、000（语义映射为 UNSUPPORTED）
   选择最终具体动作或不支持判断
         │
         ▼
@@ -46,8 +46,8 @@ action_id / candidate_id / category_id / execute
 - suffix 只使用短 candidate_id；
 - 每个候选都计算 token logprob、mean logprob、NLL 和 PPL；
 - PPL 越低、mean logprob 越高，候选排名越靠前；
-- `B000` 和 `A000` 是内部评分 ID，统一映射为语义判断 `UNSUPPORTED`，不是可执行动作；
-  `B000` 仅表示明确动作请求的目标语义类别不在当前 Session 中，`A000` 仅表示类别已存在、
+- `00` 和 `000` 是内部评分 ID，统一映射为语义判断 `UNSUPPORTED`，不是可执行动作；
+  `00` 仅表示明确动作请求的目标语义类别不在当前 Session 中，`000` 仅表示类别已存在、
   但该类别下的 Session 具体动作均无法满足明确请求；
 - 任一阶段选择 `UNSUPPORTED` 时，进入 Session 配置的最高优先级兜底类别并返回真实动作；
 - 不生成普通数字人回复，只保存动作结果到 session 历史。
@@ -71,8 +71,8 @@ hierarchical 的主要目标不是消除两阶段逻辑，而是减少每个阶�
 category 和 child 都使用短 ID 作为 suffix：
 
 ~~~text
-category：共享上下文 + B051
-child：   共享上下文 + A328
+category：共享上下文 + 51
+child：   共享上下文 + 328
 ~~~
 
 不再对每个候选重复拼接完整动作描述。动作描述仍保留在 system prompt 中，因此动作语义没有丢失。
@@ -174,7 +174,7 @@ Category prefix；`session.start` 提交的类别白名单用于构造实际 PPL
 ~~~json
 {
   "child_prefix_prefilled": true,
-  "child_prefix_cache_namespace": "hierarchical:child:B051:sha256:..."
+  "child_prefix_cache_namespace": "hierarchical:child:51:sha256:..."
 }
 ~~~
 
@@ -344,28 +344,36 @@ turn ingest
 - 分别统计 media preprocessing、encoder 和 Thinker queue；
 - 降低同一 GPU 上其他 stage 对 Thinker 的阻塞。
 
-### 6.3 category 单 child 快速路径
+### 6.3 明确动作快速候选路由
 
-当前已实现：当 category Top-1 有且仅有一个 child 且 `include_scores=false` 时，
-直接返回该 child，同时跳过 child catalog prefill 和 child 模型评分。
+共享意图解析得到 `body_mode=perform` 后，如果 body 与当前 Session 目录生成的
+candidate ID、action ID、动作名称或去掉尾部括号说明的动作名称等值，并且最终只对应
+一个 candidate，服务端跳过 Category，直接把该 candidate 交给 Child 校验。
 
 边界条件：
 
-- category 选择已经有效；
-- children 数量确实为 1；
-- 唯一 child 仍必须是真实可执行动作并返回 `execute=true`；
-- `include_scores=true` 时仍执行 child 评分，保证返回的 PPL/logprob 为真实值；
-- `timing.action_breakdown.child` 显式记录 `skipped=true` 和 `reason=single_child`。
+- 只对解析后的 body 做规范化等值匹配，不对原始用户文本做子串匹配；
+- alias 只能来自当前目录，不维护额外手写短语表；
+- 先应用 Session 白名单、Turn allow/exclude、系统类别排除和状态冲突约束；
+- 多个不同 candidate 命中时放弃快速路由，回到正常 Category Top-K；
+- Child 返回 `000` 时只把它视为召回提示失败，再完整执行一次 Category/Child，绝不
+  强制执行被模型判为不支持的动作。
 
 ### 6.4 模糊类别 Top-K 兜底
 
-当前默认 SGLANG_OMNI_ACTION_CATEGORY_TOP_K=1。对于类别边界模糊的输入，可以根据 category Top-1 与 Top-2 分差动态决定：
+当前默认 `SGLANG_OMNI_ACTION_CATEGORY_TOP_K=2`。服务端会在以下条件同时满足时，
+把本轮有效宽度自适应收窄为 Top-1：
 
-- 分差大：只计算 Top-1 children；
-- 分差小：同时计算 Top-2 children；
-- 最后仍只返回一个 action。
+- Category 总榜第一名是真实类别，而不是 `00`；
+- Top-1 PPL 不高于 `SGLANG_OMNI_ACTION_CATEGORY_TOP1_MAX_PPL`（默认 `8.0`）；
+- Top-1 与 Top-2 的 mean-logprob 分差不低于
+  `SGLANG_OMNI_ACTION_CATEGORY_TOP1_MIN_MARGIN`（默认 `0.8`）；
+- 该类别当前动作语种的全局 Child Prefix 已预热；
+- `SGLANG_OMNI_ACTION_CATEGORY_ADAPTIVE_TOP1` 未关闭。
 
-代价是 child 候选更多、耗时更高。
+其余情况保留配置的 Top-K 召回宽度。这样高置信请求能复用单 Category 的全局预热
+Prefix，类别边界模糊、`00` 更高或预热不可用时仍保留 Top-2 的准确率兜底。
+动作上下文会记录 configured/effective Top-K、PPL、分差和决策原因。
 
 ### 6.5 更深层的上下文/特征复用
 

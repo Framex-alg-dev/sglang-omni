@@ -38,6 +38,10 @@ from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_
 from sglang_omni.serve.realtime.runtime_prompt_overrides import (
     effective_runtime_prompt,
 )
+from sglang_omni.serve.realtime.user_image_policy import (
+    USER_IMAGE_REPLY_RULES_EN,
+    USER_IMAGE_REPLY_RULES_ZH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +105,36 @@ class ReplyPromptComponent:
         return effective_runtime_prompt(
             "reply_rules",
             self._repository_reply_role_and_agency_system_prompt(),
-        ) + mixed_instruction_policy(self.language, "reply")
+        ) + mixed_instruction_policy(
+            self.language, "reply"
+        ) + self._client_language_lock_precedence_system_prompt()
+
+    def _client_language_lock_precedence_system_prompt(self) -> str:
+        return self._prompt(
+            zh=(
+                "\n\n[回复语种与内容]\n"
+                "如果前面的角色回复说明指定了每条回复的语种，则每次都使用该语种。用户请求中的"
+                "其他目标语种只修饰输出语言，不改变用户真正需要的内容。保留并直接完成故事、翻译、"
+                "引用、朗读、复述、举例或回答等实际任务，同时只使用指定的回复语种。例如，指定英文"
+                "时遇到‘用中文说个故事’，直接从英文故事正文开始；指定中文时遇到英文要求，直接用"
+                "中文完成相同内容。输出只包含用户请求的实际内容，不添加关于语种选择的前言、道歉或说明。"
+                "如果前面的角色回复说明没有指定语种，则根据当前请求选择语种。"
+            ),
+            en=(
+                "\n\n[Response language and content]\n"
+                "When the preceding character reply instructions specify a language for every "
+                "response, use that language every time. A different target language in the "
+                "user's request modifies only the output language, not the substantive content "
+                "the user wants. Preserve and directly complete the actual story, translation, "
+                "quotation, reading, repetition, example, or answer while using only the specified "
+                "response language. For example, when English is specified and the user says "
+                "'用中文说个故事', begin directly with the English story itself. Apply the same "
+                "behavior in Chinese when Chinese is specified and the user asks for English. "
+                "Output only the requested substantive content, without a preamble, apology, or "
+                "commentary about language choice. When the preceding character reply instructions "
+                "do not specify a language, choose the language from the current request."
+            ),
+        )
 
     def _repository_reply_role_and_agency_system_prompt(self) -> str:
         return self._prompt(
@@ -203,7 +236,10 @@ class ReplyPromptComponent:
                 "并采用语义最小改写，不得未经要求增加、替换或反转动作。普通语言任务"
                 "确实无法完成时可以如实说明，但身体动作是否可执行由独立动作系统判断。"
                 "不得根据角色职业、是否拥有实体、技术实现方式或是否具备专业身份，自行"
-                "断言或拒绝身体动作，也不得向用户谈论这些内部判断依据。只有当用户明确引用"
+                "断言或拒绝身体动作，也不得向用户谈论这些内部判断依据。"
+                "服务端在当前 user 消息中提供的摄像头可用状态和视觉证据标记，是本轮视觉"
+                "事实，优先于角色人设；不得根据角色职业、AI 身份或技术实现方式，自行推断"
+                "本轮是否有视觉输入。只有当用户明确引用"
                 "他人原话、描述第三方、指定角色扮演关系，或明确重新定义“你/我”指代时，"
                 "才按该明确上下文理解。此规则适用于所有会话，优先于角色人设和回复风格。\n\n"
                 "[用户纯动作请求回复规则]\n"
@@ -368,6 +404,11 @@ class ReplyPromptComponent:
                 "physical action is impossible from the character's occupation, embodiment, "
                 "technical implementation, or professional status. Do not refuse a physical "
                 "action or discuss these internal decision factors with the user. "
+                "The camera-availability state and visual-evidence marker supplied by the "
+                "server in the current user message are authoritative facts for the current "
+                "turn and take priority over persona. Do not infer whether visual input is "
+                "available from the character's occupation, AI identity, or technical "
+                "implementation. "
                 "Follow a different mapping only when the user explicitly "
                 "quotes someone, describes a third party, establishes role-play roles, or "
                 "redefines who 'you' or 'I' refers to. This rule applies to every session "
@@ -425,26 +466,55 @@ class ReplyPromptComponent:
         }
 
 
+    def _explicit_client_fixed_reply_language(self) -> Literal["zh", "en"] | None:
+        instructions = self.instructions.casefold()
+        if (
+            "language: always respond in english" in instructions
+            and "use english for every response" in instructions
+        ):
+            return "en"
+        if (
+            "语言: 每条回复都必须使用中文" in instructions
+            and "每条回复都必须使用中文，即使用户使用其他语言" in instructions
+        ):
+            return "zh"
+        return None
+
+    def _reply_current_turn_language_lock_reminder_part(
+        self,
+    ) -> dict[str, str] | None:
+        fixed_language = self._explicit_client_fixed_reply_language()
+        if fixed_language is None:
+            return None
+        if fixed_language == "zh":
+            text = (
+                "[本轮回复语种]本轮只使用中文。保留当前请求的实际内容，只忽略与中文冲突的"
+                "目标语种修饰。例如，用户要求用英文讲故事时，直接从中文故事正文开始。"
+                "输出只包含用户请求的实际中文内容，不添加关于语种选择的前言、道歉或说明。"
+            )
+        else:
+            text = (
+                "[Response language for this reply] Use only English for this reply. Preserve "
+                "the user's substantive content request and ignore only a target-language "
+                "modifier that conflicts with English. For example, if the user says "
+                "'用中文说个故事', begin directly with the English story itself. Output only "
+                "the requested substantive English content, without a preamble, apology, or "
+                "commentary about language choice."
+            )
+        return {
+            "type": "text",
+            "text": text,
+        }
+
+
     def _reply_user_camera_response_guard_part(self) -> dict[str, str]:
         return {
             "type": "text",
-            "text": self._prompt(
-                zh=(
-                    "[当前回复的视觉使用边界]只有当前 user 消息中的用户语音或文本"
-                    "明确询问用户本人或其环境中的视觉内容时，才可使用当前用户摄像头"
-                    "图片。否则必须完全忽略图片，只回答当前用户请求，不得主动描述或"
-                    "评价用户的外观、情绪、健康状态、动作或环境。不得依据用户摄像头"
-                    "图片判断你自身的姿势、动作、外观或状态。"
-                ),
-                en=(
-                    "[Visual-use boundary for the current reply] Use the current "
-                    "user-camera image only when the user audio or text in the current user "
-                    "message explicitly asks about visual content concerning the user or "
-                    "their environment. Otherwise, ignore the image completely and answer "
-                    "only the current user request. Do not proactively describe or judge "
-                    "the user's appearance, emotions, health, actions, or environment. Do "
-                    "not use the user-camera image to infer your own pose, actions, "
-                    "appearance, or state."
+            "text": effective_runtime_prompt(
+                "user_image_reply_rules",
+                self._prompt(
+                    zh=USER_IMAGE_REPLY_RULES_ZH,
+                    en=USER_IMAGE_REPLY_RULES_EN,
                 ),
             ),
         }

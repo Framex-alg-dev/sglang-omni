@@ -68,7 +68,7 @@ class ActionScoringPipeline:
         cache_error_type = None
         if request.stage == "child":
             observation = child_cache_observer.submitted(
-                request, child_category_ids or [], self.locale,
+                request, child_category_ids or [], self.action_locale,
             )
             emit_structured_log(
                 "action", "child_cache_request", session_id=self.session_id,
@@ -85,7 +85,7 @@ class ActionScoringPipeline:
             request_id=request.request_id,
             stage=request.stage,
             admission_priority=request.admission_priority,
-            locale=self.locale,
+            locale=self.action_locale,
             language=request.language,
             candidate_count=len(request.candidates),
             prefix_cache_namespace=request.prefix_cache_namespace,
@@ -104,7 +104,7 @@ class ActionScoringPipeline:
                 request_id=request.request_id,
                 stage=request.stage,
                 admission_priority=request.admission_priority,
-                locale=self.locale,
+                locale=self.action_locale,
                 language=request.language,
                 candidate_count=len(request.candidates),
                 elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
@@ -121,7 +121,7 @@ class ActionScoringPipeline:
                     trace_id=turn.trace_id,
                     request_id=request.request_id,
                     stage=request.stage,
-                    locale=self.locale,
+                    locale=self.action_locale,
                     language=request.language,
                     prefix_cache_namespace=request.prefix_cache_namespace,
                     **_text_audit_fields("system_prompt", request.system_prompt),
@@ -139,7 +139,7 @@ class ActionScoringPipeline:
                 request_id=request.request_id,
                 stage=request.stage,
                 admission_priority=request.admission_priority,
-                locale=self.locale,
+                locale=self.action_locale,
                 language=request.language,
                 elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
             )
@@ -157,7 +157,7 @@ class ActionScoringPipeline:
                 request_id=request.request_id,
                 stage=request.stage,
                 admission_priority=request.admission_priority,
-                locale=self.locale,
+                locale=self.action_locale,
                 language=request.language,
                 elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
                 error_type=type(exc).__name__,

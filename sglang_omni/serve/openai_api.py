@@ -127,6 +127,10 @@ from sglang_omni.serve.realtime.runtime_prompt_overrides import (
 from sglang_omni.models.qwen3_omni.global_action_catalog import ACTION_INTENT_POLICY
 from sglang_omni.serve.realtime.proactive.policies import _POLICIES
 from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules_zh
+from sglang_omni.serve.realtime.user_image_policy import (
+    USER_IMAGE_ACTION_RULES_ZH,
+    USER_IMAGE_REPLY_RULES_ZH,
+)
 from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
 from sglang_omni.serve.speech_errors import (
     SpeechAPIError,
@@ -384,6 +388,8 @@ def _register_runtime_prompt_overrides(
                 f"[{trigger}]\n{policy.default_action_guidance_zh}"
                 for trigger, policy in _POLICIES.items()
             ),
+            "user_image_reply_rules": USER_IMAGE_REPLY_RULES_ZH,
+            "user_image_action_rules": USER_IMAGE_ACTION_RULES_ZH,
         }
 
     @app.get("/admin/runtime-prompts", dependencies=[Depends(auth)])

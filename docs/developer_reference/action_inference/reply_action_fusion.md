@@ -27,7 +27,7 @@
   "action": {
     "category_guidance": "...",
     "candidate_guidance": "...",
-    "fallback_category_ids": ["B002"],
+    "fallback_category_ids": ["02"],
     "allowed_candidates": []
   }
 }
@@ -69,7 +69,7 @@
 
 融合 Session 必须同时提供两类真实候选，action-only Session 至少提供静默类；静默类必须是
 `fallback_category_ids[0]`，回复伴随类不得作为 unsupported fallback。两个系统类别的静态
-Child Prompt、运行时请求和启动预热都不加入 `A000`。
+Child Prompt、运行时请求和启动预热都不加入 `000`。
 
 全局 Category/Child 静态前缀跨 Session 共用；Session 白名单和偏好仍是私有动态数据，
 不得写入全局共享状态。
@@ -127,12 +127,12 @@ Category 和 Child 使用当前 Turn 隔离上下文：当前用户文本或音�
 turn.commit
   ├─ 临时回复流（生成回复或 provided reply）
   └─ Category 评分
-       ├─ B000：丢弃临时回复 → 兜底真实动作
+       ├─ 00：丢弃临时回复 → 兜底真实动作
        ├─ 系统伴随类别：按实际回复是否非空校正类别
        │    ├─ 有文本：回复伴随 Child 使用首句/前缀
        │    └─ 空文本或失败：静默伴随 Child
        └─ 普通业务类别：立即启动 Child 评分，不等待回复
-            ├─ A000：丢弃临时回复 → 兜底真实动作
+            ├─ 000：丢弃临时回复 → 兜底真实动作
             └─ 普通动作：提升同一临时回复为正式回复
 
 动作结果与已提升的正式回复汇总为 turn.result
@@ -144,11 +144,11 @@ turn.commit
 最终返回 `status=partial`、`outputs.action=failed` 和仅包含 message 的
 结构化错误。
 
-Category 使用内部 `B000`、非兜底 Child 使用内部 `A000` 评分非执行型判断
+Category 使用内部 `00`、非兜底 Child 使用内部 `000` 评分非执行型判断
 `UNSUPPORTED`。Category 返回它时直接把
 动作分支路由到 `fallback_category_ids[0]`；普通 Child 返回它时使用该类别的默认动作。
 系统伴随类别的 Child 不加入 `UNSUPPORTED`，必须选择一个真实动作。普通业务类别继续保留
-`A000`。以上情况都返回真实可执行
+`000`。以上情况都返回真实可执行
 动作，并标记 `support_status=unsupported`、`fallback_applied=true`。
 
 Category 或 Child 返回不支持时，不发送标准回复流，`turn.result.outputs.text=suppressed`，

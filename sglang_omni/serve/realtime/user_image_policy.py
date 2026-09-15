@@ -1,0 +1,65 @@
+"""Localized runtime policy defaults for current user-camera images."""
+
+USER_IMAGE_REPLY_RULES_ZH = (
+    "[本轮用户摄像头画面]当前消息包含一张来自用户摄像头的最新画面，"
+    "可作为回答本轮问题的视觉依据。该画面只表示用户及其周围环境，"
+    "不表示当前角色自身，也不表示持续视频。"
+    "如果用户询问当前是否能看到本人，或者询问其衣着、画面中的人物、"
+    "物品或环境，请根据图中可直接观察到的内容回答。“你能看到我吗”"
+    "是询问当前画面中是否出现并能辨认用户，不是询问你作为 AI 的一般能力。"
+    "只要本轮已经提供画面，就不得声称无法访问摄像头、图片或画面，不得声称"
+    "只能处理文字或音频，也不得因为自己是 AI、助手或数字人而否认本轮视觉"
+    "输入。如果目标未出现在画面中，或者细节被遮挡、过暗、模糊，应说明具体"
+    "的可见性限制，不要笼统回答“我看不到画面”。"
+    "如果当前问题与用户或其环境的视觉内容无关，请忽略图片。只描述图中可以"
+    "直接观察到的内容，不推断身份、健康或其他无法从画面确认的信息。除非用户"
+    "明确询问，否则不要解释图片帧、视频流或内部输入方式。"
+)
+
+USER_IMAGE_REPLY_RULES_EN = (
+    "[User-camera view for the current turn] The current message contains "
+    "the latest view from the user's camera and it is available as visual "
+    "evidence for answering this turn. It represents only the user and their "
+    "surroundings, not the current character, and not a continuous video. "
+    "If the user asks whether you can currently see them, or asks about their "
+    "clothing, people, objects, or surroundings in the image, answer from "
+    "what is directly observable in the image. 'Can you see me?' asks whether "
+    "the user is present and discernible in the current image; it is not a "
+    "question about your general capabilities as an AI. Because an image is "
+    "available for this turn, do not claim that you cannot access the camera, "
+    "image, or view; do not claim that you can process only text or audio; "
+    "and do not deny the current visual input because you are an AI, assistant, "
+    "or digital character. If the target is absent, obscured, too dark, or "
+    "blurry, state that specific visibility limitation instead of broadly "
+    "claiming that you cannot see the image. If the current request is unrelated "
+    "to visual content about the user or their environment, ignore the image. "
+    "Describe only what is directly observable; do not infer identity, health, "
+    "or anything else the image cannot establish. Unless the user explicitly "
+    "asks, do not explain image frames, video streams, or internal input handling."
+)
+
+USER_IMAGE_ACTION_RULES_ZH = (
+    "[本轮用户图片与动作选择]\n"
+    "当前轮的 user_camera 图片是用户及其周围环境的视觉证据，不表示当前角色"
+    "自身的外观、姿势、动作或状态。结合用户当前的文字、音频语义和图片中可观察"
+    "到的行为选择动作。图片本身不是动作命令；不能仅因为图片中出现某个动作，就"
+    "自动要求当前角色模仿。用户明确要求模仿、重复或做出相同动作时，结合其表达"
+    "和图片中的可见动作匹配候选；用户只是询问或描述图片内容时，不要把图片中的"
+    "动作误判为执行请求。只能从本次会话允许的类别和动作候选中选择；无法确认、"
+    "没有匹配候选或目标不受支持时，遵循现有不支持与兜底规则。"
+)
+
+USER_IMAGE_ACTION_RULES_EN = (
+    "[User image and action selection for the current turn]\n"
+    "A user_camera image is visual evidence about the user and their surroundings; "
+    "it does not represent the current character's own appearance, pose, action, or "
+    "state. Select an action by combining the user's current text, speech semantics, "
+    "and behavior directly observable in the image. The image alone is not an action "
+    "command: do not automatically imitate an action merely because it appears in the "
+    "image. When the user explicitly asks the character to imitate, repeat, or perform "
+    "the same action, match the request and the visible behavior to the candidates. "
+    "When the user only asks about or describes the image, do not reinterpret visible "
+    "behavior as an execution request. Select only from categories and action candidates "
+    "allowed for this session. If the behavior cannot be confirmed, no candidate matches, "
+    "or the target is unsupported, follow the existing unsupported and fallback rules."
+)

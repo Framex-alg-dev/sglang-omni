@@ -1,0 +1,5175 @@
+{
+  "schema_version": 1,
+  "description": "Fixed, reviewable inputs for Category Top-1/Top-2 recall and end-to-end Child accuracy. Report metrics separately by group.",
+  "notes": [
+    "catalog_definition_seed is broad coverage, not a natural-language quality claim.",
+    "changed_category_boundary is the primary set for category-description A/B decisions.",
+    "An empty acceptable_candidate_ids list means only category routing is judged.",
+    "allowed_category_ids narrows the Session catalog for 00 rejection cases.",
+    "The committed fixture is an oracle; regenerate only with human review of its diff."
+  ],
+  "changed_category_ids": [
+    "13",
+    "21",
+    "22",
+    "24",
+    "25",
+    "29",
+    "30",
+    "33",
+    "34",
+    "36",
+    "37",
+    "38",
+    "45",
+    "47",
+    "48",
+    "50",
+    "51",
+    "52",
+    "53",
+    "54",
+    "55",
+    "56",
+    "57",
+    "58",
+    "59"
+  ],
+  "cases": [
+    {
+      "id": "seed-10-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双脚并拢，脊背挺直的庄重站姿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "10"
+        ],
+        "acceptable_candidate_ids": [
+          "100"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-10-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单脚略微外放，肩部下沉的非对称松弛站姿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "10"
+        ],
+        "acceptable_candidate_ids": [
+          "101"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-10-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：身体维持站立姿势，单侧手臂向身前或侧方伸出"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "10"
+        ],
+        "acceptable_candidate_ids": [
+          "102"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-11-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：上身微前倾，重心缓慢移至前脚掌"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "11"
+        ],
+        "acceptable_candidate_ids": [
+          "125"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-11-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：上身微后仰，重心缓慢移至脚跟"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "11"
+        ],
+        "acceptable_candidate_ids": [
+          "126"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-11-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双脚蹬地使身体腾空离开地面的爆发性动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "11"
+        ],
+        "acceptable_candidate_ids": [
+          "127"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-12-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：身体由完全静止状态缓慢启动进入动作的过渡过程"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "12"
+        ],
+        "acceptable_candidate_ids": [
+          "128"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-12-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：身体由完全静止状态缓慢启动进入动作的过渡过程"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "12"
+        ],
+        "acceptable_candidate_ids": [
+          "128"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-12-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：身体由完全静止状态缓慢启动进入动作的过渡过程"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "12"
+        ],
+        "acceptable_candidate_ids": [
+          "128"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-13-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：胸腔随呼吸缓慢均匀起伏"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "13"
+        ],
+        "acceptable_candidate_ids": [
+          "130"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-13-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：身体小幅缓慢轻晃的无意识动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "13"
+        ],
+        "acceptable_candidate_ids": [
+          "131"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-13-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：坐姿下借助腰腿发力，带动椅座左右往复旋转"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "13"
+        ],
+        "acceptable_candidate_ids": [
+          "133"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-14-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：下颌连续上下点动，节奏均匀重复"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "14"
+        ],
+        "acceptable_candidate_ids": [
+          "134"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-14-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：头部左右连续摆动，节奏均匀重复"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "14"
+        ],
+        "acceptable_candidate_ids": [
+          "135"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-14-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：下颌连续上下点动，节奏均匀重复"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "14"
+        ],
+        "acceptable_candidate_ids": [
+          "134"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-15-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：下颌向上抬起，视线随之上移"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "15"
+        ],
+        "acceptable_candidate_ids": [
+          "136"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-15-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：头部自正视前方的初始状态启动，颈部带动向前下方弯曲"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "15"
+        ],
+        "acceptable_candidate_ids": [
+          "137"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-15-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：下颌向上抬起，视线随之上移"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "15"
+        ],
+        "acceptable_candidate_ids": [
+          "136"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-16-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：头部保持端正不偏转，双眼眼球同步调整"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "16"
+        ],
+        "acceptable_candidate_ids": [
+          "138"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-16-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：头部保持正前，仅眼球转向左侧"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "16"
+        ],
+        "acceptable_candidate_ids": [
+          "139"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-16-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：头部保持正前，仅眼球转向右侧"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "16"
+        ],
+        "acceptable_candidate_ids": [
+          "140"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-17-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：头部与眼球自正前方面向启动同步向左侧转动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "17"
+        ],
+        "acceptable_candidate_ids": [
+          "145"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-17-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：头部与眼球自正前方面向启动同步向右侧转动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "17"
+        ],
+        "acceptable_candidate_ids": [
+          "146"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-17-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：头部大幅转向身后回望"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "17"
+        ],
+        "acceptable_candidate_ids": [
+          "147"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-18-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单侧或双侧眉毛快速向上挑起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "18"
+        ],
+        "acceptable_candidate_ids": [
+          "152"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-18-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双眉向中间收拢，眉心下压聚拢"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "18"
+        ],
+        "acceptable_candidate_ids": [
+          "153"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-18-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单侧或双侧眉毛快速向上挑起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "18"
+        ],
+        "acceptable_candidate_ids": [
+          "152"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-19-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：嘴部大幅张开，肩部随笑意起伏的开怀表情"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "19"
+        ],
+        "acceptable_candidate_ids": [
+          "155"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-19-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：眉头收紧下压，嘴角平直收拢的庄重表情"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "19"
+        ],
+        "acceptable_candidate_ids": [
+          "156"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-19-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：眉毛快速上扬，双眼睁大嘴微张的意外表情"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "19"
+        ],
+        "acceptable_candidate_ids": [
+          "157"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-20-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双肩由自然放松状态同步上耸靠近耳侧停顿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "20"
+        ],
+        "acceptable_candidate_ids": [
+          "165"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-20-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双肩由上提状态缓慢下沉放松"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "20"
+        ],
+        "acceptable_candidate_ids": [
+          "166"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-20-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单侧肩部单独上提，另一侧保持不动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "20"
+        ],
+        "acceptable_candidate_ids": [
+          "167"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-21-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：上身髋部带动整体向前倾斜"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "21"
+        ],
+        "acceptable_candidate_ids": [
+          "170"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-21-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：上身髋部带动整体向后倾仰"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "21"
+        ],
+        "acceptable_candidate_ids": [
+          "171"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-21-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：身体自画面外侧探头露出半张脸的入镜动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "21"
+        ],
+        "acceptable_candidate_ids": [
+          "172"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-22-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：上身腰部带动向左侧倾斜停留"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "22"
+        ],
+        "acceptable_candidate_ids": [
+          "174"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-22-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：上身腰部带动向右侧倾斜停留"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "22"
+        ],
+        "acceptable_candidate_ids": [
+          "175"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-22-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：上身腰部带动转向左侧停留"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "22"
+        ],
+        "acceptable_candidate_ids": [
+          "176"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-23-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：胸腔向前挺起，肩背随之舒展"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "23"
+        ],
+        "acceptable_candidate_ids": [
+          "179"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-23-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：胸腔向内微收，肩背随之弓起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "23"
+        ],
+        "acceptable_candidate_ids": [
+          "180"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-23-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手臂垫靠脑后，躯干由胸腔至臀胯分段联动形成波浪起伏"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "23"
+        ],
+        "acceptable_candidate_ids": [
+          "181"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-24-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：头部与上身同步小幅前倾致意"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "24"
+        ],
+        "acceptable_candidate_ids": [
+          "189"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-24-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：上身髋部带动 45°-90° 前倾，双手自然垂放身体两侧"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "24"
+        ],
+        "acceptable_candidate_ids": [
+          "190"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-24-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：上身髋部带动 30° 左右前倾，双手交叠放于小腹前"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "24"
+        ],
+        "acceptable_candidate_ids": [
+          "191"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-25-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单侧手臂握持哑铃，以肘关节屈曲为主要运动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "25"
+        ],
+        "acceptable_candidate_ids": [
+          "193"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-25-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：手臂向侧方平举抬起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "25"
+        ],
+        "acceptable_candidate_ids": [
+          "194"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-25-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单臂，向上伸直举过头顶"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "25"
+        ],
+        "acceptable_candidate_ids": [
+          "195"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-26-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双臂自面部前方启动，双手同时朝向身体正前方水平伸展"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "26"
+        ],
+        "acceptable_candidate_ids": [
+          "202"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-26-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双臂自面部前方启动，以双肩为轴心同步向身体左侧水平伸展"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "26"
+        ],
+        "acceptable_candidate_ids": [
+          "203"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-26-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双臂自面部前方启动，以双肩为轴心同步向身体右侧水平伸展"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "26"
+        ],
+        "acceptable_candidate_ids": [
+          "204"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-27-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双臂自然下垂，前后交替摆动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "27"
+        ],
+        "acceptable_candidate_ids": [
+          "215"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-27-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手握拳，手臂前后短促挥出，发力集中于拳头，动态有爆发力"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "27"
+        ],
+        "acceptable_candidate_ids": [
+          "216"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-27-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双臂从右向左连续摆动并回位，掌心相对"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "27"
+        ],
+        "acceptable_candidate_ids": [
+          "217"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-28-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单侧手臂自自然伸直状态启动，以肘关节为固定轴心"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "28"
+        ],
+        "acceptable_candidate_ids": [
+          "219"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-28-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单侧手臂自屈肘弯曲状态启动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "28"
+        ],
+        "acceptable_candidate_ids": [
+          "220"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-28-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：肘部以肩为轴向外侧展开抬起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "28"
+        ],
+        "acceptable_candidate_ids": [
+          "221"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-29-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双臂抬起置于身前或身侧，双手握拳并同时单独伸出食指"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "29"
+        ],
+        "acceptable_candidate_ids": [
+          "229"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-29-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双手立掌，指尖朝向自身胸口，手肘向内收拢"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "29"
+        ],
+        "acceptable_candidate_ids": [
+          "234"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-29-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：其余手指弯曲收拢，仅双食指伸直，指尖相互抵靠正对"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "29"
+        ],
+        "acceptable_candidate_ids": [
+          "235"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-30-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双臂交叉后向两侧展开，掌心朝上"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "30"
+        ],
+        "acceptable_candidate_ids": [
+          "239"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-30-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手手背朝上连续向右侧移动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "30"
+        ],
+        "acceptable_candidate_ids": [
+          "247"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-30-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手手背朝上，由右侧平稳滑向左侧做展示动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "30"
+        ],
+        "acceptable_candidate_ids": [
+          "248"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-31-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：五指均弯曲成弧状，拇指指尖与食指指尖相扣成圆形，中指"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "31"
+        ],
+        "acceptable_candidate_ids": [
+          "257"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-31-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手食指独立伸直伸出，其余四指收拢握拳"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "31"
+        ],
+        "acceptable_candidate_ids": [
+          "258"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-31-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：食指中指伸出，比出数字二"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "31"
+        ],
+        "acceptable_candidate_ids": [
+          "259"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-32-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手抬起位于身前或举高，手掌面向外部左右摆动的打招呼动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "32"
+        ],
+        "acceptable_candidate_ids": [
+          "288"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-32-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双手抬起位于身前或举高"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "32"
+        ],
+        "acceptable_candidate_ids": [
+          "289"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-32-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手抬起位于身前或举高，手掌面向外部左右摆动的打招呼动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "32"
+        ],
+        "acceptable_candidate_ids": [
+          "288"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-33-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双手向上抬起，短促向下发力，单次或上下反复拍击实体桌"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "33"
+        ],
+        "acceptable_candidate_ids": [
+          "294"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-33-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手立掌向前推出，随后短暂停住"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "33"
+        ],
+        "acceptable_candidate_ids": [
+          "300"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-33-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双掌向前推出并同步停顿，掌心朝外"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "33"
+        ],
+        "acceptable_candidate_ids": [
+          "301"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-34-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双臂抬至胸腹前，双手掌心两两相对交替往复拍击，拍击幅度中等"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "34"
+        ],
+        "acceptable_candidate_ids": [
+          "304"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-34-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手握拳前举，手臂短促用力挥动的加油动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "34"
+        ],
+        "acceptable_candidate_ids": [
+          "305"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-34-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双手握拳前举，同步挥动的双手加油动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "34"
+        ],
+        "acceptable_candidate_ids": [
+          "306"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-35-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手掌心向上，手指连续向自身方向勾动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "35"
+        ],
+        "acceptable_candidate_ids": [
+          "310"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-35-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双掌向上，双手同时向自身反复勾动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "35"
+        ],
+        "acceptable_candidate_ids": [
+          "311"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-35-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手掌心向上，手臂自身前向前伸出"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "35"
+        ],
+        "acceptable_candidate_ids": [
+          "312"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-36-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双手掌心相合，置于胸前微微俯首的感谢姿态"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "36"
+        ],
+        "acceptable_candidate_ids": [
+          "314"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-36-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手握拳，另一手包覆抱于胸前的手势"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "36"
+        ],
+        "acceptable_candidate_ids": [
+          "315"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-36-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手四指并拢，抬至眉梢停留的动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "36"
+        ],
+        "acceptable_candidate_ids": [
+          "316"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-37-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手贴颈后缓慢摩挲，头部随动作轻微左右晃动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "37"
+        ],
+        "acceptable_candidate_ids": [
+          "318"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-37-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单侧手臂抬起并跨越身前，手掌或手指主动接触"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "37"
+        ],
+        "acceptable_candidate_ids": [
+          "319"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-37-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手指尖轻抵唇边，缓慢蹭过嘴角擦拭"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "37"
+        ],
+        "acceptable_candidate_ids": [
+          "320"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-38-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手五指由并拢状态展开分散"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "38"
+        ],
+        "acceptable_candidate_ids": [
+          "359"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-38-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双手五指由并拢状态展开分散"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "38"
+        ],
+        "acceptable_candidate_ids": [
+          "360"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-38-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双手五指向内收紧攥成拳头，随即舒展张开，手掌向前摊开"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "38"
+        ],
+        "acceptable_candidate_ids": [
+          "361"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-39-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双脚分开与肩同宽，自然站立"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "39"
+        ],
+        "acceptable_candidate_ids": [
+          "376"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-39-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双脚并拢贴合，垂直站立的正式站姿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "39"
+        ],
+        "acceptable_candidate_ids": [
+          "377"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-39-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双脚左右分开，稳定站立的开阔站姿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "39"
+        ],
+        "acceptable_candidate_ids": [
+          "378"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-40-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双脚原地交替上下踏动的步行动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "40"
+        ],
+        "acceptable_candidate_ids": [
+          "383"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-40-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：双脚交替迈步，身体随之前进的行走动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "40"
+        ],
+        "acceptable_candidate_ids": [
+          "384"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-40-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双脚交替倒退，身体随之后移的退行动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "40"
+        ],
+        "acceptable_candidate_ids": [
+          "385"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-41-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：身体转向左侧的转身动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "41"
+        ],
+        "acceptable_candidate_ids": [
+          "392"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-41-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：身体转向右侧的转身动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "41"
+        ],
+        "acceptable_candidate_ids": [
+          "393"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-41-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：身体转向左侧的转身动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "41"
+        ],
+        "acceptable_candidate_ids": [
+          "392"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-42-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双膝伸直发力，身体缓慢站起的起身动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "42"
+        ],
+        "acceptable_candidate_ids": [
+          "394"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-42-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双腿同时弯曲下蹲，臀部接近脚跟，膝盖完全折叠的深度蹲姿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "42"
+        ],
+        "acceptable_candidate_ids": [
+          "395"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-42-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单腿弯曲下蹲承重，另一条腿向前伸直抬起的单侧蹲姿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "42"
+        ],
+        "acceptable_candidate_ids": [
+          "396"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-43-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单脚脚尖轻触地面的脚部动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "43"
+        ],
+        "acceptable_candidate_ids": [
+          "398"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-43-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双脚脚跟同步抬起，以脚尖支撑的脚部姿态"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "43"
+        ],
+        "acceptable_candidate_ids": [
+          "399"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-43-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双脚小步挪动，微调站立位置的脚部动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "43"
+        ],
+        "acceptable_candidate_ids": [
+          "400"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-44-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：头部转向左侧，单侧手臂同步抬起指引的引导动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "44"
+        ],
+        "acceptable_candidate_ids": [
+          "403"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-44-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：头部转向右侧，单侧手臂同步抬起指引的引导动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "44"
+        ],
+        "acceptable_candidate_ids": [
+          "404"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-44-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：头部伸向前方，单侧手臂向前伸展，掌心示意前方引路的引导动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "44"
+        ],
+        "acceptable_candidate_ids": [
+          "405"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-45-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：手臂舒展绕腕，步伐轻盈富有韵律的蹈"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "45"
+        ],
+        "acceptable_candidate_ids": [
+          "407"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-45-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：肢体自由延展，动作富有张力变化的蹈"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "45"
+        ],
+        "acceptable_candidate_ids": [
+          "408"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-45-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：胯部摆动明显，步伐紧凑节奏鲜明的舞"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "45"
+        ],
+        "acceptable_candidate_ids": [
+          "409"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-46-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：俯身弯腰，一手平贴台面架起手桥"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "46"
+        ],
+        "acceptable_candidate_ids": [
+          "430"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-46-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：站立姿态下，单手或双手左右交替拍击地面篮球的运球动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "46"
+        ],
+        "acceptable_candidate_ids": [
+          "431"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-46-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：起跳腾空，单手或双手持球将球砸入篮筐的爆发性跳跃动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "46"
+        ],
+        "acceptable_candidate_ids": [
+          "432"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-47-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双脚原地跳起并快速击掌，落地时双拳收回胸前"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "47"
+        ],
+        "acceptable_candidate_ids": [
+          "436"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-47-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双手捂住口鼻，眼睛睁大并伴随身体后缩"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "47"
+        ],
+        "acceptable_candidate_ids": [
+          "437"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-47-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双手叉腰，挺胸抬头并将下巴微微扬起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "47"
+        ],
+        "acceptable_candidate_ids": [
+          "438"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-48-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手食指或中指伸出，向前轻点虚拟按钮位置的交互动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "48"
+        ],
+        "acceptable_candidate_ids": [
+          "474"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-48-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手食指触屏，横向匀速滑动的交互动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "48"
+        ],
+        "acceptable_candidate_ids": [
+          "475"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-48-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手大拇指和食指双指触屏，由内向外撑开滑动的放大动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "48"
+        ],
+        "acceptable_candidate_ids": [
+          "476"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-49-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手抓住面板边缘，向侧方拉出的交互动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "49"
+        ],
+        "acceptable_candidate_ids": [
+          "481"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-49-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手抵住面板边缘，向侧方推入的交互动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "49"
+        ],
+        "acceptable_candidate_ids": [
+          "482"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-49-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手食指按住元素，随手移动拖行的交互动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "49"
+        ],
+        "acceptable_candidate_ids": [
+          "483"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": false
+    },
+    {
+      "id": "seed-50-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手俯身探向桌面，抓握物品后提起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "50"
+        ],
+        "acceptable_candidate_ids": [
+          "486"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-50-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手侧伸探向物品，握住后抬起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "50"
+        ],
+        "acceptable_candidate_ids": [
+          "487"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-50-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手下探，抓握后拿起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "50"
+        ],
+        "acceptable_candidate_ids": [
+          "488"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-51-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手握住物品中部，稳持斜前方的持物姿态"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "51"
+        ],
+        "acceptable_candidate_ids": [
+          "500"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-51-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双手分持物品两侧，置于胸前稳托的持物姿态"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "51"
+        ],
+        "acceptable_candidate_ids": [
+          "501"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-51-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手握住物品，小幅缓慢前后晃动查看"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "51"
+        ],
+        "acceptable_candidate_ids": [
+          "502"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-52-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：用于展示未特别指定方向的物品；单手掌心向上托举，物品停在身前"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "52"
+        ],
+        "acceptable_candidate_ids": [
+          "512"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-52-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：用于明确双手展示物品；双手掌心向上共同托举，物品停在身前"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "52"
+        ],
+        "acceptable_candidate_ids": [
+          "513"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-52-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：用于明确向前展示物品；单手持物从身前伸至胸前，不要求靠近镜头"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "52"
+        ],
+        "acceptable_candidate_ids": [
+          "514"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-53-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手握住物品，手臂转向左侧递出的递物动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "53"
+        ],
+        "acceptable_candidate_ids": [
+          "527"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-53-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：双手握住物品，手臂转向左侧递出的递物动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "53"
+        ],
+        "acceptable_candidate_ids": [
+          "528"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-53-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手握住物品，手臂转向右侧递出的递物动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "53"
+        ],
+        "acceptable_candidate_ids": [
+          "529"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-54-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手握住物品，向下放置于桌面"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "54"
+        ],
+        "acceptable_candidate_ids": [
+          "537"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-54-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：双手握住物品，向下放置于桌面"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "54"
+        ],
+        "acceptable_candidate_ids": [
+          "538"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-54-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手轻扶物品，微调角度摆放端正"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "54"
+        ],
+        "acceptable_candidate_ids": [
+          "539"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-55-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手握住物品，绕臂收至身后藏起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "55"
+        ],
+        "acceptable_candidate_ids": [
+          "559"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-55-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手握住物品，塞入口袋收好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "55"
+        ],
+        "acceptable_candidate_ids": [
+          "560"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-55-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手握住物品，放入包内收好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "55"
+        ],
+        "acceptable_candidate_ids": [
+          "561"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-56-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手握笔，笔尖抵纸低头书写"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "56"
+        ],
+        "acceptable_candidate_ids": [
+          "566"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-56-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：单手持手机或听筒贴于耳侧，头部微侧，肩部可能微耸以保持姿势"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "56"
+        ],
+        "acceptable_candidate_ids": [
+          "567"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-56-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手握笔，笔尖前伸点向内容处"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "56"
+        ],
+        "acceptable_candidate_ids": [
+          "568"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-57-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "我希望看到这样的动作：双手握帽檐两侧，向下扣于头顶"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "57"
+        ],
+        "acceptable_candidate_ids": [
+          "595"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-57-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：双手握帽檐两侧，向上取下帽子"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "57"
+        ],
+        "acceptable_candidate_ids": [
+          "596"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-57-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手扶镜腿，由前向后架上"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "57"
+        ],
+        "acceptable_candidate_ids": [
+          "597"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-58-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请把以下动作表现出来：单手扶盒身，另一手掀起盒盖"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "58"
+        ],
+        "acceptable_candidate_ids": [
+          "635"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-58-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手扶盒身，另一手压下盒盖"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "58"
+        ],
+        "acceptable_candidate_ids": [
+          "636"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-58-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手握瓶身，另一手逆时针拧开"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "58"
+        ],
+        "acceptable_candidate_ids": [
+          "637"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-59-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请按这个动作细节来做：单手握瓶身，手腕小幅上下晃动"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "59"
+        ],
+        "acceptable_candidate_ids": [
+          "646"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-59-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "请完成下面描述的身体动作：单手持布料，来回擦拭物体表面"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "59"
+        ],
+        "acceptable_candidate_ids": [
+          "647"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "seed-59-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在照这个执行细节做一次：单手持物靠近扫描区，稍作停顿"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "59"
+        ],
+        "acceptable_candidate_ids": [
+          "648"
+        ],
+        "support_status": "supported"
+      },
+      "group": "catalog_definition_seed",
+      "coverage_kind": "normal",
+      "source": "catalog_definition_seed",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-13-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "先别比划，保持自然呼吸就好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "13"
+        ],
+        "acceptable_candidate_ids": [
+          "130"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-13-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "在椅子上稍微挪一下坐稳"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "13"
+        ],
+        "acceptable_candidate_ids": [
+          "132"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-13-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "坐着轻轻左右转一下椅子"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "13"
+        ],
+        "acceptable_candidate_ids": [
+          "133"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-21-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把上半身朝镜头凑近一点"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "21"
+        ],
+        "acceptable_candidate_ids": [
+          "170"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-21-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "身体往后靠一些"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "21"
+        ],
+        "acceptable_candidate_ids": [
+          "171"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-21-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "从画面边上探出半张脸看看"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "21"
+        ],
+        "acceptable_candidate_ids": [
+          "172"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-22-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "腰和上身一起向左边侧过去"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "22"
+        ],
+        "acceptable_candidate_ids": [
+          "174"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-22-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "脚别动，只把整个上身转向右侧"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "22"
+        ],
+        "acceptable_candidate_ids": [
+          "177"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-22-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "让上半身左右连续晃几下"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "22"
+        ],
+        "acceptable_candidate_ids": [
+          "178"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-24-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "轻轻点一下头向大家致意"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "24"
+        ],
+        "acceptable_candidate_ids": [
+          "189"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-24-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手放在身体两边，正式地深鞠一躬"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "24"
+        ],
+        "acceptable_candidate_ids": [
+          "190"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-24-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手交叠在小腹前，弯腰感谢观众"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "24"
+        ],
+        "acceptable_candidate_ids": [
+          "191"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-25-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "只把一边的胳膊平举到身体侧面"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "25"
+        ],
+        "acceptable_candidate_ids": [
+          "194"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-25-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "像课堂回答问题那样举起一只手"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "25"
+        ],
+        "acceptable_candidate_ids": [
+          "196"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-25-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用一只手叉在腰上站好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "25"
+        ],
+        "acceptable_candidate_ids": [
+          "201"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-29-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "伸出食指明确指向你身体左边"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "29"
+        ],
+        "acceptable_candidate_ids": [
+          "226"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-29-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用手指点着自己的胸口"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "29"
+        ],
+        "acceptable_candidate_ids": [
+          "232"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-29-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "抬手指给大家看黑板上的位置"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "29"
+        ],
+        "acceptable_candidate_ids": [
+          "236"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-30-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "掌心朝上，从左往右扫过来介绍这一片区域"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "30"
+        ],
+        "acceptable_candidate_ids": [
+          "245"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-30-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用食指在正前方完整画一个圆"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "30"
+        ],
+        "acceptable_candidate_ids": [
+          "250"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-30-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "两只空手掌心向上摊开，展示整个范围"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "30"
+        ],
+        "acceptable_candidate_ids": [
+          "238"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-33-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "说到重点时用一只手用力拍一下桌面"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "33"
+        ],
+        "acceptable_candidate_ids": [
+          "293"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-33-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把一只手掌向前推，明确示意停下"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "33"
+        ],
+        "acceptable_candidate_ids": [
+          "300"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-33-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双臂在胸前交叉成叉，表示拒绝"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "33"
+        ],
+        "acceptable_candidate_ids": [
+          "302"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-34-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "为刚才的表现拍几下手鼓励一下"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "34"
+        ],
+        "acceptable_candidate_ids": [
+          "304"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-34-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双臂举过头顶用力挥舞欢呼"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "34"
+        ],
+        "acceptable_candidate_ids": [
+          "307"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-34-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "面向镜头伸出手掌来击个掌"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "34"
+        ],
+        "acceptable_candidate_ids": [
+          "308"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-36-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手在胸前合掌，低头表达感谢"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "36"
+        ],
+        "acceptable_candidate_ids": [
+          "314"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-36-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "一手握拳、另一手包住拳头行个礼"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "36"
+        ],
+        "acceptable_candidate_ids": [
+          "315"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-36-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "四指并拢抬到眉梢敬个礼"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "36"
+        ],
+        "acceptable_candidate_ids": [
+          "316"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-37-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用指尖轻轻揉一揉自己的耳廓和耳垂"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "37"
+        ],
+        "acceptable_candidate_ids": [
+          "323"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-37-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把散下来的头发整理拨到一边"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "37"
+        ],
+        "acceptable_candidate_ids": [
+          "340"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-37-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "手掌贴在耳边，偏着头仔细听"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "37"
+        ],
+        "acceptable_candidate_ids": [
+          "352"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-38-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用拇指和中指摩擦弹一下，打个响指"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "38"
+        ],
+        "acceptable_candidate_ids": [
+          "365"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-38-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把两只手的手指交错扣在一起"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "38"
+        ],
+        "acceptable_candidate_ids": [
+          "366"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-38-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "面前没有琴，单手在空中模拟弹奏"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "38"
+        ],
+        "acceptable_candidate_ids": [
+          "372"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-45-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "面前有钢琴，只用一只手按琴键演奏"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "45"
+        ],
+        "acceptable_candidate_ids": [
+          "424"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-45-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "抱着吉他，一只手按弦另一只手拨弦"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "45"
+        ],
+        "acceptable_candidate_ids": [
+          "426"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-45-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手撑地，让身体向侧面翻转一周"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "45"
+        ],
+        "acceptable_candidate_ids": [
+          "421"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-47-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手做成猫爪托着脸，歪头装可爱"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "47"
+        ],
+        "acceptable_candidate_ids": [
+          "442"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-47-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "吓得双手抱住头，身体也往后缩"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "47"
+        ],
+        "acceptable_candidate_ids": [
+          "460"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-47-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "视线移开，用一根手指慢慢抚过下巴思考"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "47"
+        ],
+        "acceptable_candidate_ids": [
+          "465"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-48-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用食指贴着虚拟屏幕横向滑过去"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "48"
+        ],
+        "acceptable_candidate_ids": [
+          "475"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-48-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "在屏幕上用拇指和食指向外撑开放大内容"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "48"
+        ],
+        "acceptable_candidate_ids": [
+          "476"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-48-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "伸手点击前方界面里的虚拟按钮"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "48"
+        ],
+        "acceptable_candidate_ids": [
+          "474"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-50-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "手伸到桌面，把原本放着的东西抓起来"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "50"
+        ],
+        "acceptable_candidate_ids": [
+          "486"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-50-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把手伸进口袋，取出里面的东西"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "50"
+        ],
+        "acceptable_candidate_ids": [
+          "495"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-50-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "伸手到上方架子，把东西拿下来"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "50"
+        ],
+        "acceptable_candidate_ids": [
+          "498"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-51-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把已经拿在手里的东西抱紧在胸前"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "51"
+        ],
+        "acceptable_candidate_ids": [
+          "503"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-51-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "握住袋子的提手，让袋子垂在身边"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "51"
+        ],
+        "acceptable_candidate_ids": [
+          "506"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-51-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手从下面稳稳托着已经装好东西的托盘"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "51"
+        ],
+        "acceptable_candidate_ids": [
+          "510"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-52-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把手里的商品靠近镜头，让我看清细节"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "52"
+        ],
+        "acceptable_candidate_ids": [
+          "519"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-52-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "转动手中物品，把正面和背面都展示出来"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "52"
+        ],
+        "acceptable_candidate_ids": [
+          "521"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-52-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "撕开包装，取出里面的东西后立刻向前展示"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "52"
+        ],
+        "acceptable_candidate_ids": [
+          "524"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-53-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "从对方手里用一只手接过递来的东西"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "53"
+        ],
+        "acceptable_candidate_ids": [
+          "531"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-53-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "先接过对方递来的物品，然后马上举起来展示"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "53"
+        ],
+        "acceptable_candidate_ids": [
+          "535"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-53-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把手里的东西递给站在你左边的人"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "53"
+        ],
+        "acceptable_candidate_ids": [
+          "527"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-54-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把手中物品向下放到桌面上"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "54"
+        ],
+        "acceptable_candidate_ids": [
+          "537"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-54-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把好几个东西一个挨一个并排摆好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "54"
+        ],
+        "acceptable_candidate_ids": [
+          "553"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-54-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把这些物品一层一层叠起来"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "54"
+        ],
+        "acceptable_candidate_ids": [
+          "554"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-55-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把已经拿着的东西绕到背后藏起来"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "55"
+        ],
+        "acceptable_candidate_ids": [
+          "559"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-55-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把手中的小物件塞进口袋收好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "55"
+        ],
+        "acceptable_candidate_ids": [
+          "560"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-55-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "手里本来就拿着东西，从画面外把它带进镜头"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "55"
+        ],
+        "acceptable_candidate_ids": [
+          "565"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-56-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "拿杯子喝一口水，我没有指定别的容器"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "56"
+        ],
+        "acceptable_candidate_ids": [
+          "571"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-56-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "拿起耳机，把它戴到耳朵上"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "56"
+        ],
+        "acceptable_candidate_ids": [
+          "582"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-56-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "捏住纸质书的一角，翻到下一页"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "56"
+        ],
+        "acceptable_candidate_ids": [
+          "570"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-57-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "耳机已经戴着了，用一只手把耳机位置调好"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "57"
+        ],
+        "acceptable_candidate_ids": [
+          "625"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-57-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "用手指摸一摸另一只手上戴着的戒指"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "57"
+        ],
+        "acceptable_candidate_ids": [
+          "620"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-57-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把一只手插进衣兜里，保持放松姿势"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "57"
+        ],
+        "acceptable_candidate_ids": [
+          "627"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-58-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "只把盒子的盖子掀开，不要取出或展示里面的东西"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "58"
+        ],
+        "acceptable_candidate_ids": [
+          "635"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-58-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把包上的拉链拉开，但不要从里面拿东西"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "58"
+        ],
+        "acceptable_candidate_ids": [
+          "642"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-58-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "双手抓住包装两端，把包装直接撕开"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "58"
+        ],
+        "acceptable_candidate_ids": [
+          "644"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-59-1",
+      "locale": "zh-CN",
+      "input": {
+        "text": "握住瓶身上下摇几下，把里面的液体混匀"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "59"
+        ],
+        "acceptable_candidate_ids": [
+          "646"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-59-2",
+      "locale": "zh-CN",
+      "input": {
+        "text": "拿着布在物体表面来回擦干净"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "59"
+        ],
+        "acceptable_candidate_ids": [
+          "647"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "boundary",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "boundary-59-3",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把商品条码靠近扫描区域停一下识别"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "59"
+        ],
+        "acceptable_candidate_ids": [
+          "648"
+        ],
+        "support_status": "supported"
+      },
+      "group": "changed_category_boundary",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_boundary",
+      "changed_category": true
+    },
+    {
+      "id": "reply_weather",
+      "locale": "zh-CN",
+      "input": {
+        "text": "给我解释一下今天为什么这么热"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "01"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "reply_story",
+      "locale": "zh-CN",
+      "input": {
+        "text": "讲一个很短的睡前故事"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "01"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "reply_translation",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把早上好翻译成英文"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "01"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "reply_knowledge",
+      "locale": "zh-CN",
+      "input": {
+        "text": "海水为什么是咸的"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "01"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "reply_repeat",
+      "locale": "zh-CN",
+      "input": {
+        "text": "只说一句欢迎回来"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "01"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "silent_wait",
+      "locale": "zh-CN",
+      "input": {
+        "text": "先安静陪着我，不要说话，也不要做明显动作"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "02"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "silent_observe",
+      "locale": "zh-CN",
+      "input": {
+        "text": "保持安静看着就好，不用回答"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "02"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "silent_no_gesture",
+      "locale": "zh-CN",
+      "input": {
+        "text": "别出声，也别做表达性手势"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "02"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "silent_rest",
+      "locale": "zh-CN",
+      "input": {
+        "text": "安静待一会儿，只要自然呼吸"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "02"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "silent_reset",
+      "locale": "zh-CN",
+      "input": {
+        "text": "不用回复，恢复到自然安静的状态"
+      },
+      "allowed_category_ids": [],
+      "expected": {
+        "acceptable_category_ids": [
+          "02"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "supported"
+      },
+      "group": "system_route",
+      "coverage_kind": "boundary",
+      "source": "reviewed_system_route",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_dance",
+      "locale": "zh-CN",
+      "input": {
+        "text": "现在跳一段现代舞"
+      },
+      "allowed_category_ids": [
+        "13",
+        "14"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_walk",
+      "locale": "zh-CN",
+      "input": {
+        "text": "向前走到镜头旁边"
+      },
+      "allowed_category_ids": [
+        "18",
+        "19"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_drink",
+      "locale": "zh-CN",
+      "input": {
+        "text": "拿杯子喝一口水"
+      },
+      "allowed_category_ids": [
+        "29",
+        "30"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_write",
+      "locale": "zh-CN",
+      "input": {
+        "text": "拿笔在纸上写几个字"
+      },
+      "allowed_category_ids": [
+        "21",
+        "22"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_bow",
+      "locale": "zh-CN",
+      "input": {
+        "text": "正式地鞠一躬"
+      },
+      "allowed_category_ids": [
+        "31",
+        "32"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_wave",
+      "locale": "zh-CN",
+      "input": {
+        "text": "抬手向我挥手告别"
+      },
+      "allowed_category_ids": [
+        "15",
+        "16"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_pickup",
+      "locale": "zh-CN",
+      "input": {
+        "text": "从桌上拿起那个盒子"
+      },
+      "allowed_category_ids": [
+        "51",
+        "52"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_screen",
+      "locale": "zh-CN",
+      "input": {
+        "text": "在虚拟屏幕上向左滑动"
+      },
+      "allowed_category_ids": [
+        "53",
+        "54"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_applause",
+      "locale": "zh-CN",
+      "input": {
+        "text": "为大家鼓掌庆祝"
+      },
+      "allowed_category_ids": [
+        "10",
+        "11"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    },
+    {
+      "id": "restricted_glasses",
+      "locale": "zh-CN",
+      "input": {
+        "text": "把眼镜戴到脸上"
+      },
+      "allowed_category_ids": [
+        "45",
+        "46"
+      ],
+      "expected": {
+        "acceptable_category_ids": [
+          "00"
+        ],
+        "acceptable_candidate_ids": [],
+        "support_status": "unsupported"
+      },
+      "group": "restricted_category_unsupported",
+      "coverage_kind": "adversarial",
+      "source": "reviewed_restricted_catalog",
+      "changed_category": false
+    }
+  ]
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from typing import Any
@@ -52,7 +53,7 @@ ACTION_PERSONA_FIELDS = (
 CHARACTER_PROFILE_FIELDS = ACTION_PERSONA_FIELDS + (
     "visual_behavior_preferences",
 )
-FACIAL_EXPRESSION_CATEGORY_ID = "B019"
+FACIAL_EXPRESSION_CATEGORY_ID = "19"
 DEFAULT_REPLY_MAX_NEW_TOKENS = 512
 DEFAULT_REPLY_TEMPERATURE = 0.4
 PURE_ACTION_REPLY_MAX_NEW_TOKENS = 48
@@ -107,6 +108,15 @@ DEFAULT_ACTION_MICRO_BATCH_SIZE = 64
 ACTION_CATEGORY_TOP_K_ENV = "SGLANG_OMNI_ACTION_CATEGORY_TOP_K"
 DEFAULT_ACTION_CATEGORY_TOP_K = 2
 MAX_ACTION_CATEGORY_TOP_K = 3
+ACTION_CATEGORY_ADAPTIVE_TOP1_ENV = (
+    "SGLANG_OMNI_ACTION_CATEGORY_ADAPTIVE_TOP1"
+)
+ACTION_CATEGORY_TOP1_MIN_MARGIN_ENV = (
+    "SGLANG_OMNI_ACTION_CATEGORY_TOP1_MIN_MARGIN"
+)
+DEFAULT_ACTION_CATEGORY_TOP1_MIN_MARGIN = 0.8
+ACTION_CATEGORY_TOP1_MAX_PPL_ENV = "SGLANG_OMNI_ACTION_CATEGORY_TOP1_MAX_PPL"
+DEFAULT_ACTION_CATEGORY_TOP1_MAX_PPL = 8.0
 TURN_ORIGIN_USER = "user"
 TURN_ORIGIN_PROACTIVE = "proactive"
 ACTION_FINISHED_TRIGGER = "action_finished"
@@ -216,6 +226,44 @@ def normalize_action_category_top_k(value: int | str | None = None) -> int:
             f"{MAX_ACTION_CATEGORY_TOP_K}; got {top_k}"
         )
     return top_k
+
+
+def _normalize_positive_finite_float(
+    value: float | str | None,
+    *,
+    env_name: str,
+    default: float,
+) -> float:
+    raw = value if value is not None else os.environ.get(env_name)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    try:
+        normalized = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{env_name} must be a positive finite number; got {raw!r}") from exc
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError(f"{env_name} must be a positive finite number; got {raw!r}")
+    return normalized
+
+
+def normalize_action_category_top1_min_margin(
+    value: float | str | None = None,
+) -> float:
+    return _normalize_positive_finite_float(
+        value,
+        env_name=ACTION_CATEGORY_TOP1_MIN_MARGIN_ENV,
+        default=DEFAULT_ACTION_CATEGORY_TOP1_MIN_MARGIN,
+    )
+
+
+def normalize_action_category_top1_max_ppl(
+    value: float | str | None = None,
+) -> float:
+    return _normalize_positive_finite_float(
+        value,
+        env_name=ACTION_CATEGORY_TOP1_MAX_PPL_ENV,
+        default=DEFAULT_ACTION_CATEGORY_TOP1_MAX_PPL,
+    )
 
 
 def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:

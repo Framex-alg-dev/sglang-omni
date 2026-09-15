@@ -607,6 +607,7 @@ class ProtocolValidationComponent:
                 action_config,
                 "action",
                 allowed={
+                    "locale",
                     "category_guidance",
                     "candidate_guidance",
                     "passive_policy",
@@ -615,6 +616,9 @@ class ProtocolValidationComponent:
                 },
                 required={"fallback_category_ids"},
             )
+            action_locale = action_config.get("locale", locale)
+            if action_locale not in locale_to_language:
+                raise ValueError("action.locale must be 'zh-CN' or 'en-US'")
             (
                 action_candidates,
                 action_profile,
@@ -800,6 +804,9 @@ class ProtocolValidationComponent:
             "include_scores": include_scores,
             "_protocol_version": version,
             "_locale": locale,
+            "_action_locale": (
+                action_locale if "action" in outputs else locale
+            ),
             "_reply_instructions_provided": "instructions" in reply_config,
         }
         if unsupported_action_text is not None:

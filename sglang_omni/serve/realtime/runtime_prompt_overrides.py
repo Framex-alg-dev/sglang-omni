@@ -13,6 +13,8 @@ _FILENAMES = {
     "action_rules": "action_rules.txt",
     "proactive_reply_rules": "proactive_reply_rules.txt",
     "proactive_action_rules": "proactive_action_rules.txt",
+    "user_image_reply_rules": "user_image_reply_rules.txt",
+    "user_image_action_rules": "user_image_action_rules.txt",
 }
 _PROACTIVE_SECTION_NAMES = frozenset(
     {
@@ -82,6 +84,22 @@ def prompt_slot_payloads(defaults: dict[str, str]) -> list[dict[str, object]]:
         "action_rules": "sglang-omni 对主动和用户动作都生效的通用动作选择规则",
         "proactive_reply_rules": "sglang-omni 对所有主动场景生效的强制回复规则",
         "proactive_action_rules": "sglang-omni 对所有主动场景生效的动作目标指导",
+        "user_image_reply_rules": (
+            "当前轮包含 user_camera 图片时，指导如何理解图片并生成回复；"
+            "不负责判断动作是否执行成功"
+        ),
+        "user_image_action_rules": (
+            "当前轮包含 user_camera 图片时，指导图片信息如何参与动作选择；"
+            "不能扩展候选集或改变系统兜底机制"
+        ),
+    }
+    display_names = {
+        "reply_rules": "服务端通用回复规则",
+        "action_rules": "服务端通用动作规则",
+        "proactive_reply_rules": "服务端主动回复规则",
+        "proactive_action_rules": "服务端主动动作规则",
+        "user_image_reply_rules": "用户图片理解与回复规则",
+        "user_image_action_rules": "用户图片理解与动作规则",
     }
     payloads: list[dict[str, object]] = []
     for key, filename in _FILENAMES.items():
@@ -92,6 +110,7 @@ def prompt_slot_payloads(defaults: dict[str, str]) -> list[dict[str, object]]:
                 "owner": "sglang_omni",
                 "key": key,
                 "filename": filename,
+                "display_name": display_names[key],
                 "description": descriptions[key],
                 "source": "runtime" if override is not None else "repository_default",
                 "override_content": override or "",

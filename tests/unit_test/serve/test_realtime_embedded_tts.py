@@ -104,11 +104,12 @@ def _app(
     *,
     interval_ms: int = 0,
     tts_config: EmbeddedTTSConfig | None = None,
+    response_text: str = "固定流式回复",
 ):
     client = DevRealtimeModelClient(
         DevRealtimeModelConfig(
             enabled=True,
-            response_text="固定流式回复",
+            response_text=response_text,
             chunk_size=2,
             chunk_interval_ms=interval_ms,
         )
@@ -248,6 +249,19 @@ def test_text_audio_streams_pcm_and_reuses_connection_across_turns() -> None:
             "channels": 1,
         }
         assert events[-1]["outputs"] == {"text": "completed", "audio": "completed"}
+
+
+def test_normalized_tts_keeps_official_text_deltas_unchanged() -> None:
+    connector = ProgrammableTTSConnector()
+    original = "  What's  new?\r\n\n Hello\t world.  "
+    with TestClient(_app(connector, response_text=original)).websocket_connect(
+        "/v1/session/realtime"
+    ) as ws:
+        _start_session(ws)
+        events = _run_turn(ws, "whitespace")
+    assert events[-1]["type"] == "turn.result"
+    assert "".join(e["delta"] for e in events if e["type"] == "response.text.delta") == original
+    assert connector.contexts[0].websocket.committed_texts == ["What's new?\nHello world."]
 
 
 def test_session_voice_overrides_default_in_ack_log_and_tts_across_turns() -> None:

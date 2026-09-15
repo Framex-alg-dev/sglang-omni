@@ -339,11 +339,13 @@ class TurnPipeline:
                 guidance_parts: list[str] = []
                 if policy is not None:
                     guidance_parts.append(
-                        policy.default_action_guidance(self.language).strip()
+                        policy.default_action_guidance(
+                            self.action_language
+                        ).strip()
                     )
                 if isinstance(turn.scene_context, str) and turn.scene_context.strip():
                     guidance_parts.append(
-                        self._prompt(
+                        self._action_prompt(
                             zh="当前主动场景补充：",
                             en="Current proactive scene refinement: ",
                         )

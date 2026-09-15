@@ -17,6 +17,8 @@ DEFAULTS = {
     "action_rules": "repository action",
     "proactive_reply_rules": "repository proactive reply",
     "proactive_action_rules": "repository proactive action",
+    "user_image_reply_rules": "repository user-image reply",
+    "user_image_action_rules": "repository user-image action",
 }
 
 
@@ -58,3 +60,30 @@ def test_plain_and_sectioned_proactive_overrides() -> None:
             == "[动作意图：低打扰提醒]\n空闲动作"
         )
         assert read_runtime_prompt_section("proactive_action_rules", "farewell") is None
+
+
+def test_user_image_rules_use_the_shared_runtime_prompt_directory() -> None:
+    with tempfile.TemporaryDirectory() as directory, patch.dict(
+        os.environ,
+        {"SGLANG_OMNI_RUNTIME_PROMPT_DIR": directory},
+    ):
+        write_runtime_prompt("user_image_reply_rules", "custom image reply")
+        write_runtime_prompt("user_image_action_rules", "custom image action")
+        items = {
+            item["key"]: item for item in prompt_slot_payloads(DEFAULTS)
+        }
+
+        assert Path(directory, "user_image_reply_rules.txt").read_text(
+            encoding="utf-8"
+        ) == "custom image reply"
+        assert Path(directory, "user_image_action_rules.txt").read_text(
+            encoding="utf-8"
+        ) == "custom image action"
+        assert items["user_image_reply_rules"]["display_name"] == (
+            "用户图片理解与回复规则"
+        )
+        assert items["user_image_action_rules"]["display_name"] == (
+            "用户图片理解与动作规则"
+        )
+        assert items["user_image_reply_rules"]["activation"] == "new_turn"
+        assert items["user_image_action_rules"]["activation"] == "new_turn"

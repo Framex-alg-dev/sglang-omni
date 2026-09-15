@@ -510,6 +510,8 @@ class SessionStartComponent:
         self.protocol_version = event.get("_protocol_version")
         self.locale = event.get("_locale", "zh-CN" if language == "zh" else "en-US")
         self.language = language
+        self.action_locale = event.get("_action_locale", self.locale)
+        self.action_language = PROMPT_LANGUAGE_BY_LOCALE[self.action_locale]
         self.modalities = modalities
         self.output_capabilities = output_capabilities
         self.knowledge_binding = knowledge_binding
@@ -584,20 +586,20 @@ class SessionStartComponent:
             else "flat_children"
         )
         self.action_prefix_cache_namespace = (
-            self.global_action_catalog.category_cache_namespace(self.locale)
+            self.global_action_catalog.category_cache_namespace(self.action_locale)
             if self.global_action_catalog is not None and categories
-            else f"{mode_namespace}:{self.locale}:{self.action_catalog_hash}"
+            else f"{mode_namespace}:{self.action_locale}:{self.action_catalog_hash}"
         )
         prefill = getattr(self.client, "prefill_action_catalog", None)
         if self.global_action_catalog is not None and categories:
-            locale_prewarm = self.global_action_prewarm.for_locale(self.locale)
+            locale_prewarm = self.global_action_prewarm.for_locale(self.action_locale)
             self.prewarmed_child_category_ids = sorted(
                 {item.category_id for item in categories}
                 & set(locale_prewarm.ready_child_category_ids)
             )
             self._prefilled_action_prefix_namespaces.update(
                 self.global_action_catalog.child_cache_namespace(
-                    category_id, self.locale
+                    category_id, self.action_locale
                 )
                 for category_id in self.prewarmed_child_category_ids
             )
@@ -654,7 +656,7 @@ class SessionStartComponent:
                         ],
                         prefix_cache_namespace=session_category_namespace,
                         stage="category",
-                        language=self.language,
+                        language=self.action_language,
                         session_instruction=category_session_instruction,
                     )
                 )
@@ -718,7 +720,7 @@ class SessionStartComponent:
                 candidates=prefill_candidates,
                 prefix_cache_namespace=session_prefix_namespace,
                 stage=prefill_stage,
-                language=self.language,
+                language=self.action_language,
                 session_instruction=session_instruction,
             )
             if self.action_prefix_prefilled:
@@ -765,7 +767,7 @@ class SessionStartComponent:
                         ],
                         prefix_cache_namespace=child_namespace,
                         stage="child",
-                        language=self.language,
+                        language=self.action_language,
                         session_instruction=child_session_instruction,
                     )
                     elapsed_ms = round(
@@ -833,6 +835,7 @@ class SessionStartComponent:
                     "protocol_version": self.protocol_version,
                     "outputs": list(self.modalities),
                     "locale": self.locale,
+                    "action_locale": self.action_locale,
                 }
             )
             if self.output_audio_voice is not None:
@@ -891,6 +894,7 @@ class SessionStartComponent:
             session_id=self.session_id,
             protocol_version=self.protocol_version,
             locale=self.locale,
+            action_locale=self.action_locale,
             modalities=list(self.modalities),
             action_selection_mode=self.action_selection_mode,
             action_ready_tts_decoupled=self.action_ready_tts_decoupled,

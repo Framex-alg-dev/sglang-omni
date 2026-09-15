@@ -12,7 +12,7 @@ CATALOG = json.loads((Path(__file__).resolve().parents[3] / 'sglang_omni/assets/
 
 def result():
     return {'status': 'completed', 'reply': {'text': '一。'},
-            'action': {'candidate_id': 'A259', 'execute': True, 'support_status': 'supported'},
+            'action': {'candidate_id': '259', 'execute': True, 'support_status': 'supported'},
             'timing': {'reply_mode': 'LANGUAGE_REQUIRED', 'request_scope': 'body_only'}}
 
 
@@ -22,7 +22,7 @@ def test_joint_checks_fail_wrong_reply_body_or_scope():
     actual = result()
     assert all(judge(case, actual, CATALOG).values())
     actual['reply']['text'] = '好的，一。'
-    actual['action']['candidate_id'] = 'A258'
+    actual['action']['candidate_id'] = '258'
     actual['timing']['request_scope'] = 'expression_only'
     checks = judge(case, actual, CATALOG)
     assert checks['reply'] is checks['body'] is checks['scope'] is False
@@ -32,7 +32,7 @@ def test_optional_face_and_explicit_face_have_different_requirements():
     actual = result()
     assert all(judge({'expected': {'expression_target': None}}, actual, CATALOG).values())
     assert not judge({'expected': {'expression_target': '微笑'}}, actual, CATALOG)['expression']
-    actual['action']['candidate_id'] = 'A288'
+    actual['action']['candidate_id'] = '288'
     assert not judge({'expected': {'forbidden_body_targets': ['挥手']}}, actual, CATALOG)['body_prohibition']
 
 

@@ -35,7 +35,7 @@ async def main(args):
         result, first, _ = await run_turn(ws, {'text': '说一比二'}, ROOT, 30)
         assert result['status'] == 'completed', result
         assert result['reply']['text'] == '一', result
-        assert result['action']['candidate_id'] == 'A259' and result['action']['execute'], result
+        assert result['action']['candidate_id'] == '259' and result['action']['execute'], result
         rows.append({'label': label, 'session_id': result['session_id'], 'turn_id': result['turn_id'],
             'wire_first_ms': first, 'action_breakdown': result['timing']['action_breakdown'], 'passed': True})
 

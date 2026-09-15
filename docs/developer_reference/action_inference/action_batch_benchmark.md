@@ -22,7 +22,7 @@
 `protocol_version=1` 固定使用 hierarchical，benchmark 脚本只上传全局目录的紧凑
 candidate ID 白名单，不再接受 `--mode` 或上传动作语义目录。
 
-为了验证 batch 大小本身，benchmark 使用短的外部 `candidate_id`（`A000`、`A001`……），同时保留目录中的长 canonical `action_id` 作为动作执行 ID。这样不会把长 action_id 的 token 数量误算成 batch 优化收益。
+为了验证 batch 大小本身，benchmark 使用短的外部 `candidate_id`（`000`、`001`……），同时保留目录中的长 canonical `action_id` 作为动作执行 ID。这样不会把长 action_id 的 token 数量误算成 batch 优化收益。
 
 ## 2. 实现改动
 

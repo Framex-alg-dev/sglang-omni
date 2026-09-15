@@ -144,18 +144,14 @@ class ReplyHistoryComponent:
             "type": "text",
             "text": self._prompt(
                 zh=(
-                    "[当前 user 消息附带用户摄像头图片]"
-                    "该图片只表示当前用户及其周围环境，不表示你的姿势、动作、"
-                    "外观或状态。只有当前用户语音或文本明确要求判断用户本人或"
-                    "其环境中的视觉内容时，才使用该图片；否则忽略该图片。"
+                    "[当前用户摄像头图片]紧随其后的图片是从用户摄像头采集的当前帧，"
+                    "只表示用户及其周围环境，不表示当前角色自身的外观、姿势、动作或状态。"
                 ),
                 en=(
-                    "[The current user message includes a user-camera image] "
-                    "The image represents only the current user and their surroundings; "
-                    "it does not represent your own pose, actions, appearance, or state. "
-                    "Use it only when the current user audio or text explicitly asks for "
-                    "a visual judgment about the user or their environment; otherwise "
-                    "ignore it."
+                    "[Current user-camera image] The image immediately following this text "
+                    "is a current frame captured from the user's camera. It represents only "
+                    "the user and their surroundings, not the current character's appearance, "
+                    "pose, actions, or state."
                 ),
             ),
         }

@@ -192,16 +192,16 @@ def test_short_id_tokenization_composes_suffix_without_retokenizing_prefix():
     class ShortIdTokenizer:
         def encode(self, text, add_special_tokens=False):
             del add_special_tokens
-            if text == "A328":
+            if text == "328":
                 return [328]
-            if text == "A329":
+            if text == "329":
                 return [329]
             raise AssertionError(f"unexpected text encoded: {text!r}")
 
     items = tokenize_suffixes(
         ShortIdTokenizer(),
         "ignored long multimodal prompt",
-        [candidate("A328", "A328"), candidate("A329", "A329")],
+        [candidate("328", "328"), candidate("329", "329")],
         prefix_token_ids=[101, 102, 103],
         terminal_token_id=999,
         suffix_only=True,
@@ -259,22 +259,22 @@ def test_aggregate_math_counts_every_explicit_token_score():
 
 def test_runtime_score_excludes_terminal_from_identifier_ppl():
     score = score_candidate_from_runtime(
-        "B027",
-        [100, 0, 2, 7, 151645],
+        "27",
+        [2, 7, 151645],
         {},
-        [-9.2338, -0.0056, -0.2165, -0.0035, -6.4764],
+        [-0.2165, -0.0035, -6.4764],
         terminal_token_id=151645,
     )
 
-    assert [item.token_id for item in score.token_scores] == [100, 0, 2, 7]
-    assert score.token_count == 4
-    assert score.mean_logprob == pytest.approx(-2.36485)
-    assert score.ppl == pytest.approx(math.exp(2.36485))
+    assert [item.token_id for item in score.token_scores] == [2, 7]
+    assert score.token_count == 2
+    assert score.mean_logprob == pytest.approx(-0.11)
+    assert score.ppl == pytest.approx(math.exp(0.11))
 
 
 def test_runtime_score_excludes_terminal_on_continuation_only_backend():
     score = score_candidate_from_runtime(
-        "B027",
+        "27",
         [10, 11, 151645],
         {10: -0.7},
         [-0.2, -6.0],
@@ -288,25 +288,25 @@ def test_runtime_score_excludes_terminal_on_continuation_only_backend():
 
 def test_terminal_bias_cannot_flip_captured_category_ranking():
     terminal = 151645
-    b000 = score_candidate_from_runtime(
-        "B000",
+    category_00_score = score_candidate_from_runtime(
+        "00",
         [100, 0, 0, 0, terminal],
         {},
         [-9.2338, -0.0056, -2.3386, -1.5422, -0.0122],
         terminal_token_id=terminal,
     )
-    b027 = score_candidate_from_runtime(
-        "B027",
+    category_27_score = score_candidate_from_runtime(
+        "27",
         [100, 0, 2, 7, terminal],
         {},
         [-9.2338, -0.0056, -0.2165, -0.0035, -6.4764],
         terminal_token_id=terminal,
     )
 
-    assert b027.mean_logprob > b000.mean_logprob
-    assert b027.ppl < b000.ppl
-    assert all(item.token_id != terminal for item in b000.token_scores)
-    assert all(item.token_id != terminal for item in b027.token_scores)
+    assert category_27_score.mean_logprob > category_00_score.mean_logprob
+    assert category_27_score.ppl < category_00_score.ppl
+    assert all(item.token_id != terminal for item in category_00_score.token_scores)
+    assert all(item.token_id != terminal for item in category_27_score.token_scores)
 
 
 def test_alignment_rejects_nan_and_preserves_first_suffix_token():

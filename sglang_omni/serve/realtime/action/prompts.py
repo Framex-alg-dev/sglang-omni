@@ -264,7 +264,7 @@ class ActionPromptComponent:
         self, candidate: SessionActionCandidate, turn_origin: str = "user"
     ) -> str:
         definition = candidate.effective_definition(turn_origin)
-        return self._prompt(
+        return self._action_prompt(
             zh=(
                 f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
                 f"说明={definition}"
@@ -297,8 +297,10 @@ class ActionPromptComponent:
 
     def _build_category_system_prompt(self) -> str:
         if self.global_action_catalog is not None:
-            return self.global_action_catalog.category_system_prompt_for(self.locale)
-        if self.language == "en":
+            return self.global_action_catalog.category_system_prompt_for(
+                self.action_locale
+            )
+        if self.action_language == "en":
             lines = [
                 "You are a digital-character action category classifier. Select one category_id from the fixed category set.",
                 CATEGORY_CONTEXT_POLICY_EN,
@@ -324,7 +326,7 @@ class ActionPromptComponent:
                 "Select the category_id that best matches the current input. Output "
                 "exactly one category_id and stop immediately. Do not explain."
             )
-            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
+            return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
         lines = [
             "你是数字人动作类别识别器。请从固定类别集合中选择一个 category_id。",
             CATEGORY_CONTEXT_POLICY,
@@ -354,7 +356,7 @@ class ActionPromptComponent:
             "请根据当前输入选择最匹配的 category_id；只输出一个 category_id，"
             "输出后立即结束，不要解释。"
         )
-        return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
+        return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
     def _build_child_system_prompt(
         self,
         category: SessionActionCategory | list[SessionActionCategory],
@@ -365,7 +367,9 @@ class ActionPromptComponent:
         # Preserve all ordering and exact metadata. This caches rendering only;
         # it never weakens the model's namespace or changes token sequences.
         key = (
-            id(self.global_action_catalog), self.language, getattr(self, "locale", None),
+            id(self.global_action_catalog),
+            self.action_language,
+            getattr(self, "action_locale", None),
             turn_origin,
             tuple((c.category_id, c.source_label, c.short_definition) for c in categories),
             tuple((c.candidate_id, c.source_label, c.effective_definition(turn_origin))
@@ -397,21 +401,21 @@ class ActionPromptComponent:
         if self.global_action_catalog is not None:
             if len(categories) == 1:
                 return self.global_action_catalog.child_system_prompt_for(
-                    self.locale, categories[0].category_id, turn_origin
+                    self.action_locale, categories[0].category_id, turn_origin
                 )
             lines = [
-                self._prompt(
+                self._action_prompt(
                     zh="你是数字人动作识别器。请从以下集合中选择一个 candidate_id。",
                     en="You are a digital-character action classifier. Select one candidate_id from the following set.",
                 ),
-                self._prompt(
+                self._action_prompt(
                     zh=DIRECTION_REFERENCE_POLICY,
                     en=DIRECTION_REFERENCE_POLICY_EN,
                 ),
             ]
             for selected in categories:
                 lines.append(
-                    self._prompt(
+                    self._action_prompt(
                         zh=(
                             f"候选类别：category_id={selected.category_id}｜"
                             f"类别={selected.source_label}｜说明={selected.short_definition}"
@@ -422,13 +426,13 @@ class ActionPromptComponent:
                         ),
                     )
                 )
-            lines.append(child_unsupported_policy(self.locale))
+            lines.append(child_unsupported_policy(self.action_locale))
             lines.extend(
                 self._format_candidate_for_prompt(item, turn_origin)
                 for item in candidates
             )
             lines.append(
-                self._prompt(
+                self._action_prompt(
                     zh=(
                         "只能从以上候选类别的动作中选择最匹配的 candidate_id；"
                         "只输出一个结果。"
@@ -439,8 +443,8 @@ class ActionPromptComponent:
                     ),
                 )
             )
-            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
-        if self.language == "en":
+            return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
+        if self.action_language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the following set.",
             ]
@@ -457,7 +461,7 @@ class ActionPromptComponent:
                 "selected category above. Do not introduce another category or an "
                 "extra default action."
             )
-            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
+            return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
         lines = [
             "你是数字人动作识别器。请从以下集合中选择一个 candidate_id。",
         ]
@@ -474,18 +478,18 @@ class ActionPromptComponent:
             "只能从以上已选类别的候选动作中选择最匹配的 candidate_id；"
             "不得引入其他类别或系统兜底动作。"
         )
-        return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
+        return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
 
 
     def _category_whitelist_instruction(self) -> str:
         if self.global_action_catalog is None:
             return ""
-        separator = self._prompt(zh="、", en=", ")
+        separator = self._action_prompt(zh="、", en=", ")
         allowed_ids = separator.join(
             category.category_id for category in self.categories
         )
         fallback_items = separator.join(
-            self._prompt(
+            self._action_prompt(
                 zh=f"{category.category_id}（{category.source_label}）",
                 en=f"{category.category_id} ({category.source_label})",
             )
@@ -497,7 +501,7 @@ class ActionPromptComponent:
         silent_category = self._category_with_semantic_tag(
             CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
         )
-        system_route = self._prompt(
+        system_route = self._action_prompt(
             zh=(
                 "[本次会话系统伴随类别]\n"
                 f"有非空实际回复时：{reply_category.category_id}（{reply_category.source_label}）\n"
@@ -511,7 +515,7 @@ class ActionPromptComponent:
                 f"({silent_category.source_label})\n"
             ),
         ) if reply_category is not None and silent_category is not None else ""
-        if self.language == "en":
+        if self.action_language == "en":
             return (
                 "[Action categories allowed in this conversation]\n"
                 f"Allowed real category_id values: {allowed_ids}\n"
@@ -549,15 +553,15 @@ class ActionPromptComponent:
     ) -> str:
         if self.global_action_catalog is None:
             return ""
-        allowed_ids = self._prompt(zh="、", en=", ").join(
+        allowed_ids = self._action_prompt(zh="、", en=", ").join(
             item.candidate_id for item in candidates
         )
         categories = category if isinstance(category, list) else [category]
-        category_ids = self._prompt(zh="、", en=", ").join(
+        category_ids = self._action_prompt(zh="、", en=", ").join(
             item.category_id for item in categories
         )
         if len(categories) == 1 and self._is_system_accompaniment_category(categories[0]):
-            return self._prompt(
+            return self._action_prompt(
                 zh=(
                     "[本次会话允许选择的具体动作]\n"
                     f"已选 category_id={category_ids}。"
@@ -572,7 +576,7 @@ class ActionPromptComponent:
                     "listed above.\n"
                 ),
             )
-        if self.language == "en":
+        if self.action_language == "en":
             return (
                 "[Concrete actions allowed in this conversation]\n"
                 f"Selected category_id values: {category_ids}. Only these candidate_id "
@@ -607,7 +611,7 @@ class ActionPromptComponent:
         if self._category_has_semantic_tag(
             category, CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
         ):
-            return self._prompt(
+            return self._action_prompt(
                 zh=(
                     "[本轮数字人实际回复开头]\n"
                     f"{reply_prefix}\n"
@@ -625,7 +629,7 @@ class ActionPromptComponent:
         if self._category_has_semantic_tag(
             category, CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
         ):
-            return self._prompt(
+            return self._action_prompt(
                 zh=(
                     "[本轮回复状态]\n"
                     "本轮没有需要数字人说出的有效回复文本。根据当前状态、场景和低打扰"
@@ -642,7 +646,7 @@ class ActionPromptComponent:
 
 
     def _build_action_system_prompt(self, turn_origin: str = "user") -> str:
-        if self.language == "en":
+        if self.action_language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the fixed set for this conversation.",
             ]
@@ -655,7 +659,7 @@ class ActionPromptComponent:
                 "conflict must be avoided, select the "
                 f"default candidate_id={self._no_action_candidate_id()}."
             )
-            return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
+            return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
         lines = [
             "你是数字人动作识别器。请从本次会话的固定集合中选择一个 candidate_id。",
         ]
@@ -667,7 +671,7 @@ class ActionPromptComponent:
             "没有候选动作满足输入与状态约束，或需要避免冲突时，选择兜底 "
             f"candidate_id={self._no_action_candidate_id()}。"
         )
-        return mixed_instruction_policy(self.language, "body") + "\n\n" + "\n".join(lines)
+        return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
 
 
 MultimodalActionPromptMixin = ActionPromptComponent

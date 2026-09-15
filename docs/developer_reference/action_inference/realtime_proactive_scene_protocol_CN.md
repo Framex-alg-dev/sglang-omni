@@ -40,8 +40,8 @@
   },
   "action": {
     "guidance": "保持当前基础姿态，选择友好且清晰的欢迎动作。",
-    "allowed_candidate_ids": ["A101", "A103"],
-    "excluded_candidate_ids": ["A102"],
+    "allowed_candidate_ids": ["101", "103"],
+    "excluded_candidate_ids": ["102"],
     "last_executed_action_id": "wave_once"
   },
   "avatar_state": {

@@ -88,7 +88,9 @@ class ActionCandidateComponent:
             has_avatar_image=IMAGE_ROLE_AVATAR_STATE in action_image_roles,
         )
         session_instruction = self._build_session_action_profile_instruction(
-            "single", turn_origin=turn_origin
+            "single",
+            turn_origin=turn_origin,
+            has_user_camera=IMAGE_ROLE_USER_CAMERA in action_image_roles,
         )
         prefix = (
             self._last_user_action_reference_instruction(
@@ -149,12 +151,12 @@ class ActionCandidateComponent:
             session_instruction=session_instruction,
             prefix=prefix,
             current_text=text or "",
-            output_prompt=self._prompt(
+            output_prompt=self._action_prompt(
                 zh="最合适的 candidate_id：",
                 en="Best matching candidate_id:",
             ),
             system_prompt=action_system_prompt,
-            language=self.language,
+            language=self.action_language,
             candidates=candidates,
             suffix_tokenization_mode="short_id",
             audios=audios,

@@ -23,6 +23,7 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
     CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
     GlobalActionCatalog,
+    GlobalActionCatalogPrewarmStatus,
     load_global_action_catalog,
 )
 from sglang_omni.preprocessing.image import is_prepared_image_wire
@@ -44,6 +45,9 @@ from sglang_omni.serve.realtime.session_memory import (
     SessionMemoryConfig,
     SessionMemoryScheduler,
     SessionMemoryTurn,
+)
+from sglang_omni.serve.realtime.runtime_prompt_overrides import (
+    write_runtime_prompt,
 )
 from sglang_omni.serve.realtime.turn_pipeline import _build_request_base
 
@@ -133,7 +137,7 @@ class FakeClient:
 
 
 class PerformanceMatrixClient(FakeClient):
-    def __init__(self, performance_winner: str, body_id: str = "A100", body_category: str = "B010") -> None:
+    def __init__(self, performance_winner: str, body_id: str = "100", body_category: str = "10") -> None:
         super().__init__()
         self.performance_winner = performance_winner
         self.body_id = body_id
@@ -222,6 +226,46 @@ class ReplyHistoryRouteClient(FakeClient):
                 for index, candidate_id in enumerate(("R0", "R1", "R2", "R3"))
             ],
             stats={"audio_encoder_ms": 7.5},
+        )
+
+
+class ReplySpeechModeClient(FakeClient):
+    def __init__(self, winner: str) -> None:
+        super().__init__()
+        self.winner = winner
+
+    async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+        self.score_requests.append(request)
+        assert request.stage == multimodal_module.REPLY_SPEECH_MODE_STAGE
+        assert self.winner in {"S0", "S1"}
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=candidate_id,
+                    token_count=1,
+                    mean_logprob=(
+                        -0.1 if candidate_id == self.winner else -1.0
+                    ),
+                    mean_nll=(
+                        0.1 if candidate_id == self.winner else 1.0
+                    ),
+                    ppl=(
+                        1.105170 if candidate_id == self.winner else 2.718281
+                    ),
+                    token_scores=[
+                        TokenScore(
+                            token_id=151 + index,
+                            logprob=(
+                                -0.1 if candidate_id == self.winner else -1.0
+                            ),
+                        )
+                    ],
+                )
+                for index, candidate_id in enumerate(("S0", "S1"))
+            ],
         )
 
 
@@ -345,6 +389,7 @@ def make_session(
     action_category_top_k: int | None = None,
     resource_sample_requester=None,
     global_action_catalog: GlobalActionCatalog | None = None,
+    global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
     session_memory_config: SessionMemoryConfig | None = None,
     session_memory_scheduler: SessionMemoryScheduler | None = None,
 ) -> MultimodalSession:
@@ -366,6 +411,7 @@ def make_session(
         action_selection_mode=action_selection_mode,
         action_category_top_k=action_category_top_k,
         global_action_catalog=global_action_catalog,
+        global_action_prewarm=global_action_prewarm,
         claim_session=claim,
         release_session=release,
         request_resource_sample=resource_sample_requester,
@@ -652,8 +698,8 @@ async def test_turn_expression_body_event_matrix(
     expected_action_execute: bool,
 ) -> None:
     catalog = load_global_action_catalog()
-    expression = catalog.category_by_id["B019"].children[0]
-    body = catalog.category_by_id["B010"].children[0]
+    expression = catalog.category_by_id["19"].children[0]
+    body = catalog.category_by_id["10"].children[0]
     fallback_category = catalog.category_with_semantic_tag(
         CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
     )
@@ -711,8 +757,8 @@ async def test_turn_expression_body_event_matrix(
         assert event_types.index("turn.expression.ready") < event_types.index(
             "turn.action.ready"
         )
-        assert expression_events[0]["expression"]["category_id"] == "B019"
-        assert expression_events[0]["expression"]["candidate_id"] == "A154"
+        assert expression_events[0]["expression"]["category_id"] == "19"
+        assert expression_events[0]["expression"]["candidate_id"] == "154"
 
     action_event = next(
         event for event in turn_events if event["type"] == "turn.action.ready"
@@ -929,6 +975,85 @@ async def test_protocol_v1_defaults_locale_to_english() -> None:
         )
         == ""
     )
+
+
+@pytest.mark.asyncio
+async def test_protocol_v1_action_locale_is_independent_from_reply_locale() -> None:
+    catalog = load_global_action_catalog()
+    fallback = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    reply_category = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT
+    )
+    assert fallback is not None
+    assert reply_category is not None
+    candidates = [fallback.children[0], reply_category.children[0]]
+    session = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+
+    await session.dispatch(
+        protocol_v1_session_start(
+            "protocol-v1-independent-action-locale",
+            outputs=["text", "action"],
+            locale="en-US",
+            reply={"unsupported_action_text": "That action is unavailable."},
+            action={
+                "locale": "zh-CN",
+                "fallback_category_ids": [fallback.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": candidate.candidate_id}
+                    for candidate in candidates
+                ],
+            },
+        )
+    )
+
+    assert session.locale == "en-US"
+    assert session.language == "en"
+    assert session.action_locale == "zh-CN"
+    assert session.action_language == "zh"
+    assert session.action_system_prompt == catalog.category_system_prompt_for(
+        "zh-CN"
+    )
+    started = session.websocket.events[-1]
+    assert started["locale"] == "en-US"
+    assert started["action_locale"] == "zh-CN"
+
+
+@pytest.mark.asyncio
+async def test_protocol_v1_rejects_invalid_action_locale() -> None:
+    catalog = load_global_action_catalog()
+    fallback = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback is not None
+    session = make_session(
+        FakeWebSocket(),
+        FakeClient(),
+        global_action_catalog=catalog,
+    )
+    event = protocol_v1_session_start(
+        "protocol-v1-invalid-action-locale",
+        outputs=["text", "action"],
+        reply={"unsupported_action_text": "暂不支持。"},
+        action={
+            "locale": "fr-FR",
+            "fallback_category_ids": [fallback.category_id],
+            "allowed_candidates": [
+                {"candidate_id": fallback.children[0].candidate_id}
+            ],
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="action.locale must be 'zh-CN' or 'en-US'",
+    ):
+        await session.dispatch(event)
 
 
 @pytest.mark.asyncio
@@ -1186,9 +1311,9 @@ async def test_protocol_v1_requires_fallback_categories_for_action() -> None:
 
 
 @pytest.mark.asyncio
-async def test_protocol_v1_expression_requires_b019_and_excludes_it_from_fallback() -> None:
+async def test_protocol_v1_expression_requires_category_19_and_excludes_it_from_fallback() -> None:
     catalog = load_global_action_catalog()
-    expression_category = catalog.category_by_id["B019"]
+    expression_category = catalog.category_by_id["19"]
     expression = expression_category.children[0]
     fallback_category = catalog.category_with_semantic_tag(
         CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
@@ -1216,7 +1341,7 @@ async def test_protocol_v1_expression_requires_b019_and_excludes_it_from_fallbac
     )
 
     assert session.output_capabilities.expression_enabled is True
-    assert "B019" not in session.fallback_category_ids
+    assert "19" not in session.fallback_category_ids
 
     missing_expression = make_session(
         FakeWebSocket(),
@@ -1226,7 +1351,7 @@ async def test_protocol_v1_expression_requires_b019_and_excludes_it_from_fallbac
     with pytest.raises(ValueError, match="expression output requires"):
         await missing_expression.dispatch(
             protocol_v1_session_start(
-                "expression-output-missing-b019",
+                "expression-output-missing-category-19",
                 outputs=["expression", "action"],
                 action={
                     "fallback_category_ids": [fallback_category.category_id],
@@ -3071,18 +3196,18 @@ class ToggleChildFailureFusionClient(FusionFakeClient):
 def fusion_catalog() -> list[dict]:
     return [
         {
-            "category_id": "B010",
+            "category_id": "10",
             "source_label": "问候",
             "short_definition": "打招呼、欢迎和告别等互动",
             "children": [
                 {
-                    "candidate_id": "A123",
+                    "candidate_id": "123",
                     "action_id": "wave",
                     "source_label": "挥手",
                     "short_definition": "自然挥手问候",
                 },
                 {
-                    "candidate_id": "A124",
+                    "candidate_id": "124",
                     "action_id": "wave_both",
                     "source_label": "双手问候",
                     "short_definition": "自然进行双手问候",
@@ -3090,12 +3215,12 @@ def fusion_catalog() -> list[dict]:
             ],
         },
         {
-            "category_id": "B000",
+            "category_id": "00",
             "source_label": "系统动作",
             "short_definition": "没有合适动作时保持当前姿态",
             "children": [
                 {
-                    "candidate_id": "A000",
+                    "candidate_id": "000",
                     "action_id": "no_action",
                     "source_label": "不做动作",
                     "short_definition": "保持当前姿态",
@@ -3544,10 +3669,10 @@ async def test_system_route_reconciles_silent_category_to_reply_accompaniment(
     assert "[本轮数字人实际回复开头]" in child_request.prefix
     assert "先说结论。" in child_request.prefix
     assert "然后解释原因" not in child_request.prefix
-    assert "A000" not in child_request.system_prompt
-    assert "A000" not in child_request.prefix
+    assert "000" not in child_request.system_prompt
+    assert "000" not in child_request.prefix
     assert all(
-        candidate.candidate_id != "A000"
+        candidate.candidate_id != "000"
         for candidate in child_request.candidates
     )
     route = next(
@@ -3590,10 +3715,10 @@ async def test_system_route_reconciles_empty_reply_to_silent_accompaniment() -> 
         candidate.candidate_id for candidate in child_request.candidates
     }.issubset({item.candidate_id for item in silent_category.children})
     assert "[本轮回复状态]" in child_request.prefix
-    assert "A000" not in child_request.system_prompt
-    assert "A000" not in child_request.prefix
+    assert "000" not in child_request.system_prompt
+    assert "000" not in child_request.prefix
     assert all(
-        candidate.candidate_id != "A000"
+        candidate.candidate_id != "000"
         for candidate in child_request.candidates
     )
     result = next(event for event in ws.events if event["type"] == "turn.result")
@@ -3891,7 +4016,7 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
                 "language": "zh",
             "instructions": "自然回复，不要复述动作。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_profile": {
                 "persona": {
                     "gender_expression": "男性",
@@ -3952,8 +4077,8 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     ]
     assert "回复要自然，不要说明动作。" in rendered_controls
     assert all("[已执行动作事实]" not in item for item in rendered_controls)
-    assert all("category_id=B010" not in item for item in rendered_controls)
-    assert all("A123" not in item for item in rendered_controls)
+    assert all("category_id=10" not in item for item in rendered_controls)
+    assert all("123" not in item for item in rendered_controls)
     category_request, child_request = [
         request
         for request in client.score_requests
@@ -3978,11 +4103,11 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     assert "海洋科学家" not in category_request.system_prompt
     assert "海洋科学家" not in child_request.system_prompt
     assert [item.candidate_id for item in child_request.candidates] == [
-        "A123",
-        "A124",
-        "A000",
+        "123",
+        "124",
+        "000",
     ]
-    assert "candidate_id=A000｜动作=不做动作" in child_request.system_prompt
+    assert "candidate_id=000｜动作=不做动作" in child_request.system_prompt
     assert all(
         "回复要自然" not in request.prefix
         and "回复要自然" not in request.system_prompt
@@ -4080,7 +4205,7 @@ async def test_history_route_and_action_category_start_concurrently() -> None:
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4115,7 +4240,7 @@ async def test_history_route_action_parallel_can_be_disabled(
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4146,7 +4271,7 @@ async def test_parallel_unsupported_category_waits_for_language_route() -> None:
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4171,9 +4296,9 @@ async def test_parallel_unsupported_category_waits_for_language_route() -> None:
         category_finished.set()
         return (
             {
-                "candidate_id": "A000",
+                "candidate_id": "000",
                 "action_id": "no_action",
-                "category_id": "B000",
+                "category_id": "00",
                 "execution_binding": {},
                 "execute": False,
                 "support_status": "unsupported",
@@ -4230,7 +4355,7 @@ async def test_action_ready_does_not_wait_for_promoted_reply_tts_done() -> None:
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4297,7 +4422,7 @@ async def test_action_ready_tts_decoupling_can_be_disabled(
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4352,7 +4477,7 @@ async def test_action_ready_does_not_wait_for_discarded_reply_cleanup() -> None:
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "这个动作暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4372,7 +4497,7 @@ async def test_action_ready_does_not_wait_for_discarded_reply_cleanup() -> None:
         del args
         callback = kwargs.get("on_category_selected")
         category = next(
-            item for item in session.categories if item.category_id == "B010"
+            item for item in session.categories if item.category_id == "10"
         )
         if callback is not None:
             callback(category, "supported")
@@ -4380,16 +4505,16 @@ async def test_action_ready_does_not_wait_for_discarded_reply_cleanup() -> None:
         await release_action.wait()
         return (
             {
-                "candidate_id": "A000",
+                "candidate_id": "000",
                 "action_id": "no_action",
-                "category_id": "B000",
+                "category_id": "00",
                 "execution_binding": {},
                 "execute": False,
                 "support_status": "unsupported",
             },
             [],
             0.0,
-            {"category_decision_id": "B010"},
+            {"category_decision_id": "10"},
         )
 
     async def delayed_abort_reply_tts(tts_state):
@@ -4442,7 +4567,7 @@ async def test_action_ready_does_not_wait_for_discarded_reply_cleanup() -> None:
 async def test_concrete_action_promotes_reply_without_semantic_text_filter() -> None:
     ws = FakeWebSocket()
     client = SystemRouteFusionClient(
-        category_id="B010",
+        category_id="10",
         reply_chunks=["宝贝，你今天看起来有点累呢。"],
     )
     session = make_session(ws, client)
@@ -4454,7 +4579,7 @@ async def test_concrete_action_promotes_reply_without_semantic_text_filter() -> 
             "modalities": ["text", "action"],
             "instructions": "只回答当前用户请求。",
             "unsupported_action_text": "暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -4630,7 +4755,7 @@ async def test_successful_action_is_not_automatically_injected_into_reply(
     assert all("[已执行动作事实]" not in item for item in reply_controls)
     assert "用户正在询问历史动作；最近一次已执行动作：挥手。" in reply_controls
     assert all("仅当用户明确询问之前的动作" not in item for item in reply_controls)
-    assert all("A123" not in item for item in reply_controls)
+    assert all("123" not in item for item in reply_controls)
     assert all("wave" not in item for item in reply_controls)
     assert all("自然挥手问候" not in item for item in reply_controls)
 
@@ -4698,7 +4823,7 @@ async def test_failed_child_does_not_replace_last_executed_action_fact() -> None
 @pytest.mark.asyncio
 async def test_action_scoring_uses_only_last_user_action_as_reference_anchor() -> None:
     ws = FakeWebSocket()
-    client = ScriptedChildFusionClient(["A123", "A124", "A123"])
+    client = ScriptedChildFusionClient(["123", "124", "123"])
     session = make_session(ws, client)
     await session.handle_session_start(
         {
@@ -4739,11 +4864,11 @@ async def test_action_scoring_uses_only_last_user_action_as_reference_anchor() -
 
     assert session.last_executed_action is not None
     assert session.last_executed_action.turn_id == "turn-proactive-wave"
-    assert session.last_executed_action.candidate_id == "A124"
+    assert session.last_executed_action.candidate_id == "124"
     assert session.last_executed_action.turn_origin == "proactive"
     assert session.last_user_executed_action is not None
     assert session.last_user_executed_action.turn_id == "turn-user-wave"
-    assert session.last_user_executed_action.candidate_id == "A123"
+    assert session.last_user_executed_action.candidate_id == "123"
     assert session.last_user_executed_action.turn_origin == "user"
     assert all(
         "[最近一次用户触发动作，仅用于指代解析]" not in request.prefix
@@ -4764,24 +4889,24 @@ async def test_action_scoring_uses_only_last_user_action_as_reference_anchor() -
     assert "[最近一次用户触发动作]" not in category_request.system_prompt
     assert "[最近一次用户触发动作，仅用于指代解析]" in category_request.prefix
     assert (
-        "category_id=B010｜candidate_id=A123｜action_id=wave"
+        "category_id=10｜candidate_id=123｜action_id=wave"
         in category_request.prefix
     )
     assert "动作=挥手" in category_request.prefix
-    assert "candidate_id=A124" not in category_request.prefix
+    assert "candidate_id=124" not in category_request.prefix
     assert "[最近一次用户触发动作，仅用于指代解析]" in child_request.prefix
     assert (
-        "category_id=B010｜candidate_id=A123｜action_id=wave"
+        "category_id=10｜candidate_id=123｜action_id=wave"
         in child_request.prefix
     )
-    assert "candidate_id=A124" not in child_request.prefix
+    assert "candidate_id=124" not in child_request.prefix
     result = next(
         event
         for event in ws.events
         if event.get("type") == "turn.result"
         and event.get("turn_id") == "turn-repeat-user-action"
     )
-    assert result["action"]["candidate_id"] == "A123"
+    assert result["action"]["candidate_id"] == "123"
 
 
 @pytest.mark.asyncio
@@ -4906,6 +5031,9 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "never to a proactive message" in prompt
     assert "Do not repeat, explain, promise, narrate" in prompt
     assert "a separate action system decides" in prompt
+    assert "camera-availability state and visual-evidence marker" in prompt
+    assert "authoritative facts for the current turn" in prompt
+    assert "Do not infer whether visual input is available" in prompt
     assert "digital character or model" not in prompt
     assert "takes priority over persona and response-style instructions" in prompt
     assert "[Response length and conversational continuation]" in prompt
@@ -4916,6 +5044,15 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "does not mean the current conversation has ended" in prompt
     assert "greeting, welcome, salutation, or self-introduction" in prompt
     assert "do not extend it into a farewell" in prompt
+    assert "[Response language and content]" in prompt
+    assert "use that language every time" in prompt
+    assert "Preserve and directly complete the actual story" in prompt
+    assert "'用中文说个故事'" in prompt
+    assert "begin directly with the English story itself" in prompt
+    assert "without a preamble, apology, or commentary about language choice" in prompt
+    assert "mandatory output-language constraint" not in prompt
+    assert "explain the language restriction" not in prompt
+    assert prompt.endswith("choose the language from the current request.")
 
 
 def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None:
@@ -4947,6 +5084,14 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "简短但完整的内容" in prompt
     assert "一个最小化的澄清问题" in prompt
     assert "不适用于无需语言内容的纯动作请求" in prompt
+    assert "[回复语种与内容]" in prompt
+    assert "每次都使用该语种" in prompt
+    assert "保留并直接完成故事、翻译" in prompt
+    assert "用中文说个故事" in prompt
+    assert "直接从英文故事正文开始" in prompt
+    assert "不添加关于语种选择的前言、道歉或说明" in prompt
+    assert "强制输出语种约束" not in prompt
+    assert "解释语种限制" not in prompt
     assert "[回复长度与交流延续规则]" in prompt
     assert "回复长度应与当前请求需要的信息量相匹配" in prompt
     assert "每次最多一个" in prompt
@@ -4978,6 +5123,9 @@ def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None
     assert "对于纯动作请求，可以返回空文本" in prompt
     assert "结合当前语言人设的简短社交回应" in prompt
     assert "身体动作是否可执行由独立动作系统判断" in prompt
+    assert "摄像头可用状态和视觉证据标记" in prompt
+    assert "事实，优先于角色人设" in prompt
+    assert "自行推断本轮是否有视觉输入" in prompt
     assert "当前数字人" not in prompt
 
 
@@ -5262,11 +5410,53 @@ def test_user_camera_response_guard_has_equivalent_english_rule() -> None:
 
     guard = session._reply_user_camera_response_guard_part()["text"]
 
-    assert "only when the user audio or text in the current user message" in guard
-    assert "ignore the image completely" in guard
-    assert "answer only the current user request" in guard
-    assert "Do not proactively describe or judge" in guard
-    assert "Do not use the user-camera image to infer your own pose" in guard
+    assert "available as visual evidence for answering this turn" in guard
+    assert "whether the user is present and discernible" in guard
+    assert "not a question about your general capabilities as an AI" in guard
+    assert "do not claim that you cannot access the camera" in guard
+    assert "do not claim that you can process only text or audio" in guard
+    assert "state that specific visibility limitation" in guard
+    assert "If the current request is unrelated" in guard
+    assert "do not explain image frames, video streams" in guard
+
+
+def test_user_image_action_rules_are_scoped_to_current_user_camera_turns() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+
+    without_camera = session._build_session_action_profile_instruction("category")
+    with_camera = session._build_session_action_profile_instruction(
+        "category", has_user_camera=True
+    )
+    proactive_with_camera = session._build_session_action_profile_instruction(
+        "category", turn_origin="proactive", has_user_camera=True
+    )
+
+    assert "User image and action selection for the current turn" not in without_camera
+    assert "User image and action selection for the current turn" in with_camera
+    assert "The image alone is not an action command" in with_camera
+    assert "User image and action selection for the current turn" not in (
+        proactive_with_camera
+    )
+
+
+def test_user_image_runtime_rules_replace_their_repository_defaults(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SGLANG_OMNI_RUNTIME_PROMPT_DIR", str(tmp_path))
+    write_runtime_prompt("user_image_reply_rules", "custom image reply")
+    write_runtime_prompt("user_image_action_rules", "custom image action")
+    session = make_session(FakeWebSocket(), FakeClient())
+
+    assert session._reply_user_camera_response_guard_part()["text"] == (
+        "custom image reply"
+    )
+    with_camera = session._build_session_action_profile_instruction(
+        "child", has_user_camera=True
+    )
+    without_camera = session._build_session_action_profile_instruction("child")
+
+    assert "custom image action" in with_camera
+    assert "custom image action" not in without_camera
 
 
 def test_current_turn_priority_has_equivalent_english_rule() -> None:
@@ -5279,6 +5469,62 @@ def test_current_turn_priority_has_equivalent_english_rule() -> None:
     assert "Use the provided history only when" in priority
     assert "do not continue, reuse, or repeat" in priority
     assert "Do not assume access to any history that was not provided" in priority
+
+
+def test_current_turn_fixed_language_reminder_is_conditional_and_explicit() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    assert session._reply_current_turn_language_lock_reminder_part() is None
+    session.instructions = (
+        "Language: Always respond in English. "
+        "Use English for every response."
+    )
+
+    reminder = session._reply_current_turn_language_lock_reminder_part()["text"]
+
+    assert "Use only English for this reply" in reminder
+    assert "ignore only a target-language modifier" in reminder
+    assert "'用中文说个故事'" in reminder
+    assert "begin directly with the English story itself" in reminder
+    assert "commentary about language choice" in reminder
+    assert "client reply instructions" not in reminder
+    assert "explain this restriction" not in reminder
+
+    session.instructions = (
+        "语言: 每条回复都必须使用中文。"
+        "每条回复都必须使用中文，即使用户使用其他语言。"
+    )
+    chinese_reminder = (
+        session._reply_current_turn_language_lock_reminder_part()["text"]
+    )
+    assert "本轮只使用中文" in chinese_reminder
+    assert "用户要求用英文讲故事时，直接从中文故事正文开始" in chinese_reminder
+    assert "客户端回复 instructions" not in chinese_reminder
+    assert "解释限制" not in chinese_reminder
+
+
+@pytest.mark.asyncio
+async def test_explicit_client_language_lock_is_reminded_after_current_user_text() -> None:
+    client = FakeClient()
+    session = make_session(FakeWebSocket(), client)
+    event = protocol_v1_session_start("session-explicit-language-lock")
+    event["reply"] = {
+        "instructions": (
+            "Language: Always respond in English. "
+            "Use English for every response."
+        )
+    }
+    await session.dispatch(event)
+
+    await session.handle_turn_start(user_turn_start("turn-language-lock"))
+    await session.handle_turn_commit(
+        user_turn_commit("turn-language-lock", text="用中文说个故事")
+    )
+
+    current_content = client.chat_requests[-1].messages[-1].content
+    assert {"type": "text", "text": "用中文说个故事"} in current_content
+    assert current_content[-1] == (
+        session._reply_current_turn_language_lock_reminder_part()
+    )
 
 
 def test_reply_history_keeps_two_recent_unique_assistant_replies() -> None:
@@ -5434,6 +5680,157 @@ async def test_text_only_turn_runs_joint_reply_route_before_generation() -> None
     assert route_requests[0].current_text == "请介绍一下你自己"
     assert route_requests[0].audios == []
     assert len(client.chat_requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("winner", "expected_reply_mode"),
+    [("S0", "LANGUAGE_REQUIRED"), ("S1", "PURE_ACTION")],
+)
+async def test_shared_silent_intent_is_rechecked_by_speech_mode(
+    winner: str,
+    expected_reply_mode: str,
+) -> None:
+    from sglang_omni.serve.realtime.turn_intent import TurnIntent
+
+    client = ReplySpeechModeClient(winner)
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": f"session-shared-silent-{winner}",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(
+        user_turn_start(f"turn-shared-silent-{winner}")
+    )
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = f"request-shared-silent-{winner}"
+    turn.intent = TurnIntent(
+        speech="none",
+        text="",
+        body="",
+        body_mode="none",
+        face="",
+        history=True,
+        elapsed_ms=12.5,
+    )
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        ["audio-current"],
+    )
+
+    assert route.decision == "HISTORY_REQUIRED"
+    assert route.reply_mode == expected_reply_mode
+    assert route.elapsed_ms >= 12.5
+    assert route.stats["source"] == "shared_turn_intent"
+    assert route.stats["speech_mode_rechecked"] is True
+    assert route.stats["speech_mode_disambiguation"]["reply_mode"] == (
+        expected_reply_mode
+    )
+    assert len(client.score_requests) == 1
+    request = client.score_requests[0]
+    assert request.stage == multimodal_module.REPLY_SPEECH_MODE_STAGE
+    assert request.audios == ["audio-current"]
+    assert request.images == []
+
+
+@pytest.mark.asyncio
+async def test_shared_generated_intent_keeps_language_fast_path() -> None:
+    from sglang_omni.serve.realtime.turn_intent import TurnIntent
+
+    client = ReplySpeechModeClient("S1")
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-shared-generated",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-shared-generated"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-shared-generated"
+    turn.intent = TurnIntent(
+        speech="generated",
+        text="你能看到我穿什么衣服吗",
+        body="",
+        body_mode="none",
+        face="",
+        history=False,
+        elapsed_ms=12.5,
+    )
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        ["audio-current"],
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "LANGUAGE_REQUIRED"
+    assert client.score_requests == []
+
+
+@pytest.mark.asyncio
+async def test_shared_silent_intent_speech_mode_timeout_fails_open_to_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sglang_omni.serve.realtime.turn_intent import TurnIntent
+
+    class HangingSharedIntentSpeechModeClient(FakeClient):
+        async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+            self.score_requests.append(request)
+            assert request.stage == multimodal_module.REPLY_SPEECH_MODE_STAGE
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setenv(multimodal_module.REPLY_HISTORY_ROUTE_TIMEOUT_ENV, "0.01")
+    client = HangingSharedIntentSpeechModeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-shared-silent-timeout",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(
+        user_turn_start("turn-shared-silent-timeout")
+    )
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-shared-silent-timeout"
+    turn.intent = TurnIntent(
+        speech="none",
+        text="",
+        body="",
+        body_mode="none",
+        face="",
+        history=False,
+    )
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        ["audio-current"],
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "LANGUAGE_REQUIRED"
+    assert route.fallback_reason == "timeout"
+    assert route.stats["speech_mode_disambiguation"]["fallback_reason"] == (
+        "timeout"
+    )
+    assert turn.active_request_ids == set()
 
 
 @pytest.mark.asyncio
@@ -6695,7 +7092,7 @@ async def test_audio_pure_action_route_generates_validated_short_reply() -> None
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -6781,7 +7178,7 @@ async def test_concrete_action_cannot_override_language_required_route() -> None
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -6853,7 +7250,7 @@ async def test_invalid_pure_action_reply_falls_back_before_provisional_delta() -
             "session_id": "session-invalid-pure-action-reply",
             "language": "zh",
             "instructions": "语气甜美。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -6918,7 +7315,7 @@ async def test_semantic_role_reversal_is_dropped_without_suppressing_action(
             "language": "zh",
             "instructions": "自然回复。",
             "unsupported_action_text": "暂时做不了。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -6965,7 +7362,7 @@ async def test_semantically_invalid_pure_action_reply_falls_back_to_empty() -> N
             "session_id": "session-semantic-invalid-pure-action-reply",
             "language": "zh",
             "instructions": "语气甜美。",
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "action_candidates": fusion_catalog(),
         }
     )
@@ -7132,10 +7529,8 @@ async def test_reply_uses_latest_user_camera_and_drops_images_from_history() -> 
         {
             "type": "text",
             "text": (
-                "[当前 user 消息附带用户摄像头图片]"
-                "该图片只表示当前用户及其周围环境，不表示你的姿势、动作、"
-                "外观或状态。只有当前用户语音或文本明确要求判断用户本人或"
-                "其环境中的视觉内容时，才使用该图片；否则忽略该图片。"
+                "[当前用户摄像头图片]紧随其后的图片是从用户摄像头采集的当前帧，"
+                "只表示用户及其周围环境，不表示当前角色自身的外观、姿势、动作或状态。"
             ),
         },
         {"type": "image"},
@@ -7146,11 +7541,19 @@ async def test_reply_uses_latest_user_camera_and_drops_images_from_history() -> 
         {
             "type": "text",
             "text": (
-                "[当前回复的视觉使用边界]只有当前 user 消息中的用户语音或文本"
-                "明确询问用户本人或其环境中的视觉内容时，才可使用当前用户摄像头"
-                "图片。否则必须完全忽略图片，只回答当前用户请求，不得主动描述或"
-                "评价用户的外观、情绪、健康状态、动作或环境。不得依据用户摄像头"
-                "图片判断你自身的姿势、动作、外观或状态。"
+                "[本轮用户摄像头画面]当前消息包含一张来自用户摄像头的最新画面，"
+                "可作为回答本轮问题的视觉依据。该画面只表示用户及其周围环境，"
+                "不表示当前角色自身，也不表示持续视频。"
+                "如果用户询问当前是否能看到本人，或者询问其衣着、画面中的人物、"
+                "物品或环境，请根据图中可直接观察到的内容回答。“你能看到我吗”"
+                "是询问当前画面中是否出现并能辨认用户，不是询问你作为 AI 的一般能力。"
+                "只要本轮已经提供画面，就不得声称无法访问摄像头、图片或画面，不得声称"
+                "只能处理文字或音频，也不得因为自己是 AI、助手或数字人而否认本轮视觉"
+                "输入。如果目标未出现在画面中，或者细节被遮挡、过暗、模糊，应说明具体"
+                "的可见性限制，不要笼统回答“我看不到画面”。"
+                "如果当前问题与用户或其环境的视觉内容无关，请忽略图片。只描述图中可以"
+                "直接观察到的内容，不推断身份、健康或其他无法从画面确认的信息。除非用户"
+                "明确询问，否则不要解释图片帧、视频流或内部输入方式。"
             ),
         },
     ]
@@ -8162,15 +8565,111 @@ async def test_hierarchical_top_k_scores_children_from_multiple_categories() -> 
 
 
 @pytest.mark.asyncio
+async def test_confident_category_uses_prewarmed_global_top1_child_prefix() -> None:
+    class ConfidentCategoryClient(FakeClient):
+        async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
+            self.score_requests.append(request)
+            preferred = (
+                {"57": -0.1, "37": -1.2, "00": -5.0}
+                if request.stage == "category"
+                else {target.candidate_id: -0.1}
+            )
+            scores = []
+            for index, item in enumerate(request.candidates):
+                value = preferred.get(item.candidate_id, -10.0 - index)
+                scores.append(
+                    CandidateScore(
+                        candidate_id=item.candidate_id,
+                        token_count=1,
+                        mean_logprob=value,
+                        mean_nll=-value,
+                        ppl=math.exp(-value),
+                        token_scores=[
+                            TokenScore(token_id=100 + index, logprob=value)
+                        ],
+                    )
+                )
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=scores,
+            )
+
+    catalog = load_global_action_catalog()
+    target_category = catalog.category_by_id["57"]
+    runner_category = catalog.category_by_id["37"]
+    fallback = catalog.category_with_semantic_tag(
+        CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+    )
+    assert fallback is not None
+    target = target_category.children[0]
+    allowed = [target, runner_category.children[0], fallback.children[0]]
+    prewarm = GlobalActionCatalogPrewarmStatus(
+        category_ready=True,
+        ready_child_category_ids=frozenset({"57"}),
+        failed_child_category_ids=frozenset(),
+        elapsed_ms=1.0,
+    )
+    client = ConfidentCategoryClient()
+    session = make_session(
+        FakeWebSocket(),
+        client,
+        action_category_top_k=2,
+        global_action_catalog=catalog,
+        global_action_prewarm=prewarm,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "adaptive-top1-prewarmed-prefix",
+            outputs=["action"],
+            action={
+                "fallback_category_ids": [fallback.category_id],
+                "allowed_candidates": [
+                    {"candidate_id": item.candidate_id} for item in allowed
+                ],
+            },
+            diagnostics={"include_action_scores": True},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("adaptive-top1-turn"))
+    await session.handle_turn_commit(
+        user_turn_commit("adaptive-top1-turn", text="做个合适的动作")
+    )
+
+    category_request, child_request = client.score_requests
+    assert category_request.stage == "category"
+    assert child_request.stage == "child"
+    assert child_request.prefix_cache_namespace.startswith(
+        catalog.child_cache_namespace("57", "zh-CN") + ":session:"
+    )
+    assert {
+        item.candidate_id for item in child_request.candidates
+    } == {target.candidate_id, "000"}
+    result = next(
+        event
+        for event in session.websocket.events
+        if event["type"] == "turn.result" and "media_summary" in event
+    )
+    context = result["media_summary"]["action_context"]
+    assert context["category_top_k"] == 2
+    assert context["effective_category_top_k"] == 1
+    assert context["category_adaptive_top1_applied"] is True
+    assert context["category_width_reason"] == "high_confidence_prewarmed_top1"
+    assert context["selected_category_ids"] == ["57"]
+    assert context["child_prefix_prefilled"] is True
+
+
+@pytest.mark.asyncio
 async def test_global_top_two_routes_exact_child_from_runner_up_category() -> None:
     class GlobalTopTwoClient(FakeClient):
         async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
             self.score_requests.append(request)
             ids = [item.candidate_id for item in request.candidates]
             preferred = (
-                {"B030": -0.1, "B000": -0.15, "B047": -0.2}
+                {"30": -0.1, "00": -0.15, "47": -0.2}
                 if request.stage == "category"
-                else {"A459": -0.1}
+                else {"459": -0.1}
             )
             scores = []
             for index, candidate_id in enumerate(ids):
@@ -8213,7 +8712,7 @@ async def test_global_top_two_routes_exact_child_from_runner_up_category() -> No
             "session-global-top-two",
             outputs=["action"],
             action={
-                "fallback_category_ids": ["B002"],
+                "fallback_category_ids": ["02"],
                 "allowed_candidates": allowed_candidates,
             },
             diagnostics={"include_action_scores": True},
@@ -8229,25 +8728,25 @@ async def test_global_top_two_routes_exact_child_from_runner_up_category() -> No
     category_request, child_request = client.score_requests
     assert category_request.stage == "category"
     assert child_request.stage == "child"
-    assert "A459" in {item.candidate_id for item in child_request.candidates}
-    assert "候选类别：category_id=B030" in child_request.system_prompt
-    assert "候选类别：category_id=B047" in child_request.system_prompt
+    assert "459" in {item.candidate_id for item in child_request.candidates}
+    assert "候选类别：category_id=30" in child_request.system_prompt
+    assert "候选类别：category_id=47" in child_request.system_prompt
     result = next(
         event
         for event in session.websocket.events
         if event["type"] == "turn.result"
     )
     assert result["action"] == {
-        "candidate_id": "A459",
-        "action_id": "A459",
-        "category_id": "B047",
+        "candidate_id": "459",
+        "action_id": "459",
+        "category_id": "47",
         "execute": True,
         "support_status": "supported",
         "fallback_applied": False,
     }
     context = result["media_summary"]["action_context"]
-    assert context["selected_category_ids"] == ["B030", "B047"]
-    assert context["child_scoring_candidate_id"] == "A459"
+    assert context["selected_category_ids"] == ["30", "47"]
+    assert context["child_scoring_candidate_id"] == "459"
 
 
 def test_action_micro_batch_size_reads_environment_and_is_fixed_on_manager(monkeypatch) -> None:
@@ -8638,7 +9137,7 @@ async def test_global_catalog_session_start_extends_category_prefix_before_start
     prefill = client.prefill_requests[0]
     assert prefill["stage"] == "category"
     assert prefill["request_id"] == "session-system-route-session-category-prefill"
-    assert prefill["candidates"][-1].candidate_id == "B000"
+    assert prefill["candidates"][-1].candidate_id == "00"
     started = next(event for event in ws.events if event["type"] == "session.started")
     assert started["action_prefix_prefilled"] is True
 
@@ -8949,8 +9448,8 @@ async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
         reply={"unsupported_action_text": "暂不支持。"},
         action={"fallback_category_ids": [fallback.category_id], "allowed_candidates": [
             {"candidate_id": c.candidate_id} for c in (
-                catalog.category_by_id["B019"].children[0],
-                catalog.category_by_id["B010"].children[0],
+                catalog.category_by_id["19"].children[0],
+                catalog.category_by_id["10"].children[0],
                 fallback.children[0], reply.children[0],
             )
         ]},
@@ -9003,7 +9502,7 @@ async def test_mixed_numeric_turn_preserves_reply_and_visual_channels(scope, uns
         monkeypatch.setattr(pipeline, "infer_turn_intent", infer_turn_intent)
     catalog = load_global_action_catalog()
     body_category = next(c.category_id for c in catalog.categories if any(
-        child.candidate_id == "A259" for child in c.children
+        child.candidate_id == "259" for child in c.children
     ))
 
     class NumericClient(PerformanceMatrixClient):
@@ -9016,17 +9515,17 @@ async def test_mixed_numeric_turn_preserves_reply_and_visual_channels(scope, uns
         async def score_action_suffixes(self, request):
             result = await super().score_action_suffixes(request)
             if unsupported and request.stage == "child":
-                assert any(s.candidate_id == "A000" for s in result.scores)
+                assert any(s.candidate_id == "000" for s in result.scores)
                 for score in result.scores:
-                    score.mean_logprob = -0.01 if score.candidate_id == "A000" else -10.0
+                    score.mean_logprob = -0.01 if score.candidate_id == "000" else -10.0
             return result
 
-    client = NumericClient(scope, "A259", body_category)
+    client = NumericClient(scope, "259", body_category)
     ws = FakeWebSocket()
     session = make_session(ws, client, global_action_catalog=catalog)
     silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
     reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
-    allowed = list(dict.fromkeys(["A259", "A154", silent.children[0].candidate_id, reply.children[0].candidate_id]))
+    allowed = list(dict.fromkeys(["259", "154", silent.children[0].candidate_id, reply.children[0].candidate_id]))
     await session.dispatch(protocol_v1_session_start(
         "numeric-mixed", outputs=["text", "expression", "action"],
         reply={"unsupported_action_text": "暂时无法执行。"},
@@ -9041,12 +9540,12 @@ async def test_mixed_numeric_turn_preserves_reply_and_visual_channels(scope, uns
     assert result["reply"]["text"] == "一。"
     assert result["action"]["execute"] is (not unsupported or scope != "P301")
     if not unsupported:
-        assert result["action"]["candidate_id"] == "A259"
+        assert result["action"]["candidate_id"] == "259"
     else:
         assert result["action"]["support_status"] == "unsupported"
     assert ("expression" in result) == (scope != "P200" and not unsupported)
     if "expression" in result:
-        assert result["expression"]["candidate_id"] == "A154"
+        assert result["expression"]["candidate_id"] == "154"
     stages = [r.stage for r in client.score_requests]
     assert stages.count("category") == (0 if shared_intent and not unsupported else 1)
     assert stages.count("child") == (2 if shared_intent and unsupported else 1)
@@ -9092,8 +9591,8 @@ async def test_optional_face_publishes_before_slow_body_only_when_independent(wi
     await session.dispatch(protocol_v1_session_start('early-optional', outputs=['text', 'expression', 'action'],
         reply={'unsupported_action_text': '暂不支持。'},
         action={'fallback_category_ids': [fallback.category_id], 'allowed_candidates': [
-            {'candidate_id': c.candidate_id} for c in (catalog.category_by_id['B019'].children[0],
-             catalog.category_by_id['B010'].children[0], fallback.children[0],
+            {'candidate_id': c.candidate_id} for c in (catalog.category_by_id['19'].children[0],
+             catalog.category_by_id['10'].children[0], fallback.children[0],
              catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT).children[0])]}))
     await session.handle_turn_start(user_turn_start('early-optional-turn'))
     task = asyncio.create_task(session.handle_turn_commit(user_turn_commit('early-optional-turn', text='你好')))
@@ -9122,7 +9621,7 @@ async def test_rejected_semantic_hint_recalls_ranked_categories_once(monkeypatch
         return TurnIntent(speech='verbatim', text='一', body='数字二手势', body_mode='perform', face='', history=False)
     monkeypatch.setattr(pipeline, 'infer_turn_intent', intent)
     catalog = load_global_action_catalog()
-    body_category = next(c.category_id for c in catalog.categories if any(x.candidate_id == 'A259' for x in c.children))
+    body_category = next(c.category_id for c in catalog.categories if any(x.candidate_id == '259' for x in c.children))
     class Client(PerformanceMatrixClient):
         child_calls = 0
         async def score_action_suffixes(self, request):
@@ -9131,14 +9630,14 @@ async def test_rejected_semantic_hint_recalls_ranked_categories_once(monkeypatch
                 self.child_calls += 1
                 if self.child_calls == 1:
                     for score in result.scores:
-                        score.mean_logprob = -0.01 if score.candidate_id == 'A000' else -10
+                        score.mean_logprob = -0.01 if score.candidate_id == '000' else -10
             return result
-    client = Client('P200', 'A259', body_category)
+    client = Client('P200', '259', body_category)
     ws = FakeWebSocket()
     session = make_session(ws, client, global_action_catalog=catalog)
     silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
     reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
-    allowed = list(dict.fromkeys(['A258', *(['A259'] if target_available else []), silent.children[0].candidate_id, reply.children[0].candidate_id]))
+    allowed = list(dict.fromkeys(['258', *(['259'] if target_available else []), silent.children[0].candidate_id, reply.children[0].candidate_id]))
     await session.dispatch(protocol_v1_session_start('hint-recall', outputs=['text', 'action'],
         reply={'unsupported_action_text': '暂时无法执行。'}, action={'fallback_category_ids': [silent.category_id],
         'allowed_candidates': [{'candidate_id': item} for item in allowed]}))
@@ -9147,7 +9646,7 @@ async def test_rejected_semantic_hint_recalls_ranked_categories_once(monkeypatch
     result = next(e for e in ws.events if e['type'] == 'turn.result')
     assert result['reply']['text'] == '一'
     if target_available:
-        assert result['action']['candidate_id'] == 'A259'
+        assert result['action']['candidate_id'] == '259'
         assert result['action']['support_status'] == 'supported'
         assert client.child_calls == 2
         assert [r.stage for r in client.score_requests].count('category') == 1
@@ -9155,7 +9654,7 @@ async def test_rejected_semantic_hint_recalls_ranked_categories_once(monkeypatch
     else:
         assert result['action']['support_status'] == 'unsupported'
         assert client.child_calls == 1
-        assert [r.stage for r in client.score_requests].count('category') == 0
+        assert [r.stage for r in client.score_requests].count('category') == 1
         assert 'intent_hint_validation' not in result['timing']['action_breakdown']
 
 
@@ -9208,7 +9707,7 @@ async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkey
     catalog = load_global_action_catalog()
     reply = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
     silent = catalog.category_with_semantic_tag(CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT)
-    numeric = next(c for c in catalog.categories if any(x.candidate_id == 'A259' for x in c.children))
+    numeric = next(c for c in catalog.categories if any(x.candidate_id == '259' for x in c.children))
     class Client(PerformanceMatrixClient):
         async def completion(self, request, *, request_id):
             if request.metadata.get('task') == 'session_turn_intent':
@@ -9217,15 +9716,15 @@ async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkey
             return CompletionResult(request_id=request_id, text='一比二')
         async def score_action_suffixes(self, request):
             if request.stage == 'child':
-                assert 'A259' not in [c.candidate_id for c in request.candidates]
+                assert '259' not in [c.candidate_id for c in request.candidates]
             result = await super().score_action_suffixes(request)
             if request.stage == 'category':
                 for score in result.scores:
                     score.mean_logprob = -1 if score.candidate_id == numeric.category_id else (-0.1 if score.candidate_id == reply.category_id else -20)
             return result
-    client = Client('P200', 'A259', numeric.category_id)
+    client = Client('P200', '259', numeric.category_id)
     ws = FakeWebSocket(); session = make_session(ws, client, global_action_catalog=catalog)
-    allowed = ['A259'] + [c.candidate_id for c in reply.children[:2]] + [silent.children[0].candidate_id]
+    allowed = ['259'] + [c.candidate_id for c in reply.children[:2]] + [silent.children[0].candidate_id]
     await session.dispatch(protocol_v1_session_start('literal-no-body', outputs=['text','action'],
         reply={'unsupported_action_text':'暂时无法执行'}, action={'fallback_category_ids':[silent.category_id],
         'allowed_candidates':[{'candidate_id':cid} for cid in allowed]}))
@@ -9233,5 +9732,5 @@ async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkey
     await session.handle_turn_commit(user_turn_commit('literal', text='说一比二这三个字'))
     result = next(e for e in ws.events if e['type'] == 'turn.result')
     assert result['reply']['text'] == '一比二'
-    assert result['action']['candidate_id'] != 'A259'
+    assert result['action']['candidate_id'] != '259'
     assert result['action']['category_id'] in [reply.category_id,silent.category_id]

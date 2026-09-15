@@ -180,7 +180,7 @@ async def test_session_catalog_prefill_places_session_prefix_before_turn_prompt(
                 prefix_cached=True,
                 scores=[
                     CandidateScore(
-                        candidate_id="B001",
+                        candidate_id="01",
                         token_count=1,
                         mean_logprob=-0.1,
                         mean_nll=0.1,
@@ -206,7 +206,7 @@ async def test_session_catalog_prefill_places_session_prefix_before_turn_prompt(
         session_instruction="会话人设、实体信息和动作偏好。",
         candidates=[
             ActionScoreCandidate(
-                candidate_id="B001", suffix="B001", action_id="B001"
+                candidate_id="01", suffix="01", action_id="01"
             )
         ],
         prefix_cache_namespace="category:session:test",

@@ -95,7 +95,7 @@ class ActionSuffixScoreRequest:
     # Lower values are admitted first by the API-process action scorer.  This
     # controls queueing only; it does not alter candidate scores or prompts.
     admission_priority: int = 10
-    # Scheme B uses identifier-only suffixes (for example A328, A329, ...).
+    # Scheme B uses identifier-only suffixes (for example 328, 329, ...).
     # These can be tokenized independently of the long multimodal prefix.
     suffix_tokenization_mode: Literal["exact", "short_id"] = "exact"
 

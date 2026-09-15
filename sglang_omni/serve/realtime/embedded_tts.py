@@ -6,8 +6,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import logging
+import math
+import os
 import time
 from dataclasses import dataclass, replace
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -17,6 +20,12 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
 
+from sglang_omni.serve.realtime.tts_buffer import buffered_appends
+from sglang_omni.serve.realtime.tts_text import (
+    StreamingTTSWhitespace,
+    TTSTextAppend,
+    split_tts_append,
+)
 from sglang_omni.utils.structured_logs import emit_structured_log
 
 AudioSink = Callable[[bytes], Awaitable[None]]
@@ -46,15 +55,51 @@ class EmbeddedTTSConfig:
     ready_timeout_seconds: float = 10.0
     send_timeout_seconds: float = 10.0
     first_audio_timeout_seconds: float = 10.0
-    turn_timeout_seconds: float = 30.0
+    audio_idle_timeout_seconds: float = 10.0
+    completion_timeout_seconds: float = 5.0
+    turn_timeout_seconds: float = 300.0
     connection_count: int = 1
     text_queue_max_chunks: int = 64
+    normalize_text_whitespace: bool = True
+    text_buffer_enabled: bool = True
+    text_first_buffer_seconds: float = 0.06
+    text_later_buffer_seconds: float = 0.10
+    text_coalesce: bool = False
+    text_append_target_chars: int = 0
+    max_turn_text_chars: int = 16384
+    max_turn_text_bytes: int = 65536
+    log_text_payloads: bool = False
     max_audio_chunk_bytes: int = 1024 * 1024
     max_turn_audio_bytes: int = 32 * 1024 * 1024
     provisional_audio_max_bytes: int = 8 * 1024 * 1024
     provisional_audio_max_milliseconds: int = 10000
 
+    @staticmethod
+    def text_options_from_env() -> dict[str, Any]:
+        """Shared production/dev entry settings; direct constructors stay explicit."""
+        options: dict[str, Any] = {}
+        for field, suffix, default in (
+            ("normalize_text_whitespace", "NORMALIZE_WHITESPACE", "1"),
+            ("text_coalesce", "COALESCE", "0"),
+            ("text_buffer_enabled", "BUFFER_ENABLED", "1"),
+            ("log_text_payloads", "LOG_PAYLOADS", "0"),
+        ):
+            value = os.environ.get("SGLANG_OMNI_TTS_TEXT_" + suffix, default).strip().lower()
+            if value not in {"1", "true", "0", "false"}:
+                raise ValueError(f"SGLANG_OMNI_TTS_TEXT_{suffix} must be 0/1 or false/true")
+            options[field] = value in {"1", "true"}
+        for field, suffix, default in (
+            ("text_append_target_chars", "APPEND_TARGET_CHARS", "0"),
+            ("max_turn_text_chars", "MAX_TURN_CHARS", "16384"),
+            ("max_turn_text_bytes", "MAX_TURN_BYTES", "65536"),
+        ):
+            options[field] = int(os.environ.get("SGLANG_OMNI_TTS_TEXT_" + suffix, default))
+        return options
+
     def __post_init__(self) -> None:
+        for name in ("normalize_text_whitespace", "text_coalesce", "log_text_payloads", "text_buffer_enabled"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"TTS {name} must be a bool")
         if type(self.connection_count) is not int or self.connection_count not in (1, 2):
             raise ValueError("TTS connection_count must be 1 or 2")
         parsed = urlsplit(self.url)
@@ -68,11 +113,18 @@ class EmbeddedTTSConfig:
             "send_timeout_seconds",
             "first_audio_timeout_seconds",
             "turn_timeout_seconds",
+            "audio_idle_timeout_seconds",
+            "completion_timeout_seconds",
+            "text_first_buffer_seconds",
+            "text_later_buffer_seconds",
         ):
-            if getattr(self, name) <= 0:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"TTS {name} must be positive")
         for name in (
             "text_queue_max_chunks",
+            "max_turn_text_chars",
+            "max_turn_text_bytes",
             "max_audio_chunk_bytes",
             "max_turn_audio_bytes",
             "provisional_audio_max_bytes",
@@ -81,6 +133,9 @@ class EmbeddedTTSConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"TTS {name} must be a positive integer")
+        if (type(self.text_append_target_chars) is not int
+                or not 0 <= self.text_append_target_chars <= self.max_turn_text_chars):
+            raise ValueError("TTS text_append_target_chars must be between zero and max_turn_text_chars")
 
 
 @dataclass(frozen=True)
@@ -202,6 +257,10 @@ class EmbeddedTTSConnection:
                     "tts_turn_started",
                     session_id=self._session_id,
                     turn_id=turn_id,
+                    first_audio_timeout_seconds=self._config.first_audio_timeout_seconds,
+                    audio_idle_timeout_seconds=self._config.audio_idle_timeout_seconds,
+                    completion_timeout_seconds=self._config.completion_timeout_seconds,
+                    turn_timeout_seconds=self._config.turn_timeout_seconds,
                 )
                 if (not self.connected and self._standby is not None
                         and (self._standby_task is None or self._standby_task.done())
@@ -218,12 +277,12 @@ class EmbeddedTTSConnection:
                     self._session_id,
                     turn_id,
                 )
-                queue: asyncio.Queue[str | None] = asyncio.Queue(
+                queue: asyncio.Queue[TTSTextAppend | None] = asyncio.Queue(
                     maxsize=self._config.text_queue_max_chunks
                 )
                 first_text_sent = asyncio.Event()
                 producer = asyncio.create_task(
-                    self._produce_text(text_chunks, queue),
+                    self._produce_text(text_chunks, queue, turn_id),
                     name=f"embedded-tts-producer:{turn_id}",
                 )
                 sender = asyncio.create_task(
@@ -440,21 +499,113 @@ class EmbeddedTTSConnection:
         )
         return websocket
 
-    @staticmethod
     async def _produce_text(
-        text_chunks: AsyncIterator[str], queue: asyncio.Queue[str | None]
+        self, text_chunks: AsyncIterator[str], queue: asyncio.Queue[TTSTextAppend | None],
+        turn_id: str,
     ) -> None:
+        normalizer = StreamingTTSWhitespace()
+        input_chars = input_bytes = output_chars = source_seq = 0
+        pending_source: int | None = None
+        pending_at: float | None = None
         async for chunk in text_chunks:
             if not isinstance(chunk, str):
                 raise EmbeddedTTSError("TTS text chunk must be a string", phase="send")
-            if chunk:
-                await queue.put(chunk)
+            if not chunk:
+                continue
+            arrived = time.monotonic()
+            source_seq += 1
+            input_chars += len(chunk)
+            input_bytes += len(chunk.encode("utf-8"))
+            if (input_chars > self._config.max_turn_text_chars
+                    or input_bytes > self._config.max_turn_text_bytes):
+                raise EmbeddedTTSError("TTS turn text budget exceeded", phase="text_budget")
+            if self._config.log_text_payloads:
+                emit_structured_log(
+                    "diagnostic", "tts_text_delta_received", session_id=self._session_id,
+                    turn_id=turn_id, source_seq=source_seq, text=chunk,
+                )
+            first_source = pending_source or source_seq
+            first_at = pending_at if pending_at is not None else arrived
+            normalized = normalizer.feed(chunk) if self._config.normalize_text_whitespace else chunk
+            output_chars += len(normalized)
+            if normalizer.pending:
+                if normalized or pending_source is None:
+                    pending_source, pending_at = source_seq, arrived
+            else:
+                pending_source = pending_at = None
+            try:
+                pieces = split_tts_append(
+                    normalized, self._config.text_append_target_chars,
+                    self._config.max_turn_text_chars,
+                )
+            except ValueError as exc:
+                raise EmbeddedTTSError(str(exc), phase="text_budget") from None
+            for piece in pieces:
+                await queue.put(TTSTextAppend(
+                    piece, first_source, source_seq, first_at,
+                    "size_split" if len(pieces) > 1 else "delta",
+                ))
+        normalizer.finish()
+        emit_structured_log(
+            "performance", "tts_text_normalization_completed", session_id=self._session_id,
+            turn_id=turn_id, input_chars=input_chars, input_bytes=input_bytes,
+            output_chars=output_chars, removed_chars=input_chars - output_chars,
+            source_delta_count=source_seq,
+            normalization_enabled=self._config.normalize_text_whitespace,
+            leading_whitespace_chars=normalizer.leading_whitespace_chars,
+            trailing_whitespace_chars=normalizer.trailing_whitespace_chars,
+            collapsed_whitespace_chars=normalizer.collapsed_whitespace_chars,
+            cr_chars=normalizer.cr_chars,
+        )
         await queue.put(None)
+
+    async def _text_batches(
+        self, queue: asyncio.Queue[TTSTextAppend | None]
+    ) -> AsyncIterator[TTSTextAppend]:
+        """One batching owner: timed buffering, or the legacy zero-wait path."""
+        if self._config.text_buffer_enabled:
+            async for item in buffered_appends(
+                queue, first_wait=self._config.text_first_buffer_seconds,
+                later_wait=self._config.text_later_buffer_seconds,
+            ):
+                yield item
+            return
+        carry = None
+        while True:
+            item = carry if carry is not None else await queue.get()
+            carry = None
+            if item is None:
+                return
+            eof = False
+            target = self._config.text_append_target_chars or 512
+            if self._config.text_coalesce:
+                while len(item.text) < target:
+                    # Send likely gateway boundaries promptly. The gateway still
+                    # decides whether punctuation is internal to a word/number.
+                    if any(c in item.text for c in "\n。！？；.!?;,:，："):
+                        break
+                    try:
+                        following = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if following is None:
+                        eof = True
+                        break
+                    if len(item.text) + len(following.text) > target:
+                        carry = following
+                        break
+                    item = TTSTextAppend(
+                        item.text + following.text, item.source_first,
+                        following.source_last, item.received_at, "queued_coalesce",
+                    )
+            yield item
+            if eof:
+                return
 
     async def _send_text(
         self,
         websocket: Any,
-        queue: asyncio.Queue[str | None],
+        queue: asyncio.Queue[TTSTextAppend | None],
         first_text_sent: asyncio.Event,
         turn_id: str,
         *,
@@ -470,10 +621,8 @@ class EmbeddedTTSConnection:
         text_chunks = 0
         text_chars = 0
         first_append_started: float | None = None
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
+        async for item in self._text_batches(queue):
+            chunk = item.text
             saw_text = True
             if first_append_started is None:
                 first_append_started = time.monotonic()
@@ -483,6 +632,7 @@ class EmbeddedTTSConnection:
             }
             if resolved_instruct is not None:
                 append_event["instruct"] = resolved_instruct
+            send_started = time.monotonic()
             await _wait_for_phase(
                 websocket.send(json.dumps(append_event, ensure_ascii=False)),
                 timeout=self._config.send_timeout_seconds,
@@ -490,6 +640,18 @@ class EmbeddedTTSConnection:
             )
             text_chunks += 1
             text_chars += len(chunk)
+            sent_at = time.monotonic()
+            encoded = chunk.encode("utf-8")
+            emit_structured_log(
+                "performance", "tts_text_append_sent", session_id=self._session_id,
+                turn_id=turn_id, seq=text_chunks, chars=len(chunk), utf8_bytes=len(encoded),
+                source_first=item.source_first, source_last=item.source_last,
+                reason=item.reason, text_sha256=hashlib.sha256(encoded).hexdigest(),
+                buffer_wait_ms=round((send_started - item.received_at) * 1000, 3),
+                send_ms=round((sent_at - send_started) * 1000, 3),
+                queue_depth=queue.qsize(),
+                **({"text": chunk} if self._config.log_text_payloads else {}),
+            )
             if text_chunks == 1:
                 emit_structured_log(
                     "performance",
@@ -565,23 +727,18 @@ class EmbeddedTTSConnection:
         first_audio_deadline = (
             time.monotonic() + self._config.first_audio_timeout_seconds
         )
+        progress_deadline = first_audio_deadline
         while True:
-            if chunk_count == 0:
-                remaining = first_audio_deadline - time.monotonic()
-                if remaining <= 0:
-                    raise EmbeddedTTSError(
-                        "TTS first audio timed out", phase="first_audio_timeout"
-                    )
-                try:
-                    event = await asyncio.wait_for(
-                        self._receive_event(websocket), timeout=remaining
-                    )
-                except asyncio.TimeoutError as exc:
-                    raise EmbeddedTTSError(
-                        "TTS first audio timed out", phase="first_audio_timeout"
-                    ) from exc
-            else:
-                event = await self._receive_event(websocket)
+            phase = (
+                "completion_timeout" if audio_done else
+                "first_audio_timeout" if chunk_count == 0 else "audio_idle_timeout"
+            )
+            remaining = progress_deadline - time.monotonic()
+            if remaining <= 0:
+                raise EmbeddedTTSError(f"TTS {phase} timed out", phase=phase)
+            event = await _wait_for_phase(
+                self._receive_event(websocket), timeout=remaining, phase=phase,
+            )
             event_type = event.get("type")
             if event_type == "response.created":
                 if response_created:
@@ -614,7 +771,12 @@ class EmbeddedTTSConnection:
                         "TTS turn audio exceeds configured limit", phase="protocol"
                     )
                 if chunk:
-                    await audio_sink(chunk)
+                    # Bound downstream backpressure separately from provider stalls.
+                    await _wait_for_phase(
+                        audio_sink(chunk), timeout=self._config.send_timeout_seconds,
+                        phase="audio_delivery_timeout",
+                    )
+                    progress_deadline = time.monotonic() + self._config.audio_idle_timeout_seconds
                     chunk_count += 1
                     if chunk_count == 1:
                         emit_structured_log(
@@ -639,6 +801,7 @@ class EmbeddedTTSConnection:
                         "response.audio.done is out of order", phase="protocol"
                     )
                 audio_done = True
+                progress_deadline = time.monotonic() + self._config.completion_timeout_seconds
             elif event_type == "response.done":
                 if not response_created or not audio_done:
                     raise EmbeddedTTSError(

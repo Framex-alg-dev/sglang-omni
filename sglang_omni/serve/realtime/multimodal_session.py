@@ -167,6 +167,9 @@ class MultimodalSession:
         action_selection_mode: str | None = None,
         action_micro_batch_size: int | None = None,
         action_category_top_k: int | None = None,
+        action_category_adaptive_top1: bool | None = None,
+        action_category_top1_min_margin: float | None = None,
+        action_category_top1_max_ppl: float | None = None,
         global_action_catalog: GlobalActionCatalog | None = None,
         global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
         allow_unregistered_protocol_actions: bool = False,
@@ -190,6 +193,19 @@ class MultimodalSession:
         )
         self.action_category_top_k = normalize_action_category_top_k(
             action_category_top_k
+        )
+        self.action_category_adaptive_top1 = (
+            _env_flag(ACTION_CATEGORY_ADAPTIVE_TOP1_ENV, default=True)
+            if action_category_adaptive_top1 is None
+            else action_category_adaptive_top1
+        )
+        self.action_category_top1_min_margin = (
+            normalize_action_category_top1_min_margin(
+                action_category_top1_min_margin
+            )
+        )
+        self.action_category_top1_max_ppl = normalize_action_category_top1_max_ppl(
+            action_category_top1_max_ppl
         )
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
@@ -261,6 +277,8 @@ class MultimodalSession:
         self.protocol_version: int | None = None
         self.locale = DEFAULT_ACTION_PROMPT_LOCALE
         self.language = "en"
+        self.action_locale = DEFAULT_ACTION_PROMPT_LOCALE
+        self.action_language = "en"
         self.instructions = ""
         self.unsupported_action_text = ""
         self.action_profile: SessionActionProfile | None = None
@@ -483,6 +501,9 @@ class MultimodalSession:
 
     def _prompt(self, *, zh: str, en: str) -> str:
         return localized_prompt(self.language, zh=zh, en=en)
+
+    def _action_prompt(self, *, zh: str, en: str) -> str:
+        return localized_prompt(self.action_language, zh=zh, en=en)
 
 
 
@@ -853,6 +874,14 @@ class MultimodalSessionManager:
         )
         self.action_micro_batch_size = normalize_action_micro_batch_size()
         self.action_category_top_k = normalize_action_category_top_k()
+        self.action_category_adaptive_top1 = _env_flag(
+            ACTION_CATEGORY_ADAPTIVE_TOP1_ENV,
+            default=True,
+        )
+        self.action_category_top1_min_margin = (
+            normalize_action_category_top1_min_margin()
+        )
+        self.action_category_top1_max_ppl = normalize_action_category_top1_max_ppl()
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
@@ -895,6 +924,13 @@ class MultimodalSessionManager:
             self.action_category_top_k,
         )
         logger.info(
+            "[SESSION_ACTION_REALTIME] action_category_adaptive_top1=%s "
+            "min_margin=%s max_ppl=%s",
+            self.action_category_adaptive_top1,
+            self.action_category_top1_min_margin,
+            self.action_category_top1_max_ppl,
+        )
+        logger.info(
             "[SESSION_ACTION_REALTIME] session_memory_enabled=%s "
             "write_enabled=%s read_enabled=%s "
             "batch_turns=%s max_pending_turns=%s max_retries=%s "
@@ -928,6 +964,11 @@ class MultimodalSessionManager:
             action_selection_mode=self.action_selection_mode,
             action_micro_batch_size=self.action_micro_batch_size,
             action_category_top_k=self.action_category_top_k,
+            action_category_adaptive_top1=self.action_category_adaptive_top1,
+            action_category_top1_min_margin=(
+                self.action_category_top1_min_margin
+            ),
+            action_category_top1_max_ppl=self.action_category_top1_max_ppl,
             global_action_catalog=self.global_action_catalog,
             global_action_prewarm=self.global_action_prewarm,
             allow_unregistered_protocol_actions=(

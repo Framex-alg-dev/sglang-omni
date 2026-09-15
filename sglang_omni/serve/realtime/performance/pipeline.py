@@ -21,45 +21,45 @@ from sglang_omni.serve.realtime.protocol.models import TurnBuffer
 from sglang_omni.utils.structured_logs import emit_structured_log
 
 _FACE_ONLY_DESCRIPTIONS = {
-    "A154": "a natural smile with gently raised mouth corners and cheerful eyes",
-    "A155": "an open joyful laugh with a wide mouth and strongly smiling eyes",
-    "A156": "a serious expression with tightened brows and a straight closed mouth",
-    "A157": "a surprised expression with raised brows, widened eyes, and a slightly open mouth",
-    "A158": "a playful funny face with exaggerated features, a crooked mouth, and the tongue out",
-    "A159": "a frightened expression with wide eyes, raised brows, and lowered mouth corners",
-    "A160": "an aggrieved expression with lowered mouth corners and slightly knitted brows",
-    "A161": "a sad expression with drooping eyes and brows, lowered mouth corners, and a subdued gaze",
-    "A162": "a puzzled expression with one raised brow and a slightly crooked mouth",
-    "A163": "an angry expression with deeply knitted brows, flared nostrils, and a tense mouth",
-    "A164": "a vulnerable pleading expression with a gently bitten lower lip and upward-looking eyes",
+    "154": "a natural smile with gently raised mouth corners and cheerful eyes",
+    "155": "an open joyful laugh with a wide mouth and strongly smiling eyes",
+    "156": "a serious expression with tightened brows and a straight closed mouth",
+    "157": "a surprised expression with raised brows, widened eyes, and a slightly open mouth",
+    "158": "a playful funny face with exaggerated features, a crooked mouth, and the tongue out",
+    "159": "a frightened expression with wide eyes, raised brows, and lowered mouth corners",
+    "160": "an aggrieved expression with lowered mouth corners and slightly knitted brows",
+    "161": "a sad expression with drooping eyes and brows, lowered mouth corners, and a subdued gaze",
+    "162": "a puzzled expression with one raised brow and a slightly crooked mouth",
+    "163": "an angry expression with deeply knitted brows, flared nostrils, and a tense mouth",
+    "164": "a vulnerable pleading expression with a gently bitten lower lip and upward-looking eyes",
 }
 
 _TTS_BY_EXPRESSION = {
-    "A154": "语气轻快温暖，音调略微上扬，语速适中，带有自然笑意",
-    "A155": "语气开朗活泼，音调偏高，语速略快，笑意明显但保持吐字清楚",
-    "A156": "语气克制严肃，音调平稳偏低，语速稍慢，吐字清晰",
-    "A157": "语气惊讶，音调明显上扬，语速略快，保留自然停顿",
-    "A158": "语气俏皮活泼，音调偏高，语速略快，节奏轻盈",
-    "A159": "语气紧张不安，音调略高，语速稍快，声音力度偏弱",
-    "A160": "语气轻柔委屈，音调略低，语速偏慢，声音力度较轻",
-    "A161": "语气低落悲伤，音调偏低，语速缓慢，声音轻柔",
-    "A162": "语气带有疑问，句尾自然上扬，语速适中，停顿清楚",
-    "A163": "语气坚定不满，音调偏低，语速适中，力度稍强但不喊叫",
-    "A164": "语气柔软可怜，音调略高，语速偏慢，声音轻柔",
+    "154": "语气轻快温暖，音调略微上扬，语速适中，带有自然笑意",
+    "155": "语气开朗活泼，音调偏高，语速略快，笑意明显但保持吐字清楚",
+    "156": "语气克制严肃，音调平稳偏低，语速稍慢，吐字清晰",
+    "157": "语气惊讶，音调明显上扬，语速略快，保留自然停顿",
+    "158": "语气俏皮活泼，音调偏高，语速略快，节奏轻盈",
+    "159": "语气紧张不安，音调略高，语速稍快，声音力度偏弱",
+    "160": "语气轻柔委屈，音调略低，语速偏慢，声音力度较轻",
+    "161": "语气低落悲伤，音调偏低，语速缓慢，声音轻柔",
+    "162": "语气带有疑问，句尾自然上扬，语速适中，停顿清楚",
+    "163": "语气坚定不满，音调偏低，语速适中，力度稍强但不喊叫",
+    "164": "语气柔软可怜，音调略高，语速偏慢，声音轻柔",
 }
 
 _TTS_BY_EXPRESSION_EN = {
-    "A154": "warm and upbeat tone, slightly rising pitch, medium pace, with a natural smile",
-    "A155": "bright and lively tone, higher pitch, slightly faster pace, clear articulation",
-    "A156": "restrained and serious tone, steady lower pitch, slightly slower pace, clear articulation",
-    "A157": "surprised tone, clearly rising pitch, slightly faster pace, with natural pauses",
-    "A158": "playful lively tone, higher pitch, slightly faster pace, light rhythm",
-    "A159": "nervous uneasy tone, slightly higher pitch and faster pace, with low vocal force",
-    "A160": "soft aggrieved tone, slightly lower pitch, slower pace, and gentle vocal force",
-    "A161": "subdued sad tone, lower pitch, slow pace, and a soft voice",
-    "A162": "questioning tone, naturally rising sentence endings, medium pace, and clear pauses",
-    "A163": "firm displeased tone, lower pitch, medium pace, stronger force without shouting",
-    "A164": "soft vulnerable tone, slightly higher pitch, slower pace, and gentle vocal force",
+    "154": "warm and upbeat tone, slightly rising pitch, medium pace, with a natural smile",
+    "155": "bright and lively tone, higher pitch, slightly faster pace, clear articulation",
+    "156": "restrained and serious tone, steady lower pitch, slightly slower pace, clear articulation",
+    "157": "surprised tone, clearly rising pitch, slightly faster pace, with natural pauses",
+    "158": "playful lively tone, higher pitch, slightly faster pace, light rhythm",
+    "159": "nervous uneasy tone, slightly higher pitch and faster pace, with low vocal force",
+    "160": "soft aggrieved tone, slightly lower pitch, slower pace, and gentle vocal force",
+    "161": "subdued sad tone, lower pitch, slow pace, and a soft voice",
+    "162": "questioning tone, naturally rising sentence endings, medium pace, and clear pauses",
+    "163": "firm displeased tone, lower pitch, medium pace, stronger force without shouting",
+    "164": "soft vulnerable tone, slightly higher pitch, slower pace, and gentle vocal force",
 }
 
 
@@ -127,7 +127,7 @@ class PerformancePipeline:
             if persona_body
             else ""
         )
-        return self._prompt(
+        return self._action_prompt(
             zh=(
                 "你只负责判断当前这条消息要求的可视执行通道，并为当前角色选择脸部表情。"
                 "expression_only 表示用户只明确要求眉眼、口部或面颊构成的脸部表情；"
@@ -154,7 +154,7 @@ class PerformancePipeline:
                 "from this list and no explanation.\n"
                 f"{mapping}{persona_context_en}"
             ),
-        ) + mixed_instruction_policy(self.language, "expression")
+        ) + mixed_instruction_policy(self.action_language, "expression")
 
     @staticmethod
     def _choices(expression_ids: list[str]) -> dict[str, _Choice]:
@@ -215,11 +215,14 @@ class PerformancePipeline:
         request = ActionSuffixScoreRequest(
             request_id=f"{turn.request_base}-performance",
             model=self.model_name,
-            prefix=self._prompt(zh="表现控制结果：", en="Performance control result:"),
+            prefix=self._action_prompt(
+                zh="表现控制结果：",
+                en="Performance control result:",
+            ),
             current_text=(current_text or "").strip(),
             output_prompt="",
             system_prompt=system_prompt,
-            language=self.language,
+            language=self.action_language,
             candidates=[
                 ActionScoreCandidate(
                     candidate_id=decision_id,
@@ -245,7 +248,7 @@ class PerformancePipeline:
             history_audios=[],
             history_images=[],
             prefix_cache_namespace=(
-                f"performance:v1:{self.locale}:"
+                f"performance:v1:{self.action_locale}:"
                 f"{hashlib.sha256(system_prompt.encode()).hexdigest()[:16]}"
             ),
             cache_static_system_only=True,

@@ -269,6 +269,15 @@ class ReplyPipeline:
             # is deliberately scoped so non-visual requests, including camera-
             # relative motions of the digital character, remain unaffected.
             parts.append(self._reply_no_user_camera_context_part())
+        # Keep this server-owned prompt reminder closest to generation. Qwen can
+        # otherwise treat a target-language modifier in the latest user text as
+        # stronger than an earlier fixed-language client instruction.
+        if turn.turn_origin == TURN_ORIGIN_USER:
+            language_lock_reminder = (
+                self._reply_current_turn_language_lock_reminder_part()
+            )
+            if language_lock_reminder is not None:
+                parts.append(language_lock_reminder)
         if parts:
             messages.append(Message(role="user", content=parts))
         request = GenerateRequest(

@@ -177,7 +177,7 @@
       "text": "说一比二",
       "group": "unsupported",
       "excluded_candidate_ids": [
-        "A259"
+        "259"
       ],
       "expected": {
         "reply_exact": "一",

@@ -51,6 +51,7 @@ SYSTEM += '\n用户自述事实不是命令你复述；只有明确要求你说�
 SYSTEM += '\n例：我叫小林 -> {"speech":"generated","text":"我叫小林","body_mode":"none","body":"","face":"","history":false}。例：说我叫小林 -> {"speech":"verbatim","text":"我叫小林","body_mode":"none","body":"","face":"","history":false}。例：你知道我叫什么名字吗 -> {"speech":"generated","text":"你知道我叫什么名字吗","body_mode":"none","body":"","face":"","history":true}。例：我喜欢蓝色 -> {"speech":"generated","text":"我喜欢蓝色","body_mode":"none","body":"","face":"","history":false}。'
 
 SYSTEM += '\n询问用户自身信息与询问助手自身信息要区分。例：我现在叫什么名字？ -> {"speech":"generated","text":"我现在叫什么名字？","body_mode":"none","body":"","face":"","history":true}。例：你叫什么名字？ -> {"speech":"generated","text":"你叫什么名字？","body_mode":"none","body":"","face":"","history":false}。姓名经过更正时也要查阅历史，不能当作独立常识问题。'
+SYSTEM += '\n询问当前摄像头画面、用户外观或衣着、画面中的人物或物体，以及要求描述所见内容，都必须通过语言回答，属于generated，不是纯动作。例：你能看到我穿什么衣服吗 -> {"speech":"generated","text":"你能看到我穿什么衣服吗","body_mode":"none","body":"","face":"","history":false}。例：描述一下你看到的画面 -> {"speech":"generated","text":"描述一下你看到的画面","body_mode":"none","body":"","face":"","history":false}。'
 SYSTEM += '\n复合任务逐项保留：表情和声音修饰不吞并身体动作，也不扩大朗读正文的范围。先识别用户要求说的正文边界，再检查正文之外是否还有动作动词；多个通道可以同时有独立目标。'
 SYSTEM += '\n最终检查独立通道：笑着说一比二仍然是说“一”、比二、微笑三个目标；笑着说一比二这三个字则是说“一比二”、不指定身体、微笑。“这三个字”是指定正文边界的指令，不进入text。不要因为有表情或语气修饰而合并正文与手势。'
 

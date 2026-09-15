@@ -75,7 +75,7 @@ in the KV cache; otherwise the request fails with `prefix_cached=false`.
 
 ### Flat-children latency path
 
-Scheme B uses short identifier suffixes such as `A328` and sets
+Scheme B uses short identifier suffixes such as `328` and sets
 `action_scoring.suffix_tokenization_mode` to `short_id`. The service encodes each short
 suffix independently and appends it to the already authoritative prefix token IDs. This
 avoids re-tokenizing the long multimodal prompt once per candidate. Descriptive suffixes

@@ -39,8 +39,8 @@ http://<host>:18002/debug/realtime?session_id=sess_xxxxxxxx
 `system_action_route_resolved`。其中 `category_scoring_candidate_id` 是 Category 原始结果，
 `resolved_category_id` 是按实际回复校正后的类别；`reply_prefix_status`、
 `reply_prefix_wait_ms`、`reply_prefix_chars` 和 `reply_prefix_sha256` 用于核对首句等待。只有启用
-完整诊断模式时日志才记录回复前缀正文。B001 Child 的动态 Prompt 会显示
-“本轮数字人实际回复开头”，B002 Child 则显示无有效回复文本的状态。
+完整诊断模式时日志才记录回复前缀正文。01 Child 的动态 Prompt 会显示
+“本轮数字人实际回复开头”，02 Child 则显示无有效回复文本的状态。
 
 `action_finished` 会记录 `action_category_route_forced`，其中
 `category_scoring_skipped=true`、`category_scoring_skip_reason=trigger_policy` 和

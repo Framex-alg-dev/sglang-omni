@@ -115,7 +115,7 @@ def _fixture_logs(root: Path) -> None:
                 "category_selected",
                 2_220,
                 turn_id="turn_debug_1",
-                category_id="B027",
+                category_id="27",
                 category_label="打招呼与告别",
                 support_status="supported",
             ),
@@ -123,8 +123,8 @@ def _fixture_logs(root: Path) -> None:
                 "action_execution_assumed",
                 2_348,
                 turn_id="turn_debug_1",
-                category_id="B027",
-                candidate_id="A124",
+                category_id="27",
+                candidate_id="124",
                 action_id="wave",
                 source_label="单手挥手",
                 execute=True,
@@ -166,8 +166,8 @@ def _fixture_logs(root: Path) -> None:
     diagnostic_records = []
     rendered_records = []
     for stage, request_id, candidate_id in (
-        ("category", "request-turn_debug_1-category", "B027"),
-        ("child", "request-turn_debug_1-child", "A124"),
+        ("category", "request-turn_debug_1-category", "27"),
+        ("child", "request-turn_debug_1-child", "124"),
     ):
         diagnostic_records.extend(
             [
@@ -236,12 +236,12 @@ def test_load_realtime_session_debug_aggregates_turn_prompts_and_timing(
         "configured_system_prompt_applied": False,
     }
     assert turn["action"]["ready_after_commit_ms"] == 349
-    assert turn["action"]["category_id"] == "B027"
-    assert turn["action"]["candidate_id"] == "A124"
+    assert turn["action"]["category_id"] == "27"
+    assert turn["action"]["candidate_id"] == "124"
     assert turn["action"]["category_prompt"]["rendered_prompt"] == (
         "rendered category prompt"
     )
-    assert turn["action"]["category_prompt"]["scores"][0]["candidate_id"] == "B027"
+    assert turn["action"]["category_prompt"]["scores"][0]["candidate_id"] == "27"
     assert turn["action"]["child_prompt"]["dynamic_prompt"] == ("child dynamic")
 
 
@@ -330,4 +330,4 @@ async def test_realtime_debug_routes_render_page_and_enforce_admin_auth(
             headers={"Authorization": "Bearer secret"},
         )
         assert response.status_code == 200
-        assert response.json()["turns"][0]["action"]["candidate_id"] == ("A124")
+        assert response.json()["turns"][0]["action"]["candidate_id"] == ("124")

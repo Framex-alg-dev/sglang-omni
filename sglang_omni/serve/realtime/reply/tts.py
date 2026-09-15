@@ -163,6 +163,14 @@ class ReplyTTSComponent:
     ) -> None:
         if state is None or not text:
             return
+        # Bound a single item before it enters the upstream queue. The embedded
+        # producer separately enforces the cumulative per-turn budget.
+        config = self.embedded_tts_config
+        if config is not None and (
+            len(text) > config.max_turn_text_chars
+            or len(text.encode("utf-8")) > config.max_turn_text_bytes
+        ):
+            raise RuntimeError("TTS input text chunk exceeds turn text budget")
         if not state.first_text_queued:
             state.first_text_queued = True
             emit_structured_log(

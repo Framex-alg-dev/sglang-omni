@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "tests/unit_test/fixtures/realtime_mixed_instruction_cases.json"
-ALIASES = {"挥手": {"A288", "A289", "A217", "A218"}, "摇头": {"A135"}}
+ALIASES = {"挥手": {"288", "289", "217", "218"}, "摇头": {"135"}}
 
 
 def normalize_text(text):

@@ -80,24 +80,25 @@
     "unsupported_action_text": "这个动作暂时做不了，我们换个互动方式吧"
   },
   "action": {
+    "locale": "zh-CN",
     "category_guidance": "优先自然反馈和低打扰类别。",
     "candidate_guidance": "避免夸张舞蹈、快速位移和不符合当前构图的动作。",
-    "fallback_category_ids": ["B002"],
+    "fallback_category_ids": ["02"],
     "allowed_candidates": [
       {
-        "candidate_id": "A002",
+        "candidate_id": "002",
         "execution_binding": {"asset_id": "motion_present_single"}
       },
       {
-        "candidate_id": "A043",
+        "candidate_id": "043",
         "execution_binding": {"asset_id": "motion_idle_adjust_seated"}
       },
       {
-        "candidate_id": "A288",
+        "candidate_id": "288",
         "execution_binding": {"asset_id": "motion_wave_single"}
       },
       {
-        "candidate_id": "A154"
+        "candidate_id": "154"
       }
     ]
   },
@@ -133,10 +134,12 @@
 会话使用 `["text", "audio", "expression", "action"]`；生产客户端建议始终显式
 发送，避免未来缺省值变化后产生意外行为。
 
-`locale` 控制服务端生成的 Category、Child 和动作上下文 Prompt 使用中文还是英文。
+顶层 `locale` 控制回复语种。`action.locale` 独立控制服务端生成的 Category、Child
+和动作上下文 Prompt 使用中文还是英文；省略时继承顶层 `locale`，以兼容旧客户端。
 客户端传入的 `reply.instructions`、人设、临时上下文、不支持文案，以及动作目录中
 的名称和说明均保持原文，服务端不会自动翻译。客户端如果要求中文交互，应始终显式发送
-`"locale": "zh-CN"`。
+`"locale": "zh-CN"`；若回复必须为英文但中文动作目录理解更稳定，可以同时发送顶层
+`"locale": "en-US"` 和 `"action": {"locale": "zh-CN", ...}`。
 
 ### 3.3 人设与约束作用域
 
@@ -145,6 +148,7 @@
 | `character_profile` | 类别、身体动作、可选表情风格 | 整个 Session |
 | `reply.instructions` | 回复；作为完整 System Prompt 原样使用 | 整个 Session |
 | `reply.unsupported_action_text` | 不支持动作时写入历史的文本，并对应客户端预生成音频 | 整个 Session |
+| `action.locale` | Category、Child 和动作上下文 Prompt；缺省继承顶层 `locale` | 整个 Session |
 | `action.category_guidance` | 类别选择为主 | 整个 Session |
 | `action.candidate_guidance` | 类别内具体动作选择为主 | 整个 Session |
 | `action.fallback_category_ids` | 不支持或异常时使用的类别，按数组顺序确定优先级 | 整个 Session |
@@ -187,7 +191,7 @@ guidance 和人设单字段最长 2048 字符。完整动作人设序列化后�
 
 ```json
 {
-  "candidate_id": "A288",
+  "candidate_id": "288",
   "execution_binding": {"asset_id": "motion_wave_single"}
 }
 ```
@@ -208,14 +212,14 @@ guidance 和人设单字段最长 2048 字符。完整动作人设序列化后�
 
 当前目录使用两个由语义标签识别的系统伴随类别，客户端不能只上传业务动作：
 
-- `reply_accompaniment`（当前目录为 `B001`）：数字人实际有非空回复文本时，Child 根据
+- `reply_accompaniment`（当前目录为 `01`）：数字人实际有非空回复文本时，Child 根据
   回复首句选择语言表达伴随动作；
-- `silent_accompaniment`（当前目录为 `B002`）：回复为空、生成失败或本轮无需说话时，选择
+- `silent_accompaniment`（当前目录为 `02`）：回复为空、生成失败或本轮无需说话时，选择
   静默低扰动作。
 
 `text+action` Session 必须同时提供这两个类别下的真实候选；`action-only` Session 至少提供
 静默伴随类别。`fallback_category_ids[0]` 必须是静默伴随类别，回复伴随类别不得出现在
-fallback 数组中。系统类别不参与 `A000` 拒识：其中至少要有一个真实动作可执行。
+fallback 数组中。系统类别不参与 `000` 拒识：其中至少要有一个真实动作可执行。
 
 Category 先与 provisional 回复并行判断。若 Category 初选了上述任一系统类别，服务端会等待
 首个非空回复 delta 或回复终态，并按实际结果在两个系统类别之间校正：有文本使用回复伴随，
@@ -225,8 +229,8 @@ Category 先与 provisional 回复并行判断。若 Category 初选了上述任
 
 #### 方向动作坐标约定
 
-动作目录及服务端结果中的未限定“左/右”均采用数字人自身的身体坐标。例如 A031「看左侧」和
-A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自身左臂。数字人正面面对用户时，
+动作目录及服务端结果中的未限定“左/右”均采用数字人自身的身体坐标。例如 031「看左侧」和
+089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自身左臂。数字人正面面对用户时，
 自身左侧通常显示在用户屏幕右侧，这是正确表现；客户端不得因为画面镜像而交换候选 ID、
 `action_id` 或动作名称。
 
@@ -235,11 +239,11 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
 动作；判断资源绑定是否反向时应检查骨骼或身体实际运动方向，不能只看屏幕左右。
 
 `UNSUPPORTED` 是服务端在 Category/Child 推理中使用的非执行型判断值；内部评分 ID 分别为
-`B000` 和 `A000`。三者均为服务端保留值，客户端不得把它们加入类别目录或
+`00` 和 `000`。三者均为服务端保留值，客户端不得把它们加入类别目录或
 `allowed_candidates`。当用户请求不受支持时，服务端进入
 `fallback_category_ids[0]`，并从该类别的 Session 白名单中选择真实可执行动作。
 
-可以配置多个兜底类别，例如 `["B002", "B003"]`。Category 正常判断仍可根据语义选择其中
+可以配置多个兜底类别，例如 `["02", "03"]`。Category 正常判断仍可根据语义选择其中
 任一类别；只有 `UNSUPPORTED`、Child 推理失败等兜底路径按数组优先级使用第一个类别。
 因此第一个类别应当在任何场景下都安全、可执行，且其中第一个白名单动作应适合作为推理
 异常时的确定性默认动作。
@@ -257,6 +261,7 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
   "model": "Qwen3-Omni",
   "outputs": ["text", "audio", "expression", "action"],
   "locale": "zh-CN",
+  "action_locale": "zh-CN",
   "output_audio": {
     "voice": "benchmark_qwen_cherry_zh"
   },
@@ -265,7 +270,7 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
   "session_action_catalog_hash": "sha256:...",
   "global_action_catalog_hash": "sha256:...",
   "global_action_catalog_version": "...",
-  "fallback_category_ids": ["B002"],
+  "fallback_category_ids": ["02"],
   "action_prefix_prefilled": true,
   "unsupported_action_text_configured": true,
   "unsupported_action_text_sha256": "sha256:..."
@@ -462,9 +467,9 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
 被拒绝。
 
 该触发类型不执行 Category PPL，而是按 `silent_accompaniment` 语义标签直接进入当前目录的
-静默低扰伴随类别（当前为 B002）。服务端在当前可用的真实候选中均匀随机选择，并排除上一次
+静默低扰伴随类别（当前为 02）。服务端在当前可用的真实候选中均匀随机选择，并排除上一次
 `action_finished` 选择的候选以避免连续重复；只有过滤后仅剩该候选时才允许重复。该路径同时
-跳过 Child PPL。`action.guidance` 只能过滤 B002 内不符合当前状态的候选，不能切换到其他类别；
+跳过 Child PPL。`action.guidance` 只能过滤 02 内不符合当前状态的候选，不能切换到其他类别；
 不得传上一动作 ID，也不需要由客户端要求避免重复或依据上一动作衔接。客户端应只
 提供当前 `pose`、手部/持物状态及最多一张最新 `avatar_current` 画面，动画过渡和复位由播放
 引擎负责。
@@ -601,9 +606,9 @@ must not、do not、avoid”等明确禁止语句执行确定性过滤：与禁�
   "session_id": "session-20260822-001",
   "turn_id": "turn-user-001",
   "action": {
-    "candidate_id": "A288",
-    "action_id": "A288",
-    "category_id": "B032",
+    "candidate_id": "288",
+    "action_id": "288",
+    "category_id": "32",
     "execution_binding": {"asset_id": "motion_wave_single"},
     "execute": true,
     "support_status": "supported",
@@ -625,7 +630,7 @@ TTS 完成或 TTS 取消：它可能早于首个 `response.audio.delta`，也可
 
 ### 8.1 独立脸部表情
 
-启用 `expression` 后，服务端只从全局目录 B019 选择脸部表情。B019 不参与身体动作的
+启用 `expression` 后，服务端只从全局目录 19 选择脸部表情。19 不参与身体动作的
 Category、Child、flat 或 fallback 选择。没有必要改变表情时不发送事件，并在
 `turn.result.outputs.expression` 返回 `not_changed`。
 
@@ -637,9 +642,9 @@ Category、Child、flat 或 fallback 选择。没有必要改变表情时不发�
   "session_id": "session-20260822-001",
   "turn_id": "turn-user-001",
   "expression": {
-    "category_id": "B019",
-    "candidate_id": "A154",
-    "expression_id": "A154",
+    "category_id": "19",
+    "candidate_id": "154",
+    "expression_id": "154",
     "label": "微笑",
     "description": "a natural smile with gently raised mouth corners and cheerful eyes",
     "apply": true
@@ -673,9 +678,9 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
     "source": "generated"
   },
   "action": {
-    "candidate_id": "A288",
-    "action_id": "A288",
-    "category_id": "B032",
+    "candidate_id": "288",
+    "action_id": "288",
+    "category_id": "32",
     "execution_binding": {"asset_id": "motion_wave_single"},
     "execute": true
   },
@@ -694,9 +699,9 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
   "outputs": {"text": "completed", "action": "failed"},
   "reply": {"text": "你好呀。", "source": "generated"},
   "action": {
-    "candidate_id": "A043",
-    "action_id": "A043",
-    "category_id": "B002",
+    "candidate_id": "043",
+    "action_id": "043",
+    "category_id": "02",
     "execute": true,
     "support_status": "unknown",
     "fallback_applied": true
@@ -711,7 +716,7 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
 
 动作识别为不支持时，`status` 仍为 `completed`，但动作包含
 `support_status="unsupported"`、`fallback_applied=true`，实际 `category_id` 为本 Session
-配置的最高优先级静默伴随类别。当前目录中的 B002 由 `silent_accompaniment` 语义标签识别，
+配置的最高优先级静默伴随类别。当前目录中的 02 由 `silent_accompaniment` 语义标签识别，
 服务端路由逻辑不写死该 ID。
 
 融合模式的不支持结果如下。此时没有正式文本，也没有 `reply.text`：
@@ -729,9 +734,9 @@ text-only、action-only 和融合模式统一返回 `status` 与 `outputs`：
     "recorded_in_history": true
   },
   "action": {
-    "candidate_id": "A043",
-    "action_id": "A043",
-    "category_id": "B002",
+    "candidate_id": "043",
+    "action_id": "043",
+    "category_id": "02",
     "execute": true,
     "support_status": "unsupported",
     "fallback_applied": true
