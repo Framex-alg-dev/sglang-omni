@@ -61,6 +61,10 @@ from sglang_omni.serve.realtime.reply.generation import ReplyGenerationComponent
 from sglang_omni.serve.realtime.reply.prompts import ReplyPromptComponent
 from sglang_omni.serve.realtime.reply.history import ReplyHistoryComponent
 from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
+from sglang_omni.serve.realtime.knowledge.turn_context_gate import (
+    filter_podcast_context,
+    resolve_knowledge_gate,
+)
 
 
 @compose_components(
@@ -113,6 +117,22 @@ class ReplyPipeline:
         messages: list[Message] = [
             Message(role="system", content="\n\n".join(reply_system_parts))
         ]
+        gate = turn.knowledge_gate or resolve_knowledge_gate(self, turn)
+        knowledge_text = ""
+        if (
+            gate.include_context
+            and turn.knowledge_context is not None
+            and turn.knowledge_context.should_inject
+        ):
+            knowledge_text = render_knowledge_context(
+                turn.knowledge_context, language=self.language
+            )
+        if gate.applied and knowledge_text:
+            # A stable, low-authority text prefix precedes dynamic history and
+            # media. Never promote reference text to system for cache reuse.
+            messages.append(Message(role="user", content=[
+                {"type": "text", "text": knowledge_text},
+            ]))
         history_audios: list[str] = []
         history_images: list[str] = []
         suppress_reply_history = (
@@ -189,6 +209,7 @@ class ReplyPipeline:
             if isinstance(turn.reply_context, str) and turn.reply_context.strip()
             else None
         )
+        reply_context = filter_podcast_context(reply_context, gate)
         podcast_context = bool(
             reply_context and PODCAST_REPLY_CONTEXT_MARKER in reply_context
         )
@@ -204,12 +225,8 @@ class ReplyPipeline:
             # user message (below system authority), before the actual current
             # speech/text, and explicitly mark it as non-instructional data.
             parts.append({"type": "text", "text": session_memory_context.text})
-        if turn.knowledge_context is not None and turn.knowledge_context.should_inject:
-            knowledge_text = render_knowledge_context(
-                turn.knowledge_context, language=self.language
-            )
-            if knowledge_text:
-                parts.append({"type": "text", "text": knowledge_text})
+        if not gate.applied and knowledge_text:
+            parts.append({"type": "text", "text": knowledge_text})
         if turn.turn_origin == TURN_ORIGIN_PROACTIVE:
             if isinstance(turn.scene_context, str) and turn.scene_context.strip():
                 parts.append(
@@ -294,6 +311,11 @@ class ReplyPipeline:
                 "turn_id": turn.turn_id,
                 "logical_request_id": turn.request_base,
                 "task": "session_reply",
+                "knowledge_gate_applied": gate.applied,
+                "knowledge_gate_reason": gate.reason,
+                "knowledge_context_included": bool(knowledge_text),
+                "knowledge_context_chars": len(knowledge_text),
+                "podcast_context_chars": len(reply_context or "") if podcast_context else 0,
                 "reply_history_available_turn_count": len(
                     self.reply_history_turns
                 ),
@@ -419,6 +441,16 @@ class ReplyPipeline:
                 ),
             },
         )
+        if gate.applied:
+            emit_structured_log(
+                "diagnostic", "reply_knowledge_context_selected",
+                session_id=self.session_id, turn_id=turn.turn_id,
+                logical_request_id=turn.request_base,
+                include_context=gate.include_context, reason=gate.reason,
+                knowledge_context_chars=len(knowledge_text),
+                podcast_context_chars=len(reply_context or "") if podcast_context else 0,
+                snapshot_id=getattr(self.provided_entity_snapshot, "snapshot_id", None),
+            )
         return request, reply_image_roles
 
 

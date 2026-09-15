@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sglang_omni.serve.realtime.turn_intent import infer_turn_intent
+from sglang_omni.serve.realtime.knowledge.turn_context_gate import resolve_knowledge_gate
 
 import asyncio
 import hashlib
@@ -1108,6 +1109,16 @@ class TurnPipeline:
                 turn.intent = await infer_turn_intent(self, turn, current_audio_list)
                 self._ensure_turn_processing(turn)
 
+            turn.knowledge_gate = resolve_knowledge_gate(self, turn)
+            if turn.knowledge_gate.applied:
+                emit_structured_log(
+                    "diagnostic", "turn_knowledge_gate_decided",
+                    session_id=self.session_id, turn_id=turn.turn_id,
+                    include_context=turn.knowledge_gate.include_context,
+                    reason=turn.knowledge_gate.reason,
+                    snapshot_id=getattr(self.provided_entity_snapshot, "snapshot_id", None),
+                )
+
             reply_history_route_task: asyncio.Task[Any] | None = None
             if (
                 "text" in self.modalities
@@ -1295,7 +1306,10 @@ class TurnPipeline:
                 and not provided_reply
                 and turn.turn_origin == TURN_ORIGIN_USER
             ):
-                turn.knowledge_context = self.provided_entity_context
+                if turn.knowledge_gate.include_context:
+                    turn.knowledge_context = self.provided_entity_context
+                else:
+                    turn.knowledge_context = None
             knowledge_speculative_enabled = bool(
                 getattr(
                     getattr(self.knowledge_controller, "config", None),
