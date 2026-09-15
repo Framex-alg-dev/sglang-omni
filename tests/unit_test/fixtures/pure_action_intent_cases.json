@@ -1,0 +1,127 @@
+{
+  "cases": [
+    {
+      "id": "pure_action_1",
+      "group": "pure_action_regression",
+      "text": "跳一段民族舞",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "民族舞"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_2",
+      "group": "pure_action_regression",
+      "text": "跳一段现代舞",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "现代舞"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_3",
+      "group": "pure_action_regression",
+      "text": "跳一段hiphop",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "hiphop"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_4",
+      "group": "pure_action_regression",
+      "text": "你两只手弹一段钢琴给我看下",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "双手弹钢琴"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_5",
+      "group": "pure_action_regression",
+      "text": "弹一段吉他给我看",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "弹吉他"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_6",
+      "group": "pure_action_regression",
+      "text": "吹个萨克斯给我看下",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "吹萨克斯"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_7",
+      "group": "pure_action_regression",
+      "text": "打台球给我看",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "打台球"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_8",
+      "group": "pure_action_regression",
+      "text": "打篮球给我看",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "打篮球"
+        ]
+      }
+    },
+    {
+      "id": "pure_action_9",
+      "group": "pure_action_regression",
+      "text": "做个平板支撑给我看看",
+      "expected": {
+        "language_required": false,
+        "body_targets": [
+          "平板支撑"
+        ]
+      }
+    },
+    {
+      "id": "explain_dance",
+      "text": "解释一下民族舞的特点",
+      "expected": {
+        "language_required": true
+      }
+    },
+    {
+      "id": "wave_introduce",
+      "text": "挥手并介绍自己",
+      "expected": {
+        "language_required": true,
+        "body_targets": [
+          "单手挥手"
+        ]
+      }
+    },
+    {
+      "id": "literal_basketball",
+      "text": "说“打篮球给我看”这句话",
+      "expected": {
+        "reply_exact": "打篮球给我看"
+      }
+    }
+  ]
+}
