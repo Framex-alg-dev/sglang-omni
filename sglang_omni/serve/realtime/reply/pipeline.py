@@ -97,6 +97,7 @@ class ReplyPipeline:
         # accidentally restore stage directions, technical-identity refusals,
         # or the former empty-only pure-action policy.
         reply_system_parts.append(self._reply_role_and_agency_system_prompt())
+        reply_system_parts.append(self._reply_action_capabilities_system_prompt(turn))
         proactive_policy = (
             proactive_scene_policy(turn.trigger)
             if turn.turn_origin == TURN_ORIGIN_PROACTIVE
