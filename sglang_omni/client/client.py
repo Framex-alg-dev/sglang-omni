@@ -740,6 +740,8 @@ class Client:
         session_instruction: str = "",
         admission_priority: int = 3,
         session_instance_id: str | None = None,
+        stats_out: dict[str, Any] | None = None,
+        max_prefix_tokens: int | None = None,
     ) -> bool:
         """Prefill one immutable action catalog prefix."""
         if not candidates:
@@ -766,13 +768,16 @@ class Client:
             system_prompt=system_prompt,
             stage=stage,
             admission_priority=admission_priority,
+            max_prefix_tokens=max_prefix_tokens,
             logical_request_id=f"catalog-prefill-{prefix_cache_namespace}",
             prefix_cache_namespace=prefix_cache_namespace,
             cache_static_system_only=not bool(session_instruction),
             suffix_tokenization_mode="short_id",
         )
         try:
-            await self.score_action_suffixes(request)
+            result = await self.score_action_suffixes(request)
+            if stats_out is not None:
+                stats_out.update(result.stats)
         except Exception:
             logger.warning(
                 "[ACTION_CATALOG_PREFILL] failed namespace=%s stage=%s",
@@ -1206,6 +1211,11 @@ class Client:
                     "prefix_cache_namespace": request.prefix_cache_namespace,
                     "cache_static_system_only": request.cache_static_system_only,
                     "admission_priority": request.admission_priority,
+                    "stage": request.stage,
+                    "max_prefix_tokens": request.max_prefix_tokens,
+                    "session_id": request.session_id,
+                    "session_instance_id": request.session_instance_id,
+                    "logical_request_id": request.logical_request_id,
                     "action_context_cache_key": request.action_context_cache_key,
                     "turn_origin": request.turn_origin,
                     "text_role": request.text_role,

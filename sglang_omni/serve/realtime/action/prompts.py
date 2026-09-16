@@ -261,17 +261,28 @@ class ActionPromptComponent:
 
 
     def _format_candidate_for_prompt(
-        self, candidate: SessionActionCandidate, turn_origin: str = "user"
+        self,
+        candidate: SessionActionCandidate,
+        turn_origin: str = "user",
+        definition_mode: Literal["contextual", "visual"] = "contextual",
     ) -> str:
-        definition = candidate.effective_definition(turn_origin)
+        definition = (
+            candidate.short_definition
+            if definition_mode == "visual"
+            else candidate.effective_definition(turn_origin)
+        )
+        definition_label = "视觉定义" if definition_mode == "visual" else "说明"
+        definition_label_en = (
+            "visual definition" if definition_mode == "visual" else "description"
+        )
         return self._action_prompt(
             zh=(
                 f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
-                f"说明={definition}"
+                f"{definition_label}={definition}"
             ),
             en=(
                 f"candidate_id={candidate.candidate_id} | action={candidate.source_label} | "
-                f"description={definition}"
+                f"{definition_label_en}={definition}"
             ),
         )
 
@@ -362,8 +373,16 @@ class ActionPromptComponent:
         category: SessionActionCategory | list[SessionActionCategory],
         candidates: list[SessionActionCandidate],
         turn_origin: str = "user",
+        definition_mode: Literal["contextual", "visual"] = "contextual",
     ) -> str:
         categories = category if isinstance(category, list) else [category]
+        if self.global_action_catalog is not None and turn_origin == "user" and len(categories) > 1:
+            # Ranking selects the candidate set, not an instruction priority.
+            # Canonical rendering lets A+B and B+A share the same prefix while
+            # leaving execution-category and score ordering untouched.
+            categories = sorted(categories, key=lambda c: c.category_id)
+            category = categories
+            candidates = sorted(candidates, key=lambda c: c.candidate_id)
         # Preserve all ordering and exact metadata. This caches rendering only;
         # it never weakens the model's namespace or changes token sequences.
         key = (
@@ -371,9 +390,20 @@ class ActionPromptComponent:
             self.action_language,
             getattr(self, "action_locale", None),
             turn_origin,
+            definition_mode,
             tuple((c.category_id, c.source_label, c.short_definition) for c in categories),
-            tuple((c.candidate_id, c.source_label, c.effective_definition(turn_origin))
-                  for c in candidates),
+            tuple(
+                (
+                    c.candidate_id,
+                    c.source_label,
+                    (
+                        c.short_definition
+                        if definition_mode == "visual"
+                        else c.effective_definition(turn_origin)
+                    ),
+                )
+                for c in candidates
+            ),
         )
         cache = getattr(self, "_child_prompt_render_cache", None)
         if (
@@ -385,7 +415,12 @@ class ActionPromptComponent:
         if key in cache:
             cache.move_to_end(key)
             return cache[key]
-        prompt = self._render_child_system_prompt(category, candidates, turn_origin)
+        prompt = self._render_child_system_prompt(
+            category,
+            candidates,
+            turn_origin,
+            definition_mode,
+        )
         cache[key] = prompt
         if len(cache) > 64:
             cache.popitem(last=False)
@@ -396,10 +431,11 @@ class ActionPromptComponent:
         category: SessionActionCategory | list[SessionActionCategory],
         candidates: list[SessionActionCandidate],
         turn_origin: str = "user",
+        definition_mode: Literal["contextual", "visual"] = "contextual",
     ) -> str:
         categories = category if isinstance(category, list) else [category]
         if self.global_action_catalog is not None:
-            if len(categories) == 1:
+            if len(categories) == 1 and definition_mode == "contextual":
                 return self.global_action_catalog.child_system_prompt_for(
                     self.action_locale, categories[0].category_id, turn_origin
                 )
@@ -428,7 +464,11 @@ class ActionPromptComponent:
                 )
             lines.append(child_unsupported_policy(self.action_locale))
             lines.extend(
-                self._format_candidate_for_prompt(item, turn_origin)
+                self._format_candidate_for_prompt(
+                    item,
+                    turn_origin,
+                    definition_mode,
+                )
                 for item in candidates
             )
             lines.append(
@@ -453,7 +493,11 @@ class ActionPromptComponent:
                 for selected in categories
             )
             lines.extend(
-                self._format_candidate_for_prompt(item, turn_origin)
+                self._format_candidate_for_prompt(
+                    item,
+                    turn_origin,
+                    definition_mode,
+                )
                 for item in candidates
             )
             lines.append(
@@ -471,7 +515,11 @@ class ActionPromptComponent:
                 f"说明={selected.short_definition}"
             )
         lines.extend(
-            self._format_candidate_for_prompt(item, turn_origin)
+            self._format_candidate_for_prompt(
+                item,
+                turn_origin,
+                definition_mode,
+            )
             for item in candidates
         )
         lines.append(

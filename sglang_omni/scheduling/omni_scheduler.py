@@ -70,6 +70,7 @@ from sglang_omni.proto.admin import (
 )
 from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 from sglang_omni.vendor.sglang.server_args import override_server_args
+from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
 
@@ -1606,6 +1607,31 @@ class OmniScheduler:
         return plan.batch_to_run
 
     def get_new_batch_prefill(self, running_batch):
+        # Isolate latency-critical action work from new long reply prefills.
+        # Never detach an in-progress chunk: upstream owns its KV lifecycle.
+        # After 250 ms give deferred work a normal scheduling opportunity.
+        if self.chunked_req is None and self.waiting_queue:
+            now = time.perf_counter()
+            urgent, deferred = [], []
+            for req in self.waiting_queue:
+                data = getattr(req, "_omni_data", None)
+                plan = getattr(data, "action_scoring_plan", None) or {}
+                target = urgent if (
+                    plan.get("stage") in {"category", "child"}
+                    and plan.get("turn_origin", "user") == "user"
+                    and int(plan.get("admission_priority", 1)) <= 1
+                ) else deferred
+                target.append(req)
+            aged = any(
+                now - getattr(req, "_coalesce_enqueue_t", now) >= 0.25
+                for req in deferred
+            )
+            if urgent and deferred and not aged:
+                self.waiting_queue = urgent
+                try:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                finally:
+                    self.waiting_queue.extend(deferred)
         # Note: (maydomine) batch prefill admissions to amortize the fixed step
         # cost; the oldest-request deadline survives partial admission and aborts.
         #
@@ -1632,6 +1658,33 @@ class OmniScheduler:
         return NextBatchPlan(batch_to_run=None, running_batch=running_batch)
 
     def run_batch(self, batch, pp_proxy_tensors=None):
+        forward_mode = getattr(batch, "forward_mode", None)
+        if forward_mode is not None and forward_mode.is_extend() and os.environ.get("SGLANG_OMNI_LOG_GPU_BATCH_MEMBERS", "1") != "0":
+            self._action_trace_batch_seq = getattr(self, "_action_trace_batch_seq", 0) + 1
+            members = []
+            for req in batch.reqs:
+                data = getattr(req, "_omni_data", None)
+                plan = getattr(data, "action_scoring_plan", None) or {}
+                extend = getattr(req, "extend_range", None)
+                members.append({
+                    "request_id": req.rid,
+                    "stage": plan.get("stage", "generation"),
+                    "turn_origin": plan.get("turn_origin"),
+                    "admission_priority": plan.get("admission_priority"),
+                    "session_id": plan.get("session_id"),
+                    "logical_request_id": plan.get("logical_request_id"),
+                    "role": getattr(data, "action_scoring_role", None),
+                    "cached_tokens": len(getattr(req, "prefix_indices", ())),
+                    "new_tokens": getattr(req, "extend_input_len", None),
+                    "range_start": getattr(extend, "start", None),
+                    "range_end": getattr(extend, "end", None),
+                })
+            emit_structured_log(
+                "performance", "gpu_physical_batch_selected",
+                batch_id=f"{os.getpid()}-{self._action_trace_batch_seq}",
+                request_count=len(members), members=members,
+                waiting_count=len(self.waiting_queue),
+            )
         try:
             return self._run_batch(batch, pp_proxy_tensors)
         except Exception as exc:

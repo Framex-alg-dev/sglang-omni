@@ -163,7 +163,9 @@ class ReplyGenerationComponent:
                 IMAGE_ROLE_AVATAR_STATE
             ),
             reply_filtered_stale_user_camera_image_count=max(
-                0, image_roles.count(IMAGE_ROLE_USER_CAMERA) - 1
+                0,
+                image_roles.count(IMAGE_ROLE_USER_CAMERA)
+                - MAX_REPLY_CURRENT_IMAGES,
             ),
             user_camera_present=bool(reply_forwarded_image_roles),
             reply_history_turn_count=len(self.reply_history_turns),

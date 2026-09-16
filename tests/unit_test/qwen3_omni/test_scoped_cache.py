@@ -102,3 +102,15 @@ def test_multimodal_scope_shares_only_verified_ordinary_position_prefix():
     assert _verified_scope_boundaries(metadata, torch.zeros(3, 2), 8) is None
     metadata['scope_has_media'] = False
     assert _verified_scope_boundaries(metadata, torch.arange(12).repeat(3, 1), 8) == (3, 8)
+
+
+def test_verified_session_prefix_with_private_media_and_no_public_catalog():
+    from sglang_omni.models.qwen3_omni.request_builders import _verified_scope_boundaries
+    metadata = {'public_prefix_token_count': 0, 'scope_has_media': True,
+                'session_instruction_cached': True}
+    positions = torch.arange(12).repeat(3, 1)
+    positions[:, 8:] += 100
+    assert _verified_scope_boundaries(metadata, positions, 8) == (0, 8)
+    positions[0, 7] += 1
+    assert _verified_scope_boundaries(metadata, positions, 8) is None
+    assert _verified_scope_boundaries(metadata, None, 8) is None

@@ -52,6 +52,40 @@ async def test_audio_metadata_and_request_cleanup_on_parse_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body,speech,text", [
+    ("单手挥手", "none", ""),
+    ("单手摊开展示", "verbatim", "这是礼物"),
+    ("这个手势", "none", ""),
+    ("这个手势", "verbatim", "你好"),
+])
+async def test_shared_intent_preserves_body_and_speech_with_camera(body, speech, text):
+    requests = []
+    class Client:
+        async def completion(self, request, request_id):
+            requests.append(request)
+            assert request.metadata['task'] == 'session_turn_intent'
+            return SimpleNamespace(text=json.dumps(dict(
+                body=body, speech=speech, text=text, body_mode='perform', face='', history=False)))
+    session = SimpleNamespace(client=Client(), model_name='model', session_id='session',
+        _register_turn_request=lambda *a: None, _unregister_turn_request=lambda *a: None)
+    turn = SimpleNamespace(text=None, request_base='turn', turn_id='turn')
+    result = await infer_turn_intent(session, turn, ['audio'], ['camera'], ['user_camera'])
+    assert (result.body, result.speech, result.text) == (body, speech, text)
+    assert len(requests) == 1
+    assert requests[0].metadata['images'] == []
+    assert not result.visual_scope_gate
+
+
+@pytest.mark.asyncio
+async def test_intent_rejects_misaligned_current_image_roles():
+    session = SimpleNamespace(model_name='model', session_id='session')
+    turn = SimpleNamespace(text='请做出这个手势', request_base='bad-images')
+
+    with pytest.raises(ValueError, match='images and image_roles'):
+        await infer_turn_intent(session, turn, [], ['camera'], [])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('cancel', [False, True])
 async def test_pending_parse_aborts_on_timeout_or_cancellation(monkeypatch, cancel):
     import asyncio
@@ -85,3 +119,20 @@ def test_generated_reply_context_preserves_original_question_not_predicted_answe
     intent = TurnIntent(speech='generated', text='我不知道你的名字', body='', body_mode='none', face='', history=True)
     data = json.loads(intent.action_context('你知道我叫什么名字吗'))
     assert data['speech_task'] == '你知道我叫什么名字吗'
+
+
+def test_visual_imitation_prompt_preserves_the_unresolved_image_reference():
+    from sglang_omni.serve.realtime.turn_intent import SYSTEM
+
+    assert '请做出这个手势' in SYSTEM
+    assert '"body":"这个手势"' in SYSTEM
+    assert '请做出手势' in SYSTEM
+    assert '"body":"做出手势"' in SYSTEM
+    assert '请做出这个表情' in SYSTEM
+    assert '"face":"这个表情"' in SYSTEM
+    assert '请做出表情' in SYSTEM
+    assert '"face":"做出表情"' in SYSTEM
+    assert '请做出这个动作' in SYSTEM
+    assert '"body":"这个动作"' in SYSTEM
+    assert '这个动作叫什么' in SYSTEM
+    assert '"body_mode":"none"' in SYSTEM

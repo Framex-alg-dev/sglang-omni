@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build deterministic image and spoken-audio inputs for the 24-turn journey."""
+"""Build deterministic image and spoken-audio inputs for the multimodal journey."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from scipy.signal import resample_poly
 
 from sglang_omni.serve.realtime.embedded_tts import (
@@ -24,6 +24,7 @@ from sglang_omni.serve.realtime.embedded_tts import (
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "benchmarks/eval/realtime_multimodal_user_journey_cases.json"
 DEFAULT_OUTPUT = ROOT / "reports/realtime_multimodal_user_journey/assets"
+FIXTURE_IMAGES = ROOT / "benchmarks/eval/assets"
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -195,6 +196,24 @@ def _draw_checklist(final_summary: bool) -> Image.Image:
     return image
 
 
+def _draw_number_one_gesture() -> Image.Image:
+    with Image.open(FIXTURE_IMAGES / "number_one_gesture.png") as source:
+        return ImageOps.fit(
+            source.convert("RGB"),
+            (1024, 768),
+            method=Image.Resampling.LANCZOS,
+        )
+
+
+def _draw_number_two_gesture() -> Image.Image:
+    with Image.open(FIXTURE_IMAGES / "number_two_gesture.png") as source:
+        return ImageOps.fit(
+            source.convert("RGB"),
+            (1024, 768),
+            method=Image.Resampling.LANCZOS,
+        )
+
+
 def _render_scene(scene: str) -> Image.Image:
     if scene in {"desk_start", "neutral_desk"}:
         return _draw_desk(scene)
@@ -222,6 +241,10 @@ def _render_scene(scene: str) -> Image.Image:
         return _draw_checklist(False)
     if scene == "final_summary":
         return _draw_checklist(True)
+    if scene == "number_one_gesture":
+        return _draw_number_one_gesture()
+    if scene == "number_two_gesture":
+        return _draw_number_two_gesture()
     raise ValueError(f"unknown scene: {scene}")
 
 
@@ -232,11 +255,46 @@ def _load_turns(path: Path) -> list[dict[str, Any]]:
         raise ValueError("journey must contain at least 20 turns")
     if len({str(turn.get("id")) for turn in turns}) != len(turns):
         raise ValueError("turn ids must be unique")
+    for turn in turns:
+        _turn_image_scenes(turn)
     return turns
 
 
+def _turn_image_scenes(turn: dict[str, Any]) -> tuple[str, ...]:
+    raw = turn.get("image_scenes")
+    if raw is None:
+        raw = [turn.get("scene")]
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or any(not isinstance(item, str) or not item.strip() for item in raw)
+    ):
+        raise ValueError(
+            f"turn {turn.get('id')} image_scenes must contain scene names"
+        )
+    return tuple(item.strip() for item in raw)
+
+
+def _select_turns(
+    turns: list[dict[str, Any]], turn_ids: list[str] | None
+) -> list[dict[str, Any]]:
+    if not turn_ids:
+        return turns
+    requested = set(turn_ids)
+    selected = [turn for turn in turns if str(turn.get("id")) in requested]
+    missing = requested - {str(turn.get("id")) for turn in selected}
+    if missing:
+        raise ValueError(f"unknown turn ids: {sorted(missing)}")
+    return selected
+
+
 def _prepare_images(turns: list[dict[str, Any]], output: Path) -> None:
-    for scene in sorted({str(turn["scene"]) for turn in turns}):
+    scenes = {
+        scene
+        for turn in turns
+        for scene in _turn_image_scenes(turn)
+    }
+    for scene in sorted(scenes):
         target = output / f"{scene}.jpg"
         _render_scene(scene).save(target, format="JPEG", quality=94, optimize=True)
 
@@ -310,7 +368,13 @@ def _write_manifest(turns: list[dict[str, Any]], output: Path) -> None:
             {
                 "turn_count": len(turns),
                 "every_turn_has_audio": all((output / f"turn_{turn['id']}.wav").exists() for turn in turns),
-                "every_turn_has_image": all((output / f"{turn['scene']}.jpg").exists() for turn in turns),
+                "every_turn_has_image": all(
+                    all(
+                        (output / f"{scene}.jpg").exists()
+                        for scene in _turn_image_scenes(turn)
+                    )
+                    for turn in turns
+                ),
                 "assets": assets,
             },
             indent=2,
@@ -325,9 +389,14 @@ async def _main() -> None:
     parser.add_argument("--tts-url", default="ws://127.0.0.1:40001/api-ws/v1/realtime")
     parser.add_argument("--voice", default="spk_691b97a24dcc")
     parser.add_argument("--images-only", action="store_true")
+    parser.add_argument(
+        "--turn-id",
+        action="append",
+        help="prepare only the selected turn id; may be repeated",
+    )
     args = parser.parse_args()
 
-    turns = _load_turns(args.cases)
+    turns = _select_turns(_load_turns(args.cases), args.turn_id)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _prepare_images(turns, args.output_dir)
     if not args.images_only:

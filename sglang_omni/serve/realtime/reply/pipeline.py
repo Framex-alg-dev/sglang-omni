@@ -179,9 +179,8 @@ class ReplyPipeline:
         parts: list[dict[str, Any]] = []
         if reply_image_roles:
             # Put visual evidence before the user's speech/text so the actual
-            # request remains closest to the assistant generation. Only one
-            # latest camera frame is forwarded, but keep this grouped in case
-            # that policy changes later.
+            # request remains closest to the assistant generation. The bounded
+            # current-turn camera window stays grouped in capture order.
             parts.append(self._reply_user_camera_context_part())
             parts.extend({"type": "image"} for _ in reply_image_roles)
         reply_context = (
@@ -261,7 +260,7 @@ class ReplyPipeline:
         if reply_image_roles:
             # Repeat only the decision boundary after the current speech/text.
             # The earlier label explains the image role; this final guard keeps
-            # an available camera frame from becoming the default reply topic.
+            # available camera frames from becoming the default reply topic.
             parts.append(self._reply_user_camera_response_guard_part())
         else:
             # Keep the current-turn visual fact closest to generation so it

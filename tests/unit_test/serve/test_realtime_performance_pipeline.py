@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionSuffixScoreResult,
+    CandidateScore,
+    TokenScore,
+)
 from sglang_omni.serve.realtime.performance.fusion import fuse_performance_decision
 from sglang_omni.serve.realtime.performance.models import PerformanceDecision
 from sglang_omni.serve.realtime.performance.pipeline import PerformancePipeline
@@ -196,6 +203,79 @@ def test_tts_instruction_is_derived_from_turn_expression() -> None:
 
     assert "语速适中" in instruction
     assert "自然笑意" in instruction
+
+
+@pytest.mark.asyncio
+async def test_visual_deictic_expression_scores_the_current_user_camera() -> None:
+    from sglang_omni.serve.realtime.turn_intent import TurnIntent
+
+    pipeline = _Pipeline()
+    pipeline.action_micro_batch_size = 64
+    pipeline.model_name = "model"
+    pipeline.session_id = "session"
+    pipeline.session_instance_id = "instance"
+    pipeline.action_profile = None
+    pipeline.modalities = ["expression"]
+    pipeline._action_prompt = lambda *, zh, en: zh
+    requests = []
+
+    async def score_action_request(turn, request):
+        del turn
+        requests.append(request)
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=candidate.candidate_id,
+                    token_count=1,
+                    mean_logprob=(
+                        -0.01 if candidate.candidate_id == "P101" else -10.0
+                    ),
+                    mean_nll=(
+                        0.01 if candidate.candidate_id == "P101" else 10.0
+                    ),
+                    ppl=(1.01 if candidate.candidate_id == "P101" else 22026.0),
+                    token_scores=[TokenScore(token_id=1, logprob=-0.01)],
+                )
+                for candidate in request.candidates
+            ],
+        )
+
+    pipeline._score_action_request = score_action_request
+    turn = SimpleNamespace(
+        intent=TurnIntent(
+            speech="none",
+            text="",
+            body="",
+            body_mode="none",
+            face="做出表情",
+            history=False,
+        ),
+        request_base="visual-expression",
+        turn_origin="user",
+        text_role="user_input",
+        trigger=None,
+        turn_id="turn",
+        trace_id="trace",
+    )
+
+    decision = await pipeline._infer_turn_performance(
+        turn,
+        [],
+        current_text="请做出表情",
+        images=["user-camera", "avatar-state"],
+        image_roles=["user_camera", "avatar_state"],
+    )
+
+    request = requests[0]
+    assert request.images == ["user-camera"]
+    assert request.image_roles == ["user_camera"]
+    assert "匹配可见脸部形态" in request.system_prompt
+    assert decision.request_scope == "expression_only"
+    assert decision.expression is not None
+    assert decision.expression["candidate_id"] == "154"
 
 
 def test_expression_only_ignores_body_failure_and_uses_not_required_barrier() -> None:

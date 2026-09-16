@@ -21,6 +21,7 @@ def fuse_performance_decision(
     action_error: Exception | None,
     performance: PerformanceDecision,
     expression_enabled: bool,
+    independent_channels: bool = False,
 ) -> PerformanceFusionResult:
     """Apply channel ownership and atomicity after parallel inference finishes."""
     action = dict(action) if action is not None else None
@@ -63,7 +64,7 @@ def fuse_performance_decision(
                 "fallback_applied": False,
                 "reason_code": "expression_unsupported",
             }
-    elif performance.request_scope == "both" and (
+    elif not independent_channels and performance.request_scope == "both" and (
         body_unavailable
         or performance.expression is None
         or performance.expression_unsupported
@@ -83,7 +84,8 @@ def fuse_performance_decision(
         and performance.expression is not None
         and not performance.expression_unsupported
         and (
-            performance.request_scope in {"none", "expression_only"}
+            independent_channels
+            or performance.request_scope in {"none", "expression_only"}
             or (
                 performance.request_scope in {"body_only", "both"}
                 and action is not None

@@ -10,6 +10,7 @@ import logging
 import random
 import time
 from typing import Any, Callable, Literal
+from sglang_omni.serve.realtime.action.routing import IntentShortcutBackoff
 
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
@@ -26,6 +27,7 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
 from sglang_omni.serve.realtime.action.routing import (
     choose_category_width,
     resolve_unique_explicit_action,
+    scope_visual_deictic_categories,
 )
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.common import (
@@ -217,6 +219,152 @@ class ActionCategoryComponent:
             raise ValueError(
                 "per-turn action candidate constraints leave no executable action"
             )
+        visual_deictic_scope = scope_visual_deictic_categories(
+            eligible_categories,
+            body_task=(turn.intent.body if turn.intent is not None else ""),
+            body_mode=(turn.intent.body_mode if turn.intent is not None else "none"),
+            has_user_camera=IMAGE_ROLE_USER_CAMERA in action_image_roles,
+        )
+        visual_deictic_instruction = ""
+        visual_deictic_child_instruction = ""
+        if visual_deictic_scope is not None:
+            eligible_categories = list(visual_deictic_scope.categories)
+            visual_deictic_category_ids = [
+                category.category_id for category in eligible_categories
+            ]
+            action_context.update(
+                {
+                    "category_scope": (
+                        "visual_deictic:" + visual_deictic_scope.name
+                    ),
+                    "category_scope_ids": visual_deictic_category_ids,
+                }
+            )
+            visual_deictic_instruction = self._action_prompt(
+                zh=(
+                    "\n本轮用户通过范围词明确要求模仿 user_camera 中展示的动作；"
+                    f"范围={visual_deictic_scope.name}。只能在该范围对应的动作目录中，"
+                    "依据图片中直接可见的完整行为选择具体匹配项。"
+                ),
+                en=(
+                    "\nThe user explicitly names the range of the action to imitate from "
+                    "the user_camera image; "
+                    f"range={visual_deictic_scope.name}. Match the complete directly visible "
+                    "behavior only against the catalog family for that range."
+                ),
+            )
+            visual_deictic_child_instruction = self._action_prompt(
+                zh=(
+                    "\n具体动作选择必须逐项比较范围部位与候选视觉定义，包括参与"
+                    "部位数量、伸展或弯曲状态、相对位置、朝向以及物体关系；若关键"
+                    "部位被遮挡、证据不足或没有足够匹配的候选，必须选择 000，不得"
+                    "按候选常见程度猜测。"
+                ),
+                en=(
+                    "\nCompare the in-scope body parts against each candidate's visual "
+                    "definition, including the number of participating parts, extension "
+                    "or flexion, relative positions, orientation, and object relations. "
+                    "Select 000 when key parts are occluded, evidence is insufficient, "
+                    "or no candidate matches closely enough; never guess from candidate "
+                    "frequency."
+                ),
+            )
+            emit_structured_log(
+                "action",
+                "visual_deictic_range_scope_applied",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=request_base,
+                scope=visual_deictic_scope.name,
+                category_ids=visual_deictic_category_ids,
+                child_definition_mode="visual",
+                selection_definition_source="short_definition_visual",
+            )
+        child_definition_mode: Literal["contextual", "visual"] = (
+            "visual" if visual_deictic_scope is not None else "contextual"
+        )
+        filtered_user_camera_image_count = 0
+        if (
+            visual_deictic_scope is None
+            and turn_origin == TURN_ORIGIN_USER
+            and self.global_action_catalog is not None
+            and IMAGE_ROLE_USER_CAMERA in action_image_roles
+        ):
+            retained_media = [
+                (image, role)
+                for image, role in zip(
+                    action_images,
+                    action_image_roles,
+                    strict=True,
+                )
+                if role != IMAGE_ROLE_USER_CAMERA
+            ]
+            filtered_user_camera_image_count = (
+                len(action_image_roles) - len(retained_media)
+            )
+            action_images = [image for image, _ in retained_media]
+            action_image_roles = [role for _, role in retained_media]
+            base = self._build_turn_action_instruction(
+                text,
+                turn_origin=turn_origin,
+                trigger=trigger,
+                has_audio=bool(audios),
+                image_roles=action_image_roles,
+                has_state_description=(
+                    "state_description" in effective_avatar_state
+                ),
+                avatar_state_source=self._avatar_state_source(
+                    effective_avatar_state,
+                    action_image_roles,
+                ),
+            )
+            category_session_instruction = (
+                self._build_session_action_profile_instruction(
+                    "category",
+                    turn_origin=turn_origin,
+                    has_user_camera=False,
+                )
+            )
+            category_prefix_namespace = self._session_action_prefix_namespace(
+                base_namespace=self.action_prefix_cache_namespace,
+                stage="category",
+                turn_origin=turn_origin,
+                session_instruction=category_session_instruction,
+            )
+            common.update(
+                images=action_images,
+                image_roles=action_image_roles,
+                prefix_cache_namespace=category_prefix_namespace,
+                cache_static_system_only=not bool(category_session_instruction),
+            )
+            emit_structured_log(
+                "action",
+                "user_camera_action_media_filtered",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=request_base,
+                filtered_user_camera_image_count=(
+                    filtered_user_camera_image_count
+                ),
+                reason="no_named_visual_action_scope",
+            )
+        action_context.update(
+            {
+                "visual_scope_user_camera_image_count": (
+                    sum(
+                        role == IMAGE_ROLE_USER_CAMERA
+                        for role in action_image_roles
+                    )
+                    if visual_deictic_scope is not None
+                    else 0
+                ),
+                "filtered_user_camera_action_image_count": (
+                    filtered_user_camera_image_count
+                ),
+            }
+        )
         category_by_id = {
             item.category_id: item for item in eligible_categories
         }
@@ -243,6 +391,19 @@ class ActionCategoryComponent:
                 turn.intent.body,
                 shortcut_candidates,
             )
+            if explicit_route is not None and turn_origin == TURN_ORIGIN_USER:
+                backoff = getattr(self, "_intent_shortcut_backoff", None)
+                if backoff is None:
+                    backoff = self._intent_shortcut_backoff = IntentShortcutBackoff()
+                hint_key = (explicit_route.candidate.candidate_id, turn.intent.body.strip())
+                if backoff.blocked(hint_key, time.monotonic()):
+                    emit_structured_log(
+                        "action", "action_intent_hint_backoff",
+                        session_id=self.session_id, turn_id=turn.turn_id,
+                        candidate_id=explicit_route.candidate.candidate_id,
+                        reason="recent_validation_failure", ttl_seconds=30,
+                    )
+                    explicit_route = None
             if explicit_route is not None:
                 shortcut_state_exclusions = (
                     self._state_description_excluded_candidate_ids(
@@ -323,6 +484,7 @@ class ActionCategoryComponent:
                     last_user_action_reference
                     + proactive_repeat_instruction
                     + base
+                    + visual_deictic_instruction
                     + self._category_whitelist_instruction()
                     + self._state_description_exclusion_instruction(
                         category_ids=excluded_category_ids
@@ -390,23 +552,39 @@ class ActionCategoryComponent:
                     self.action_locale
                 ).ready_child_category_ids
             )
-            width_decision = choose_category_width(
-                configured_top_k=self.action_category_top_k,
-                ranked_real_scores=[
-                    (item.candidate_id, item.mean_logprob, item.ppl)
-                    for item in ranked_real_categories
-                ],
-                overall_top_candidate_id=category_ranked[0].candidate_id,
-                adaptive_enabled=self.action_category_adaptive_top1,
-                top_category_prewarmed=top_category_prewarmed,
-                min_margin=self.action_category_top1_min_margin,
-                max_ppl=self.action_category_top1_max_ppl,
-            )
-            effective_category_top_k = width_decision.effective_top_k
-            category_adaptive_top1_applied = width_decision.adaptive_top1
-            category_width_reason = width_decision.reason
-            category_top_ppl = width_decision.top_ppl
-            category_confidence_margin = width_decision.confidence_margin
+            if visual_deictic_scope is not None:
+                effective_category_top_k = min(2, len(ranked_real_categories))
+                category_adaptive_top1_applied = False
+                category_width_reason = "visual_deictic_top2"
+                category_top_ppl = (
+                    ranked_real_categories[0].ppl
+                    if ranked_real_categories
+                    else None
+                )
+                category_confidence_margin = (
+                    ranked_real_categories[0].mean_logprob
+                    - ranked_real_categories[1].mean_logprob
+                    if len(ranked_real_categories) > 1
+                    else None
+                )
+            else:
+                width_decision = choose_category_width(
+                    configured_top_k=self.action_category_top_k,
+                    ranked_real_scores=[
+                        (item.candidate_id, item.mean_logprob, item.ppl)
+                        for item in ranked_real_categories
+                    ],
+                    overall_top_candidate_id=category_ranked[0].candidate_id,
+                    adaptive_enabled=self.action_category_adaptive_top1,
+                    top_category_prewarmed=top_category_prewarmed,
+                    min_margin=self.action_category_top1_min_margin,
+                    max_ppl=self.action_category_top1_max_ppl,
+                )
+                effective_category_top_k = width_decision.effective_top_k
+                category_adaptive_top1_applied = width_decision.adaptive_top1
+                category_width_reason = width_decision.reason
+                category_top_ppl = width_decision.top_ppl
+                category_confidence_margin = width_decision.confidence_margin
             emit_structured_log(
                 "action",
                 "action_category_width_selected",
@@ -477,7 +655,14 @@ class ActionCategoryComponent:
         ):
             original_category_id = selected_category.category_id
             system_route_original_category_id = original_category_id
-            if provisional_reply is None:
+            if turn_origin == TURN_ORIGIN_USER and turn.intent is not None:
+                # Accompaniment follows the already parsed speech intent; never
+                # wait for generated text on the action-critical user path.
+                reply_prefix_status = (
+                    "reply_pending" if turn.intent.speech != "none"
+                    else "empty_completed"
+                )
+            elif provisional_reply is None:
                 reply_prefix_status = "empty_completed"
             else:
                 (
@@ -814,6 +999,7 @@ class ActionCategoryComponent:
                         system_route_degradation_reason
                     ),
                     "child_candidate_count": len(child_candidates),
+                    "child_definition_mode": child_definition_mode,
                     "support_status": (
                         "unsupported" if category_unsupported else "supported"
                     ),
@@ -882,15 +1068,27 @@ class ActionCategoryComponent:
             return action, [], total_ms, action_context
 
         child_namespace = ",".join(selected_category_ids)
+        if turn_origin == TURN_ORIGIN_USER and len(selected_categories) > 1:
+            child_namespace = ",".join(sorted(selected_category_ids))
         if len(selected_categories) == 1:
             child_system_prompt = self._build_child_system_prompt(
-                execution_category, child_candidates, turn_origin
+                execution_category,
+                child_candidates,
+                turn_origin,
+                child_definition_mode,
             )
         else:
             child_system_prompt = self._build_child_system_prompt(
-                selected_categories, child_candidates, turn_origin
+                selected_categories,
+                child_candidates,
+                turn_origin,
+                child_definition_mode,
             )
-        if self.global_action_catalog is not None and len(selected_categories) == 1:
+        if (
+            self.global_action_catalog is not None
+            and len(selected_categories) == 1
+            and child_definition_mode == "contextual"
+        ):
             child_namespace = self.global_action_catalog.child_cache_namespace(
                 execution_category.category_id, self.action_locale, turn_origin
             )
@@ -898,7 +1096,7 @@ class ActionCategoryComponent:
             combined_prompt_hash = prompt_sha256(child_system_prompt)
             child_namespace = (
                 f"hierarchical:{self.action_locale}:child:{child_namespace}:"
-                f"{turn_origin}:sha256:{combined_prompt_hash}"
+                f"{turn_origin}:{child_definition_mode}:sha256:{combined_prompt_hash}"
             )
         else:
             child_namespace = (
@@ -925,6 +1123,7 @@ class ActionCategoryComponent:
             len(selected_categories) == 1
             and self.global_action_catalog is not None
             and turn_origin == TURN_ORIGIN_USER
+            and child_definition_mode == "contextual"
             and execution_category.category_id
             in self.global_action_prewarm.for_locale(
                 self.action_locale
@@ -990,6 +1189,8 @@ class ActionCategoryComponent:
                 last_user_action_reference
                 + proactive_repeat_instruction
                 + base
+                + visual_deictic_instruction
+                + visual_deictic_child_instruction
                 + self._system_accompaniment_child_instruction(
                     execution_category,
                     reply_prefix=reply_prefix,
@@ -1062,6 +1263,11 @@ class ActionCategoryComponent:
             raise ValueError("child action score did not return a decision")
         child_unsupported = ranked[0].candidate_id == UNSUPPORTED_CHILD_SCORE_ID
         if child_unsupported and exact_body_ids.intersection(child_by_id):
+            if turn_origin == TURN_ORIGIN_USER and turn.intent is not None:
+                backoff = getattr(self, "_intent_shortcut_backoff", None)
+                if backoff is not None:
+                    for candidate_id in exact_body_ids:
+                        backoff.reject((candidate_id, turn.intent.body.strip()), time.monotonic())
             # A semantic hint is only a recall shortcut. If its narrowed child
             # set fails validation, run the original ranked top-k path once.
             # Do not force a hinted ID or discard state/negation constraints.
@@ -1191,19 +1397,26 @@ class ActionCategoryComponent:
             "support_status": action.get("support_status"),
             "fallback_applied": action.get("fallback_applied"),
             "selection_definition_source": (
-                selected_candidate.definition_source(turn_origin)
+                (
+                    "short_definition_visual"
+                    if child_definition_mode == "visual"
+                    else selected_candidate.definition_source(turn_origin)
+                )
                 if selected_candidate is not None
                 else None
             ),
             "selection_definition_hash": (
                 "sha256:" + hashlib.sha256(
-                    selected_candidate.effective_definition(
-                        turn_origin
+                    (
+                        selected_candidate.short_definition
+                        if child_definition_mode == "visual"
+                        else selected_candidate.effective_definition(turn_origin)
                     ).encode("utf-8")
                 ).hexdigest()
                 if selected_candidate is not None
                 else None
             ),
+            "child_definition_mode": child_definition_mode,
             "selected_category_ids": selected_category_ids,
             "category_top_k": self.action_category_top_k,
             "effective_category_top_k": effective_category_top_k,

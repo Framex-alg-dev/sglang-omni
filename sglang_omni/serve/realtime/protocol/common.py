@@ -72,6 +72,9 @@ MAX_PREPARED_IMAGE_BYTES_PER_TURN = 64 * 1024 * 1024
 # scoring omits general history; its one reference-only action anchor does not
 # use this limit.
 MAX_REPLY_HISTORY_TURNS = 2
+# Preserve a small ordered image set for questions that compare multiple
+# current-turn camera frames while keeping request size bounded.
+MAX_REPLY_CURRENT_IMAGES = 8
 REPLY_HISTORY_CURRENT_ONLY = "CURRENT_ONLY"
 REPLY_HISTORY_REQUIRED = "HISTORY_REQUIRED"
 REPLY_MODE_LANGUAGE_REQUIRED = "LANGUAGE_REQUIRED"

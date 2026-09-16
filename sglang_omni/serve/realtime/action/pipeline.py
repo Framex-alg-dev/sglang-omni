@@ -49,9 +49,16 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 
 from sglang_omni.serve.realtime.action.category import ActionCategoryComponent
 from sglang_omni.serve.realtime.action.candidate import ActionCandidateComponent
+from sglang_omni.serve.realtime.action.numeric_reply import (
+    NumericReplyActionComponent,
+)
 
 
-@compose_components(ActionCategoryComponent, ActionCandidateComponent)
+@compose_components(
+    ActionCategoryComponent,
+    ActionCandidateComponent,
+    NumericReplyActionComponent,
+)
 class ActionScoringPipeline:
     async def _score_action_request(
         self,

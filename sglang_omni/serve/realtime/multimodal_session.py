@@ -82,7 +82,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_SESSIONS = 4
+MAX_CONCURRENT_SESSIONS = 2
 
 
 class SessionBusyError(RuntimeError):
@@ -90,7 +90,7 @@ class SessionBusyError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__(
-            "Maximum concurrent sessions reached (4). Please retry later."
+            f"Maximum concurrent sessions reached ({MAX_CONCURRENT_SESSIONS}). Please retry later."
         )
 
 
@@ -415,7 +415,13 @@ class MultimodalSession:
         finally:
             self.closed = True
             try:
-                await self._cleanup_session_resources()
+                try:
+                    await asyncio.wait_for(self._cleanup_session_resources(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    emit_structured_log(
+                        "error", "session_cleanup_timeout", session_id=self.session_id,
+                        session_instance_id=self.session_instance_id,
+                    )
             finally:
                 try:
                     if self.session_id is not None:
@@ -1002,10 +1008,20 @@ class MultimodalSessionManager:
             raise SessionBusyError()
         # Synchronous check + registration: no await between these operations.
         self.sessions[session_id] = session
+        emit_structured_log(
+            "lifecycle", "session_capacity_reserved", session_id=session_id,
+            session_instance_id=session.session_instance_id,
+            active_session_count=len(self.sessions), max_session_count=MAX_CONCURRENT_SESSIONS,
+        )
 
     def release(self, session_id: str, session: MultimodalSession) -> None:
         if self.sessions.get(session_id) is session:
             del self.sessions[session_id]
+            emit_structured_log(
+                "lifecycle", "session_capacity_released", session_id=session_id,
+                session_instance_id=session.session_instance_id,
+                active_session_count=len(self.sessions),
+            )
 
     def active_sessions(self) -> list[str]:
         return list(self.sessions)

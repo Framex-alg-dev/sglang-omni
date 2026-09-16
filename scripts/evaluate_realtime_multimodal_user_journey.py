@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one 24-turn audio+image user journey through D_video_call and SGLang."""
+"""Run one audio+image user journey through D_video_call and SGLang."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,7 @@ class TurnRecord:
     audio_bytes: int
     audio_chunks: int
     started_at: float
+    image_count: int = 1
     turn_id: str | None = None
     transcript: str = ""
     reply: str = ""
@@ -72,6 +74,7 @@ class TurnRecord:
             "image_file": self.image_file,
             "audio_file": self.audio_file,
             "image_bytes": self.image_bytes,
+            "image_count": self.image_count,
             "audio_bytes": self.audio_bytes,
             "audio_chunks": self.audio_chunks,
             "duration_ms": duration_ms,
@@ -129,9 +132,36 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
     for turn in turns:
         if not str(turn.get("prompt") or "").strip():
             raise ValueError(f"turn {turn.get('id')} has no spoken prompt")
-        if not str(turn.get("scene") or "").strip():
-            raise ValueError(f"turn {turn.get('id')} has no camera scene")
+        _case_image_scenes(turn)
     return turns
+
+
+def _case_image_scenes(case: dict[str, Any]) -> tuple[str, ...]:
+    raw = case.get("image_scenes")
+    if raw is None:
+        raw = [case.get("scene")]
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or any(not isinstance(item, str) or not item.strip() for item in raw)
+    ):
+        raise ValueError(
+            f"turn {case.get('id')} image_scenes must contain scene names"
+        )
+    return tuple(item.strip() for item in raw)
+
+
+def _select_turns(
+    turns: list[dict[str, Any]], turn_ids: list[str] | None
+) -> list[dict[str, Any]]:
+    if not turn_ids:
+        return turns
+    requested = set(turn_ids)
+    selected = [turn for turn in turns if str(turn.get("id")) in requested]
+    missing = requested - {str(turn.get("id")) for turn in selected}
+    if missing:
+        raise ValueError(f"unknown turn ids: {sorted(missing)}")
+    return selected
 
 
 def _read_pcm(path: Path) -> bytes:
@@ -148,10 +178,12 @@ def _read_pcm(path: Path) -> bytes:
 def _require_assets(turns: list[dict[str, Any]], assets: Path) -> None:
     missing: list[str] = []
     for turn in turns:
-        image = assets / f"{turn['scene']}.jpg"
+        images = [
+            assets / f"{scene}.jpg"
+            for scene in _case_image_scenes(turn)
+        ]
         audio = assets / f"turn_{turn['id']}.wav"
-        if not image.exists():
-            missing.append(str(image))
+        missing.extend(str(image) for image in images if not image.exists())
         if not audio.exists():
             missing.append(str(audio))
     if missing:
@@ -214,9 +246,12 @@ async def _send_media_turn(
 ) -> TurnRecord:
     case_id = str(case["id"])
     request_id = f"journey-{run_id}-{case_id}"
-    image_path = assets / f"{case['scene']}.jpg"
+    image_paths = [
+        assets / f"{scene}.jpg"
+        for scene in _case_image_scenes(case)
+    ]
     audio_path = assets / f"turn_{case_id}.wav"
-    image = image_path.read_bytes()
+    images = [path.read_bytes() for path in image_paths]
     pcm = _read_pcm(audio_path)
     chunk_size = 3200
     chunks = [pcm[offset : offset + chunk_size] for offset in range(0, len(pcm), chunk_size)]
@@ -225,12 +260,13 @@ async def _send_media_turn(
         request_id=request_id,
         prompt=str(case["prompt"]),
         scene=str(case["scene"]),
-        image_file=str(image_path),
+        image_file=",".join(str(path) for path in image_paths),
         audio_file=str(audio_path),
-        image_bytes=len(image),
+        image_bytes=sum(len(image) for image in images),
         audio_bytes=len(pcm),
         audio_chunks=len(chunks),
         started_at=time.monotonic(),
+        image_count=len(images),
     )
 
     await websocket.send(
@@ -243,19 +279,22 @@ async def _send_media_turn(
             }
         )
     )
-    await websocket.send(
-        json.dumps(
-            {
-                "type": "image",
-                "request_id": request_id,
-                "frame_id": f"frame-{run_id}-{case_id}",
-                "client_ts": int(time.time() * 1000),
-                "mime_type": "image/jpeg",
-                "reason": "user_camera",
-                "image": base64.b64encode(image).decode(),
-            }
+    for image_index, image in enumerate(images, 1):
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "image",
+                    "request_id": request_id,
+                    "frame_id": (
+                        f"frame-{run_id}-{case_id}-{image_index}"
+                    ),
+                    "client_ts": int(time.time() * 1000),
+                    "mime_type": "image/jpeg",
+                    "reason": "user_camera",
+                    "image": base64.b64encode(image).decode(),
+                }
+            )
         )
-    )
     for index, chunk in enumerate(chunks, 1):
         await websocket.send(
             json.dumps(
@@ -283,7 +322,6 @@ async def _send_media_turn(
 
     deadline = time.monotonic() + timeout
     result_seen = False
-    unlocked_after_result = False
     action_events: dict[str, dict[str, Any]] = {}
     while time.monotonic() < deadline:
         try:
@@ -291,6 +329,15 @@ async def _send_media_turn(
         except TimeoutError:
             record.errors.append(
                 {"type": "timeout", "message": f"turn exceeded {timeout:.1f}s"}
+            )
+            break
+        except ConnectionClosed as exc:
+            record.errors.append(
+                {
+                    "type": "connection_closed",
+                    "code": exc.code,
+                    "reason": exc.reason,
+                }
             )
             break
         safe_event = _redact(event)
@@ -337,9 +384,10 @@ async def _send_media_turn(
             if isinstance(expression, dict):
                 record.expression = _redact(expression)
             result_seen = True
-        elif event_type == "input_locked" and result_seen and event.get("locked") is False:
-            unlocked_after_result = True
-        if result_seen and unlocked_after_result:
+        # turn_result is the semantic terminal event. Waiting for a later UI
+        # unlock couples the evaluator to digital-human playback duration and
+        # can incorrectly turn a completed model result into an idle timeout.
+        if result_seen:
             break
     if not result_seen and not any(error.get("type") == "timeout" for error in record.errors):
         record.errors.append({"type": "timeout", "message": "turn result not received"})
@@ -402,6 +450,13 @@ def _evaluate_turn(record: TurnRecord, case: dict[str, Any]) -> None:
         record.motion_failures.append(
             f"action {candidate_id or '<none>'} not in {sorted(expected_actions)}"
         )
+    expected_categories = {
+        str(item) for item in case.get("expected_action_categories", [])
+    }
+    if expected_categories and category_id not in expected_categories:
+        record.motion_failures.append(
+            f"category {category_id or '<none>'} not in {sorted(expected_categories)}"
+        )
     expected_expressions = {
         str(item) for item in case.get("expected_expression_candidates", [])
     }
@@ -456,7 +511,7 @@ def _write_report(
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
 
     lines = [
-        "# 24-turn audio + image user journey",
+        f"# {len(records)}-turn audio + image user journey",
         "",
         f"- Run: `{run_id}`",
         f"- Character: `{character_id}`",
@@ -478,7 +533,8 @@ def _write_report(
         transcript = record.transcript.replace("|", "\\|").replace("\n", " ")[:100]
         reply = record.reply.replace("|", "\\|").replace("\n", " ")[:140]
         lines.append(
-            f"| {record.case_id} | 1 image + {record.audio_chunks} audio chunks | "
+            f"| {record.case_id} | {record.image_count} image(s) + "
+            f"{record.audio_chunks} audio chunks | "
             f"{transcript} | {reply} | "
             f"{action.get('candidate_id', '-')} / {action.get('category_id', '-')} | {result_mark} |"
         )
@@ -512,7 +568,7 @@ def _write_progress(
 
 
 async def _run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
-    turns = _load_cases(args.cases)
+    turns = _select_turns(_load_cases(args.cases), args.turn_id)
     _require_assets(turns, args.assets)
     run_id = time.strftime("journey-%Y%m%d-%H%M%S")
     output = args.output_root / run_id
@@ -563,7 +619,12 @@ async def _run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
             startup_events=startup_events,
             records=records,
         )
+        previous_turn_start = None
         for index, case in enumerate(turns, 1):
+            start_interval = getattr(args, "turn_start_interval", 0.0)
+            if previous_turn_start is not None and start_interval > 0:
+                await asyncio.sleep(max(0.0, previous_turn_start + start_interval - time.monotonic()))
+            previous_turn_start = time.monotonic()
             record = await _send_media_turn(
                 websocket,
                 case,
@@ -624,9 +685,16 @@ def main() -> int:
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_REPORT_ROOT)
+    parser.add_argument(
+        "--turn-id",
+        action="append",
+        help="run only the selected turn id; may be repeated",
+    )
     parser.add_argument("--startup-timeout", type=float, default=180.0)
     parser.add_argument("--turn-timeout", type=float, default=180.0)
     parser.add_argument("--inter-turn-gap", type=float, default=1.0)
+    parser.add_argument("--turn-start-interval", type=float, default=0.0,
+                        help="Minimum start-to-start seconds; use --inter-turn-gap 0 for paced turns")
     parser.add_argument(
         "--audio-realtime-factor",
         type=float,
@@ -647,7 +715,7 @@ def main() -> int:
         return 130
     print(json.dumps({"output": str(output), "summary": summary}, ensure_ascii=False, indent=2))
     structurally_passed = bool(
-        summary["turn_count"] >= 20
+        summary["turn_count"] >= (1 if args.turn_id else 20)
         and summary["every_turn_sent_audio"]
         and summary["every_turn_sent_image"]
         and summary["all_transport_pass"]

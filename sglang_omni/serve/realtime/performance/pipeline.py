@@ -13,9 +13,13 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
 )
+from sglang_omni.serve.realtime.action.routing import (
+    is_visual_deictic_expression_request,
+)
 from sglang_omni.serve.realtime.performance.models import PerformanceDecision
 from sglang_omni.serve.realtime.protocol.common import (
     FACIAL_EXPRESSION_CATEGORY_ID,
+    IMAGE_ROLE_USER_CAMERA,
 )
 from sglang_omni.serve.realtime.protocol.models import TurnBuffer
 from sglang_omni.utils.structured_logs import emit_structured_log
@@ -90,7 +94,12 @@ class PerformancePipeline:
             if item.candidate_id in _FACE_ONLY_DESCRIPTIONS
         ]
 
-    def _performance_system_prompt(self, choices: dict[str, _Choice]) -> str:
+    def _performance_system_prompt(
+        self,
+        choices: dict[str, _Choice],
+        *,
+        visual_deictic_expression: bool = False,
+    ) -> str:
         choice_lines: list[str] = []
         labels = {
             item.candidate_id: item.source_label
@@ -127,7 +136,7 @@ class PerformancePipeline:
             if persona_body
             else ""
         )
-        return self._action_prompt(
+        prompt = self._action_prompt(
             zh=(
                 "你只负责判断当前这条消息要求的可视执行通道，并为当前角色选择脸部表情。"
                 "expression_only 表示用户只明确要求眉眼、口部或面颊构成的脸部表情；"
@@ -154,7 +163,25 @@ class PerformancePipeline:
                 "from this list and no explanation.\n"
                 f"{mapping}{persona_context_en}"
             ),
-        ) + mixed_instruction_policy(self.action_language, "expression")
+        )
+        if visual_deictic_expression:
+            prompt += self._action_prompt(
+                zh=(
+                    "\n本轮用户通过表情范围词要求匹配 user_camera 中的表情。必须根据图片"
+                    "中直接可见的眉眼、口部和面颊形态选择表情候选；这是匹配可见"
+                    "脸部形态，不是推断用户的内在情绪。"
+                ),
+                en=(
+                    "\nThe user names the facial-expression range for the user_camera image. "
+                    "Match directly visible eyes, brows, mouth, and "
+                    "cheek configuration; this is visual shape matching, not an inference "
+                    "about the user's internal emotion."
+                ),
+            )
+        return prompt + mixed_instruction_policy(
+            self.action_language,
+            "expression",
+        )
 
     @staticmethod
     def _choices(expression_ids: list[str]) -> dict[str, _Choice]:
@@ -200,18 +227,47 @@ class PerformancePipeline:
         audios: list[str],
         *,
         current_text: str | None,
+        images: list[Any] | None = None,
+        image_roles: list[str] | None = None,
     ) -> PerformanceDecision:
         started = time.perf_counter()
         expressions = self._expression_candidates()
         expression_by_id = {item.candidate_id: item for item in expressions}
         choices = self._choices(list(expression_by_id))
+        current_images = images or []
+        current_image_roles = image_roles or []
+        if len(current_images) != len(current_image_roles):
+            raise ValueError("performance images and image_roles must have equal length")
+        visual_deictic_expression = bool(
+            turn.intent is not None
+            and is_visual_deictic_expression_request(
+                face_task=turn.intent.face,
+                has_user_camera=IMAGE_ROLE_USER_CAMERA in current_image_roles,
+            )
+        )
+        expression_media = (
+            [
+                (image, role)
+                for image, role in zip(
+                    current_images,
+                    current_image_roles,
+                    strict=True,
+                )
+                if role == IMAGE_ROLE_USER_CAMERA
+            ]
+            if visual_deictic_expression
+            else []
+        )
         if turn.intent is not None:
             if turn.intent.body_mode == "perform":
                 scope = "both" if turn.intent.face else "body_only"
             else:
                 scope = "expression_only" if turn.intent.face else "none"
             choices = {key: value for key, value in choices.items() if value.scope == scope}
-        system_prompt = self._performance_system_prompt(choices)
+        system_prompt = self._performance_system_prompt(
+            choices,
+            visual_deictic_expression=visual_deictic_expression,
+        )
         request = ActionSuffixScoreRequest(
             request_id=f"{turn.request_base}-performance",
             model=self.model_name,
@@ -233,8 +289,8 @@ class PerformancePipeline:
             ],
             suffix_tokenization_mode="short_id",
             audios=audios,
-            images=[],
-            image_roles=[],
+            images=[image for image, _ in expression_media],
+            image_roles=[role for _, role in expression_media],
             sample_rate=16000,
             micro_batch_size=min(self.action_micro_batch_size, len(choices)),
             session_id=self.session_id,
@@ -286,6 +342,8 @@ class PerformancePipeline:
                 expression.get("candidate_id") if expression else None
             ),
             expression_unsupported=decision.expression_unsupported,
+            visual_deictic_expression=visual_deictic_expression,
+            user_camera_image_count=len(expression_media),
             tts_instruction=decision.tts_instruction,
             tts_instruction_generated=True,
             tts_instruction_delivery=(

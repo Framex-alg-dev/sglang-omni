@@ -92,6 +92,12 @@ async def run_turn(ws, case, base, timeout):
     turn_id = uuid.uuid4().hex
     await ws.send(json.dumps({"type": "turn.start", "turn_id": turn_id, "origin": "user"}))
     await receive(ws, "turn.started")
+    if case.get("image"):
+        image_path = base / case["image"]
+        await ws.send(json.dumps({"type": "input.image.append", "turn_id": turn_id,
+            "seq": 1, "image_source": "user_camera", "media_type": "image/jpeg",
+            "data": base64.b64encode(image_path.read_bytes()).decode()}))
+        await receive(ws, "input.ack")
     if case.get("audio"):
         pcm = load_audio(base / case["audio"])
         for seq, offset in enumerate(range(0, len(pcm), 32000), 1):

@@ -402,6 +402,9 @@ class ProvisionalReplyState:
     cancelled: bool = False
     content_available: asyncio.Event = field(default_factory=asyncio.Event)
     sentence_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    complete_text_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    complete_text: str | None = None
+    text_completed_at: float | None = None
     delta_count: int = 0
     first_token_ms: float | None = None
     first_delta_after_commit_ms: float | None = None

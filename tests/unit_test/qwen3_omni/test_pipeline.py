@@ -1490,7 +1490,8 @@ def test_qwen_sglang_request_hashes_media_tokens_without_changing_mrope_ids(
     assert captured["input_ids"].tolist() == input_ids.tolist()
 
 
-def test_action_scoring_candidate_requests_are_materialized_lazily():
+@pytest.mark.parametrize("stage", ["category", "child"])
+def test_action_scoring_candidate_requests_are_materialized_lazily(stage):
     class ShortIdTokenizer:
         eos_token_id = 99
 
@@ -1542,6 +1543,16 @@ def test_action_scoring_candidate_requests_are_materialized_lazily():
         candidate_data = build_action_scoring_candidate_data(req_data, "A1")
         assert candidate_data.req.origin_input_ids == [11, 12, 13, 1001, 99]
         assert candidate_data.action_scoring_candidate_id == "A1"
+        plan.update(stage=stage, turn_origin="user", admission_priority=0,
+                    session_id="session-test", logical_request_id="turn-test")
+        candidate_data = build_action_scoring_candidate_data(req_data, "A2")
+        assert candidate_data.action_scoring_plan["stage"] == stage
+        assert candidate_data.action_scoring_plan["admission_priority"] == 0
+        assert candidate_data.action_scoring_plan["turn_origin"] == "user"
+        assert candidate_data.action_scoring_plan["logical_request_id"] == "turn-test"
+        assert candidate_data.action_scoring_plan["session_id"] == "session-test"
+        assert candidate_data.action_scoring_parent is req_data
+        assert "candidate_data" not in candidate_data.action_scoring_plan
     finally:
         monkeypatch.undo()
 

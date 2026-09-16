@@ -49,6 +49,17 @@ from sglang_omni.utils.structured_logs import (
 
 logger = logging.getLogger(__name__)
 
+USER_CHILD_PREWARM_LABELS = (
+    "基础表情", "躯干前后动作", "单臂抬起", "指向类", "展示类",
+    "符号化手势", "打招呼与告别", "强调类", "鼓励与庆祝", "身体触碰",
+    "手指精细动作",
+)
+# Counts complete cached prefixes (including shared public tokens), deliberately
+# conservative. Two admitted sessions budget at most 170k tokens, leaving
+# headroom in the deployed 222k-token pool. No promise of pinned KV residency.
+USER_CHILD_PREWARM_TOKEN_BUDGET = 85_000
+USER_CHILD_PREWARM_TIMEOUT_SECONDS = 90.0
+
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     from sglang_omni.serve.realtime import multimodal
@@ -61,6 +72,95 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prewarm_user_child_sessions(self, prefill: Any) -> None:
+        if not callable(prefill):
+            raise ValueError("session_child_prewarm_unavailable")
+        by_label = {category.source_label: category for category in self.categories}
+        self.session_prewarmed_child_category_ids = []
+        consumed = 0
+        started = time.perf_counter()
+        # Ordinary contextual routing strips user-camera frames. Warm that
+        # actual path; explicit visual imitation uses a separate visual prompt.
+        instruction = self._build_session_action_profile_instruction(
+            "child", turn_origin=TURN_ORIGIN_USER, has_user_camera=False,
+        )
+        optional_ids = {c.category_id for tag in (
+            CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
+            CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
+        ) if (c := self.global_action_catalog.category_with_semantic_tag(tag)) is not None}
+        optional_labels = tuple(c.source_label for c in self.categories
+            if c.category_id in optional_ids and c.source_label not in USER_CHILD_PREWARM_LABELS)
+        async with asyncio.timeout(USER_CHILD_PREWARM_TIMEOUT_SECONDS):
+            for label in (*USER_CHILD_PREWARM_LABELS, *optional_labels):
+                optional = label in optional_labels
+                if optional and consumed >= USER_CHILD_PREWARM_TOKEN_BUDGET:
+                    break
+                category = by_label.get(label)
+                if category is None or not category.children:
+                    emit_structured_log(
+                        "performance", "session_child_prewarm_skipped",
+                        session_id=self.session_id, source_label=label,
+                        reason="category_not_available_in_session",
+                    )
+                    continue
+                children = list(category.children)
+                namespace = self._session_action_prefix_namespace(
+                    base_namespace=self.global_action_catalog.child_cache_namespace(
+                        category.category_id, self.action_locale, TURN_ORIGIN_USER,
+                    ),
+                    stage="child", turn_origin=TURN_ORIGIN_USER,
+                    session_instruction=instruction,
+                )
+                stats: dict[str, Any] = {}
+                item_started = time.perf_counter()
+                ready = await prefill(
+                    request_id=f"session-{self.session_instance_id}-child-prewarm-{category.category_id}",
+                    session_instance_id=self.session_instance_id,
+                    model=self.model_name,
+                    system_prompt=self._build_child_system_prompt(category, children),
+                    candidates=[ActionScoreCandidate(
+                        candidate_id=item.candidate_id, suffix=item.candidate_id,
+                        action_id=item.action_id,
+                    ) for item in children],
+                    prefix_cache_namespace=namespace, stage="child",
+                    language=self.action_language, session_instruction=instruction,
+                    admission_priority=30, stats_out=stats,
+                    max_prefix_tokens=USER_CHILD_PREWARM_TOKEN_BUDGET - consumed,
+                )
+                tokens = int(stats.get("prefix_token_count") or stats.get("reusable_boundary_token_count") or 0)
+                consumed += tokens
+                emit_structured_log(
+                    "performance", "session_child_prewarm_completed",
+                    session_id=self.session_id, session_instance_id=self.session_instance_id,
+                    category_id=category.category_id, source_label=label,
+                    candidate_count=len(children), prewarmed=bool(ready),
+                    input_variant="contextual_without_user_camera",
+                    prefix_cache_namespace=namespace, prefix_tokens=tokens,
+                    cumulative_prefix_tokens=consumed,
+                    token_budget=USER_CHILD_PREWARM_TOKEN_BUDGET,
+                    elapsed_ms=round((time.perf_counter() - item_started) * 1000, 3),
+                )
+                if not ready:
+                    if optional:
+                        emit_structured_log(
+                            "performance", "session_child_prewarm_skipped",
+                            session_id=self.session_id, source_label=label,
+                            reason="optional_prefill_unavailable_or_over_budget",
+                        )
+                        continue
+                    raise ValueError("session_child_prewarm_failed")
+                if tokens <= 0:
+                    raise ValueError("session_child_prewarm_missing_token_accounting")
+                if consumed > USER_CHILD_PREWARM_TOKEN_BUDGET:
+                    raise ValueError("session_child_prewarm_budget_exceeded")
+                self._prefilled_action_prefix_namespaces.add(namespace)
+                self.session_prewarmed_child_category_ids.append(category.category_id)
+        emit_structured_log(
+            "performance", "session_child_prewarm_ready",
+            session_id=self.session_id, category_ids=self.session_prewarmed_child_category_ids,
+            prefix_tokens=consumed, elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+        )
+
     async def _prefill_action_catalog_degraded(
         self,
         prefill: Any,
@@ -787,6 +887,8 @@ class SessionStartComponent:
                         prewarmed=prewarmed,
                         elapsed_ms=elapsed_ms,
                     )
+        if self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
+            await self._prewarm_user_child_sessions(prefill)
         self.started = True
         emit_structured_log(
             "lifecycle",

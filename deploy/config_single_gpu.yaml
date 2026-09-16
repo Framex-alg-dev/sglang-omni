@@ -11,6 +11,10 @@ name: qwen3-omni-single-gpu
 model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
 
 runtime_overrides:
+  thinker:
+    server_args_overrides:
+      # Bound long reply prefill so queued action suffixes can run promptly.
+      chunked_prefill_size: 1024
   audio_encoder:
     max_batch_wait_ms: 0
   image_encoder:

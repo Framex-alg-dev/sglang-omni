@@ -144,6 +144,10 @@ class ProvisionalReplyComponent:
             state.finish_reason = finish_reason
             state.usage = usage
             text = "".join(state.text_parts)
+            if not state.complete_text_ready.is_set():
+                state.complete_text = text
+                state.text_completed_at = time.perf_counter()
+                state.complete_text_ready.set()
             state.content_available.set()
             state.sentence_ready.set()
             if state.status == "discarded":
@@ -213,6 +217,38 @@ class ProvisionalReplyComponent:
             state.cancelled = state.cancelled or cancelled
             state.content_available.set()
             state.sentence_ready.set()
+            state.complete_text_ready.set()
+
+    async def _resolve_complete_provisional_reply(
+        self,
+        turn: TurnBuffer,
+        state: ProvisionalReplyState,
+    ) -> tuple[str | None, str, float]:
+        """Wait for model text generation to terminate, independently of TTS."""
+
+        wait_started = time.perf_counter()
+        await state.complete_text_ready.wait()
+        self._ensure_turn_processing(turn)
+        async with state.lock:
+            if state.cancelled:
+                status = "cancelled"
+                text = None
+            elif state.failed:
+                status = "failed"
+                text = None
+            elif state.complete_text is None:
+                status = "terminal_without_text"
+                text = None
+            elif not state.complete_text.strip():
+                status = "empty"
+                text = state.complete_text
+            else:
+                status = "completed"
+                text = state.complete_text
+        return text, status, round(
+            (time.perf_counter() - wait_started) * 1000.0,
+            3,
+        )
 
     @staticmethod
     def _provisional_reply_prefix(text: str) -> tuple[str, bool]:

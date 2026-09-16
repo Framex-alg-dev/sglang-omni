@@ -2,7 +2,7 @@
   "schema_version": 2,
   "catalog_version": "v3-numeric-category-ids-r1",
   "action_catalog_version": "v7-numeric-action-ids-r1",
-  "action_catalog_hash": "sha256:32ae3f0045c2e474f66691e142f38ef76030672c1a1f7b5c9aebbb37eb276da1",
+  "action_catalog_hash": "sha256:87fbb6ed7060fb4be6922fe280b03d1b54a4212ab44801835dadb4369d9443d6",
   "categories": [
     {
       "category_id": "01",
@@ -1580,89 +1580,89 @@
           "candidate_id": "257",
           "action_id": "257",
           "source_label": "数字零手势",
-          "short_definition": "五指均弯曲成弧状，拇指指尖与食指指尖相扣成圆形，中指自然弯曲收拢。",
-          "proactive_expression": "适用于播报数字0、讲解数值为0、演示数字手势教学时触发，例如“这个就是数字0”、“比个数字0”",
-          "user_reaction_expression": "适用于提到零/0、要求比划数字0、询问数量为0时触发，例如“比个0”"
+          "short_definition": "单手五指均向掌心弯曲，拇指与食指指尖相接成圆形，中指、无名指和小指同步弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数0，或明确播报数量为0时，用数字零手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字零手势时触发，例如“比个0”“用手表示数字零”。"
         },
         {
           "candidate_id": "258",
           "action_id": "258",
           "source_label": "数字一手势",
-          "short_definition": "单手食指独立伸直伸出，其余四指收拢握拳。",
-          "proactive_expression": "适用于播报数字1、演示数字1，列举首个重要要点时触发，例如“第一个关键点”、“第一名”、“比个数字一”",
-          "user_reaction_expression": "适用于提到一/1、要求比划数字1、询问数量为1时触发，例如“比个1给我看看”"
+          "short_definition": "单手食指伸直，其余四指弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数1，或明确播报数量为1时，用数字一手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字一手势时触发，例如“比个1”“用手表示数字一”。"
         },
         {
           "candidate_id": "259",
           "action_id": "259",
           "source_label": "数字二手势",
-          "short_definition": "食指中指伸出，比出数字二。",
-          "proactive_expression": "适用于播报数字2、介绍第二项内容时触发，例如“第二点是xxx”、“加起来是数字二”、“比个数字二”",
-          "user_reaction_expression": "适用于提到二/2、要求比划数字2、询问数量为2时触发，例如“比个2”、“比个数字二”、“数字二手势”"
+          "short_definition": "单手食指和中指伸直，其余三指弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数2，或明确播报数量为2时，用数字二手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字二手势时触发，例如“比个2”“用手表示数字二”。"
         },
         {
           "candidate_id": "260",
           "action_id": "260",
           "source_label": "数字三手势",
-          "short_definition": "食指中指无名指伸出，比出数字三。",
-          "proactive_expression": "适用于播报数字3、介绍序号第三条、列举第三项内容时触发，例如“第三点请注意”、“加起来是数字三”、“比个数字三”",
-          "user_reaction_expression": "适用于提到三/3、要求比划数字3、询问数量为3时触发，例如“比个2”、“比个数字二”、“数字二手势”、“这两个加起来等于多少”"
+          "short_definition": "单手食指、中指和无名指伸直，拇指和小指弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数3，或明确播报数量为3时，用数字三手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字三手势时触发，例如“比个3”“用手表示数字三”。"
         },
         {
           "candidate_id": "261",
           "action_id": "261",
           "source_label": "数字四手势",
-          "short_definition": "四指并拢伸出，拇指内扣比出四。",
-          "proactive_expression": "适用于播报数字4、介绍序号第四条、列举第四项内容时触发，例如“第四个条件”、“比个数字四”、“加起来是数字四”",
-          "user_reaction_expression": "适用于提到四/4、要求比划数字4、询问数量为4时触发，例如“比一下4”、“比个数字四”、“数字四手势”"
+          "short_definition": "单手食指、中指、无名指和小指并拢伸直，拇指弯曲内扣。",
+          "proactive_expression": "数字人回复的主要答案为整数4，或明确播报数量为4时，用数字四手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字四手势时触发，例如“比个4”“用手表示数字四”。"
         },
         {
           "candidate_id": "262",
           "action_id": "262",
           "source_label": "数字五手势",
-          "short_definition": "五指全部张开，比出数字五。",
-          "proactive_expression": "适用于播报数字5、介绍序号第五条、列举第五项内容时触发，例如“第五个选项”、“比个数字五”、“加起来是数字五”",
-          "user_reaction_expression": "适用于提到五/5、要求比划数字5、询问数量为5时触发，例如“比个5”、“比个数字五”、“数字五手势”"
+          "short_definition": "单手五指全部伸直并张开。",
+          "proactive_expression": "数字人回复的主要答案为整数5，或明确播报数量为5时，用数字五手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字五手势时触发，例如“比个5”“用手表示数字五”。"
         },
         {
           "candidate_id": "263",
           "action_id": "263",
           "source_label": "数字六手势",
-          "short_definition": "拇指小指伸出，其余三指收拢。",
-          "proactive_expression": "适用于播报数字6、介绍序号第六条、列举第六项内容时触发，例如“第六个要点”、“比个数字六”、“加起来是数字六”",
-          "user_reaction_expression": "适用于提到六/6、要求比划数字6、询问数量为6时触发，例如“比个数字6”、“比个六”、“数字六手势”"
+          "short_definition": "单手拇指和小指伸直，其余三指弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数6，或明确播报数量为6时，用数字六手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字六手势时触发，例如“比个6”“用手表示数字六”。"
         },
         {
           "candidate_id": "264",
           "action_id": "264",
           "source_label": "数字七手势",
-          "short_definition": "拇指食指中指捏合，比出数字七。",
-          "proactive_expression": "适用于播报数字7、介绍序号第七条、列举第七项内容时触发，例如“第七点说明”、“比个数字七”、“加起来是数字七”",
-          "user_reaction_expression": "适用于提到七/7、要求比划数字7、询问数量为7时触发，例如“帮我比7”、“比个数字7”、“比个七”、“数字七手势”"
+          "short_definition": "单手拇指、食指和中指的指尖捏合，无名指和小指弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数7，或明确播报数量为7时，用数字七手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字七手势时触发，例如“比个7”“用手表示数字七”。"
         },
         {
           "candidate_id": "265",
           "action_id": "265",
           "source_label": "数字八手势",
-          "short_definition": "拇指食指成L形，比出数字八。",
-          "proactive_expression": "适用于播报数字8、介绍序号第八条、列举第八项内容时触发，例如“第八项内容”、“比个数字八”、“加起来是数字八”",
-          "user_reaction_expression": "适用于提到八/8、要求比划数字8、询问数量为8时触发，例如“比数字8”、“比个数字8”、“比个八”、“数字八手势”"
+          "short_definition": "单手拇指和食指伸直形成 L 形，中指、无名指和小指弯曲收拢。",
+          "proactive_expression": "数字人回复的主要答案为整数8，或明确播报数量为8时，用数字八手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字八手势时触发，例如“比个8”“用手表示数字八”。"
         },
         {
           "candidate_id": "266",
           "action_id": "266",
           "source_label": "数字九手势",
-          "short_definition": "食指弯曲成钩状，其余四指收拢握拳，拇指内扣贴于掌心。",
-          "proactive_expression": "适用于播报数字9、介绍序号第九条、列举第九项内容时触发，例如“第九个注意事项”、“比个数字九”、“加起来是数字九”",
-          "user_reaction_expression": "适用于提到九/9、要求比划数字9、询问数量为9时触发，例如“比划9”"
+          "short_definition": "单手食指弯曲成钩状，中指、无名指和小指收拢，拇指内扣贴于掌心。",
+          "proactive_expression": "数字人回复的主要答案为整数9，或明确播报数量为9时，用数字九手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字九手势时触发，例如“比个9”“用手表示数字九”。"
         },
         {
           "candidate_id": "267",
           "action_id": "267",
           "source_label": "数字十手势",
-          "short_definition": "双手握拳食指交叉，比出数字十。",
-          "proactive_expression": "适用于播报数字10、介绍序号第十条、列举第十项内容时触发，例如“第十个要点”、“比个数字十”、“加起来是数字十”",
-          "user_reaction_expression": "适用于提到十/10、要求比划数字10、询问数量为10时触发，例如“帮我比数字十”、“比数字10”、“比个数字10”、“比个十”、“数字十手势”"
+          "short_definition": "双手各自握拳并伸出食指，两根食指交叉。",
+          "proactive_expression": "数字人回复的主要答案为整数10，或明确播报数量为10时，用数字十手势伴随。",
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字十手势时触发，例如“比个10”“用手表示数字十”。"
         },
         {
           "candidate_id": "268",

@@ -760,7 +760,10 @@ def _verified_scope_boundaries(prompt_cache, positions, cache_prefix_token_count
         return None
     public_end = min(prompt_cache["public_prefix_token_count"], cache_prefix_token_count)
     has_media = prompt_cache.get("scope_has_media", False)
-    session_end = public_end if has_media else cache_prefix_token_count
+    # Generated combinations need not be public to be reusable in one session.
+    # Trust only the exact pre-media session boundary verified by preprocessing.
+    session_verified = prompt_cache.get("session_instruction_cached") is True
+    session_end = cache_prefix_token_count if (not has_media or session_verified) else public_end
     if positions is None:
         return None if has_media else (public_end, session_end)
     if positions.shape[-1] < session_end:
@@ -934,7 +937,16 @@ def _prepare_action_scoring_request(
     prefix_data.action_scoring_role = "prefix"
     prefix_data.action_scoring_parent = prefix_data
     prefix_data.action_scoring_candidate_id = None
+    prefix_budget = action_spec.get("max_prefix_tokens")
+    if prefix_budget is not None and len(prefix_ids) > int(prefix_budget):
+        raise ValueError("session_child_prewarm_budget_exceeded")
     prefix_data.action_scoring_plan = {
+        "stage": action_spec.get("stage"),
+        "turn_origin": action_spec.get("turn_origin", "user"),
+        "admission_priority": action_spec.get("admission_priority", 1),
+        "session_id": action_spec.get("session_id"),
+        "session_instance_id": action_spec.get("session_instance_id"),
+        "logical_request_id": action_spec.get("logical_request_id"),
         "candidate_ids": [item.candidate_id for item in candidates],
         "candidate_suffix_ids": {
             item.candidate_id: tuple(ids)
@@ -1057,6 +1069,16 @@ def build_action_scoring_candidate_data(
         action_scoring_candidate_id=candidate_id,
     )
     candidate_data.return_logprob = True
+    # Preserve scheduling identity without sharing the mutable prefix lifecycle
+    # plan (candidate completion is accounted for through the parent).
+    candidate_data.action_scoring_plan = {
+        key: plan[key]
+        for key in (
+            "stage", "turn_origin", "admission_priority", "session_id",
+            "session_instance_id", "logical_request_id",
+        )
+        if key in plan
+    }
     return candidate_data
 
 

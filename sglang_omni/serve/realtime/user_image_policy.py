@@ -1,8 +1,8 @@
 """Localized runtime policy defaults for current user-camera images."""
 
 USER_IMAGE_REPLY_RULES_ZH = (
-    "[本轮用户摄像头画面]当前消息包含一张来自用户摄像头的最新画面，"
-    "可作为回答本轮问题的视觉依据。该画面只表示用户及其周围环境，"
+    "[本轮用户摄像头画面]当前消息包含一张或多张来自本轮用户摄像头的画面，"
+    "按采集顺序排列，可作为回答本轮问题的视觉依据。这些画面只表示用户及其周围环境，"
     "不表示当前角色自身，也不表示持续视频。"
     "如果用户询问当前是否能看到本人，或者询问其衣着、画面中的人物、"
     "物品或环境，请根据图中可直接观察到的内容回答。“你能看到我吗”"
@@ -18,14 +18,14 @@ USER_IMAGE_REPLY_RULES_ZH = (
 
 USER_IMAGE_REPLY_RULES_EN = (
     "[User-camera view for the current turn] The current message contains "
-    "the latest view from the user's camera and it is available as visual "
-    "evidence for answering this turn. It represents only the user and their "
+    "one or more views from the user's camera in capture order, available as visual "
+    "evidence for answering this turn. They represent only the user and their "
     "surroundings, not the current character, and not a continuous video. "
     "If the user asks whether you can currently see them, or asks about their "
     "clothing, people, objects, or surroundings in the image, answer from "
     "what is directly observable in the image. 'Can you see me?' asks whether "
     "the user is present and discernible in the current image; it is not a "
-    "question about your general capabilities as an AI. Because an image is "
+    "question about your general capabilities as an AI. Because visual input is "
     "available for this turn, do not claim that you cannot access the camera, "
     "image, or view; do not claim that you can process only text or audio; "
     "and do not deny the current visual input because you are an AI, assistant, "

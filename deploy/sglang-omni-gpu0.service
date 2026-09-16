@@ -1,0 +1,41 @@
+[Unit]
+Description=SGLang-Omni GPU0 action routing validation on 18004
+After=network-online.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/data/fanshide/sglang-omni
+Environment=HOME=/data/fanshide/.runtime-home
+Environment=XDG_CACHE_HOME=/data/fanshide/.cache
+Environment=FLASHINFER_WORKSPACE_DIR=/data/fanshide/.cache/flashinfer
+Environment=TORCHINDUCTOR_CACHE_DIR=/data/fanshide/.cache/torchinductor
+Environment=CUDA_HOME=/usr/local/cuda
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=SGLANG_OMNI_QWEN3_CHAT_TEMPLATE_MODEL=/data/models/Qwen3-Omni-30B-A3B-Instruct
+Environment=SGLANG_OMNI_REALTIME_LOG_DIR=/data/fanshide/sglang-omni/logs/realtime
+Environment=SGLANG_OMNI_REALTIME_LOG_TIMEZONE=Asia/Shanghai
+Environment=SGLANG_OMNI_SERVICE_INSTANCE_ID=sglang-omni-gpu0
+Environment=SGLANG_OMNI_STRICT_PORT=1
+Environment=SGLANG_OMNI_SCOPED_RADIX_CACHE=1
+Environment=SGLANG_OMNI_TTS_CONNECTION_COUNT=2
+Environment=SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S=30
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/data/fanshide/sglang-omni/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/data/fanshide/sglang-omni/deploy/realtime-knowledge.env
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+ExecStart=/data/fanshide/sglang-omni/.venv/bin/sgl-omni serve --config /data/fanshide/sglang-omni/deploy/config_single_gpu.yaml --host 0.0.0.0 --port 18004 --log-level info --realtime-tts-url ws://127.0.0.1:40001/api-ws/v1/realtime --realtime-tts-voice spk_691b97a24dcc
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=infinity
+TimeoutStopSec=120
+KillMode=control-group
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
