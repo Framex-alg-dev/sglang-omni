@@ -133,6 +133,7 @@ Supported Models
 
    developer_reference/action_inference/action_inference_scheme_summary.md
    developer_reference/action_inference/multimodal_session_realtime.md
+   developer_reference/action_inference/current_turn_pipeline_observed_20260917_CN.md
    developer_reference/action_inference/action_suffix_scoring.md
    developer_reference/action_inference/action_token_mapping.md
    developer_reference/action_inference/action_hierarchical_optimization.md
