@@ -14,6 +14,8 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     TokenScore,
 )
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    CANDIDATE_REACTION_SOURCE_LANGUAGE,
+    CANDIDATE_REACTION_SOURCE_USER_CAMERA,
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
     CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
     GlobalActionCatalogPrewarmStatus,
@@ -170,14 +172,26 @@ def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None
     assert "不是关键词匹配规则" in chinese_child
 
 
-def test_builtin_catalog_does_not_require_ordinary_category_semantic_tags() -> None:
+def test_builtin_catalog_marks_bounded_candidate_reaction_sources() -> None:
     catalog = load_global_action_catalog()
     chinese = catalog.category_system_prompt_for("zh-CN")
     english = catalog.category_system_prompt_for("en-US")
+    wave = catalog.candidate_by_id["288"]
+    assert wave.reaction_sources == {
+        CANDIDATE_REACTION_SOURCE_LANGUAGE,
+        CANDIDATE_REACTION_SOURCE_USER_CAMERA,
+    }
+    assert "挥挥手跟我打个招呼" in wave.aliases
+    assert catalog.candidate_by_id["289"].reaction_sources == {
+        CANDIDATE_REACTION_SOURCE_LANGUAGE
+    }
+    assert catalog.candidate_by_id["460"].reaction_sources == {
+        CANDIDATE_REACTION_SOURCE_USER_CAMERA
+    }
+    assert not catalog.candidate_by_id["170"].reaction_sources
     assert all(
-        not category.semantic_tags
+        "implicit_social_reaction" not in category.semantic_tags
         for category in catalog.categories
-        if category.category_id in {"32", "39", "40", "41", "42", "43"}
     )
     assert "本目录中要求下肢、位移或全身大幅移动的类别为：" not in chinese
     assert "the lower-body movement categories are:" not in english
@@ -1741,7 +1755,7 @@ async def test_proactive_hard_candidate_exclusion_filters_conflicting_category(
     assert "禁止：选择自然待机、自然呼吸或其他微动作" in (
         category_request.avatar_state["state_description"]
     )
-    assert "已从本轮可选集合移除：08" not in category_request.prefix
+    assert "已从本轮可选集合移除：08" in category_request.prefix
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["action"]["category_id"] == "01"
     assert result["action"]["candidate_id"] == "001"

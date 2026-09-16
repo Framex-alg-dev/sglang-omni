@@ -184,7 +184,8 @@
       "image_scenes": ["number_two_gesture", "number_one_gesture"],
       "prompt": "这两个加起来等于多少",
       "expected_reply_groups": [["三", "3", "three"]],
-      "expected_action_categories": ["01"]
+      "expected_action_candidates": ["260"],
+      "expected_action_categories": ["31"]
     }
   ]
 }

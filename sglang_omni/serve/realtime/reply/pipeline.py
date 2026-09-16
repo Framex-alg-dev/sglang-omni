@@ -61,6 +61,7 @@ from sglang_omni.serve.realtime.reply.generation import ReplyGenerationComponent
 from sglang_omni.serve.realtime.reply.prompts import ReplyPromptComponent
 from sglang_omni.serve.realtime.reply.history import ReplyHistoryComponent
 from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 
 
 @compose_components(
@@ -277,6 +278,11 @@ class ReplyPipeline:
             )
             if language_lock_reminder is not None:
                 parts.append(language_lock_reminder)
+        if (
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+        ):
+            parts.append(self._visual_arithmetic_operand_output_part())
         if parts:
             messages.append(Message(role="user", content=parts))
         request = GenerateRequest(

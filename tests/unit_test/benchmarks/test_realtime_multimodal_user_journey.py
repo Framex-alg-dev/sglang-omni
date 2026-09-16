@@ -60,8 +60,8 @@ def test_number_one_gesture_case_has_visual_action_expectations() -> None:
         "number_one_gesture",
     ]
     assert sum_case["expected_reply_groups"] == [["三", "3", "three"]]
-    assert "expected_action_candidates" not in sum_case
-    assert sum_case["expected_action_categories"] == ["01"]
+    assert sum_case["expected_action_candidates"] == ["260"]
+    assert sum_case["expected_action_categories"] == ["31"]
 
 
 def test_number_one_gesture_scene_is_renderable() -> None:

@@ -8,6 +8,7 @@ or differently configured clients cannot remove the safety boundaries.
 from __future__ import annotations
 
 from dataclasses import replace
+from .action_policy import proactive_selection_instruction
 
 from sglang_omni.serve.realtime.proactive.models import ProactiveScenePolicy
 from sglang_omni.serve.realtime.runtime_prompt_overrides import (
@@ -41,13 +42,12 @@ _POLICIES = {
             "event. Do not describe actions."
         ),
         default_action_guidance_zh=(
-            "动作意图为首次问候。动作范围以挥手、点头、致意或其他具有明确问候"
-            "含义的友好动作为主。保持当前姿态，动作清晰可见且幅度适中。"
+            "场景目标为首次建立交流。优先体现角色自身风格，不限定为问候手势；"
+            "没有合适风格动作时才用允许的挥手、点头或致意兜底。"
         ),
         default_action_guidance_en=(
-            "The action intent is a first greeting. Prefer a wave, nod, salutation, or "
-            "another clearly friendly greeting while preserving the current pose and "
-            "using a clear, moderate motion."
+            "Open the interaction in the character's own style. A permitted wave, nod "
+            "or salutation is only a fallback when no suitable style-specific action fits."
         ),
     ),
     IDLE_TIMEOUT_TRIGGER: ProactiveScenePolicy(
@@ -67,13 +67,12 @@ _POLICIES = {
             "or activity. Do not reuse the prior reply topic or describe actions."
         ),
         default_action_guidance_zh=(
-            "动作意图为低打扰提醒。优先选择轻柔点头、轻微抬手、自然关注用户或"
-            "其他幅度较小的提醒动作。保持当前姿态，动作轻量且清晰。"
+            "场景目标为低打扰提醒。优先体现角色风格，保持轻量；没有合适风格动作"
+            "时才使用允许的轻柔点头或自然关注动作兜底。"
         ),
         default_action_guidance_en=(
-            "The action intent is a low-disturbance reminder. Prefer a gentle nod, small "
-            "hand motion, attentive response, or another subtle reminder that preserves "
-            "the current pose."
+            "Prioritize the character's style for a low-disturbance reminder. A permitted "
+            "gentle nod or subtle attentive response is only a fallback."
         ),
     ),
     USER_RETURNED_TRIGGER: ProactiveScenePolicy(
@@ -93,13 +92,12 @@ _POLICIES = {
             "not infer why they left, where they went, or what happened. Do not describe actions."
         ),
         default_action_guidance_zh=(
-            "动作意图为欢迎用户重新出现。优先选择挥手、致意、轻柔点头、微笑回应"
-            "或自然欢迎手势。保持当前姿态，动作友好、清晰且不过度。"
+            "场景目标为回应用户重新出现。优先体现角色风格；没有合适风格动作时，"
+            "才使用允许的挥手、致意或轻柔点头兜底。"
         ),
         default_action_guidance_en=(
-            "The action intent is to welcome the user back. Prefer a wave, salutation, "
-            "gentle nod, smile response, or natural welcoming gesture while preserving "
-            "the current pose."
+            "Acknowledge the returning user in the character's own style. Use a permitted "
+            "wave, salutation or gentle nod only as a fallback."
         ),
     ),
     CHARACTER_PROACTIVE_TRIGGER: ProactiveScenePolicy(
@@ -145,12 +143,12 @@ _POLICIES = {
             "natural spoken farewell. Do not open a new topic or describe actions."
         ),
         default_action_guidance_zh=(
-            "动作意图为自然告别。优先选择挥手、点头、致意等清晰友好的告别动作，"
-            "并保持当前姿态。"
+            "场景目标为自然告别。优先体现角色风格；没有合适风格动作时才使用允许"
+            "的挥手、点头或致意兜底。"
         ),
         default_action_guidance_en=(
-            "The action intent is a natural farewell. Prefer a wave, nod, salutation, or "
-            "another clear friendly farewell while preserving the current pose."
+            "Express farewell in the character's own style. Use a permitted wave, nod "
+            "or salutation only as a fallback."
         ),
     ),
 }
@@ -161,6 +159,11 @@ def proactive_scene_policy(trigger: str | None) -> ProactiveScenePolicy | None:
     policy = _POLICIES.get(trigger or "")
     if policy is None:
         return None
+    policy = replace(
+        policy,
+        default_action_guidance_zh=(proactive_selection_instruction("zh") + policy.default_action_guidance_zh),
+        default_action_guidance_en=(proactive_selection_instruction("en") + policy.default_action_guidance_en),
+    )
     reply_override = read_runtime_prompt_section(
         "proactive_reply_rules", policy.trigger
     )

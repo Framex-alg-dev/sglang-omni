@@ -7,7 +7,7 @@ import re
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Mapping
 
 
 class IntentShortcutBackoff:
@@ -272,6 +272,8 @@ def _catalog_aliases(candidate: SessionActionCandidate) -> tuple[str, ...]:
 def resolve_unique_explicit_action(
     body_task: str,
     candidates: Iterable[tuple[SessionActionCategory, SessionActionCandidate]],
+    *,
+    aliases_by_candidate_id: Mapping[str, Iterable[str]] | None = None,
 ) -> ExplicitActionRoute | None:
     """Return a route only when a parsed body task names one concrete action.
 
@@ -288,10 +290,13 @@ def resolve_unique_explicit_action(
         return None
     matches: dict[str, ExplicitActionRoute] = {}
     for category, candidate in candidates:
+        aliases = list(_catalog_aliases(candidate))
+        if aliases_by_candidate_id is not None:
+            aliases.extend(aliases_by_candidate_id.get(candidate.candidate_id, ()))
         matched_alias = next(
             (
                 alias
-                for alias in _catalog_aliases(candidate)
+                for alias in aliases
                 if _normalized_label(alias) == normalized_task
             ),
             None,

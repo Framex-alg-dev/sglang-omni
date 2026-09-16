@@ -16,6 +16,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.serve.realtime.components import compose_components
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,12 @@ class ProvisionalReplyComponent:
                 "seq": state.delta_count,
                 "delta": delta,
             }
-            await self.send(payload)
+            # Keep V11 evidence in the local buffer for numeric selection only.
+            if not (
+                turn.intent is not None
+                and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+            ):
+                await self.send(payload)
             if state.status == "promoted" and state.official_first_delta_after_commit_ms is None:
                 state.official_first_delta_after_commit_ms = self._after_commit_ms(turn)
             if is_first_delta:
@@ -158,16 +164,20 @@ class ProvisionalReplyComponent:
             state.provisional_done_after_commit_ms = self._after_commit_ms(turn)
             if state.status == "pending":
                 was_pending = True
-                await self.send(
-                    {
-                        "type": "response.provisional.text.done",
-                        "session_id": self.session_id,
-                        "turn_id": turn.turn_id,
-                        "response_id": state.response_id,
-                        "provisional_id": state.response_id,
-                        "text": text,
-                    }
-                )
+                if not (
+                    turn.intent is not None
+                    and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+                ):
+                    await self.send(
+                        {
+                            "type": "response.provisional.text.done",
+                            "session_id": self.session_id,
+                            "turn_id": turn.turn_id,
+                            "response_id": state.response_id,
+                            "provisional_id": state.response_id,
+                            "text": text,
+                        }
+                    )
             elif not state.official_done:
                 state.official_done = True
                 should_send_official_done = True
@@ -248,6 +258,37 @@ class ProvisionalReplyComponent:
         return text, status, round(
             (time.perf_counter() - wait_started) * 1000.0,
             3,
+        )
+
+    async def _suppress_provisional_reply_content(
+        self,
+        turn: TurnBuffer,
+        state: ProvisionalReplyState,
+        *,
+        reason: str,
+    ) -> None:
+        """Keep an internal reasoning result out of the public reply stream."""
+
+        async with state.lock:
+            suppressed_text = "".join(state.text_parts)
+            suppressed_delta_count = state.delta_count
+            tts_state = state.tts_state
+            state.text_parts.clear()
+            state.delta_count = 0
+            state.complete_text = ""
+            state.tts_state = None
+        await self._abort_reply_tts(tts_state)
+        emit_structured_log(
+            "reply",
+            "provisional_reply_content_suppressed",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            response_id=state.response_id,
+            reason=reason,
+            suppressed_chars=len(suppressed_text),
+            suppressed_delta_count=suppressed_delta_count,
         )
 
     @staticmethod

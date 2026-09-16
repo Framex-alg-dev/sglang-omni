@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from sglang_omni.serve.realtime.turn_intent import infer_turn_intent
+from sglang_omni.serve.realtime.turn_intent import (
+    VISUAL_GESTURE_ANSWER_GATE,
+    infer_turn_intent,
+)
 
 import asyncio
 import hashlib
@@ -1041,6 +1044,7 @@ class TurnPipeline:
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER
                     and intent is not None
+                    and intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
                     and not (intent.face and intent.body_mode == "none")
                 ):
                     action = result[0]
@@ -1477,16 +1481,24 @@ class TurnPipeline:
             if reply_history_route_task is not None:
                 reply_history_route = await reply_history_route_task
 
+            visual_gesture_answer = bool(
+                turn.intent is not None
+                and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+            )
             preserve_language_reply_on_unsupported_action = bool(
                 fusion_reply
                 and turn.turn_origin == TURN_ORIGIN_USER
                 and reply_history_route is not None
                 and reply_history_route.reply_mode == REPLY_MODE_LANGUAGE_REQUIRED
+                and not visual_gesture_answer
             )
             pure_action_reply = bool(
-                fusion_reply
-                and reply_history_route is not None
-                and reply_history_route.reply_mode == REPLY_MODE_PURE_ACTION
+                visual_gesture_answer
+                or (
+                    fusion_reply
+                    and reply_history_route is not None
+                    and reply_history_route.reply_mode == REPLY_MODE_PURE_ACTION
+                )
             )
             eligible_turn_candidates = self._filter_turn_action_candidates(
                 turn, self.candidates
@@ -1503,12 +1515,12 @@ class TurnPipeline:
                 has_action_output="action" in self.modalities,
                 candidates=eligible_turn_candidates,
             )
-            if turn.turn_origin == TURN_ORIGIN_USER:
+            if turn.turn_origin == TURN_ORIGIN_USER and not visual_gesture_answer:
                 numeric_reply_route = replace(
                     numeric_reply_route, enabled=False,
                     reason="disabled_action_first_policy",
                 )
-            if pure_action_reply and numeric_reply_route.enabled:
+            if pure_action_reply and numeric_reply_route.enabled and not visual_gesture_answer:
                 numeric_reply_route = replace(
                     numeric_reply_route,
                     enabled=False,
@@ -1618,7 +1630,7 @@ class TurnPipeline:
                             f"{self.session_id}-{turn.turn_id}"
                         ),
                     )
-                elif pure_action_reply:
+                elif pure_action_reply and not visual_gesture_answer:
                     reply_task = track_branch(
                         self._run_pure_action_short_reply(
                             turn,
@@ -1632,6 +1644,12 @@ class TurnPipeline:
                         ),
                     )
                 else:
+                    generated_reply_route = reply_history_route
+                    if visual_gesture_answer and generated_reply_route is not None:
+                        generated_reply_route = replace(
+                            generated_reply_route,
+                            reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+                        )
                     reply_task = track_branch(
                         self._run_generated_reply(
                             turn,
@@ -1640,7 +1658,7 @@ class TurnPipeline:
                             current_image_roles,
                             None,
                             provisional=provisional_state,
-                            history_route=reply_history_route,
+                            history_route=generated_reply_route,
                         ),
                         name=(
                             f"session-provisional-reply-{self.session_id}-"
@@ -1832,6 +1850,13 @@ class TurnPipeline:
                     and not preserve_language_reply_on_unsupported_action
                 )
                 if provisional_state is not None:
+                    if visual_gesture_answer and reply_task is not None:
+                        await reply_task
+                        await self._suppress_provisional_reply_content(
+                            turn,
+                            provisional_state,
+                            reason="visual_gesture_answer",
+                        )
                     if suppress_reply_for_unsupported_action:
                         unsupported_reason = (
                             "category_unsupported"
@@ -1915,6 +1940,8 @@ class TurnPipeline:
             )
             if reply_task is not None and not suppress_reply_for_unsupported_action:
                 reply_text, reply_timing = await reply_task
+                if visual_gesture_answer:
+                    reply_text = ""
                 if provisional_state is not None:
                     reply_timing = self._provisional_reply_timing(provisional_state)
             elif provisional_state is not None:

@@ -28,6 +28,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCategory,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -211,9 +212,15 @@ class ReplyGenerationComponent:
             created_after_commit_ms = self._after_commit_ms(turn)
         else:
             created_after_commit_ms = provisional.created_after_commit_ms
-        tts_state = self._start_reply_tts(
-            turn, response_id=response_id, provisional=provisional
-        )
+        # V11 output is private evidence for gesture selection, not speech.
+        # Do not synthesize it speculatively and rely on a later abort.
+        if not (
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+        ):
+            tts_state = self._start_reply_tts(
+                turn, response_id=response_id, provisional=provisional
+            )
         self._register_turn_request(turn, request_id)
         emit_structured_log(
             "reply",

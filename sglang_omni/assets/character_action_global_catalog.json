@@ -1590,7 +1590,10 @@
           "source_label": "数字一手势",
           "short_definition": "单手食指伸直，其余四指弯曲收拢。",
           "proactive_expression": "数字人回复的主要答案为整数1，或明确播报数量为1时，用数字一手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字一手势时触发，例如“比个1”“用手表示数字一”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字一手势时触发，例如“比个1”“用手表示数字一”。",
+          "reaction_sources": [
+            "user_camera"
+          ]
         },
         {
           "candidate_id": "259",
@@ -1606,7 +1609,10 @@
           "source_label": "数字三手势",
           "short_definition": "单手食指、中指和无名指伸直，拇指和小指弯曲收拢。",
           "proactive_expression": "数字人回复的主要答案为整数3，或明确播报数量为3时，用数字三手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字三手势时触发，例如“比个3”“用手表示数字三”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字三手势时触发，例如“比个3”“用手表示数字三”。",
+          "reaction_sources": [
+            "user_camera"
+          ]
         },
         {
           "candidate_id": "261",
@@ -1630,7 +1636,10 @@
           "source_label": "数字六手势",
           "short_definition": "单手拇指和小指伸直，其余三指弯曲收拢。",
           "proactive_expression": "数字人回复的主要答案为整数6，或明确播报数量为6时，用数字六手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字六手势时触发，例如“比个6”“用手表示数字六”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字六手势时触发，例如“比个6”“用手表示数字六”。",
+          "reaction_sources": [
+            "user_camera"
+          ]
         },
         {
           "candidate_id": "264",
@@ -1718,7 +1727,11 @@
           "source_label": "单手比耶",
           "short_definition": "食指中指伸出成V，其余手指收拢的比耶手势。",
           "proactive_expression": "适用于表达开心、庆祝、胜利、传递轻松愉快氛围时触发，例如“太棒啦”、“成功啦”、“比个耶”",
-          "user_reaction_expression": "适用于分享喜事、庆祝胜利、要求比耶手势互动时触发，例如“帮我比个耶”、“比个耶”"
+          "user_reaction_expression": "适用于分享喜事、庆祝胜利、要求比耶手势互动时触发，例如“帮我比个耶”、“比个耶”",
+          "reaction_sources": [
+            "language",
+            "user_camera"
+          ]
         },
         {
           "candidate_id": "275",
@@ -1822,7 +1835,11 @@
           "source_label": "单手飞吻",
           "short_definition": "指尖轻触唇边，随即向前扬手抛出的飞吻动作。",
           "proactive_expression": "适用于表达亲昵、送出甜蜜祝福、温柔道别时触发，例如“送你一个飞吻”、“爱你哦”",
-          "user_reaction_expression": "适用于索要飞吻、期待亲昵互动，要求做飞吻动作时触发，例如“给我一个飞吻吧”、“给我飞吻”"
+          "user_reaction_expression": "适用于索要飞吻、期待亲昵互动，要求做飞吻动作时触发，例如“给我一个飞吻吧”、“给我飞吻”",
+          "reaction_sources": [
+            "language",
+            "user_camera"
+          ]
         }
       ]
     },
@@ -1841,7 +1858,21 @@
           "source_label": "单手挥手",
           "short_definition": "单手抬起位于身前或举高，手掌面向外部左右摆动的打招呼动作。",
           "proactive_expression": "适用于问候用户、开场打招呼、结束对话道别、回应用户问候时触发，例如“你好，欢迎来到直播间”“再见啦”",
-          "user_reaction_expression": "适用于问好、道别、挥手打招呼，要求挥手回应时触发，例如“嗨”“拜拜”“你好”"
+          "user_reaction_expression": "适用于问好、道别、挥手打招呼，要求挥手回应时触发，例如“嗨”“拜拜”“你好”",
+          "aliases": [
+            "挥手",
+            "挥挥手",
+            "单手挥手",
+            "挥手打招呼",
+            "挥挥手打招呼",
+            "挥挥手跟我打个招呼",
+            "跟我挥手打招呼",
+            "打个招呼"
+          ],
+          "reaction_sources": [
+            "language",
+            "user_camera"
+          ]
         },
         {
           "candidate_id": "289",
@@ -1849,7 +1880,10 @@
           "source_label": "双手挥手",
           "short_definition": "双手抬起位于身前或举高，手掌面向外部左右摆动的打招呼动作。",
           "proactive_expression": "适用于热情开场问候、热烈道别、隆重欢迎用户时触发，例如“欢迎欢迎，很高兴见到你！”“拜拜，下次再见”",
-          "user_reaction_expression": "适用于热情问好、热烈告别，期待双手挥手回应时触发，例如“嗨嗨！”“再见啦～”"
+          "user_reaction_expression": "适用于热情问好、热烈告别，期待双手挥手回应时触发，例如“嗨嗨！”“再见啦～”",
+          "reaction_sources": [
+            "language"
+          ]
         }
       ]
     },
@@ -1961,7 +1995,11 @@
           "candidate_id": "304",
           "action_id": "304",
           "source_label": "鼓掌",
-          "short_definition": "双臂抬至胸腹前，双手掌心两两相对交替往复拍击，拍击幅度中等。"
+          "short_definition": "双臂抬至胸腹前，双手掌心两两相对交替往复拍击，拍击幅度中等。",
+          "user_reaction_expression": "适用于用户分享值得祝贺的成功、获奖、升职、通过考试等明确喜讯时，以鼓掌自然回应。",
+          "reaction_sources": [
+            "language"
+          ]
         },
         {
           "candidate_id": "305",
@@ -2043,7 +2081,11 @@
           "candidate_id": "314",
           "action_id": "314",
           "source_label": "合十感谢",
-          "short_definition": "双手掌心相合，置于胸前微微俯首的感谢姿态。"
+          "short_definition": "双手掌心相合，置于胸前微微俯首的感谢姿态。",
+          "user_reaction_expression": "适用于用户直接向数字人表达感谢时，以合十姿态自然回应。",
+          "reaction_sources": [
+            "language"
+          ]
         },
         {
           "candidate_id": "315",
@@ -3040,7 +3082,10 @@
           "candidate_id": "460",
           "action_id": "460",
           "source_label": "双手抱头惊讶",
-          "short_definition": "双手抱住头部两侧，身体略微后缩的极度惊讶动作。"
+          "short_definition": "双手抱住头部两侧，身体略微后缩的极度惊讶动作。",
+          "reaction_sources": [
+            "user_camera"
+          ]
         },
         {
           "candidate_id": "461",

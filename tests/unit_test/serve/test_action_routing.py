@@ -1,3 +1,5 @@
+import pytest
+
 from sglang_omni.serve.realtime.action.routing import (
     choose_category_width,
     complete_reply_may_contain_numeric_answer,
@@ -58,6 +60,23 @@ def test_explicit_route_requires_equality_and_one_unique_candidate() -> None:
         )
         is None
     )
+
+
+def test_explicit_route_accepts_versioned_catalog_aliases() -> None:
+    candidate = _candidate("288", "单手挥手")
+    category = _category(candidate)
+
+    route = resolve_unique_explicit_action(
+        "挥挥手跟我打个招呼",
+        [(category, candidate)],
+        aliases_by_candidate_id={
+            "288": ("挥挥手跟我打个招呼",),
+        },
+    )
+
+    assert route is not None
+    assert route.candidate.candidate_id == "288"
+    assert route.matched_alias == "挥挥手跟我打个招呼"
 
 
 def test_category_width_uses_top1_only_for_confident_prewarmed_winner() -> None:
@@ -288,3 +307,51 @@ def test_complete_reply_numeric_gate_is_broad_but_bounded() -> None:
         assert complete_reply_may_contain_numeric_answer(text)
     for text in ("没有明确的答案", "共有 11 个", "结果为 3.5"):
         assert not complete_reply_may_contain_numeric_answer(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("加起来是数字三", 3),
+        ("1+2=3", 3),
+        ("The answer is three.", 3),
+        ("3", 3),
+        ("今天是 2026 年 9 月 16 日。", None),
+        ("结果是 3%。", None),
+        ("结果是 3.5。", None),
+        ("结果是 -3。", None),
+        ("答案是 11。", None),
+        ("答案可能是三或者四。", None),
+    ],
+)
+def test_explicit_primary_answer_number_is_strict(text: str, expected: int | None) -> None:
+    from sglang_omni.serve.realtime.action.numeric_reply import (
+        _explicit_primary_answer_number,
+    )
+
+    assert _explicit_primary_answer_number(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("VISUAL_ARITHMETIC=add,2,2", (2, 2)),
+        (" visual_arithmetic = ADD, 10, 0 ", (10, 0)),
+        ("VISUAL_ARITHMETIC=add,11,2", None),
+        ("答案：VISUAL_ARITHMETIC=add,1,2", (1, 2)),
+        ("VISUAL_ARITHMETIC=add,1,2。", (1, 2)),
+        (
+            "VISUAL_ARITHMETIC=add,1,2 / VISUAL_ARITHMETIC=add,2,3",
+            None,
+        ),
+    ],
+)
+def test_explicit_visual_arithmetic_operands_is_strict(
+    text: str,
+    expected: tuple[int, int] | None,
+) -> None:
+    from sglang_omni.serve.realtime.action.numeric_reply import (
+        _explicit_visual_arithmetic_operands,
+    )
+
+    assert _explicit_visual_arithmetic_operands(text) == expected

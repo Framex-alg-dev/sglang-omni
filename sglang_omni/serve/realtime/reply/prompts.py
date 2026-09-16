@@ -54,6 +54,41 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     hook = getattr(multimodal, "emit_structured_log", _base_emit_structured_log)
     return hook(log_type, event, **fields)
 class ReplyPromptComponent:
+    def _visual_arithmetic_operand_output_part(self) -> dict[str, str]:
+        return {
+            "type": "text",
+            "text": self._prompt(
+                zh=(
+                    "[服务端内部视觉算术输出约束]\n"
+                    "本段只适用于用户要求识别两个数字手势并做加法、且要求用手势回答的当前请求；"
+                    "其他请求忽略本段并遵循前述规则。先过滤没有刻意数字手型的画面：没有举手、"
+                    "手已放下、空白、遮挡和过渡画面都不表示任何数字，绝不能把它们识别成 0；"
+                    "只有清晰、刻意做出的数字手势才是操作数。将过滤后最先和最后的清晰数字手势"
+                    "填入两个操作数槽位，不把同一持续手势的重复采样算成额外展示。若过滤后只出现"
+                    "一个稳定清晰数字，且用户说‘这个加这个’，该数字同时填入两个槽位，例如只清晰"
+                    "看到数字 2 时输出 2,2。你只负责识别操作数，不要计算。只输出且必须严格输出："
+                    "VISUAL_ARITHMETIC=add,A,B，其中 A 和 B 均为 0 到 10 的整数；不得输出其他内容。"
+                ),
+                en=(
+                    "[Server-internal visual arithmetic output contract]\n"
+                    "This block applies only when the current request asks to identify two "
+                    "numeric hand gestures, add them, and answer with a gesture. Ignore this "
+                    "block for every other request and follow the preceding rules. First filter "
+                    "frames with no deliberately formed numeric handshape: no raised hand, a "
+                    "lowered hand, blank, occluded, and transition frames represent no number "
+                    "and must never be read as zero. Only a clear, deliberate numeric gesture is "
+                    "an operand. Fill the two operand slots from the first and last clear numeric "
+                    "gestures after filtering; duplicate samples of one continuously held gesture "
+                    "are not additional displays. If only one stable clear number remains and the "
+                    "user says 'this plus this', put that number in both slots; for example, if "
+                    "only number 2 is clearly visible, output 2,2. "
+                    "Identify operands only; do not calculate. Output exactly "
+                    "VISUAL_ARITHMETIC=add,A,B, where A and B are integers from 0 through 10, "
+                    "and output nothing else."
+                ),
+            ),
+        }
+
     def _pure_action_short_reply_part(self) -> dict[str, str]:
         return {
             "type": "text",

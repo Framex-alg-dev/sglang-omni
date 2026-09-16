@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +27,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     ProvisionalReplyState,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import (
     emit_structured_log as _base_emit_structured_log,
 )
@@ -32,6 +35,82 @@ from sglang_omni.utils.structured_logs import (
 
 NUMERIC_REPLY_ACTION_STAGE = "numeric_reply_action"
 NUMERIC_REPLY_ACTION_TIMEOUT_SECONDS = 4.0
+
+_ANSWER_NUMBER_TOKEN = (
+    r"(?:(?<![\d.])(?:10|[0-9])(?![\d.])|零|〇|一|二|两|三|四|五|六|七|八|九|十|"
+    r"zero|one|two|three|four|five|six|seven|eight|nine|ten)"
+)
+_PRIMARY_ANSWER_PATTERNS = (
+    re.compile(
+        rf"(?:答案|结果|总数|合计|加起来|等于|answer|result|total|equals?)"
+        rf"\s*(?:是|为|等于|is|equals?|=|：|:)*\s*(?:数字\s*)?"
+        rf"(?P<number>{_ANSWER_NUMBER_TOKEN})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?:=|＝)\s*(?:数字\s*)?(?P<number>{_ANSWER_NUMBER_TOKEN})",
+        re.IGNORECASE,
+    ),
+)
+_STANDALONE_ANSWER_RE = re.compile(
+    rf"^\s*(?:答案|结果|数字|number)?\s*(?:是|为|is|:|：)?\s*"
+    rf"(?P<number>{_ANSWER_NUMBER_TOKEN})\s*[。.!！]?\s*$",
+    re.IGNORECASE,
+)
+_AMBIGUOUS_ANSWER_RE = re.compile(
+    rf"{_ANSWER_NUMBER_TOKEN}\s*(?:或|或者|还是|/|or)\s*{_ANSWER_NUMBER_TOKEN}",
+    re.IGNORECASE,
+)
+_VISUAL_ARITHMETIC_OPERANDS_RE = re.compile(
+    r"VISUAL_ARITHMETIC\s*=\s*add\s*,\s*(?P<first>10|[0-9])"
+    r"\s*,\s*(?P<last>10|[0-9])",
+    re.IGNORECASE,
+)
+_NUMBER_VALUE = {
+    "0": 0, "零": 0, "〇": 0, "zero": 0,
+    "1": 1, "一": 1, "one": 1,
+    "2": 2, "二": 2, "两": 2, "two": 2,
+    "3": 3, "三": 3, "three": 3,
+    "4": 4, "四": 4, "four": 4,
+    "5": 5, "五": 5, "five": 5,
+    "6": 6, "六": 6, "six": 6,
+    "7": 7, "七": 7, "seven": 7,
+    "8": 8, "八": 8, "eight": 8,
+    "9": 9, "九": 9, "nine": 9,
+    "10": 10, "十": 10, "ten": 10,
+}
+
+
+def _explicit_primary_answer_number(text: str) -> int | None:
+    """Extract an explicit 0-10 answer, never a number from the question."""
+
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    if _AMBIGUOUS_ANSWER_RE.search(normalized):
+        return None
+    for pattern in _PRIMARY_ANSWER_PATTERNS:
+        matches = set()
+        for match in pattern.finditer(normalized):
+            suffix = normalized[match.end("number"):].lstrip()
+            if suffix.startswith(("%", "percent", "％")):
+                continue
+            matches.add(_NUMBER_VALUE[match.group("number")])
+        if len(matches) == 1:
+            return next(iter(matches))
+    standalone = _STANDALONE_ANSWER_RE.fullmatch(normalized)
+    if standalone is not None:
+        return _NUMBER_VALUE[standalone.group("number")]
+    return None
+
+
+def _explicit_visual_arithmetic_operands(text: str) -> tuple[int, int] | None:
+    """Parse the server-owned visual-addition contract without accepting prose."""
+
+    normalized = unicodedata.normalize("NFKC", text)
+    matches = list(_VISUAL_ARITHMETIC_OPERANDS_RE.finditer(normalized))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    return int(match.group("first")), int(match.group("last"))
 
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
@@ -119,46 +198,110 @@ class NumericReplyActionComponent:
             candidate_count=candidate_count,
             reply_wait_ms=reply_wait_ms,
         )
-        try:
-            decision = await asyncio.wait_for(
-                self._score_numeric_reply_action(
-                    turn,
-                    original_question=original_question,
-                    complete_reply=complete_reply,
-                    avatar_state=avatar_state,
-                    candidates=route.candidates,
-                    request_base=turn.request_base,
-                ),
-                timeout=NUMERIC_REPLY_ACTION_TIMEOUT_SECONDS,
+        visual_gesture_answer = (
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+        )
+        operand_values = (
+            _explicit_visual_arithmetic_operands(complete_reply)
+            if visual_gesture_answer
+            else None
+        )
+        direct_number = (
+            sum(operand_values)
+            if operand_values is not None
+            else (
+                _explicit_primary_answer_number(complete_reply)
+                if visual_gesture_answer
+                else None
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            fallback_reason = (
-                "timeout" if isinstance(exc, TimeoutError) else "scoring_error"
+        )
+        direct_candidate = next(
+            (item for item in route.candidates if item.value == direct_number),
+            None,
+        )
+        if direct_candidate is not None:
+            candidate = direct_candidate.candidate
+            decision = NumericReplyActionDecision(
+                action={
+                    "candidate_id": candidate.candidate_id,
+                    "action_id": candidate.action_id,
+                    **(
+                        {"category_id": candidate.category_id}
+                        if candidate.category_id
+                        else {}
+                    ),
+                    "execution_binding": dict(candidate.execution_binding),
+                    "execute": candidate.action_id != "no_action",
+                    "support_status": "supported",
+                    "fallback_applied": False,
+                },
+                scores=[],
+                elapsed_ms=0.0,
+                candidate_count=candidate_count,
+                selected_number=direct_number,
+                fallback_reason=None,
             )
-            route_context = {
-                "routed": True,
-                "candidate_count": candidate_count,
-                "reply_wait_ms": reply_wait_ms,
-                "fallback_reason": fallback_reason,
-            }
             emit_structured_log(
-                "error",
-                "numeric_reply_action_failed",
-                level="warning",
+                "action",
+                "numeric_reply_action_resolved_deterministically",
                 session_id=self.session_id,
                 turn_id=turn.turn_id,
                 trace_id=turn.trace_id,
                 logical_request_id=turn.request_base,
+                selected_number=direct_number,
+                selected_candidate_id=candidate.candidate_id,
+            )
+        elif operand_values is not None:
+            decision = NumericReplyActionDecision(
+                action=None,
+                scores=[],
+                elapsed_ms=0.0,
                 candidate_count=candidate_count,
-                fallback_reason=fallback_reason,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
+                selected_number=direct_number,
+                fallback_reason="computed_result_not_representable",
             )
-            return NumericReplyActionResolution(
-                None, None, route_context, {}, None
-            )
+        else:
+            try:
+                decision = await asyncio.wait_for(
+                    self._score_numeric_reply_action(
+                        turn,
+                        original_question=original_question,
+                        complete_reply=complete_reply,
+                        avatar_state=avatar_state,
+                        candidates=route.candidates,
+                        request_base=turn.request_base,
+                    ),
+                    timeout=NUMERIC_REPLY_ACTION_TIMEOUT_SECONDS,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                fallback_reason = (
+                    "timeout" if isinstance(exc, TimeoutError) else "scoring_error"
+                )
+                route_context = {
+                    "routed": True,
+                    "candidate_count": candidate_count,
+                    "reply_wait_ms": reply_wait_ms,
+                    "fallback_reason": fallback_reason,
+                }
+                emit_structured_log(
+                    "error",
+                    "numeric_reply_action_failed",
+                    level="warning",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    candidate_count=candidate_count,
+                    fallback_reason=fallback_reason,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                return NumericReplyActionResolution(
+                    None, None, route_context, {}, None
+                )
 
         route_context = {
             "routed": True,
@@ -166,6 +309,18 @@ class NumericReplyActionComponent:
             "reply_wait_ms": reply_wait_ms,
             "scoring_ms": decision.elapsed_ms,
             "selected_number": decision.selected_number,
+            "selection_method": (
+                "structured_operand_sum"
+                if operand_values is not None
+                else (
+                    "explicit_reply_answer"
+                    if direct_candidate is not None
+                    else "ppl"
+                )
+            ),
+            "operand_values": (
+                list(operand_values) if operand_values is not None else None
+            ),
             "fallback_reason": decision.fallback_reason,
         }
         selection_context: dict[str, Any] = {}

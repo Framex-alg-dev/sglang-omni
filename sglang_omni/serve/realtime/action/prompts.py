@@ -7,6 +7,7 @@ prompts, and action-history policy from protocol and reply orchestration.
 from __future__ import annotations
 
 from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
+from sglang_omni.serve.realtime.proactive.action_policy import proactive_selection_instruction
 
 import asyncio
 from collections import OrderedDict
@@ -230,6 +231,7 @@ class ActionPromptComponent:
             for category in self.categories
         )
 
+
     def _default_fallback_candidate_for_turn(
         self,
         turn: TurnBuffer,
@@ -374,6 +376,7 @@ class ActionPromptComponent:
         candidates: list[SessionActionCandidate],
         turn_origin: str = "user",
         definition_mode: Literal["contextual", "visual"] = "contextual",
+        persona_first: bool = False,
     ) -> str:
         categories = category if isinstance(category, list) else [category]
         if self.global_action_catalog is not None and turn_origin == "user" and len(categories) > 1:
@@ -391,6 +394,7 @@ class ActionPromptComponent:
             getattr(self, "action_locale", None),
             turn_origin,
             definition_mode,
+            persona_first,
             tuple((c.category_id, c.source_label, c.short_definition) for c in categories),
             tuple(
                 (
@@ -420,6 +424,7 @@ class ActionPromptComponent:
             candidates,
             turn_origin,
             definition_mode,
+            persona_first,
         )
         cache[key] = prompt
         if len(cache) > 64:
@@ -432,10 +437,11 @@ class ActionPromptComponent:
         candidates: list[SessionActionCandidate],
         turn_origin: str = "user",
         definition_mode: Literal["contextual", "visual"] = "contextual",
+        persona_first: bool = False,
     ) -> str:
         categories = category if isinstance(category, list) else [category]
         if self.global_action_catalog is not None:
-            if len(categories) == 1 and definition_mode == "contextual":
+            if len(categories) == 1 and definition_mode == "contextual" and not persona_first:
                 return self.global_action_catalog.child_system_prompt_for(
                     self.action_locale, categories[0].category_id, turn_origin
                 )
@@ -462,7 +468,10 @@ class ActionPromptComponent:
                         ),
                     )
                 )
-            lines.append(child_unsupported_policy(self.action_locale))
+            lines.append(
+                proactive_selection_instruction(self.action_language)
+                if persona_first else child_unsupported_policy(self.action_locale)
+            )
             lines.extend(
                 self._format_candidate_for_prompt(
                     item,
@@ -483,7 +492,7 @@ class ActionPromptComponent:
                     ),
                 )
             )
-            return mixed_instruction_policy(self.action_language, "body") + "\n\n" + "\n".join(lines)
+            return ("" if persona_first else mixed_instruction_policy(self.action_language, "body")) + "\n\n" + "\n".join(lines)
         if self.action_language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the following set.",
@@ -598,6 +607,7 @@ class ActionPromptComponent:
         self,
         category: SessionActionCategory | list[SessionActionCategory],
         candidates: list[SessionActionCandidate],
+        persona_first: bool = False,
     ) -> str:
         if self.global_action_catalog is None:
             return ""
@@ -608,6 +618,11 @@ class ActionPromptComponent:
         category_ids = self._action_prompt(zh="、", en=", ").join(
             item.category_id for item in categories
         )
+        if persona_first:
+            return proactive_selection_instruction(self.action_language) + self._action_prompt(
+                zh=f"本轮允许的具体动作：{allowed_ids}。\n",
+                en=f"Allowed concrete actions for this turn: {allowed_ids}.\n",
+            )
         if len(categories) == 1 and self._is_system_accompaniment_category(categories[0]):
             return self._action_prompt(
                 zh=(

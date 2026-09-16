@@ -40,6 +40,14 @@ UNSUPPORTED_CHILD_SCORE_ID = "000"
 UNSUPPORTED_SOURCE_LABEL = "不支持的动作"
 CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT = "reply_accompaniment"
 CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT = "silent_accompaniment"
+CANDIDATE_REACTION_SOURCE_LANGUAGE = "language"
+CANDIDATE_REACTION_SOURCE_USER_CAMERA = "user_camera"
+SUPPORTED_CANDIDATE_REACTION_SOURCES = frozenset(
+    {
+        CANDIDATE_REACTION_SOURCE_LANGUAGE,
+        CANDIDATE_REACTION_SOURCE_USER_CAMERA,
+    }
+)
 EXCLUSIVE_CATEGORY_SEMANTIC_TAGS = frozenset(
     {
         CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
@@ -406,6 +414,8 @@ class GlobalActionCandidate:
     category_id: str
     proactive_expression: str = ""
     user_reaction_expression: str = ""
+    aliases: tuple[str, ...] = ()
+    reaction_sources: frozenset[str] = frozenset()
 
     def effective_definition(self, turn_origin: str) -> str:
         contextual = (
@@ -1102,6 +1112,35 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 raise ValueError(
                     f"{child_prefix}.user_reaction_expression must be a string"
                 )
+            raw_aliases = raw_child.get("aliases", [])
+            if not isinstance(raw_aliases, list):
+                raise ValueError(f"{child_prefix}.aliases must be a string list")
+            aliases = tuple(
+                _required_string(value, f"{child_prefix}.aliases[{index}]")
+                for index, value in enumerate(raw_aliases)
+            )
+            if len(set(aliases)) != len(aliases):
+                raise ValueError(f"{child_prefix}.aliases must not contain duplicates")
+            raw_reaction_sources = raw_child.get("reaction_sources", [])
+            if not isinstance(raw_reaction_sources, list):
+                raise ValueError(
+                    f"{child_prefix}.reaction_sources must be a string list"
+                )
+            reaction_sources = frozenset(
+                _required_string(
+                    value,
+                    f"{child_prefix}.reaction_sources[{index}]",
+                )
+                for index, value in enumerate(raw_reaction_sources)
+            )
+            unsupported_reaction_sources = (
+                reaction_sources - SUPPORTED_CANDIDATE_REACTION_SOURCES
+            )
+            if unsupported_reaction_sources:
+                raise ValueError(
+                    f"{child_prefix}.reaction_sources contains unsupported values: "
+                    + ", ".join(sorted(unsupported_reaction_sources))
+                )
             if candidate_id in category_candidate_ids:
                 raise ValueError(
                     "duplicate global candidate_id within category "
@@ -1135,6 +1174,8 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 category_id=category_id,
                 proactive_expression=proactive_expression.strip(),
                 user_reaction_expression=user_reaction_expression.strip(),
+                aliases=aliases,
+                reaction_sources=reaction_sources,
             )
             children.append(child)
             candidate_occurrences_by_id.setdefault(candidate_id, []).append(
@@ -1273,6 +1314,9 @@ __all__ = [
     "DEFAULT_ACTION_PROMPT_LOCALE",
     "CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT",
     "CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT",
+    "CANDIDATE_REACTION_SOURCE_LANGUAGE",
+    "CANDIDATE_REACTION_SOURCE_USER_CAMERA",
+    "SUPPORTED_CANDIDATE_REACTION_SOURCES",
     "UNSUPPORTED_CATEGORY_SCORE_ID",
     "UNSUPPORTED_CHILD_SCORE_ID",
     "UNSUPPORTED_CATEGORY_SHORT_DEFINITION",

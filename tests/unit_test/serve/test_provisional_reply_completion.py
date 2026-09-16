@@ -33,6 +33,7 @@ def _turn():
         turn_id="turn-1",
         trace_id="trace-1",
         request_base="request-1",
+        intent=None,
     )
 
 
