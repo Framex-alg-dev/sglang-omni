@@ -84,3 +84,89 @@ def test_prohibit_and_visual_answer_fail_closed():
     assert decision.body_mode == "prohibit"
     assert decision.visual_scope == "V11"
     assert decision.allows_body is False
+
+
+def test_ambiguous_face_does_not_block_clear_body_action():
+    values = {
+        "IB0": -3.0,
+        "IB1": -0.1,
+        "IB2": -4.0,
+        "IB3": -5.0,
+        "IF0": -0.10,
+        "IF1": -0.11,
+        "IR0": -0.1,
+        "IR1": -0.11,
+        "IR2": -3.0,
+        "IR3": -4.0,
+        "IR4": -5.0,
+        "IR5": -6.0,
+    }
+
+    decision = aggregate_action_decision(
+        [_score(candidate_id, value) for candidate_id, value in values.items()],
+        min_margin=0.1,
+    )
+
+    assert decision.body_mode == "perform"
+    assert decision.body_confident is True
+    assert decision.face_confident is False
+    assert decision.reaction_confident is False
+    assert decision.confident is False
+    assert decision.body_gate_confident is True
+    assert decision.allows_body is True
+
+
+def test_social_reaction_requires_body_and_reaction_confidence():
+    values = {
+        "IB0": -0.10,
+        "IB1": -0.11,
+        "IB2": -3.0,
+        "IB3": -4.0,
+        "IF0": -0.1,
+        "IF1": -2.0,
+        "IR0": -2.0,
+        "IR1": -0.1,
+        "IR2": -3.0,
+        "IR3": -4.0,
+        "IR4": -5.0,
+        "IR5": -6.0,
+    }
+
+    decision = aggregate_action_decision(
+        [_score(candidate_id, value) for candidate_id, value in values.items()],
+        min_margin=0.1,
+    )
+
+    assert decision.body_mode == "none"
+    assert decision.reaction_type == "greeting"
+    assert decision.body_confident is False
+    assert decision.reaction_confident is True
+    assert decision.body_gate_confident is False
+    assert decision.allows_body is False
+
+
+def test_ambiguous_reaction_does_not_block_explicit_body_action():
+    values = {
+        "IB0": -3.0,
+        "IB1": -0.1,
+        "IB2": -4.0,
+        "IB3": -5.0,
+        "IF0": -0.1,
+        "IF1": -2.0,
+        "IR0": -0.10,
+        "IR1": -0.11,
+        "IR2": -3.0,
+        "IR3": -4.0,
+        "IR4": -5.0,
+        "IR5": -6.0,
+    }
+
+    decision = aggregate_action_decision(
+        [_score(candidate_id, value) for candidate_id, value in values.items()],
+        min_margin=0.1,
+    )
+
+    assert decision.body_mode == "perform"
+    assert decision.reaction_confident is False
+    assert decision.body_gate_confident is True
+    assert decision.allows_body is True

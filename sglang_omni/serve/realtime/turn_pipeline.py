@@ -1086,8 +1086,12 @@ class TurnPipeline:
                         face_mode=decision.face_mode,
                         reaction_type=decision.reaction_type,
                         visual_scope=decision.visual_scope,
-                        confidence_margin=decision.min_margin,
-                        low_confidence_fail_closed=not decision.confident,
+                        confidence_margin=decision.body_gate_margin,
+                        low_confidence_fail_closed=(
+                            not decision.body_gate_confident
+                        ),
+                        all_groups_min_margin=decision.min_margin,
+                        all_groups_confident=decision.confident,
                     )
                 else:
                     # The old parser remains authoritative in shadow/off modes.
@@ -1144,7 +1148,8 @@ class TurnPipeline:
                         legacy_reaction_mode=intent.reaction_mode,
                         decision_visual_scope=decision.visual_scope,
                         legacy_visual_scope=intent.visual_scope_gate,
-                        confidence_margin=decision.min_margin,
+                        confidence_margin=decision.body_gate_margin,
+                        all_groups_min_margin=decision.min_margin,
                     )
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER

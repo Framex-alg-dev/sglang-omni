@@ -123,6 +123,14 @@ class ActionDecision:
     face_mode: str
     reaction_type: str
     visual_scope: str = ""
+    body_confident: bool = False
+    face_confident: bool = False
+    reaction_confident: bool = False
+    visual_confident: bool = True
+    body_gate_confident: bool = False
+    body_gate_margin: float | None = None
+    # Retained as an all-groups diagnostic for compatibility. Body delivery
+    # must use body_gate_confident/body_gate_margin instead.
     confident: bool = False
     min_margin: float | None = None
     groups: dict[str, DecisionGroupResult] = field(default_factory=dict)
@@ -130,7 +138,7 @@ class ActionDecision:
     @property
     def allows_body(self) -> bool:
         return (
-            self.confident
+            self.body_gate_confident
             and self.visual_scope != "V11"
             and self.body_mode not in {"prohibit", "capability_query"}
             and (self.body_mode == "perform" or self.reaction_type != "none")
@@ -172,6 +180,41 @@ def aggregate_action_decision(
     }
     if include_visual:
         groups["visual"] = _rank_group(score_by_id, VISUAL_LABELS)
+
+    def margin_is_confident(result: DecisionGroupResult) -> bool:
+        return result.margin is not None and result.margin >= min_margin
+
+    body_confident = margin_is_confident(groups["body"])
+    face_confident = margin_is_confident(groups["face"])
+    reaction_confident = margin_is_confident(groups["reaction"])
+    visual = groups.get("visual")
+    visual_confident = visual is None or margin_is_confident(visual)
+
+    # Body delivery is gated only by groups that participate in the selected
+    # delivery path. In particular, an ambiguous face decision must not block
+    # an otherwise clear body action.
+    body_gate_margins: list[float | None] = []
+    if groups["body"].value == "perform":
+        body_gate_margins.append(groups["body"].margin)
+    elif groups["reaction"].value != "none":
+        # A reaction may synthesize a body action, so require both a confident
+        # reaction and a confident body safety classification.
+        body_gate_margins.extend(
+            (groups["body"].margin, groups["reaction"].margin)
+        )
+    if body_gate_margins and visual is not None:
+        body_gate_margins.append(visual.margin)
+    body_gate_margin = (
+        min(margin for margin in body_gate_margins if margin is not None)
+        if body_gate_margins and all(
+            margin is not None for margin in body_gate_margins
+        )
+        else None
+    )
+    body_gate_confident = bool(
+        body_gate_margin is not None and body_gate_margin >= min_margin
+    )
+
     margins = [
         result.margin for result in groups.values() if result.margin is not None
     ]
@@ -183,6 +226,12 @@ def aggregate_action_decision(
         visual_scope=groups.get(
             "visual", DecisionGroupResult("", "", None)
         ).value,
+        body_confident=body_confident,
+        face_confident=face_confident,
+        reaction_confident=reaction_confident,
+        visual_confident=visual_confident,
+        body_gate_confident=body_gate_confident,
+        body_gate_margin=body_gate_margin,
         confident=bool(smallest is not None and smallest >= min_margin),
         min_margin=smallest,
         groups=groups,
@@ -195,6 +244,12 @@ def decision_as_dict(decision: ActionDecision) -> dict[str, Any]:
         "face_mode": decision.face_mode,
         "reaction_type": decision.reaction_type,
         "visual_scope": decision.visual_scope,
+        "body_confident": decision.body_confident,
+        "face_confident": decision.face_confident,
+        "reaction_confident": decision.reaction_confident,
+        "visual_confident": decision.visual_confident,
+        "body_gate_confident": decision.body_gate_confident,
+        "body_gate_margin": decision.body_gate_margin,
         "confident": decision.confident,
         "min_margin": decision.min_margin,
         "groups": {
