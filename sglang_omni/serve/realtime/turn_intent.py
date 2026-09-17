@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -351,8 +352,25 @@ async def infer_turn_intent(
                 session.client.completion(request, request_id=request_id),
                 timeout=TURN_INTENT_TIMEOUT_SECONDS,
             )
+            raw_output = result.text or ""
+            usage = (
+                result.usage.to_dict()
+                if getattr(result, "usage", None) is not None
+                else None
+            )
+            emit_structured_log(
+                "diagnostic",
+                "turn_intent_generation_completed",
+                session_id=session.session_id,
+                turn_id=getattr(turn, "turn_id", None),
+                request_id=request_id,
+                finish_reason=getattr(result, "finish_reason", None),
+                usage=usage,
+                output_chars=len(raw_output),
+                output_sha256=hashlib.sha256(raw_output.encode()).hexdigest(),
+            )
             return TurnIntent.parse(
-                result.text, (time.perf_counter() - started) * 1000
+                raw_output, (time.perf_counter() - started) * 1000
             )
         except asyncio.CancelledError:
             if hasattr(session.client, "abort"):
@@ -360,17 +378,60 @@ async def infer_turn_intent(
                     await session.client.abort(request_id)
             raise
         except Exception as exc:
+            raw_output = (
+                (getattr(result, "text", None) or "")
+                if result is not None
+                else None
+            )
+            usage = (
+                result.usage.to_dict()
+                if result is not None
+                and getattr(result, "usage", None) is not None
+                else None
+            )
             emit_structured_log(
                 "error", "turn_intent_fallback",
                 session_id=session.session_id,
+                turn_id=getattr(turn, "turn_id", None),
+                request_id=request_id,
                 error_type=type(exc).__name__,
                 validation_reason=str(exc) if isinstance(exc, ValueError) else None,
                 elapsed_ms=(time.perf_counter() - started) * 1000,
+                finish_reason=(
+                    getattr(result, "finish_reason", None)
+                    if result is not None
+                    else None
+                ),
+                usage=usage,
+                output_chars=(len(raw_output) if raw_output is not None else None),
+                output_sha256=(
+                    hashlib.sha256(raw_output.encode()).hexdigest()
+                    if raw_output is not None
+                    else None
+                ),
+                raw_output=(raw_output[:4096] if raw_output is not None else None),
+                raw_output_truncated=(
+                    len(raw_output) > 4096 if raw_output is not None else False
+                ),
             )
             if result is None and hasattr(session.client, "abort"):
                 with suppress(Exception):
                     await session.client.abort(request_id)
-            return None
+            # Intent generation is advisory, but action execution must fail
+            # closed.  Preserve the user's original language task so the
+            # reply path can still answer from the raw text/audio while the
+            # body path is explicitly marked as not requested.
+            return TurnIntent(
+                speech="generated",
+                text=(turn.text.strip() if isinstance(turn.text, str) else ""),
+                body="",
+                body_mode="none",
+                face="",
+                history=False,
+                reaction_mode="none",
+                reaction="",
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+            )
         finally:
             session._unregister_turn_request(turn, request_id)
 
@@ -417,10 +478,10 @@ async def infer_turn_intent(
             intent = await full_task
 
         if intent is not None:
-            emit_structured_log(
-                "performance", "turn_intent_ready",
-                session_id=session.session_id,
-                turn_id=turn.turn_id,
+                emit_structured_log(
+                    "performance", "turn_intent_ready",
+                    session_id=session.session_id,
+                    turn_id=getattr(turn, "turn_id", None),
                 speech_kind=intent.speech,
                 has_body=bool(intent.body),
                 has_face=bool(intent.face),

@@ -70,7 +70,11 @@ async def test_audio_metadata_and_request_cleanup_on_parse_failure():
                               _register_turn_request=lambda t, r: registered.append(r),
                               _unregister_turn_request=lambda t, r: removed.append(r))
     turn = SimpleNamespace(text=None, request_base='turn')
-    assert await infer_turn_intent(session, turn, ['audio-ref']) is None
+    result = await infer_turn_intent(session, turn, ['audio-ref'])
+    assert result is not None
+    assert result.speech == 'generated'
+    assert result.body_mode == 'none'
+    assert result.body == ''
     assert registered == removed == ['turn-intent']
     assert aborted == []
     assert len(requests) == 1
@@ -274,6 +278,64 @@ async def test_non_visual_gate_falls_through_to_language_only_general_intent():
     assert request.metadata['images'] == []
     assert request.metadata['image_roles'] == []
     assert request.messages[1].content == [{'type': 'audio'}]
+
+
+@pytest.mark.asyncio
+async def test_malformed_full_intent_after_general_gate_fails_closed():
+    requests = []
+
+    class Client:
+        async def completion(self, request, request_id):
+            requests.append(request)
+            if request.metadata['task'] == 'session_visual_scope_gate':
+                return SimpleNamespace(
+                    text='GENERAL', finish_reason='stop', usage=None
+                )
+            return SimpleNamespace(
+                text='{"speech', finish_reason='stop',
+                usage=SimpleNamespace(
+                    to_dict=lambda: {
+                        'prompt_tokens': 100,
+                        'completion_tokens': 2,
+                        'total_tokens': 102,
+                    }
+                ),
+            )
+
+        async def abort(self, request_id):
+            raise AssertionError('completed request must not be aborted')
+
+    session = SimpleNamespace(
+        client=Client(),
+        model_name='model',
+        session_id='session',
+        _register_turn_request=lambda *args: None,
+        _unregister_turn_request=lambda *args: None,
+    )
+    turn = SimpleNamespace(
+        text='这是数字几',
+        request_base='malformed-general',
+        turn_id='malformed-general',
+    )
+
+    intent = await infer_turn_intent(
+        session,
+        turn,
+        ['audio-ref'],
+        ['camera'],
+        ['user_camera'],
+    )
+
+    assert intent is not None
+    assert intent.speech == 'generated'
+    assert intent.text == '这是数字几'
+    assert intent.body_mode == 'none'
+    assert intent.body == ''
+    assert intent.reaction_mode == 'none'
+    assert [request.metadata['task'] for request in requests] == [
+        'session_visual_scope_gate',
+        'session_turn_intent',
+    ]
 
 
 @pytest.mark.asyncio
@@ -565,7 +627,10 @@ async def test_pending_parse_aborts_on_timeout_or_cancellation(monkeypatch, canc
         with pytest.raises(asyncio.CancelledError):
             await task
     else:
-        assert await task is None
+        intent = await task
+        assert intent is not None
+        assert intent.speech == 'generated'
+        assert intent.body_mode == 'none'
     assert calls == removed == ['pending-intent']
 
 
