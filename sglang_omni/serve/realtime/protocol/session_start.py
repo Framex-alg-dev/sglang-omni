@@ -36,6 +36,9 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.serve.realtime.output_capabilities import SessionOutputCapabilities
+from sglang_omni.serve.realtime.action.routing import (
+    visual_deictic_category_scope,
+)
 from sglang_omni.serve.realtime.knowledge import (
     KnowledgeBinding,
     KnowledgeContext,
@@ -701,23 +704,53 @@ class SessionStartComponent:
             # before session.started is emitted.  User camera Turns carry an
             # additional immutable policy block and therefore have a distinct
             # scoped namespace from ordinary user Turns.
-            prefill_routes = (
-                (TURN_ORIGIN_USER, False),
-                (TURN_ORIGIN_USER, True),
-                (TURN_ORIGIN_PROACTIVE, False),
+            gesture_scope = visual_deictic_category_scope(
+                self.categories,
+                "gesture",
             )
-            for origin, has_user_camera in prefill_routes:
+            prefill_routes = [
+                (TURN_ORIGIN_USER, False, None),
+                (TURN_ORIGIN_USER, True, None),
+                (TURN_ORIGIN_PROACTIVE, False, None),
+            ]
+            if gesture_scope is not None:
+                prefill_routes.append(
+                    (TURN_ORIGIN_USER, True, gesture_scope)
+                )
+            for origin, has_user_camera, visual_scope in prefill_routes:
                 prefill_started = time.perf_counter()
                 prefill_stats: dict[str, Any] = {}
                 camera_suffix = "-camera" if has_user_camera else ""
+                visual_suffix = (
+                    f"-visual-{visual_scope.name}"
+                    if visual_scope is not None
+                    else ""
+                )
                 request_id = (
-                    f"session-{session_id}-single-prefill-{origin}{camera_suffix}"
+                    f"session-{session_id}-single-prefill-{origin}"
+                    f"{camera_suffix}{visual_suffix}"
                 )
                 instruction = self._build_session_action_profile_instruction(
                     "single",
                     turn_origin=origin,
                     has_user_camera=has_user_camera,
                 )
+                prefill_candidates = list(candidates)
+                if visual_scope is not None:
+                    instruction += self._visual_deictic_catalog_instruction(
+                        visual_scope,
+                        origin,
+                    )
+                    scoped_candidate_ids = {
+                        child.candidate_id
+                        for category in visual_scope.categories
+                        for child in category.children
+                    }
+                    prefill_candidates = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.candidate_id in scoped_candidate_ids
+                    ]
                 namespace = self._direct_action_prefix_namespace(origin, instruction)
                 ready = callable(prefill) and await self._prefill_action_catalog_degraded(
                     prefill, request_id=request_id,
@@ -731,7 +764,7 @@ class SessionStartComponent:
                             suffix=c.candidate_id,
                             action_id=c.action_id,
                         )
-                        for c in candidates
+                        for c in prefill_candidates
                     ] + [ActionScoreCandidate(
                         candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
                         suffix=UNSUPPORTED_CHILD_SCORE_ID,
@@ -753,7 +786,11 @@ class SessionStartComponent:
                     session_instance_id=self.session_instance_id,
                     request_id=request_id, prefix_cache_namespace=namespace,
                     catalog_hash=self.global_action_catalog.catalog_hash,
-                    action_count=len(candidates), candidate_count=len(candidates) + 1,
+                    action_count=len(prefill_candidates),
+                    candidate_count=len(prefill_candidates) + 1,
+                    visual_scope=(
+                        visual_scope.name if visual_scope is not None else None
+                    ),
                     probe_candidate_count=1,
                     elapsed_ms=round((time.perf_counter() - prefill_started) * 1000, 3),
                     stats=prefill_stats,

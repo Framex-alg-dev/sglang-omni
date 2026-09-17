@@ -410,7 +410,7 @@ class ReplyRoutingComponent:
                 turn.intent.visual_scope_gate
                 and turn.intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
             ):
-                # V01-V10 are an authoritative language-only gate for an
+                # COPY_* is an authoritative language-only gate for an
                 # immediate visual imitation.  Re-running S0/S1 on the same
                 # audio can only contradict that bounded decision and may
                 # accidentally synthesize an unrelated spoken answer.

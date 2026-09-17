@@ -3612,6 +3612,21 @@ def generated_body_neutral_intent(question: str) -> TurnIntent:
     )
 
 
+def assert_body_action_not_requested(action: dict[str, Any]) -> None:
+    assert action["candidate_id"] == "body_not_requested"
+    assert action["action_id"] == "no_action"
+    assert action["execute"] is False
+    assert action["support_status"] == "not_required"
+    assert action["reason_code"] == "body_action_not_requested"
+
+
+def assert_generic_action_scoring_was_bypassed(client: Any) -> None:
+    assert not any(
+        request.stage in {"single", "category", "child"}
+        for request in client.score_requests
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["completed", "timeout", "failed", "cancelled"])
 async def test_action_priority_window_releases_other_models(monkeypatch, outcome):
@@ -3830,7 +3845,8 @@ async def test_complete_reply_does_not_trigger_disabled_numeric_gesture(
 
     ready = [event for event in ws.events if event["type"] == "turn.action.ready"]
     assert len(ready) == 1
-    assert ready[0]["action"]["candidate_id"] == reply_category.children[0].candidate_id
+    assert_body_action_not_requested(ready[0]["action"])
+    assert_generic_action_scoring_was_bypassed(client)
     first_reply_delta_index = next(
         index
         for index, event in enumerate(ws.events)
@@ -3844,7 +3860,13 @@ async def test_complete_reply_does_not_trigger_disabled_numeric_gesture(
     assert first_reply_delta_index != action_ready_index
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["reply"]["text"] == reply_text
-    assert result["action"]["candidate_id"] == ready[0]["action"]["candidate_id"]
+    assert_body_action_not_requested(result["action"])
+    assert result["media_summary"]["action_context"][
+        "generic_action_scoring_bypassed"
+    ] is True
+    assert result["media_summary"]["action_context"][
+        "selection_mode"
+    ] == "not_requested"
     assert "numeric_reply_action" not in result["media_summary"]["action_context"]
 
 
@@ -3871,7 +3893,7 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
             body_mode='none',
             face='',
             history=False,
-            visual_scope_gate='V11',
+            visual_scope_gate='VISUAL_ANSWER',
         )
 
     monkeypatch.setattr(
@@ -4001,7 +4023,7 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
         "可能是三，也可能是四。",
     ],
 )
-async def test_non_primary_or_unrepresentable_number_keeps_accompaniment_action(
+async def test_non_primary_or_unrepresentable_number_keeps_body_inactive(
     monkeypatch: pytest.MonkeyPatch,
     reply_text: str,
 ) -> None:
@@ -4013,7 +4035,6 @@ async def test_non_primary_or_unrepresentable_number_keeps_accompaniment_action(
     monkeypatch.setattr(pipeline, "infer_turn_intent", infer_generated)
     catalog = load_global_action_catalog()
     reply_category, _ = system_accompaniment_categories(catalog)
-    ordinary_candidate = reply_category.children[0]
     client = NumericReplyFusionClient(
         category_id=reply_category.category_id,
         numeric_candidate_id="000",
@@ -4032,14 +4053,15 @@ async def test_non_primary_or_unrepresentable_number_keeps_accompaniment_action(
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["reply"]["text"] == reply_text
-    assert result["action"]["candidate_id"] == ordinary_candidate.candidate_id
+    assert_body_action_not_requested(result["action"])
+    assert_generic_action_scoring_was_bypassed(client)
     assert result["media_summary"]["action_context"].get(
         "selection_basis"
     ) != "complete_reply_numeric"
 
 
 @pytest.mark.asyncio
-async def test_numeric_reply_scoring_failure_keeps_accompaniment_and_reply(
+async def test_numeric_reply_scoring_failure_keeps_body_inactive_and_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
@@ -4066,12 +4088,13 @@ async def test_numeric_reply_scoring_failure_keeps_accompaniment_and_reply(
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["reply"]["text"] == "答案是三。"
-    assert result["action"]["candidate_id"] == reply_category.children[0].candidate_id
+    assert_body_action_not_requested(result["action"])
+    assert_generic_action_scoring_was_bypassed(client)
     assert not any(r.stage == NUMERIC_REPLY_ACTION_STAGE for r in client.score_requests)
 
 
 @pytest.mark.asyncio
-async def test_numeric_reply_scoring_timeout_keeps_accompaniment_and_reply(
+async def test_numeric_reply_scoring_timeout_keeps_body_inactive_and_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
@@ -4102,7 +4125,8 @@ async def test_numeric_reply_scoring_timeout_keeps_accompaniment_and_reply(
 
     result = next(event for event in ws.events if event["type"] == "turn.result")
     assert result["reply"]["text"] == "答案是三。"
-    assert result["action"]["candidate_id"] == reply_category.children[0].candidate_id
+    assert_body_action_not_requested(result["action"])
+    assert_generic_action_scoring_was_bypassed(client)
     assert not any(r.stage == NUMERIC_REPLY_ACTION_STAGE for r in client.score_requests)
 
 
@@ -4138,7 +4162,8 @@ async def test_missing_answer_gesture_is_not_offered_to_numeric_scorer(
 
     assert not any(r.stage == NUMERIC_REPLY_ACTION_STAGE for r in client.score_requests)
     result = next(event for event in ws.events if event["type"] == "turn.result")
-    assert result["action"]["candidate_id"] == reply_category.children[0].candidate_id
+    assert_body_action_not_requested(result["action"])
+    assert_generic_action_scoring_was_bypassed(client)
 
 
 @pytest.mark.asyncio
@@ -6548,7 +6573,7 @@ async def test_visual_imitation_gate_is_authoritative_pure_action_route() -> Non
         face="",
         history=False,
         elapsed_ms=11.0,
-        visual_scope_gate="V01",
+        visual_scope_gate="COPY_HAND",
     )
 
     route = await session._classify_reply_history_requirement(
@@ -9744,7 +9769,7 @@ async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_fra
         body_mode="perform",
         face="",
         history=False,
-        visual_scope_gate="V01",
+        visual_scope_gate="COPY_HAND",
     )
     images = [*(f"user-{index}" for index in range(1, 7)), "avatar"]
     roles = [*("user_camera" for _ in range(6)), "avatar_state"]
@@ -9780,8 +9805,14 @@ async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_fra
         "avatar_state",
     ]
     target = session.candidate_by_id["258"]
-    assert f"视觉定义={target.short_definition}" in request.prefix
-    assert "avatar_state 只表示数字人当前状态" in request.prefix
+    assert f"视觉定义={target.short_definition}" in request.session_instruction
+    assert "avatar_state 只表示数字人当前状态" in request.session_instruction
+    assert f"视觉定义={target.short_definition}" not in request.prefix
+    assert "[本轮视觉模仿判定]" in request.prefix
+    assert request.prefix_cache_namespace == session._direct_action_prefix_namespace(
+        "user",
+        request.session_instruction,
+    )
     assert action["candidate_id"] == "258"
     assert context["category_scope"] == "visual_deictic:gesture"
     assert context["visual_scope_user_camera_image_count"] == 3
@@ -11039,5 +11070,5 @@ async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkey
     await session.handle_turn_commit(user_turn_commit('literal', text='说一比二这三个字'))
     result = next(e for e in ws.events if e['type'] == 'turn.result')
     assert result['reply']['text'] == '一比二'
-    assert result['action']['candidate_id'] != '259'
-    assert result['action']['category_id'] in [reply.category_id,silent.category_id]
+    assert_body_action_not_requested(result['action'])
+    assert_generic_action_scoring_was_bypassed(client)

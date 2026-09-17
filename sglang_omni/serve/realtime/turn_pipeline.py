@@ -1187,6 +1187,14 @@ class TurnPipeline:
                 turn.intent is not None
                 and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
             )
+            body_action_not_requested = bool(
+                turn.turn_origin == TURN_ORIGIN_USER
+                and not provided_reply
+                and turn.intent is not None
+                and turn.intent.body_mode == "none"
+                and turn.intent.reaction_mode == "none"
+                and not visual_gesture_answer
+            )
 
             reply_history_route_task: asyncio.Task[Any] | None = None
             async def start_reply_history_route() -> Any:
@@ -1224,6 +1232,7 @@ class TurnPipeline:
                     or action_task is not None
                     or early_expression
                     or visual_gesture_answer
+                    or body_action_not_requested
                 ):
                     return
                 action_started = time.perf_counter()
@@ -1356,6 +1365,7 @@ class TurnPipeline:
                 and turn.intent is not None
                 and "action" in self.modalities
                 and not visual_gesture_answer
+                and not body_action_not_requested
                 and not (turn.intent.face and turn.intent.body_mode == "none")
             )
             if action_priority_enabled:
@@ -1398,6 +1408,7 @@ class TurnPipeline:
                         else "intent_unavailable" if turn.intent is None
                         else "action_output_disabled" if "action" not in self.modalities
                         else "visual_gesture_answer" if visual_gesture_answer
+                        else "body_action_not_requested" if body_action_not_requested
                         else "expression_only"
                     ),
                 )
@@ -1748,8 +1759,33 @@ class TurnPipeline:
                     action_started = time.perf_counter()
                 try:
                     if not early_expression:
-                        if visual_gesture_answer and numeric_reply_route.enabled:
-                            # V11 owns the body decision.  Do not spend a full
+                        if body_action_not_requested:
+                            action = {
+                                "candidate_id": "body_not_requested",
+                                "action_id": "no_action",
+                                "execution_binding": {},
+                                "execute": False,
+                                "support_status": "not_required",
+                                "fallback_applied": False,
+                                "reason_code": "body_action_not_requested",
+                            }
+                            scores = []
+                            action_context = {
+                                "selection_stages": 0,
+                                "selection_mode": "not_requested",
+                                "generic_action_scoring_bypassed": True,
+                            }
+                            emit_structured_log(
+                                "action",
+                                "generic_action_scoring_bypassed",
+                                session_id=self.session_id,
+                                turn_id=turn.turn_id,
+                                trace_id=turn.trace_id,
+                                logical_request_id=turn.request_base,
+                                reason="body_action_not_requested",
+                            )
+                        elif visual_gesture_answer and numeric_reply_route.enabled:
+                            # VISUAL_ANSWER owns the body decision. Do not spend a full
                             # catalog PPL pass on an action that would be
                             # discarded once the structured visual answer is
                             # available.

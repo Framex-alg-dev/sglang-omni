@@ -334,21 +334,39 @@ def scope_visual_deictic_categories(
         or not has_user_camera
     ):
         return None
-    scoped_categories = tuple(categories)
     for scope_name, task_markers, path_markers in _VISUAL_CATEGORY_SCOPES:
         if not any(marker in normalized_task for marker in task_markers):
             continue
-        matches = tuple(
-            category
-            for category in scoped_categories
-            if any(
-                marker in _normalized_label(" ".join(category.category_path))
-                for marker in path_markers
-            )
-        )
-        if matches:
-            return VisualDeicticCategoryScope(scope_name, matches)
+        return visual_deictic_category_scope(categories, scope_name)
     return None
+
+
+def visual_deictic_category_scope(
+    categories: Iterable[SessionActionCategory],
+    scope_name: str,
+) -> VisualDeicticCategoryScope | None:
+    """Resolve one named catalog-owned visual scope without turn-local input."""
+
+    scope = next(
+        (
+            (name, path_markers)
+            for name, _task_markers, path_markers in _VISUAL_CATEGORY_SCOPES
+            if name == scope_name
+        ),
+        None,
+    )
+    if scope is None:
+        return None
+    name, path_markers = scope
+    matches = tuple(
+        category
+        for category in categories
+        if any(
+            marker in _normalized_label(" ".join(category.category_path))
+            for marker in path_markers
+        )
+    )
+    return VisualDeicticCategoryScope(name, matches) if matches else None
 
 
 def is_visual_deictic_expression_request(

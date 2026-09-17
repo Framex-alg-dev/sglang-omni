@@ -113,7 +113,7 @@ class ProvisionalReplyComponent:
                 "seq": state.delta_count,
                 "delta": delta,
             }
-            # Keep V11 evidence in the local buffer for numeric selection only.
+            # Keep VISUAL_ANSWER evidence in the local buffer for numeric selection only.
             if not (
                 turn.intent is not None
                 and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE

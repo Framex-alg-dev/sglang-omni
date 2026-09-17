@@ -123,35 +123,22 @@ class ActionCandidateComponent:
             scoped_candidate_ids = {
                 candidate.candidate_id for candidate in scoped_candidates
             }
-            visual_lines = "\n".join(
-                self._format_candidate_for_prompt(
-                    candidate,
-                    turn_origin,
-                    definition_mode="visual",
-                )
-                for candidate in scoped_candidates
+            session_instruction += self._visual_deictic_catalog_instruction(
+                visual_deictic_scope,
+                turn_origin,
             )
             visual_deictic_instruction = self._action_prompt(
                 zh=(
-                    "\n[视觉模仿硬约束]\n"
-                    "视觉范围 gate 已确认用户要求模仿 user_camera 中展示的动作；"
-                    f"范围={visual_deictic_scope.name}。avatar_state 只表示数字人当前状态，"
-                    "不能作为要模仿的目标。只比较下列候选的视觉定义，逐项核对参与"
-                    "部位数量、手指伸直或弯曲状态、相对位置和朝向；证据不足或没有"
-                    "匹配项时选择 000，不得按候选常见程度猜测：\n"
-                    f"{visual_lines}\n"
+                    "\n[本轮视觉模仿判定]\n"
+                    f"使用前述范围={visual_deictic_scope.name} 的视觉候选目录，"
+                    "只根据本轮 user_camera 画面选择 candidate_id；"
+                    "证据不足或没有匹配项时选择 000。\n"
                 ),
                 en=(
-                    "\n[Hard visual-imitation constraint]\n"
-                    "The visual-scope gate has confirmed that the user asks to imitate "
-                    "the action shown in user_camera; "
-                    f"scope={visual_deictic_scope.name}. avatar_state describes only "
-                    "the character's current state and is never the imitation target. "
-                    "Compare only the visual definitions below, including participating "
-                    "parts, extension or flexion, relative positions, and orientation. "
-                    "Select 000 when evidence is insufficient or no candidate matches; "
-                    "never guess from candidate frequency:\n"
-                    f"{visual_lines}\n"
+                    "\n[Visual-imitation decision for this interaction]\n"
+                    f"Use the visual candidate catalog for scope={visual_deictic_scope.name} "
+                    "above and select the candidate_id only from the current user_camera "
+                    "view. Select 000 when evidence is insufficient or no candidate matches.\n"
                 ),
             )
             action_context.update(

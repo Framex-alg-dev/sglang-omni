@@ -72,11 +72,19 @@ async def test_limited_turn_scores_all_actions_once_and_hits_session_prefix(monk
     await session.handle_session_start(session._normalize_session_start(payload))
     assert len(session.candidates) == 168
     assert session.action_selection_mode == "flat_children"
-    assert len(client.prefills) == 3
-    user_prefill, camera_prefill, proactive_prefill = client.prefills
+    assert len(client.prefills) == 4
+    (
+        user_prefill,
+        camera_prefill,
+        proactive_prefill,
+        gesture_prefill,
+    ) = client.prefills
     assert user_prefill["request_id"].endswith("-single-prefill-user")
     assert camera_prefill["request_id"].endswith("-single-prefill-user-camera")
     assert proactive_prefill["request_id"].endswith("-single-prefill-proactive")
+    assert gesture_prefill["request_id"].endswith(
+        "-single-prefill-user-camera-visual-gesture"
+    )
     assert (
         user_prefill["prefix_cache_namespace"]
         != camera_prefill["prefix_cache_namespace"]
@@ -89,6 +97,14 @@ async def test_limited_turn_scores_all_actions_once_and_hits_session_prefix(monk
         "user_camera"
         in camera_prefill["session_instruction"]
     )
+    assert (
+        gesture_prefill["prefix_cache_namespace"]
+        != camera_prefill["prefix_cache_namespace"]
+    )
+    assert "[视觉模仿硬约束]" in gesture_prefill["session_instruction"]
+    assert "视觉定义=" in gesture_prefill["session_instruction"]
+    assert len(gesture_prefill["candidates"]) == 144
+    assert gesture_prefill["candidates"][-1].candidate_id == "000"
     semantics = {"turn_origin": origin, "text_role": "user_input" if origin == "user" else "character_reply"}
     if origin == "proactive":
         semantics["trigger"] = "action_finished"

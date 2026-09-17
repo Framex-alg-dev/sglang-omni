@@ -212,7 +212,7 @@ class ReplyGenerationComponent:
             created_after_commit_ms = self._after_commit_ms(turn)
         else:
             created_after_commit_ms = provisional.created_after_commit_ms
-        # V11 output is private evidence for gesture selection, not speech.
+        # VISUAL_ANSWER output is private evidence for gesture selection, not speech.
         # Do not synthesize it speculatively and rely on a later abort.
         if not (
             turn.intent is not None

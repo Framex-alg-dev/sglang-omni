@@ -48,6 +48,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCategory,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.action.routing import VisualDeicticCategoryScope
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,48 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 
 
 class ActionPromptComponent:
+    def _visual_deictic_catalog_instruction(
+        self,
+        scope: VisualDeicticCategoryScope,
+        turn_origin: str,
+    ) -> str:
+        """Return the immutable visual definitions for one camera-backed scope."""
+
+        scoped_candidates = [
+            child for category in scope.categories for child in category.children
+        ]
+        visual_lines = "\n".join(
+            self._format_candidate_for_prompt(
+                candidate,
+                turn_origin,
+                definition_mode="visual",
+            )
+            for candidate in scoped_candidates
+        )
+        return self._action_prompt(
+            zh=(
+                "\n[视觉模仿硬约束]\n"
+                "视觉范围 gate 已确认用户要求模仿 user_camera 中展示的动作；"
+                f"范围={scope.name}。avatar_state 只表示数字人当前状态，"
+                "不能作为要模仿的目标。只比较下列候选的视觉定义，逐项核对参与"
+                "部位数量、手指伸直或弯曲状态、相对位置和朝向；证据不足或没有"
+                "匹配项时选择 000，不得按候选常见程度猜测：\n"
+                f"{visual_lines}\n"
+            ),
+            en=(
+                "\n[Hard visual-imitation constraint]\n"
+                "The visual-scope gate has confirmed that the user asks to imitate "
+                "the action shown in user_camera; "
+                f"scope={scope.name}. avatar_state describes only "
+                "the character's current state and is never the imitation target. "
+                "Compare only the visual definitions below, including participating "
+                "parts, extension or flexion, relative positions, and orientation. "
+                "Select 000 when evidence is insufficient or no candidate matches; "
+                "never guess from candidate frequency:\n"
+                f"{visual_lines}\n"
+            ),
+        )
+
     def _facial_expression_candidate_ids(self) -> frozenset[str]:
         return frozenset(
             child.candidate_id
