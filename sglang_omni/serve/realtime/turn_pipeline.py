@@ -1534,7 +1534,7 @@ class TurnPipeline:
                 has_action_output="action" in self.modalities,
                 candidates=eligible_turn_candidates,
             )
-            if turn.turn_origin == TURN_ORIGIN_USER and not visual_gesture_answer:
+            if self.direct_action_selection or (turn.turn_origin == TURN_ORIGIN_USER and not visual_gesture_answer):
                 numeric_reply_route = replace(
                     numeric_reply_route, enabled=False,
                     reason="disabled_action_first_policy",
