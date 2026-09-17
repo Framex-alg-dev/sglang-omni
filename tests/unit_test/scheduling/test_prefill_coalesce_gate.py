@@ -123,7 +123,8 @@ def test_complete_action_suffix_cohort_bypasses_coalesce_deadline(upstream):
         wait_ms=60.0,
         coalesce_when_idle=True,
     )
-    sched.waiting_queue = [_req(100.0) for _ in range(169)]
+    # 117 concrete actions + UNSUPPORTED + 12 core + 12 visual labels.
+    sched.waiting_queue = [_req(100.0) for _ in range(142)]
     for req in sched.waiting_queue:
         req._omni_data = SimpleNamespace(action_scoring_role="candidate")
 

@@ -236,18 +236,18 @@ def test_batches_cover_386_candidates_without_reordering():
     assert [item.candidate_id for batch in batches for item in batch.candidates] == [str(i) for i in range(386)]
 
 
-def test_batch_capacity_does_not_pad_169_candidates_to_200():
+def test_batch_capacity_does_not_pad_142_candidates_to_200():
     items = [
         type("Item", (), {"candidate_id": str(index)})()
-        for index in range(169)
+        for index in range(142)
     ]
 
     batches = build_suffix_batches(items, 200)
 
     assert len(batches) == 1
-    assert len(batches[0].candidates) == 169
+    assert len(batches[0].candidates) == 142
     assert [item.candidate_id for item in batches[0].candidates] == [
-        str(index) for index in range(169)
+        str(index) for index in range(142)
     ]
 
 

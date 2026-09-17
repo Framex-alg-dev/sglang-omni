@@ -480,7 +480,8 @@ class ReplyPromptComponent:
             "text": self._prompt(
                 zh=(
                     "[当前用户请求优先]当前这条 user 消息中的用户语音或文本，"
-                    "是你本次需要处理的主要请求。只有该语音或文本明确要求延续、解释、"
+                    "定义你本次需要完成的任务。图片、历史、解析结果和路由标签只用于提供证据、"
+                    "消解指代或选择输出通道，不得改写、缩减、替换或遗漏该任务。只有该语音或文本明确要求延续、解释、"
                     "重复、修改或比较先前内容，或者包含必须依赖先前对话才能确定含义的"
                     "指代或省略时，才使用提供给你的相关历史消息；否则应独立理解并回答"
                     "当前请求，不得延续、复用或重复先前回复的主题或答案。不得假定自己"
@@ -488,7 +489,10 @@ class ReplyPromptComponent:
                 ),
                 en=(
                     "[Current user request takes priority] The user audio or text in the "
-                    "current user message is the primary request you must handle now. Use "
+                    "current user message defines the task you must complete now. Images, "
+                    "history, parsed data, and route labels may only provide evidence, resolve "
+                    "references, or select an output channel; they must not rewrite, narrow, "
+                    "replace, or omit that task. Use "
                     "the provided history only when that audio or text explicitly asks to "
                     "continue, explain, repeat, modify, or compare earlier content, or "
                     "contains a reference or omission that cannot be resolved without prior "

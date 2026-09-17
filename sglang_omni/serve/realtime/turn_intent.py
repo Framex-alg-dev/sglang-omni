@@ -18,6 +18,7 @@ GENERAL_INTENT_GATE = "GENERAL"
 VISUAL_GESTURE_ANSWER_GATE = "VISUAL_ANSWER"
 
 _VISUAL_SCOPE_GATE_CHOICES = {
+    "COPY_ACTION": ("body", "这个动作"),
     "COPY_HAND": ("body", "这个手势"),
     "COPY_FACE": ("face", "这个表情"),
     "COPY_HEAD": ("body", "这个头部动作"),
@@ -38,6 +39,7 @@ COPY_VISIBLE_ACTION：用户明确要求立即照抄、模仿、重复或做出�
 VISUAL_ANSWER：用户同时明确要求先根据当前画面计算、比较或推理，再用手势表示新推导出的答案。必须同时满足“需要推导”和“用手势回答”；缺少任一条件都输出 GENERAL。这不是模仿画面中已有的手势。
 
 第二步，仅对 COPY_VISIBLE_ACTION，按照用户明确说出的模仿范围输出：
+COPY_ACTION=明确指向当前画面中的动作，但没有限定身体部位
 COPY_HAND=手势或手型
 COPY_FACE=表情、神情或脸部
 COPY_HEAD=头部、视线或眼神
@@ -49,14 +51,16 @@ COPY_POSE=姿势、姿态或体态
 COPY_OBJECT=物品、物体或道具交互
 COPY_SCREEN=屏幕或虚拟空间交互
 
-如果用户要求模仿画面，却没有明确说出上述范围，输出 GENERAL。模仿时没有额外说话要求就是纯动作；明确要求模仿同时说话则输出 GENERAL，由通用意图解析保留两个任务。
+如果用户用“这个动作”“照着做这个”等表达明确指向当前画面、但没有限定身体部位，输出 COPY_ACTION。模仿时没有额外说话要求就是纯动作；明确要求模仿同时说话则输出 GENERAL，由通用意图解析保留两个任务。
 
 示例：
 “请做出这个手势” => COPY_HAND
 “这是数字一，照着做这个手势” => COPY_HAND
 “看我比的数字，模仿一下” => COPY_HAND
+“比个这个” => COPY_HAND
 “请模仿这个表情” => COPY_FACE
-“请做出这个动作” => GENERAL
+“请做出这个动作” => COPY_ACTION
+“照着做这个” => COPY_ACTION
 “这是什么手势” => GENERAL
 “这是数字几” => GENERAL
 “这个加这个等于多少” => GENERAL
@@ -66,7 +70,7 @@ COPY_SCREEN=屏幕或虚拟空间交互
 “What number is this?” => GENERAL
 “What do these add up to? Answer with a gesture.” => VISUAL_ANSWER
 
-只能输出以下十二个标签之一，不回答用户，不输出阶段或解释：GENERAL、COPY_HAND、COPY_FACE、COPY_HEAD、COPY_ARM、COPY_UPPER_BODY、COPY_LEG、COPY_BODY、COPY_POSE、COPY_OBJECT、COPY_SCREEN、VISUAL_ANSWER。'''
+只能输出以下十三个标签之一，不回答用户，不输出阶段或解释：GENERAL、COPY_ACTION、COPY_HAND、COPY_FACE、COPY_HEAD、COPY_ARM、COPY_UPPER_BODY、COPY_LEG、COPY_BODY、COPY_POSE、COPY_OBJECT、COPY_SCREEN、VISUAL_ANSWER。'''
 
 _VISUAL_SCOPE_GATE_RESULTS = frozenset(
     {GENERAL_INTENT_GATE, VISUAL_GESTURE_ANSWER_GATE, *_VISUAL_SCOPE_GATE_CHOICES}

@@ -160,6 +160,8 @@ async def test_visual_scope_gate_precedes_free_form_intent_and_uses_language_onl
     assert '输入可能是中文或英文' in request.messages[0].content
     assert 'Do this gesture” => COPY_HAND' in request.messages[0].content
     assert '这是数字一，照着做这个手势” => COPY_HAND' in request.messages[0].content
+    assert '“比个这个” => COPY_HAND' in request.messages[0].content
+    assert '“请做出这个动作” => COPY_ACTION' in request.messages[0].content
     assert '这是中间类别，不直接输出；继续执行第二步' in request.messages[0].content
     assert request.messages[1].content == [{'type': 'audio'}]
     assert request.metadata['audios'] == ['audio-ref']
@@ -170,6 +172,49 @@ async def test_visual_scope_gate_precedes_free_form_intent_and_uses_language_onl
     assert request.stream is False
     assert request.output_modalities == ['text']
     assert registered == removed == ['visual-turn-visual-scope-gate']
+
+
+@pytest.mark.asyncio
+async def test_generic_deictic_action_uses_copy_action_scope():
+    class Client:
+        async def completion(self, request, request_id):
+            assert request.metadata['task'] == 'session_visual_scope_gate'
+            return SimpleNamespace(text='COPY_ACTION')
+
+        async def score_action_suffixes(self, request):
+            raise AssertionError('visual scope generation must not score suffixes')
+
+        async def abort(self, request_id):
+            raise AssertionError('completed request must not be aborted')
+
+    session = SimpleNamespace(
+        client=Client(),
+        model_name='model',
+        session_id='session',
+        session_instance_id='instance',
+        language='zh',
+        _register_turn_request=lambda *args: None,
+        _unregister_turn_request=lambda *args: None,
+    )
+    turn = SimpleNamespace(
+        text='做这个动作',
+        request_base='generic-visual-turn',
+        turn_id='generic-visual-turn',
+    )
+
+    intent = await infer_turn_intent(
+        session,
+        turn,
+        [],
+        ['camera'],
+        ['user_camera'],
+    )
+
+    assert intent is not None
+    assert intent.speech == 'none'
+    assert intent.body_mode == 'perform'
+    assert intent.body == '这个动作'
+    assert intent.visual_scope_gate == 'COPY_ACTION'
 
 
 @pytest.mark.asyncio

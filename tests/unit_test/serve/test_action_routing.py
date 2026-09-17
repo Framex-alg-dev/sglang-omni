@@ -161,12 +161,15 @@ def test_visual_deictic_action_requires_camera_and_named_catalog_range() -> None
     assert head_action is not None
     assert head_action.name == "head_gaze"
     assert head_action.categories == (head,)
-    assert scope_visual_deictic_categories(
+    generic_action = scope_visual_deictic_categories(
         categories,
         body_task="请做出这个动作",
         body_mode="perform",
         has_user_camera=True,
-    ) is None
+    )
+    assert generic_action is not None
+    assert generic_action.name == "action"
+    assert generic_action.categories == (hand, head)
     assert scope_visual_deictic_categories(
         categories,
         body_task="这个手势",
@@ -182,6 +185,12 @@ def test_visual_deictic_action_requires_camera_and_named_catalog_range() -> None
     assert scope_visual_deictic_categories(
         categories,
         body_task="挥手",
+        body_mode="perform",
+        has_user_camera=True,
+    ) is None
+    assert scope_visual_deictic_categories(
+        categories,
+        body_task="数字一手势",
         body_mode="perform",
         has_user_camera=True,
     ) is None

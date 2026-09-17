@@ -102,6 +102,14 @@ _VISUAL_EXPRESSION_SCOPE_MARKERS = (
     "expression",
     "facialexpression",
 )
+_GENERIC_VISUAL_ACTION_SCOPE = "action"
+_GENERIC_VISUAL_ACTION_MARKERS = (
+    "这个动作",
+    "该动作",
+    "这种动作",
+    "thisaction",
+    "thataction",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,13 +327,13 @@ def scope_visual_deictic_categories(
     body_mode: str,
     has_user_camera: bool,
 ) -> VisualDeicticCategoryScope | None:
-    """Resolve a camera-backed execution request only when language names its range.
+    """Resolve a camera-backed execution request from its visual reference or range.
 
-    Generic phrases such as ``这个动作`` intentionally return ``None``. They do
-    not justify scanning the complete catalog. Scope terms such as ``这个手势``
-    or ``做出手势`` select catalog-owned families; the current user-camera image
-    supplies the explicit or implicit visual reference, and child scoring still
-    identifies the concrete visible action without a candidate-specific rule.
+    A deictic generic action such as ``这个动作`` selects the union of catalog
+    families that can be visually imitated. Scope terms such as ``这个手势`` or
+    ``做出手势`` select one catalog-owned family. The current user-camera image
+    supplies the visual reference, and child scoring identifies the concrete
+    visible action without a candidate-specific rule.
     """
 
     normalized_task = _normalized_label(body_task)
@@ -334,6 +342,25 @@ def scope_visual_deictic_categories(
         or not has_user_camera
     ):
         return None
+    catalog_candidates = [
+        (category, candidate)
+        for category in categories
+        for candidate in category.children
+    ]
+    # A concrete catalog action such as ``数字一手势`` names the action itself;
+    # the word ``手势`` in that label is not a visual reference.  Preserve the
+    # camera-backed scope only for range/deictic requests such as ``这个手势``
+    # or ``请做出手势``.
+    if resolve_unique_explicit_action(body_task, catalog_candidates) is not None:
+        return None
+    if any(
+        marker in normalized_task
+        for marker in _GENERIC_VISUAL_ACTION_MARKERS
+    ):
+        return visual_deictic_category_scope(
+            categories,
+            _GENERIC_VISUAL_ACTION_SCOPE,
+        )
     for scope_name, task_markers, path_markers in _VISUAL_CATEGORY_SCOPES:
         if not any(marker in normalized_task for marker in task_markers):
             continue
@@ -346,6 +373,26 @@ def visual_deictic_category_scope(
     scope_name: str,
 ) -> VisualDeicticCategoryScope | None:
     """Resolve one named catalog-owned visual scope without turn-local input."""
+
+    if scope_name == _GENERIC_VISUAL_ACTION_SCOPE:
+        all_path_markers = tuple(
+            marker
+            for _name, _task_markers, path_markers in _VISUAL_CATEGORY_SCOPES
+            for marker in path_markers
+        )
+        matches = tuple(
+            category
+            for category in categories
+            if any(
+                marker in _normalized_label(" ".join(category.category_path))
+                for marker in all_path_markers
+            )
+        )
+        return (
+            VisualDeicticCategoryScope(scope_name, matches)
+            if matches
+            else None
+        )
 
     scope = next(
         (

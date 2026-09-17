@@ -13,11 +13,12 @@ model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
 runtime_overrides:
   thinker:
     server_args_overrides:
-      # Bound long reply prefill so queued action suffixes can run promptly.
-      chunked_prefill_size: 1024
+      # Keep the locally validated prefill chunk size.
+      chunked_prefill_size: 8192
       # Capacity only: runtime batches retain their true request count (for
-      # example 169 actions plus 12 core decision labels; the optional visual
-      # group raises the true request count to 193). No empty slot is padded.
+      # example 117 actions plus UNSUPPORTED and 12 core decision labels; the
+      # optional visual group raises the true request count to 142). No empty
+      # slot is padded.
       # No request is added merely to fill the remaining slots.
       max_running_requests: 200
   audio_encoder:

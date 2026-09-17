@@ -258,12 +258,16 @@ class ReplyPipeline:
                 parts.append(self._pure_action_short_reply_part())
         if reply_context is not None and not podcast_context:
             parts.append({"type": "text", "text": reply_context})
-        if reply_image_roles:
+        visual_gesture_answer = bool(
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+        )
+        if reply_image_roles and not visual_gesture_answer:
             # Repeat only the decision boundary after the current speech/text.
             # The earlier label explains the image role; this final guard keeps
             # available camera frames from becoming the default reply topic.
             parts.append(self._reply_user_camera_response_guard_part())
-        else:
+        elif not reply_image_roles:
             # Keep the current-turn visual fact closest to generation so it
             # overrides stale visual claims in reply history. The instruction
             # is deliberately scoped so non-visual requests, including camera-
@@ -278,10 +282,7 @@ class ReplyPipeline:
             )
             if language_lock_reminder is not None:
                 parts.append(language_lock_reminder)
-        if (
-            turn.intent is not None
-            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
-        ):
+        if visual_gesture_answer:
             parts.append(self._visual_arithmetic_operand_output_part())
         if parts:
             messages.append(Message(role="user", content=parts))

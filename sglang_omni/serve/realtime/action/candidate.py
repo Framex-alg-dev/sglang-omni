@@ -23,6 +23,7 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     child_unsupported_policy,
 )
 from sglang_omni.serve.realtime.action.routing import (
+    resolve_unique_explicit_action,
     scope_visual_deictic_categories,
 )
 from sglang_omni.serve.realtime.action.decision import (
@@ -70,13 +71,47 @@ class ActionCandidateComponent:
         request_base: str,
         turn_id: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
-        visual_deictic_scope = scope_visual_deictic_categories(
-            self.categories,
-            body_task=(turn.intent.body if turn.intent is not None else ""),
-            body_mode=(
-                turn.intent.body_mode if turn.intent is not None else "none"
-            ),
-            has_user_camera=IMAGE_ROLE_USER_CAMERA in image_roles,
+        base_eligible_candidates = self._filter_turn_action_candidates(
+            turn,
+            [
+                candidate
+                for candidate in self.candidates
+                if self.direct_action_selection
+                or (
+                    candidate.category_id != FACIAL_EXPRESSION_CATEGORY_ID
+                    and candidate.candidate_id
+                    not in self._facial_expression_candidate_ids()
+                )
+            ],
+        )
+        exact_action_route = None
+        if (
+            self.direct_action_selection
+            and turn.intent is not None
+            and turn.intent.body_mode == "perform"
+        ):
+            category_by_id = {
+                category.category_id: category for category in self.categories
+            }
+            exact_action_route = resolve_unique_explicit_action(
+                turn.intent.body,
+                [
+                    (category_by_id[candidate.category_id], candidate)
+                    for candidate in base_eligible_candidates
+                    if candidate.category_id in category_by_id
+                ],
+            )
+        visual_deictic_scope = (
+            None
+            if exact_action_route is not None
+            else scope_visual_deictic_categories(
+                self.categories,
+                body_task=(turn.intent.body if turn.intent is not None else ""),
+                body_mode=(
+                    turn.intent.body_mode if turn.intent is not None else "none"
+                ),
+                has_user_camera=IMAGE_ROLE_USER_CAMERA in image_roles,
+            )
         )
         (
             action_history,
@@ -90,9 +125,13 @@ class ActionCandidateComponent:
             images,
             image_roles,
             current_user_camera_image_limit=(
-                MAX_ACTION_VISUAL_SCOPE_USER_CAMERA_IMAGES
-                if visual_deictic_scope is not None
-                else MAX_ACTION_CURRENT_USER_CAMERA_IMAGES
+                0
+                if exact_action_route is not None
+                else (
+                    MAX_ACTION_VISUAL_SCOPE_USER_CAMERA_IMAGES
+                    if visual_deictic_scope is not None
+                    else MAX_ACTION_CURRENT_USER_CAMERA_IMAGES
+                )
             ),
         )
         action_history = []
@@ -205,19 +244,19 @@ class ActionCandidateComponent:
             )
             + visual_deictic_instruction
         )
-        eligible_candidates = self._filter_turn_action_candidates(
-            turn,
-            [
-                candidate
-                for candidate in self.candidates
-                if self.direct_action_selection or (
-                    candidate.category_id != FACIAL_EXPRESSION_CATEGORY_ID
-                    and candidate.candidate_id not in self._facial_expression_candidate_ids()
-                )
-                if scoped_candidate_ids is None
+        eligible_candidates = [
+            candidate
+            for candidate in base_eligible_candidates
+            if (
+                exact_action_route is None
+                or candidate.candidate_id
+                == exact_action_route.candidate.candidate_id
+            )
+            and (
+                scoped_candidate_ids is None
                 or candidate.candidate_id in scoped_candidate_ids
-            ],
-        )
+            )
+        ]
         if not eligible_candidates and not self.direct_action_selection:
             raise ValueError(
                 "per-turn action candidate constraints leave no executable action"
@@ -423,6 +462,11 @@ class ActionCandidateComponent:
                     turn.action_excluded_candidate_ids
                 ),
                 "compute_ms": compute_ms,
+                "exact_action_candidate_id": (
+                    exact_action_route.candidate.candidate_id
+                    if exact_action_route is not None
+                    else None
+                ),
                 "selection_definition_source": (
                     "short_definition_visual"
                     if visual_deictic_scope is not None

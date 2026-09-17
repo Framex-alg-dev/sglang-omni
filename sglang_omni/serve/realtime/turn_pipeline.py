@@ -1508,14 +1508,24 @@ class TurnPipeline:
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
                 )
 
-            # Direct selection consumes the raw turn, so it can run while the
-            # full intent parser is still finishing.  Legacy hierarchical mode
-            # continues to wait because it consumes intent.body_context().
+            # Only enforce mode may select an action from the raw turn before
+            # the canonical intent is ready: its grouped labels are the active
+            # safety gate. Shadow/off mode still uses the legacy intent as the
+            # authority, so wait for it before scoring as well; otherwise mixed
+            # commands such as "说二比一" lose the normalized body target and
+            # exact-action routing cannot constrain the candidate set.
             if (
                 intent_task is not None
                 and intent_supports_scope_future
                 and self.direct_action_selection
+                and getattr(self, "action_decision_batch_mode", "off")
+                == "enforce"
                 and not visual_gesture_answer
+                # A COPY_* gate result is already available and the intent task
+                # will immediately materialize its canonical body/face target.
+                # Wait for that cheap hand-off so candidate scoring can apply the
+                # correct visual scope instead of racing with turn.intent=None.
+                and not visual_scope_code
             ):
                 start_action_scoring()
             if intent_task is not None:

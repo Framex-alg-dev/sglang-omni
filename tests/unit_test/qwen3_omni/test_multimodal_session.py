@@ -56,6 +56,10 @@ from sglang_omni.serve.realtime.turn_pipeline import _build_request_base
 from sglang_omni.serve.realtime.action.numeric_reply import (
     NUMERIC_REPLY_ACTION_STAGE,
 )
+from sglang_omni.serve.realtime.action.decision import (
+    ACTION_DECISION_LABELS,
+    VISUAL_LABELS,
+)
 from sglang_omni.serve.realtime.turn_intent import TurnIntent
 
 
@@ -3548,7 +3552,11 @@ def numeric_gesture_candidates_by_value(
         for category in catalog.categories
         for child in category.children
     }
-    return {value: by_label[label] for value, label in enumerate(labels)}
+    return {
+        value: by_label[label]
+        for value, label in enumerate(labels)
+        if label in by_label
+    }
 
 
 async def start_numeric_reply_session(
@@ -3847,6 +3855,136 @@ async def test_enforced_grouped_decision_publishes_before_full_intent(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_visual_scope_intent_is_ready_before_direct_action_scoring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    async def visual_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        full_intent_start_event=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result("COPY_ACTION")
+        await asyncio.sleep(0)
+        return TurnIntent(
+            speech="none",
+            text="",
+            body="这个动作",
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate="COPY_ACTION",
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", visual_intent)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "off")
+    catalog = load_runtime_action_catalog()
+    session = make_session(
+        FakeWebSocket(),
+        PerformanceMatrixClient("P201"),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "visual-intent-before-action",
+            outputs=["action"],
+            action={},
+        )
+    )
+
+    scoring_observations = []
+
+    async def score_action(*args, turn, **kwargs):
+        scoring_observations.append(
+            (
+                turn.intent.body if turn.intent is not None else None,
+                turn.intent.visual_scope_gate if turn.intent is not None else None,
+            )
+        )
+        return (
+            {
+                "candidate_id": "000",
+                "action_id": "unsupported",
+                "execution_binding": {},
+                "execute": False,
+                "support_status": "unsupported",
+                "fallback_applied": False,
+            },
+            [],
+            1.0,
+            {"selection_stages": 1},
+        )
+
+    monkeypatch.setattr(session, "_score_action", score_action)
+    await session.handle_turn_start(user_turn_start("visual-copy-action"))
+    await session.handle_turn_commit(
+        user_turn_commit("visual-copy-action", text="做这个动作")
+    )
+
+    assert scoring_observations == [("这个动作", "COPY_ACTION")]
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_uses_canonical_intent_for_exact_mixed_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    async def mixed_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        full_intent_start_event=None,
+    ):
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        await asyncio.sleep(0)
+        return TurnIntent(
+            speech="verbatim",
+            text="二",
+            body="数字一手势",
+            body_mode="perform",
+            face="",
+            history=False,
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", mixed_intent)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "shadow")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
+    catalog = load_runtime_action_catalog()
+    client = PerformanceMatrixClient("P200", "258", "31")
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    await session.dispatch(
+        protocol_v1_session_start(
+            "shadow-exact-mixed-action",
+            outputs=["action"],
+            action={},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("say-two-show-one"))
+    await session.handle_turn_commit(
+        user_turn_commit("say-two-show-one", text="说二比一")
+    )
+
+    request = next(item for item in client.score_requests if item.stage == "single")
+    request_candidate_ids = {item.candidate_id for item in request.candidates}
+    assert request_candidate_ids - ACTION_DECISION_LABELS == {"258", "000"}
+    ready = next(event for event in ws.events if event["type"] == "turn.action.ready")
+    assert ready["action"]["candidate_id"] == "258"
+    assert ready["action"]["execute"] is True
+
+
+@pytest.mark.asyncio
 async def test_enforced_low_margin_decision_fails_closed_without_waiting_for_intent(
     monkeypatch,
 ):
@@ -3964,7 +4102,14 @@ async def test_unsupported_action_ready_does_not_wait_for_performance(monkeypatc
     published = asyncio.Event()
 
     async def intent(*args, **kwargs):
-        return generated_body_neutral_intent("你好呀")
+        return TurnIntent(
+            speech="generated",
+            text="你好呀",
+            body="当前角色不支持的身体动作",
+            body_mode="perform",
+            face="",
+            history=False,
+        )
 
     monkeypatch.setattr(pipeline, "infer_turn_intent", intent)
 
@@ -4179,6 +4324,7 @@ async def test_complete_reply_does_not_trigger_disabled_numeric_gesture(
 @pytest.mark.parametrize("direct_catalog", [False, True])
 async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
     outputs: list[str],
     direct_catalog: bool,
 ) -> None:
@@ -4201,6 +4347,11 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
         pipeline,
         'infer_turn_intent',
         infer_visual_gesture_answer,
+    )
+    monkeypatch.setenv("SGLANG_OMNI_RUNTIME_PROMPT_DIR", str(tmp_path))
+    write_runtime_prompt(
+        "user_image_reply_rules",
+        "ordinary final-reply image rules must not enter operand extraction",
     )
     monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_MODE", raising=False)
     catalog = (
@@ -4275,6 +4426,10 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
         for part in message.content
     ) == 2
     assert 'VISUAL_ARITHMETIC=add,A,B' in json.dumps(
+        [message.to_dict() for message in reply_request.messages],
+        ensure_ascii=False,
+    )
+    assert "ordinary final-reply image rules" not in json.dumps(
         [message.to_dict() for message in reply_request.messages],
         ensure_ascii=False,
     )
@@ -6524,6 +6679,11 @@ def test_user_camera_response_guard_has_equivalent_english_rule(
     assert "state that specific visibility limitation" in guard
     assert "If the current request is unrelated" in guard
     assert "do not explain image frames, video streams" in guard
+    assert "current user audio or text defines the task" in guard
+    assert "must not rewrite, narrow, or replace the user's task" in guard
+    assert "perform the calculation" in guard
+    assert "'this plus this'" in guard
+    assert "instead of answering a different task or guessing" in guard
 
 
 def test_user_image_action_rules_are_scoped_to_current_user_camera_turns(
@@ -6574,7 +6734,8 @@ def test_current_turn_priority_has_equivalent_english_rule() -> None:
     priority = session._reply_current_turn_priority_part()["text"]
 
     assert "Current user request takes priority" in priority
-    assert "current user message is the primary request" in priority
+    assert "current user message defines the task" in priority
+    assert "must not rewrite, narrow, replace, or omit that task" in priority
     assert "Use the provided history only when" in priority
     assert "do not continue, reuse, or repeat" in priority
     assert "Do not assume access to any history that was not provided" in priority
@@ -8694,24 +8855,7 @@ async def test_reply_uses_bounded_current_user_camera_images_and_drops_history(
         {"type": "audio"},
         {"type": "text", "text": "看看我"},
         {"type": "text", "text": "只回答本轮问题。"},
-        {
-            "type": "text",
-            "text": (
-                "[本轮用户摄像头画面]当前消息包含一张或多张来自本轮用户摄像头的画面，"
-                "按采集顺序排列，可作为回答本轮问题的视觉依据。这些画面只表示用户及其周围环境，"
-                "不表示当前角色自身，也不表示持续视频。"
-                "如果用户询问当前是否能看到本人，或者询问其衣着、画面中的人物、"
-                "物品或环境，请根据图中可直接观察到的内容回答。“你能看到我吗”"
-                "是询问当前画面中是否出现并能辨认用户，不是询问你作为 AI 的一般能力。"
-                "只要本轮已经提供画面，就不得声称无法访问摄像头、图片或画面，不得声称"
-                "只能处理文字或音频，也不得因为自己是 AI、助手或数字人而否认本轮视觉"
-                "输入。如果目标未出现在画面中，或者细节被遮挡、过暗、模糊，应说明具体"
-                "的可见性限制，不要笼统回答“我看不到画面”。"
-                "如果当前问题与用户或其环境的视觉内容无关，请忽略图片。只描述图中可以"
-                "直接观察到的内容，不推断身份、健康或其他无法从画面确认的信息。除非用户"
-                "明确询问，否则不要解释图片帧、视频流或内部输入方式。"
-            ),
-        },
+        session._reply_user_camera_response_guard_part(),
     ]
     assert "avatar-current" not in request.metadata["images"]
     assert request.metadata["images"][:2] == [
@@ -10124,6 +10268,66 @@ async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_fra
     assert context["category_scope"] == "visual_deictic:gesture"
     assert context["visual_scope_user_camera_image_count"] == 3
     assert context["selection_definition_source"] == "short_definition_visual"
+
+
+@pytest.mark.asyncio
+async def test_direct_exact_named_action_ignores_camera_and_scores_only_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_MODE", raising=False)
+    catalog = load_runtime_action_catalog()
+    assert catalog.direct_action_selection is True
+    client = PerformanceMatrixClient("P200", "258", "31")
+    session = make_session(
+        FakeWebSocket(),
+        client,
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "direct-exact-named-action",
+            outputs=["action"],
+            action={},
+            diagnostics={"include_action_scores": True},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("direct-exact-turn"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "direct-exact-request"
+    turn.intent = TurnIntent(
+        speech="verbatim",
+        text="二",
+        body="数字一手势",
+        body_mode="perform",
+        face="",
+        history=False,
+    )
+
+    action, _, _, context = await session._score_action_flat(
+        audios=["audio"],
+        images=["user-1", "user-2", "avatar"],
+        image_roles=["user_camera", "user_camera", "avatar_state"],
+        text=turn.intent.body_context(None),
+        avatar_state={"pose": "seated"},
+        turn_origin="user",
+        text_role="user_input",
+        trigger=None,
+        turn=turn,
+        request_base=turn.request_base,
+    )
+
+    request = next(item for item in client.score_requests if item.stage == "single")
+    request_candidate_ids = {item.candidate_id for item in request.candidates}
+    assert request_candidate_ids - ACTION_DECISION_LABELS == {"258", "000"}
+    assert ACTION_DECISION_LABELS - set(VISUAL_LABELS) <= request_candidate_ids
+    assert not set(VISUAL_LABELS) & request_candidate_ids
+    assert request.images == ["avatar"]
+    assert request.image_roles == ["avatar_state"]
+    assert action["candidate_id"] == "258"
+    assert context["exact_action_candidate_id"] == "258"
+    assert "category_scope" not in context
 
 
 @pytest.mark.asyncio
