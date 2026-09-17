@@ -68,11 +68,11 @@ _DEFAULT_ACTION_WARMUP_AUDIO_PATH = (
 def _load_production_action_catalog_support():
     """Import action-catalog startup code only on the production path."""
     from sglang_omni.models.qwen3_omni.global_action_catalog import (
-        load_global_action_catalog,
+        load_runtime_action_catalog,
         prewarm_global_action_catalog,
     )
 
-    return load_global_action_catalog(), prewarm_global_action_catalog
+    return load_runtime_action_catalog(), prewarm_global_action_catalog
 
 
 def _resolve_action_warmup_audio_path() -> str | None:
@@ -566,14 +566,18 @@ async def _run_server(
                     category_count=int(
                         os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60")
                     ),
-                    child_count=int(
-                        os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8")
+                    child_count=(
+                        global_action_catalog.candidate_count + 1
+                        if global_action_catalog.direct_action_selection
+                        else int(os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8"))
                     ),
-                    selection_mode=os.environ.get(
-                        "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
-                    )
-                    .strip()
-                    .lower(),
+                    selection_mode=(
+                        "flat_children"
+                        if global_action_catalog.direct_action_selection
+                        else os.environ.get(
+                            "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
+                        ).strip().lower()
+                    ),
                     timeout_s=float(
                         os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
                     ),

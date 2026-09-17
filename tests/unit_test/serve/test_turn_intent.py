@@ -495,3 +495,13 @@ def test_visual_imitation_prompt_preserves_the_unresolved_image_reference():
     assert '"body":"这个动作"' in SYSTEM
     assert '这个动作叫什么' in SYSTEM
     assert '"body_mode":"none"' in SYSTEM
+
+
+def test_permission_shaped_body_command_is_distinct_from_capability_question():
+    from sglang_omni.serve.realtime.turn_intent import SYSTEM
+
+    assert '你可以站起来 -> {"speech":"none"' in SYSTEM
+    assert '你可以站起来吗？ -> {"speech":"generated"' in SYSTEM
+    assert '你不可以站起来 -> {"speech":"none"' in SYSTEM
+    assert 'You can stand up now. -> {"speech":"none"' in SYSTEM
+    assert 'Can you stand up? -> {"speech":"generated"' in SYSTEM

@@ -34,7 +34,7 @@ SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE
 
 行为：
 
-- 默认值为 `64`，保持原有行为
+- realtime 默认最大值为 `169`；实际候选少于 169 时使用实际候选数
 - 支持范围为 `1–256`
 - 服务启动创建 `MultimodalSessionManager` 时校验非法值；非法值不会创建 session
 - batch 配置在 manager 初始化时解析，并固定传递给后续 session

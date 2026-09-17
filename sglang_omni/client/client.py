@@ -320,6 +320,7 @@ class Client:
         """Score all suffixes as one logical multimodal pipeline request."""
         score_started = time.perf_counter()
         validate_action_suffix_request(request)
+        snapshot_started = time.perf_counter()
         candidates = [
             {
                 "candidate_id": item.candidate_id,
@@ -329,14 +330,19 @@ class Client:
             }
             for item in request.candidates
         ]
+        candidate_snapshot_ms = (time.perf_counter() - snapshot_started) * 1000.0
         build_started = time.perf_counter()
         omni_request = self._build_action_scoring_request(request, candidates)
         client_build_ms = (time.perf_counter() - build_started) * 1000.0
         action_params = omni_request.params.get("action_scoring")
         if isinstance(action_params, dict):
             action_params["client_build_ms"] = round(client_build_ms, 3)
+            action_params["candidate_snapshot_ms"] = round(
+                candidate_snapshot_ms, 3
+            )
         phase: dict[str, Any] = {
             "client_build_ms": round(client_build_ms, 3),
+            "candidate_snapshot_ms": round(candidate_snapshot_ms, 3),
             "name": "waiting_for_action_score_slot",
             "slot_wait_ms": None,
             "pipeline_ms": None,
@@ -778,6 +784,7 @@ class Client:
             result = await self.score_action_suffixes(request)
             if stats_out is not None:
                 stats_out.update(result.stats)
+                stats_out["prefix_cached"] = result.prefix_cached
         except Exception:
             logger.warning(
                 "[ACTION_CATALOG_PREFILL] failed namespace=%s stage=%s",

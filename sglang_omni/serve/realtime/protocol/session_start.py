@@ -320,7 +320,7 @@ class SessionStartComponent:
                 raise ValueError(
                     f"action candidates must contain at most {MAX_ACTION_CANDIDATES} children"
                 )
-            if categories:
+            if categories and not self.direct_action_selection:
                 if (
                     not isinstance(raw_fallback_category_ids, list)
                     or not raw_fallback_category_ids
@@ -368,7 +368,7 @@ class SessionStartComponent:
                             f"{category_id}"
                         )
                     fallback_category_ids.append(category_id)
-            elif raw_fallback_category_ids is not None:
+            elif raw_fallback_category_ids is not None and not self.direct_action_selection:
                 raise ValueError(
                     "fallback_category_ids requires hierarchical action_candidates"
                 )
@@ -377,7 +377,7 @@ class SessionStartComponent:
         elif raw_fallback_category_ids is not None:
             raise ValueError("fallback_category_ids requires the action modality")
 
-        raw_prewarm_category_ids = event.get("prewarm_child_category_ids", [])
+        raw_prewarm_category_ids = [] if self.direct_action_selection else event.get("prewarm_child_category_ids", [])
         if not isinstance(raw_prewarm_category_ids, list):
             raise ValueError("prewarm_child_category_ids must be a list")
         if len(raw_prewarm_category_ids) > MAX_PREWARM_CHILD_CATEGORIES:
@@ -463,7 +463,10 @@ class SessionStartComponent:
             else:
                 self.action_selection_mode = selected_mode
 
-        if "text" in modalities and "action" in modalities:
+        if self.direct_action_selection:
+            self.action_selection_mode = ACTION_SELECTION_MODE_FLAT_CHILDREN
+
+        if "text" in modalities and "action" in modalities and not self.direct_action_selection:
             if self.action_selection_mode != ACTION_SELECTION_MODE_HIERARCHICAL:
                 raise ValueError(
                     "text and action fusion currently requires selection_mode=hierarchical"
@@ -686,12 +689,76 @@ class SessionStartComponent:
             else "flat_children"
         )
         self.action_prefix_cache_namespace = (
-            self.global_action_catalog.category_cache_namespace(self.action_locale)
+            self.global_action_catalog.action_cache_namespace(self.action_locale)
+            if self.direct_action_selection
+            else self.global_action_catalog.category_cache_namespace(self.action_locale)
             if self.global_action_catalog is not None and categories
             else f"{mode_namespace}:{self.action_locale}:{self.action_catalog_hash}"
         )
         prefill = getattr(self.client, "prefill_action_catalog", None)
-        if self.global_action_catalog is not None and categories:
+        if self.direct_action_selection and candidates:
+            # Warm every direct-action prefix that an ordinary Session can use
+            # before session.started is emitted.  User camera Turns carry an
+            # additional immutable policy block and therefore have a distinct
+            # scoped namespace from ordinary user Turns.
+            prefill_routes = (
+                (TURN_ORIGIN_USER, False),
+                (TURN_ORIGIN_USER, True),
+                (TURN_ORIGIN_PROACTIVE, False),
+            )
+            for origin, has_user_camera in prefill_routes:
+                prefill_started = time.perf_counter()
+                prefill_stats: dict[str, Any] = {}
+                camera_suffix = "-camera" if has_user_camera else ""
+                request_id = (
+                    f"session-{session_id}-single-prefill-{origin}{camera_suffix}"
+                )
+                instruction = self._build_session_action_profile_instruction(
+                    "single",
+                    turn_origin=origin,
+                    has_user_camera=has_user_camera,
+                )
+                namespace = self._direct_action_prefix_namespace(origin, instruction)
+                ready = callable(prefill) and await self._prefill_action_catalog_degraded(
+                    prefill, request_id=request_id,
+                    stats_out=prefill_stats,
+                    model=self.model_name,
+                    session_instance_id=self.session_instance_id,
+                    system_prompt=self._build_action_system_prompt(origin),
+                    candidates=[
+                        ActionScoreCandidate(
+                            candidate_id=c.candidate_id,
+                            suffix=c.candidate_id,
+                            action_id=c.action_id,
+                        )
+                        for c in candidates
+                    ] + [ActionScoreCandidate(
+                        candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
+                        suffix=UNSUPPORTED_CHILD_SCORE_ID,
+                        action_id=UNSUPPORTED_DECISION_ID,
+                    )],
+                    prefix_cache_namespace=namespace, stage="single",
+                    language=self.action_language, session_instruction=instruction,
+                )
+                if ready:
+                    self._prefilled_action_prefix_namespaces.add(namespace)
+                if origin == TURN_ORIGIN_USER and not has_user_camera:
+                    self.action_prefix_prefilled = bool(ready)
+                emit_structured_log(
+                    "performance", "session_action_single_prefill_completed",
+                    session_id=session_id, turn_origin=origin,
+                    has_user_camera=has_user_camera,
+                    prewarmed=bool(ready), stage="single",
+                    selection_mode="flat_children", locale=self.action_locale,
+                    session_instance_id=self.session_instance_id,
+                    request_id=request_id, prefix_cache_namespace=namespace,
+                    catalog_hash=self.global_action_catalog.catalog_hash,
+                    action_count=len(candidates), candidate_count=len(candidates) + 1,
+                    probe_candidate_count=1,
+                    elapsed_ms=round((time.perf_counter() - prefill_started) * 1000, 3),
+                    stats=prefill_stats,
+                )
+        elif self.global_action_catalog is not None and categories:
             locale_prewarm = self.global_action_prewarm.for_locale(self.action_locale)
             self.prewarmed_child_category_ids = sorted(
                 {item.category_id for item in categories}
@@ -887,7 +954,7 @@ class SessionStartComponent:
                         prewarmed=prewarmed,
                         elapsed_ms=elapsed_ms,
                     )
-        if self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
+        if not self.direct_action_selection and self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
             await self._prewarm_user_child_sessions(prefill)
         self.started = True
         emit_structured_log(

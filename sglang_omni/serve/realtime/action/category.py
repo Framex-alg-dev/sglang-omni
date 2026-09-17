@@ -46,6 +46,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCategory,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,18 @@ class ActionCategoryComponent:
         (
             action_history, action_history_audios, action_history_images,
             action_images, action_image_roles, action_context,
-        ) = self._build_bounded_action_context(audios, images, image_roles)
+        ) = self._build_bounded_action_context(
+            audios,
+            images,
+            image_roles,
+            current_user_camera_image_limit=(
+                MAX_ACTION_VISUAL_SCOPE_USER_CAMERA_IMAGES
+                if turn.intent is not None
+                and turn.intent.visual_scope_gate
+                and turn.intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
+                else MAX_ACTION_CURRENT_USER_CAMERA_IMAGES
+            ),
+        )
         action_history = []
         action_history_audios = []
         action_history_images = []
@@ -638,7 +650,9 @@ class ActionCategoryComponent:
                 system_prompt=self._build_category_system_prompt(),
                 candidates=category_candidates,
                 suffix_tokenization_mode="short_id",
-                micro_batch_size=self.action_micro_batch_size,
+                micro_batch_size=min(
+                    self.action_micro_batch_size, len(category_candidates)
+                ),
                 **common,
             )
             category_started = time.perf_counter()
@@ -1396,7 +1410,9 @@ class ActionCategoryComponent:
             **common,
             "stage": "child",
             "admission_priority": 1,
-            "micro_batch_size": self.action_micro_batch_size,
+            "micro_batch_size": min(
+                self.action_micro_batch_size, len(child_candidates)
+            ),
             "prefix_cache_namespace": child_session_namespace,
         }
         action_common["cache_static_system_only"] = not bool(

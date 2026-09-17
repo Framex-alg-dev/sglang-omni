@@ -88,7 +88,13 @@ PURE_ACTION_REPLY_VALIDATION_TIMEOUT_ENV = (
     "SGLANG_OMNI_PURE_ACTION_REPLY_VALIDATION_TIMEOUT_S"
 )
 DEFAULT_PURE_ACTION_REPLY_VALIDATION_TIMEOUT_S = 0.5
-MAX_ACTION_CURRENT_IMAGES = 8
+# Ordinary action selection needs the latest evidence, not a six-frame
+# approximation of video.  A language-gated visual-imitation request is
+# different: retaining a short stable tail prevents one transitional camera
+# frame from becoming the entire visual target while keeping the action path
+# bounded.
+MAX_ACTION_CURRENT_USER_CAMERA_IMAGES = 1
+MAX_ACTION_VISUAL_SCOPE_USER_CAMERA_IMAGES = 3
 # Legacy diagnostic-only bounds used when explicitly constructing an action
 # context with history. Production action scoring keeps include_history=False.
 MAX_ACTION_HISTORY_TURNS = 2
@@ -107,7 +113,7 @@ ACTION_SELECTION_MODE_ENV = "SGLANG_OMNI_ACTION_SELECTION_MODE"
 ACTION_SELECTION_MODE_HIERARCHICAL = "hierarchical"
 ACTION_SELECTION_MODE_FLAT_CHILDREN = "flat_children"
 ACTION_MICRO_BATCH_SIZE_ENV = "SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE"
-DEFAULT_ACTION_MICRO_BATCH_SIZE = 64
+DEFAULT_ACTION_MICRO_BATCH_SIZE = 169
 ACTION_CATEGORY_TOP_K_ENV = "SGLANG_OMNI_ACTION_CATEGORY_TOP_K"
 DEFAULT_ACTION_CATEGORY_TOP_K = 2
 MAX_ACTION_CATEGORY_TOP_K = 3
@@ -321,6 +327,38 @@ def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
             "prefix_chunks": [
                 dict(item) for item in stats.get("prefix_chunks", [])
             ],
+            "candidate_preparation": {
+                "snapshot_ms": float(stats.get("candidate_snapshot_ms", 0.0)),
+                "materialize_ms": float(
+                    stats.get("candidate_materialize_ms", 0.0)
+                ),
+                "prefix_copy_ms": float(
+                    stats.get("candidate_prefix_copy_ms", 0.0)
+                ),
+                "tensorize_ms": float(
+                    stats.get("candidate_tensorize_ms", 0.0)
+                ),
+                "req_init_ms": float(
+                    stats.get("candidate_req_init_ms", 0.0)
+                ),
+                "metadata_copy_ms": float(
+                    stats.get("candidate_metadata_copy_ms", 0.0)
+                ),
+                "mrope_ms": float(stats.get("candidate_mrope_ms", 0.0)),
+                "data_init_ms": float(
+                    stats.get("candidate_data_init_ms", 0.0)
+                ),
+                "short_suffix_cache_hit": bool(
+                    stats.get("candidate_short_suffix_cache_hit", False)
+                ),
+                "critical_wait_ms": float(
+                    stats.get("candidate_materialize_wait_ms", 0.0)
+                ),
+                "enqueue_ms": float(stats.get("candidate_enqueue_ms", 0.0)),
+                "queue_wait_ms": float(
+                    stats.get("candidate_queue_wait_ms", sum(suffix_queue_ms))
+                ),
+            },
         },
         "suffix": {
             "batch_count": int(stats.get("suffix_batch_count", len(suffix_batch_ms))),

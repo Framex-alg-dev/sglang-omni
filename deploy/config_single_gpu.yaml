@@ -15,6 +15,8 @@ runtime_overrides:
     server_args_overrides:
       # Bound long reply prefill so queued action suffixes can run promptly.
       chunked_prefill_size: 1024
+      # Allow the Thinker scheduler to execute larger action-candidate batches.
+      max_running_requests: 169
   audio_encoder:
     max_batch_wait_ms: 0
   image_encoder:

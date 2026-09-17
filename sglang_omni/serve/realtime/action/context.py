@@ -107,6 +107,9 @@ class ActionPipeline:
         image_roles: list[str],
         *,
         include_history: bool = False,
+        current_user_camera_image_limit: int = (
+            MAX_ACTION_CURRENT_USER_CAMERA_IMAGES
+        ),
     ) -> tuple[
         list[dict[str, Any]],
         list[str],
@@ -199,22 +202,20 @@ class ActionPipeline:
             ),
             None,
         )
-        eligible_indices = [
+        user_camera_indices = [
             index
             for index, role in enumerate(image_roles)
-            if role != IMAGE_ROLE_AVATAR_STATE or index == latest_avatar_index
+            if role != IMAGE_ROLE_AVATAR_STATE
         ]
-        selected_indices = eligible_indices[-MAX_ACTION_CURRENT_IMAGES:]
-        if (
-            latest_avatar_index is not None
-            and latest_avatar_index not in selected_indices
-        ):
-            selected_indices = sorted(
-                [
-                    latest_avatar_index,
-                    *selected_indices[-(MAX_ACTION_CURRENT_IMAGES - 1) :],
-                ]
-            )
+        if current_user_camera_image_limit < 0:
+            raise ValueError("current_user_camera_image_limit must be non-negative")
+        selected_indices = (
+            user_camera_indices[-current_user_camera_image_limit:]
+            if current_user_camera_image_limit
+            else []
+        )
+        if latest_avatar_index is not None:
+            selected_indices = sorted([latest_avatar_index, *selected_indices])
         bounded_images = [images[index] for index in selected_indices]
         bounded_image_roles = [image_roles[index] for index in selected_indices]
         truncated = len(images) != len(bounded_images)
@@ -228,6 +229,8 @@ class ActionPipeline:
             "ignored_history_avatar_image_count": 0,
             "received_current_image_count": len(images),
             "scored_current_image_count": len(bounded_images),
+            "dropped_current_image_count": len(images) - len(bounded_images),
+            "current_user_camera_image_limit": current_user_camera_image_limit,
             "truncated": truncated,
         }
         return (

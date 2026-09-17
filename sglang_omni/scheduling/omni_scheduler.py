@@ -402,6 +402,15 @@ class OmniScheduler:
         self._pending_request_builds: dict[str, tuple[Any, bool, Future]] = {}
         self._backlogged_request_build_payloads: deque[Any] = deque()
         self._request_build_max_pending_observed = 0
+        # Candidate requests are CPU-only to materialize.  Preparing them on a
+        # separate worker lets that work overlap the shared-prefix GPU prefill;
+        # the scheduler still sees the complete batch atomically.
+        self._action_candidate_build_executor: ThreadPoolExecutor | None = (
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="omni-action-candidate-build",
+            )
+        )
 
         # --- Core scheduling state (read/written by upstream methods) -----
         self.server_args = server_args
@@ -1223,17 +1232,77 @@ class OmniScheduler:
             with self._request_admission_lock:
                 enqueue_if_live()
 
+    @staticmethod
+    def _materialize_action_candidates(
+        parent: Any,
+        candidate_ids: tuple[str, ...],
+    ) -> tuple[list[Any], float]:
+        started_at = time.perf_counter()
+        batch = [
+            build_action_scoring_candidate_data(parent, candidate_id)
+            for candidate_id in candidate_ids
+        ]
+        return batch, (time.perf_counter() - started_at) * 1000.0
+
+    def _start_action_candidate_materialization(self, parent: Any) -> None:
+        plan = parent.action_scoring_plan
+        if plan.get("candidate_materialize_submitted_at") is not None:
+            return
+        candidate_ids = tuple(plan.get("candidate_ids", ()))
+        micro_batch_size = int(plan.get("micro_batch_size", 0))
+        executor = getattr(self, "_action_candidate_build_executor", None)
+        # Multi-batch requests retain the existing just-in-time behavior to
+        # avoid increasing peak host memory.  The production 169-candidate
+        # path is one physical batch and is prepared in full.
+        if (
+            executor is None
+            or len(candidate_ids) <= 1
+            or len(candidate_ids) > micro_batch_size
+        ):
+            return
+        plan["candidate_materialize_submitted_at"] = time.perf_counter()
+        plan["candidate_materialize_trigger"] = "prefix_gpu_dispatch"
+        plan["candidate_materialize_future"] = executor.submit(
+            self._materialize_action_candidates,
+            parent,
+            candidate_ids,
+        )
+
+    def _start_action_candidate_materialization_for_batch(self, batch: Any) -> None:
+        """Start CPU preparation only after the prefix batch is schedulable.
+
+        Submitting this worker during request admission made its Python object
+        construction contend with the scheduler for the GIL. At this point the
+        prefix batch is already selected and its runner inputs are built, so the
+        worker overlaps the GPU forward without delaying prefix admission.
+        """
+        for req in batch.reqs:
+            req_data = getattr(req, "_omni_data", None)
+            if getattr(req_data, "action_scoring_role", None) == "prefix":
+                self._start_action_candidate_materialization(req_data)
+
     def _build_and_enqueue_action_candidate_batch(
         self,
         parent: Any,
         candidate_ids: list[str] | tuple[str, ...],
     ) -> None:
-        """Build only the next suffix batch after the shared prefix completes."""
+        """Make a complete suffix batch visible to the scheduler atomically."""
         plan = parent.action_scoring_plan
-        batch = [
-            build_action_scoring_candidate_data(parent, candidate_id)
-            for candidate_id in candidate_ids
-        ]
+        future = plan.pop("candidate_materialize_future", None)
+        if future is not None:
+            wait_started = time.perf_counter()
+            batch, materialize_ms = future.result()
+            plan["candidate_materialize_wait_ms"] = (
+                time.perf_counter() - wait_started
+            ) * 1000.0
+            plan["candidate_materialize_ms"] = materialize_ms
+        else:
+            batch, materialize_ms = self._materialize_action_candidates(
+                parent, tuple(candidate_ids)
+            )
+            plan["candidate_materialize_ms"] = float(
+                plan.get("candidate_materialize_ms", 0.0)
+            ) + materialize_ms
         plan["candidate_data"] = batch
         plan["current_batch_ids"] = set(candidate_ids)
         self._enqueue_action_candidate_batch(parent, batch)
@@ -1253,11 +1322,15 @@ class OmniScheduler:
             req._omni_terminal_claimed = False
             req._coalesce_enqueue_t = time.perf_counter()
             self.waiting_queue.append(req)
+        enqueue_ms = (time.perf_counter() - batch_entered_at) * 1000.0
+        plan["candidate_enqueue_ms"] = float(
+            plan.get("candidate_enqueue_ms", 0.0)
+        ) + enqueue_ms
         _emit_event(
             request_id=parent.req.rid,
             stage="thinker",
             event_name="action_suffix_batch_queued",
-            metadata={"size": len(batch)},
+            metadata={"size": len(batch), "candidate_enqueue_ms": enqueue_ms},
         )
 
     def _handle_action_prefix_terminal(self, req: Any, data: Any) -> None:
@@ -1388,6 +1461,7 @@ class OmniScheduler:
         stats = {
             "queue_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "client_request_build_ms": float(plan.get("client_request_build_ms", 0.0)),
+            "candidate_snapshot_ms": float(plan.get("candidate_snapshot_ms", 0.0)),
             "server_request_build_ms": float(plan.get("server_request_build_ms", 0.0)),
             "scheduler_admission_ms": float(plan.get("scheduler_admission_ms", 0.0)),
             "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
@@ -1396,6 +1470,38 @@ class OmniScheduler:
             "suffix_unique_trie_edges": plan.get("suffix_unique_trie_edges"),
             "suffix_unique_first_tokens": plan.get("suffix_unique_first_tokens"),
             "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
+            "candidate_materialize_ms": float(
+                plan.get("candidate_materialize_ms", 0.0)
+            ),
+            "candidate_prefix_copy_ms": float(
+                plan.get("candidate_prefix_copy_ms", 0.0)
+            ),
+            "candidate_tensorize_ms": float(
+                plan.get("candidate_tensorize_ms", 0.0)
+            ),
+            "candidate_req_init_ms": float(
+                plan.get("candidate_req_init_ms", 0.0)
+            ),
+            "candidate_metadata_copy_ms": float(
+                plan.get("candidate_metadata_copy_ms", 0.0)
+            ),
+            "candidate_mrope_ms": float(
+                plan.get("candidate_mrope_ms", 0.0)
+            ),
+            "candidate_data_init_ms": float(
+                plan.get("candidate_data_init_ms", 0.0)
+            ),
+            "candidate_short_suffix_cache_hit": bool(
+                plan.get("candidate_short_suffix_cache_hit", False)
+            ),
+            "candidate_materialize_wait_ms": float(
+                plan.get("candidate_materialize_wait_ms", 0.0)
+            ),
+            "candidate_enqueue_ms": float(plan.get("candidate_enqueue_ms", 0.0)),
+            "candidate_queue_wait_ms": sum(
+                float(value)
+                for value in plan.get("suffix_batch_queue_wait_ms", [])
+            ),
             "preprocessing_ms": preprocessing_ms,
             "image_encoder_ms": image_encoder_ms,
             "audio_encoder_ms": audio_encoder_ms,
@@ -1708,6 +1814,7 @@ class OmniScheduler:
         self.forward_ct += 1
         batch.forward_iter = self.forward_ct
         sched_output = self._build_sched_output(batch)
+        self._start_action_candidate_materialization_for_batch(batch)
         mr_output = self._model_runner.execute(sched_output)
         self._emit_stream_output(sched_output, mr_output)
         return self._make_batch_result(mr_output)
@@ -1797,6 +1904,7 @@ class OmniScheduler:
         batch.forward_iter = self.forward_ct
         sched_output = self._build_sched_output(batch)
         pending_step = self._model_runner.execute_launch(sched_output)
+        self._start_action_candidate_materialization_for_batch(batch)
         return sched_output, pending_step
 
     def _run_batch_resolve(self, batch, sched_output, pending_step, skip_rids=()):
@@ -2105,18 +2213,27 @@ class OmniScheduler:
 
     def _shutdown_request_build_executor(self) -> None:
         executor = self._request_build_executor
-        if executor is None:
-            return
-        executor.shutdown(wait=False, cancel_futures=True)
-        self._request_build_executor = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+            self._request_build_executor = None
+        action_executor = getattr(self, "_action_candidate_build_executor", None)
+        if action_executor is not None:
+            action_executor.shutdown(wait=False, cancel_futures=True)
+            self._action_candidate_build_executor = None
 
     def abort(
         self, request_id: str, *, defer_running_cleanup: bool = True, _internal: bool = False
     ) -> None:
-        action_parent = self._action_scoring_requests.get(request_id)
+        action_scoring_requests = getattr(self, "_action_scoring_requests", None)
+        if action_scoring_requests is None:
+            action_scoring_requests = {}
+        action_parent = action_scoring_requests.get(request_id)
         action_internal_ids = []
         if action_parent is not None:
             plan = action_parent.action_scoring_plan or {}
+            candidate_future = plan.pop("candidate_materialize_future", None)
+            if candidate_future is not None:
+                candidate_future.cancel()
             action_internal_ids = [
                 item.req.rid
                 for item in plan.get("candidate_data", [])
@@ -2178,7 +2295,7 @@ class OmniScheduler:
             _remove_from_batch(self.last_batch, request_id)
             _remove_from_batch(self._async_pending_batch(), request_id)
         self._drain_inbox_for_request(request_id)
-        self._action_scoring_requests.pop(request_id, None)
+        action_scoring_requests.pop(request_id, None)
         for internal_id in action_internal_ids:
             if internal_id != request_id:
                 self.abort(

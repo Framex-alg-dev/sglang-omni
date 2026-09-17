@@ -207,6 +207,9 @@ class MultimodalSession:
         self.action_category_top1_max_ppl = normalize_action_category_top1_max_ppl(
             action_category_top1_max_ppl
         )
+        self.direct_action_selection = bool(
+            global_action_catalog and global_action_catalog.direct_action_selection
+        )
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
@@ -888,6 +891,9 @@ class MultimodalSessionManager:
             normalize_action_category_top1_min_margin()
         )
         self.action_category_top1_max_ppl = normalize_action_category_top1_max_ppl()
+        self.direct_action_selection = bool(
+            global_action_catalog and global_action_catalog.direct_action_selection
+        )
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
@@ -1115,6 +1121,8 @@ class MultimodalSessionManager:
             },
             "global_action_catalog": {
                 "configured": self.global_action_catalog is not None,
+                "direct_action_selection": self.direct_action_selection,
+                "action_prefix_statuses": dict(self.global_action_prewarm.action_prefix_statuses),
                 "catalog_hash": (
                     self.global_action_catalog.catalog_hash
                     if self.global_action_catalog is not None

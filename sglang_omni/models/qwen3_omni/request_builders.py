@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import logging
 import time
+from array import array
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -749,6 +751,32 @@ def _resolve_action_terminal_token_id(tokenizer: Any) -> int:
     return int(token_id)
 
 
+@functools.lru_cache(maxsize=64)
+def _cached_short_action_suffix_ids(
+    tokenizer: Any,
+    suffixes: tuple[str, ...],
+    terminal_token_id: int,
+) -> tuple[tuple[int, ...], ...]:
+    """Tokenize prefix-independent short action IDs once per catalog shape.
+
+    Session-start prewarm traverses this builder before ordinary turns, so the
+    production short-ID catalog normally populates this cache during prewarm.
+    Unlike descriptive suffixes, these IDs are explicitly tokenized without a
+    prefix and can therefore be reused safely across turns and sessions that
+    share the tokenizer and catalog suffixes.
+    """
+    return tuple(
+        (
+            *tuple(
+                int(value)
+                for value in tokenizer.encode(suffix, add_special_tokens=False)
+            ),
+            int(terminal_token_id),
+        )
+        for suffix in suffixes
+    )
+
+
 def _verified_scope_boundaries(prompt_cache, positions, cache_prefix_token_count):
     """Share only a published, ordinary-position prefix before private media.
 
@@ -830,7 +858,22 @@ def _prepare_action_scoring_request(
         if value is not None
     )
     terminal_token_id = _resolve_action_terminal_token_id(tokenizer)
-    if prompt_text:
+    suffix_tokenization_mode = action_spec.get("suffix_tokenization_mode")
+    short_suffix_cache_hit = False
+    if prompt_text and suffix_tokenization_mode == "short_id":
+        cache_info_before = _cached_short_action_suffix_ids.cache_info()
+        suffix_ids = list(
+            _cached_short_action_suffix_ids(
+                tokenizer,
+                tuple(item.suffix for item in candidates),
+                terminal_token_id,
+            )
+        )
+        short_suffix_cache_hit = (
+            _cached_short_action_suffix_ids.cache_info().hits
+            > cache_info_before.hits
+        )
+    elif prompt_text:
         tokenizations = tokenize_suffixes(
             tokenizer,
             prompt_text,
@@ -838,9 +881,7 @@ def _prepare_action_scoring_request(
             prefix_token_ids=prefix_ids,
             special_token_ids=special_token_ids,
             terminal_token_id=terminal_token_id,
-            suffix_only=(
-                action_spec.get("suffix_tokenization_mode") == "short_id"
-            ),
+            suffix_only=False,
         )
         suffix_ids = [item.suffix_token_ids for item in tokenizations]
     else:
@@ -952,18 +993,37 @@ def _prepare_action_scoring_request(
             item.candidate_id: tuple(ids)
             for item, ids in zip(candidates, suffix_ids, strict=True)
         },
+        "candidate_short_suffix_cache_hit": short_suffix_cache_hit,
         "terminal_token_id": terminal_token_id,
         "suffix_total_tokens": sum(len(ids) for ids in suffix_ids),
         "suffix_unique_trie_edges": len({tuple(ids[:end]) for ids in suffix_ids for end in range(1, len(ids) + 1)}),
         "suffix_unique_first_tokens": len(first_token_ids),
-        # Candidate Req objects are built lazily after the shared prefix
-        # terminalizes. Keeping only suffix ids here avoids materializing
-        # N full prefix+suffix token arrays before the prefix can enter the
-        # scheduler.
+        # Candidate Req objects are not built in the request-builder critical
+        # path. The scheduler may materialize them on a background worker while
+        # the shared prefix runs, then releases the complete physical batch.
         "candidate_data": [],
         "candidate_tokenizer": tokenizer,
         "candidate_vocab_size": vocab_size,
         "candidate_prefix_positions": prefix_positions,
+        # Immutable snapshots used by the background candidate materializer.
+        # Do not read the live prefix Req while it is executing on the GPU.
+        "candidate_prefix_ids": tuple(prefix_ids),
+        # Req needs a private mutable array, but cloning an array is a C-level
+        # memcpy. Rebuilding it from the Python tuple for every candidate walks
+        # the entire prefix under the GIL.
+        "candidate_prefix_array": array("q", prefix_ids),
+        "candidate_omni_model_inputs": (
+            dict(prefix_req.omni_model_inputs)
+            if prefix_req.omni_model_inputs is not None
+            else None
+        ),
+        "candidate_model_inputs": dict(prefix_data.model_inputs),
+        "candidate_sampling_params": copy.copy(prefix_req.sampling_params),
+        "candidate_mrope_position_delta": (
+            getattr(prefix_req.multimodal_inputs, "mrope_position_delta", None)
+            if prefix_req.multimodal_inputs is not None
+            else None
+        ),
         "prefix_token_count": len(prefix_ids),
         "cache_prefix_token_count": cache_prefix_token_count,
         "public_prefix_token_count": (prompt_cache.get("public_prefix_token_count", 0) if isinstance(prompt_cache, dict) else 0),
@@ -980,6 +1040,9 @@ def _prepare_action_scoring_request(
         "prefix_chunk_timings": [],
         "started_at": float(action_spec.get("client_started_at", time.perf_counter())),
         "client_request_build_ms": float(action_spec.get("client_build_ms", 0.0)),
+        "candidate_snapshot_ms": float(
+            action_spec.get("candidate_snapshot_ms", 0.0)
+        ),
         "server_build_started_at": server_build_started,
         "server_request_build_ms": 0.0,
         "scheduler_queue_entered_at": None,
@@ -987,6 +1050,15 @@ def _prepare_action_scoring_request(
         "prefix_scheduler_started_at": None,
         "prefix_prefill_ms": 0.0,
         "suffix_batch_queue_wait_ms": [],
+        "candidate_materialize_ms": 0.0,
+        "candidate_prefix_copy_ms": 0.0,
+        "candidate_tensorize_ms": 0.0,
+        "candidate_req_init_ms": 0.0,
+        "candidate_metadata_copy_ms": 0.0,
+        "candidate_mrope_ms": 0.0,
+        "candidate_data_init_ms": 0.0,
+        "candidate_materialize_wait_ms": 0.0,
+        "candidate_enqueue_ms": 0.0,
         "suffix_batch_scheduler_started_at": None,
         "candidate_prefix_recompute_tokens": {},
     }
@@ -1018,47 +1090,92 @@ def build_action_scoring_candidate_data(
     if not isinstance(suffix_map, dict) or candidate_id not in suffix_map:
         raise KeyError(f"unknown action scoring candidate: {candidate_id}")
     suffix = tuple(int(value) for value in suffix_map[candidate_id])
-    prefix_token_count = int(plan["prefix_token_count"])
     prefix_req = prefix_data.req
-    origin_ids = list(prefix_req.origin_input_ids)
-    if len(origin_ids) < prefix_token_count:
-        raise RuntimeError("action scoring prefix request is shorter than its token count")
-    prefix_ids = tuple(int(value) for value in origin_ids[:prefix_token_count])
-    full_ids = torch.tensor(prefix_ids + suffix, dtype=torch.long)
-    sampling_params = copy.copy(prefix_req.sampling_params)
+    prefix_ids = plan.get("candidate_prefix_ids")
+    if not isinstance(prefix_ids, tuple):
+        prefix_token_count = int(plan["prefix_token_count"])
+        origin_ids = prefix_req.origin_input_ids
+        if len(origin_ids) < prefix_token_count:
+            raise RuntimeError(
+                "action scoring prefix request is shorter than its token count"
+            )
+        prefix_ids = tuple(
+            int(value) for value in origin_ids[:prefix_token_count]
+        )
+    phase_started = time.perf_counter()
+    prefix_array = plan.get("candidate_prefix_array")
+    if isinstance(prefix_array, array) and prefix_array.typecode == "q":
+        full_id_array = prefix_array[:]
+    else:
+        full_id_array = array("q", prefix_ids)
+    full_id_array.extend(suffix)
+    plan["candidate_prefix_copy_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    # Candidate scheduling consumes Req.origin_input_ids. The parallel
+    # SGLangARRequestData.input_ids tensor was never read, yet materializing it
+    # copied the complete prefix 169 more times.
+    plan["candidate_tensorize_ms"] += 0.0
+
+    sampling_params = plan.get("candidate_sampling_params")
+    if sampling_params is None:
+        sampling_params = copy.copy(prefix_req.sampling_params)
+    phase_started = time.perf_counter()
     candidate_req = Req(
         rid=f"{prefix_req.rid}::candidate::{candidate_id}",
         origin_input_text="",
-        origin_input_ids=full_ids.tolist(),
+        origin_input_ids=full_id_array,
         sampling_params=sampling_params,
         return_logprob=True,
         vocab_size=int(plan["candidate_vocab_size"]),
     )
+    plan["candidate_req_init_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    phase_started = time.perf_counter()
     candidate_req.tokenizer = plan["candidate_tokenizer"]
     candidate_req.extra_key = plan["cache_key"]
     candidate_req.return_logprob = True
     candidate_req.logprob_start_len = len(prefix_ids)
-    candidate_req.omni_model_inputs = (
-        dict(prefix_req.omni_model_inputs)
-        if prefix_req.omni_model_inputs is not None
-        else None
-    )
+    # The runner clears the per-Req reference after use but does not mutate the
+    # immutable snapshot itself. Sharing it avoids 169 shallow dictionary
+    # copies while retaining the safety fallback if radix cache recomputation
+    # ever includes multimodal prefix tokens.
+    candidate_req.omni_model_inputs = plan.get("candidate_omni_model_inputs")
     candidate_req._omni_consumed = None
     candidate_req._action_scoring_role = "candidate"
+    plan["candidate_metadata_copy_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    phase_started = time.perf_counter()
     prefix_positions = plan.get("candidate_prefix_positions")
     if prefix_positions is not None:
         candidate_req.multimodal_inputs = MultimodalInputs(mm_items=[])
-        candidate_req.multimodal_inputs.mrope_positions = _extend_action_mrope_positions(
-            prefix_positions, len(suffix)
-        )
-        candidate_req.multimodal_inputs.mrope_position_delta = getattr(
-            prefix_req.multimodal_inputs, "mrope_position_delta", None
+        mrope_cache = plan.setdefault("candidate_mrope_positions_by_suffix_len", {})
+        suffix_len = len(suffix)
+        extended_positions = mrope_cache.get(suffix_len)
+        if extended_positions is None:
+            extended_positions = _extend_action_mrope_positions(
+                prefix_positions, suffix_len
+            )
+            mrope_cache[suffix_len] = extended_positions
+        candidate_req.multimodal_inputs.mrope_positions = extended_positions
+        candidate_req.multimodal_inputs.mrope_position_delta = plan.get(
+            "candidate_mrope_position_delta"
         )
     else:
         candidate_req.multimodal_inputs = None
+    plan["candidate_mrope_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    phase_started = time.perf_counter()
     candidate_data = SGLangARRequestData(
-        input_ids=full_ids,
-        model_inputs=dict(prefix_data.model_inputs),
+        input_ids=None,
+        model_inputs=plan.get("candidate_model_inputs", prefix_data.model_inputs),
         max_new_tokens=0,
         temperature=0.0,
         output_ids=candidate_req.output_ids,
@@ -1079,6 +1196,9 @@ def build_action_scoring_candidate_data(
         )
         if key in plan
     }
+    plan["candidate_data_init_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
     return candidate_data
 
 

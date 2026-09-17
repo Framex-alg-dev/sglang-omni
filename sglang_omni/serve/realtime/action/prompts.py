@@ -708,7 +708,15 @@ class ActionPromptComponent:
         return ""
 
 
+    def _direct_action_prefix_namespace(self, turn_origin: str, instruction: str) -> str:
+        return self._session_action_prefix_namespace(
+            base_namespace=self.global_action_catalog.action_cache_namespace(self.action_locale, turn_origin),
+            stage="single", turn_origin=turn_origin, session_instruction=instruction,
+        )
+
     def _build_action_system_prompt(self, turn_origin: str = "user") -> str:
+        if self.direct_action_selection:
+            return self.global_action_catalog.action_system_prompt_for(self.action_locale, turn_origin)
         if self.action_language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the fixed set for this conversation.",

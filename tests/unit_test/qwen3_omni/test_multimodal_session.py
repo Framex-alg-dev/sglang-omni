@@ -27,6 +27,7 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     GlobalActionCatalog,
     GlobalActionCatalogPrewarmStatus,
     load_global_action_catalog,
+    load_runtime_action_catalog,
 )
 from sglang_omni.preprocessing.image import is_prepared_image_wire
 from sglang_omni.serve.realtime.multimodal import (
@@ -1972,13 +1973,29 @@ def test_bounded_context_keeps_only_latest_current_avatar_image() -> None:
         context,
     ) = session._build_bounded_action_context([], images, roles)
 
-    assert len(bounded_images) == 8
+    assert bounded_images == ["avatar-latest", "user-9"]
     assert bounded_images[0] == "avatar-latest"
     assert "avatar-old" not in bounded_images
     assert bounded_roles.count("avatar_state") == 1
     assert context["received_current_image_count"] == 11
-    assert context["scored_current_image_count"] == 8
+    assert context["scored_current_image_count"] == 2
+    assert context["dropped_current_image_count"] == 9
+    assert context["current_user_camera_image_limit"] == 1
     assert context["truncated"] is True
+
+    visual_context = session._build_bounded_action_context(
+        [],
+        images,
+        roles,
+        current_user_camera_image_limit=3,
+    )
+    assert visual_context[3] == [
+        "avatar-latest",
+        "user-7",
+        "user-8",
+        "user-9",
+    ]
+    assert visual_context[5]["current_user_camera_image_limit"] == 3
 
 
 def test_action_history_does_not_retain_avatar_images() -> None:
@@ -3540,6 +3557,20 @@ async def start_numeric_reply_session(
     *,
     outputs: list[str] | None = None,
 ) -> object:
+    if catalog.direct_action_selection:
+        await session.dispatch(
+            protocol_v1_session_start(
+                "numeric-reply-session",
+                outputs=outputs or ["text", "action"],
+                diagnostics={"include_action_scores": True},
+                reply={
+                    "instructions": "自然、简洁地回答用户问题。",
+                    "unsupported_action_text": "这个动作暂时做不了。",
+                },
+                action={},
+            )
+        )
+        return catalog.categories[0]
     reply_category, silent_category = system_accompaniment_categories(catalog)
     numeric_candidates = numeric_gesture_candidates_by_value(catalog)
     allowed = [
@@ -3822,9 +3853,11 @@ async def test_complete_reply_does_not_trigger_disabled_numeric_gesture(
     ["text", "action"],
     ["text", "audio", "expression", "action"],
 ])
+@pytest.mark.parametrize("direct_catalog", [False, True])
 async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
     monkeypatch: pytest.MonkeyPatch,
     outputs: list[str],
+    direct_catalog: bool,
 ) -> None:
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
 
@@ -3846,9 +3879,18 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
         'infer_turn_intent',
         infer_visual_gesture_answer,
     )
-    catalog = load_global_action_catalog()
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_MODE", raising=False)
+    catalog = (
+        load_runtime_action_catalog()
+        if direct_catalog
+        else load_global_action_catalog()
+    )
     numeric = numeric_gesture_candidates_by_value(catalog)
-    reply_category, _ = system_accompaniment_categories(catalog)
+    reply_category = (
+        catalog.categories[0]
+        if direct_catalog
+        else system_accompaniment_categories(catalog)[0]
+    )
     client = PureActionNumericReplyFusionClient(
         category_id=reply_category.category_id,
         numeric_candidate_id=numeric[4].candidate_id,
@@ -3895,6 +3937,10 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
 
     assert not any(
         request.stage == NUMERIC_REPLY_ACTION_STAGE
+        for request in client.score_requests
+    )
+    assert not any(
+        request.stage in {"single", "category", "child", "performance"}
         for request in client.score_requests
     )
     reply_request = client.reply_requests[0]
@@ -6478,6 +6524,45 @@ async def test_shared_silent_intent_is_rechecked_by_speech_mode(
 
 
 @pytest.mark.asyncio
+async def test_visual_imitation_gate_is_authoritative_pure_action_route() -> None:
+    client = ReplySpeechModeClient("S0")
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-visual-imitation-route",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-visual-imitation-route"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-visual-imitation-route"
+    turn.intent = TurnIntent(
+        speech="none",
+        text="",
+        body="这个手势",
+        body_mode="perform",
+        face="",
+        history=False,
+        elapsed_ms=11.0,
+        visual_scope_gate="V01",
+    )
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        ["audio-current"],
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "PURE_ACTION"
+    assert route.stats == {"source": "visual_scope_gate"}
+    assert client.score_requests == []
+
+
+@pytest.mark.asyncio
 async def test_shared_generated_intent_keeps_language_fast_path() -> None:
     from sglang_omni.serve.realtime.turn_intent import TurnIntent
 
@@ -8930,8 +9015,8 @@ async def test_nested_catalog_runs_two_stages_in_one_turn() -> None:
     assert child_request.prefix_cache_namespace.startswith(
         f"{session.action_prefix_cache_namespace}:child:B1,B2:session:{session.session_instance_id}:"
     )
-    assert category_request.micro_batch_size == 64
-    assert child_request.micro_batch_size == 64
+    assert category_request.micro_batch_size == 2
+    assert child_request.micro_batch_size == 3
     assert (
         "category_id=B1｜类别=基础姿态｜说明=姿态变化"
         in category_request.system_prompt
@@ -9627,6 +9712,83 @@ async def test_visual_deictic_action_scores_only_the_named_range(
 
 
 @pytest.mark.asyncio
+async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_MODE", raising=False)
+    catalog = load_runtime_action_catalog()
+    assert catalog.direct_action_selection is True
+    client = PerformanceMatrixClient("P200", "258", "31")
+    session = make_session(
+        FakeWebSocket(),
+        client,
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "direct-visual-deictic",
+            outputs=["action"],
+            action={},
+            diagnostics={"include_action_scores": True},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("direct-visual-turn"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "direct-visual-request"
+    turn.intent = TurnIntent(
+        speech="none",
+        text="",
+        body="这个手势",
+        body_mode="perform",
+        face="",
+        history=False,
+        visual_scope_gate="V01",
+    )
+    images = [*(f"user-{index}" for index in range(1, 7)), "avatar"]
+    roles = [*("user_camera" for _ in range(6)), "avatar_state"]
+
+    action, _, _, context = await session._score_action_flat(
+        audios=["audio"],
+        images=images,
+        image_roles=roles,
+        text=None,
+        avatar_state={"pose": "seated"},
+        turn_origin="user",
+        text_role="user_input",
+        trigger=None,
+        turn=turn,
+        request_base=turn.request_base,
+    )
+
+    request = next(item for item in client.score_requests if item.stage == "single")
+    request_ids = {item.candidate_id for item in request.candidates}
+    expected_ids = {
+        child.candidate_id
+        for category in session.categories
+        if "手部与手势" in " ".join(category.category_path)
+        for child in category.children
+    }
+    assert request_ids == expected_ids | {"000"}
+    assert len(request_ids) < len(session.candidates) + 1
+    assert request.images == ["user-4", "user-5", "user-6", "avatar"]
+    assert request.image_roles == [
+        "user_camera",
+        "user_camera",
+        "user_camera",
+        "avatar_state",
+    ]
+    target = session.candidate_by_id["258"]
+    assert f"视觉定义={target.short_definition}" in request.prefix
+    assert "avatar_state 只表示数字人当前状态" in request.prefix
+    assert action["candidate_id"] == "258"
+    assert context["category_scope"] == "visual_deictic:gesture"
+    assert context["visual_scope_user_camera_image_count"] == 3
+    assert context["selection_definition_source"] == "short_definition_visual"
+
+
+@pytest.mark.asyncio
 async def test_user_camera_natural_reaction_is_candidate_bounded() -> None:
     from sglang_omni.serve.realtime.turn_intent import TurnIntent
 
@@ -9888,6 +10050,13 @@ async def test_versioned_catalog_alias_routes_without_child_rejection() -> None:
 
 
 def test_action_micro_batch_size_reads_environment_and_is_fixed_on_manager(monkeypatch) -> None:
+    monkeypatch.delenv(ACTION_MICRO_BATCH_SIZE_ENV, raising=False)
+    default_manager = MultimodalSessionManager(
+        client=FakeClient(),
+        model_name="Qwen3-Omni-30B-A3B-Instruct",
+    )
+    assert default_manager.action_micro_batch_size == 169
+
     monkeypatch.setenv(ACTION_MICRO_BATCH_SIZE_ENV, "128")
     manager = MultimodalSessionManager(
         client=FakeClient(),

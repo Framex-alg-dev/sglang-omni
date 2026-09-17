@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
@@ -472,6 +472,34 @@ class GlobalActionCatalog:
         str, Mapping[str, str]
     ] = field(default_factory=lambda: MappingProxyType({}))
 
+    direct_action_selection: bool = False
+
+    def action_system_prompt_for(self, locale: str, turn_origin: str = "user") -> str:
+        locale = _normalize_prompt_locale(locale)
+        english = locale == "en-US"
+        lines = [
+            "Select exactly one candidate_id from the complete action list below."
+            if english else "请直接从以下完整动作列表选择一个 candidate_id，只输出一个结果。",
+            DIRECTION_REFERENCE_POLICY_EN if english else DIRECTION_REFERENCE_POLICY,
+            child_unsupported_policy(locale).replace(
+                "its semantic category has already been selected, but none of the candidates allowed in that category for this conversation",
+                "none of the candidates in the complete action list",
+            ).replace(UNSUPPORTED_CHILD_SHORT_DEFINITION,
+                      "用户明确要求执行动作，但完整动作列表中没有候选能够完成该请求"),
+        ]
+        for item in self.candidate_by_id.values():
+            definition = item.effective_definition(turn_origin)
+            lines.append(
+                f"candidate_id={item.candidate_id} | action={item.source_label} | description={definition}"
+                if english else
+                f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={definition}"
+            )
+        return mixed_instruction_policy(locale, "body") + "\n\n" + "\n".join(lines)
+
+    def action_cache_namespace(self, locale: str, turn_origin: str = "user") -> str:
+        digest = _sha256_text(self.action_system_prompt_for(locale, turn_origin))
+        return f"global-actions:{self.catalog_hash}:{locale}:{turn_origin}:{digest}"
+
     @property
     def candidate_count(self) -> int:
         return len(self.candidate_by_id)
@@ -575,6 +603,10 @@ class GlobalActionCatalogPrewarmStatus:
         default_factory=lambda: MappingProxyType({})
     )
 
+    action_prefix_statuses: Mapping[str, bool] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
     @classmethod
     def not_run(cls) -> "GlobalActionCatalogPrewarmStatus":
         return cls(False, frozenset(), frozenset(), 0.0)
@@ -594,14 +626,102 @@ class GlobalActionCatalogPrewarmStatus:
         )
 
 
+def load_runtime_action_catalog() -> GlobalActionCatalog:
+    """Production defaults to direct selection from the limited catalog."""
+    mode = os.environ.get("SGLANG_OMNI_ACTION_CATALOG_MODE", "limited")
+    if mode == "hierarchical":
+        return load_global_action_catalog()
+    if mode != "limited":
+        raise ValueError("SGLANG_OMNI_ACTION_CATALOG_MODE must be limited or hierarchical")
+    path = os.environ.get(GLOBAL_ACTION_CATALOG_PATH_ENV) or files("sglang_omni").joinpath(
+        "assets/character_limited_action_global_catalog.json"
+    )
+    return replace(load_global_action_catalog(path), direct_action_selection=True)
+
+
+async def _prewarm_direct_actions(
+    client: Any, *, model: str, catalog: GlobalActionCatalog,
+) -> GlobalActionCatalogPrewarmStatus:
+    started = time.perf_counter()
+    prefill = getattr(client, "prefill_action_catalog", None)
+    timeout = float(os.environ.get(GLOBAL_ACTION_PREWARM_TIMEOUT_ENV, "10"))
+    if not 0 < timeout < float("inf"):
+        raise ValueError("global action prewarm timeout must be finite and positive")
+    budget = float(os.environ.get("SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S", "30"))
+    if not 0 < budget < float("inf"):
+        raise ValueError("global prewarm budget must be finite and positive")
+    statuses: dict[str, bool] = {}
+    candidates = [
+        ActionScoreCandidate(
+            candidate_id=c.candidate_id, suffix=c.candidate_id, action_id=c.action_id,
+        )
+        for c in catalog.candidate_by_id.values()
+    ]
+    candidates.append(ActionScoreCandidate(
+        candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
+        suffix=UNSUPPORTED_CHILD_SCORE_ID,
+        action_id=UNSUPPORTED_DECISION_ID,
+    ))
+    for locale in SUPPORTED_ACTION_PROMPT_LOCALES:
+        for origin in ("user", "proactive"):
+            item_started = time.perf_counter()
+            stats: dict[str, Any] = {}
+            request_id = f"global-action-single-prewarm-{locale}-{origin}"
+            namespace = catalog.action_cache_namespace(locale, origin)
+            failure_reason = None
+            ready = False
+            try:
+                remaining = budget - (time.perf_counter() - started)
+                if callable(prefill) and remaining > 0:
+                    ready = bool(await asyncio.wait_for(
+                        prefill(
+                            request_id=request_id,
+                            model=model,
+                            system_prompt=catalog.action_system_prompt_for(locale, origin),
+                            candidates=candidates,
+                            stage="single",
+                            language=ACTION_PROMPT_LANGUAGE_BY_LOCALE[locale],
+                            prefix_cache_namespace=namespace,
+                            stats_out=stats,
+                        ),
+                        timeout=min(timeout, remaining),
+                    ))
+                    if not ready:
+                        failure_reason = "prefill_returned_false"
+                else:
+                    failure_reason = "client_unavailable" if not callable(prefill) else "budget_exhausted"
+            except Exception as exc:
+                failure_reason = type(exc).__name__
+                logger.warning("Direct action prewarm failed: %s %s", locale, origin, exc_info=True)
+            statuses[f"{locale}:{origin}"] = ready
+            emit_structured_log(
+                "performance", "global_action_single_prewarm_completed",
+                locale=locale, turn_origin=origin, prewarmed=ready,
+                stage="single", selection_mode="flat_children",
+                catalog_hash=catalog.catalog_hash,
+                request_id=request_id, prefix_cache_namespace=namespace,
+                action_count=catalog.candidate_count,
+                candidate_count=len(candidates), probe_candidate_count=1,
+                elapsed_ms=round((time.perf_counter() - item_started) * 1000, 3),
+                failure_reason=failure_reason, stats=stats,
+            )
+    return GlobalActionCatalogPrewarmStatus(
+        False, frozenset(), frozenset(),
+        round((time.perf_counter() - started) * 1000, 3),
+        action_prefix_statuses=MappingProxyType(statuses),
+    )
+
+
 async def prewarm_global_action_catalog(
     client: Any,
     *,
     model: str,
     catalog: GlobalActionCatalog,
 ) -> GlobalActionCatalogPrewarmStatus:
-    """Best-effort prefill of both localized Category and Child prefixes."""
+    """Best-effort prefill of the active catalog scoring prefixes."""
 
+    if catalog.direct_action_selection:
+        return await _prewarm_direct_actions(client, model=model, catalog=catalog)
     started = time.perf_counter()
     prefill = getattr(client, "prefill_action_catalog", None)
     if not callable(prefill):

@@ -1541,7 +1541,14 @@ def test_action_scoring_candidate_requests_are_materialized_lazily(stage):
         assert plan["prefix_chunk_timings"] == []
 
         candidate_data = build_action_scoring_candidate_data(req_data, "A1")
-        assert candidate_data.req.origin_input_ids == [11, 12, 13, 1001, 99]
+        assert list(candidate_data.req.origin_input_ids) == [11, 12, 13, 1001, 99]
+        assert candidate_data.input_ids is None
+        assert candidate_data.model_inputs is plan["candidate_model_inputs"]
+        assert candidate_data.req.origin_input_ids is not plan["candidate_prefix_array"]
+        assert list(plan["candidate_prefix_array"]) == [11, 12, 13]
+        assert plan["candidate_tensorize_ms"] == 0.0
+        assert plan["candidate_prefix_copy_ms"] >= 0.0
+        assert plan["candidate_req_init_ms"] >= 0.0
         assert candidate_data.action_scoring_candidate_id == "A1"
         plan.update(stage=stage, turn_origin="user", admission_priority=0,
                     session_id="session-test", logical_request_id="turn-test")

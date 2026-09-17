@@ -1183,6 +1183,11 @@ class TurnPipeline:
                 )
                 self._ensure_turn_processing(turn)
 
+            visual_gesture_answer = bool(
+                turn.intent is not None
+                and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+            )
+
             reply_history_route_task: asyncio.Task[Any] | None = None
             async def start_reply_history_route() -> Any:
                 # Delay model-backed routing along with reply/performance work.
@@ -1218,6 +1223,7 @@ class TurnPipeline:
                     "action" not in self.modalities
                     or action_task is not None
                     or early_expression
+                    or visual_gesture_answer
                 ):
                     return
                 action_started = time.perf_counter()
@@ -1236,7 +1242,7 @@ class TurnPipeline:
                         current_audio_list,
                         prepared_current_images,
                         current_image_roles,
-                        turn.intent.body_context(turn.text) if turn.intent else turn.text,
+                        turn.intent.body_context(turn.text) if turn.intent and not self.direct_action_selection else turn.text,
                         turn.avatar_state,
                         turn_origin=turn.turn_origin,
                         text_role=turn.text_role,
@@ -1308,6 +1314,7 @@ class TurnPipeline:
                 if (
                     "action" in self.modalities
                     and "expression" in self.modalities
+                    and not self.direct_action_selection
                     and decision.request_scope == "expression_only"
                     and decision.expression is not None
                     and not decision.expression_unsupported
@@ -1348,6 +1355,7 @@ class TurnPipeline:
                 and not provided_reply
                 and turn.intent is not None
                 and "action" in self.modalities
+                and not visual_gesture_answer
                 and not (turn.intent.face and turn.intent.body_mode == "none")
             )
             if action_priority_enabled:
@@ -1389,6 +1397,7 @@ class TurnPipeline:
                         else "provided_reply" if provided_reply
                         else "intent_unavailable" if turn.intent is None
                         else "action_output_disabled" if "action" not in self.modalities
+                        else "visual_gesture_answer" if visual_gesture_answer
                         else "expression_only"
                     ),
                 )
@@ -1417,7 +1426,10 @@ class TurnPipeline:
                             trace_id=turn.trace_id, after_commit_ms=self._after_commit_ms(turn),
                             voice_tone=turn.intent.voice_tone, voice_pace=turn.intent.voice_pace,
                         )
-                if "expression" in self.modalities or turn.intent is None:
+                if (
+                    not visual_gesture_answer
+                    and ("expression" in self.modalities or turn.intent is None)
+                ):
                     performance_task = track_branch(
                         infer_performance_and_release(),
                         name=f"session-performance-{self.session_id}-{turn.turn_id}",
@@ -1481,10 +1493,6 @@ class TurnPipeline:
             if reply_history_route_task is not None:
                 reply_history_route = await reply_history_route_task
 
-            visual_gesture_answer = bool(
-                turn.intent is not None
-                and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
-            )
             preserve_language_reply_on_unsupported_action = bool(
                 fusion_reply
                 and turn.turn_origin == TURN_ORIGIN_USER
@@ -1541,7 +1549,8 @@ class TurnPipeline:
             maybe_schedule_category_discard()
             if provisional_discard_task is not None:
                 await provisional_discard_task
-            start_action_scoring()
+            if not visual_gesture_answer:
+                start_action_scoring()
 
             if knowledge_prepare_task is not None and pure_action_reply:
                 if not knowledge_prepare_task.done():
@@ -1739,8 +1748,39 @@ class TurnPipeline:
                     action_started = time.perf_counter()
                 try:
                     if not early_expression:
-                        assert action_task is not None
-                        action, scores, action_timing, action_context = await action_task
+                        if visual_gesture_answer and numeric_reply_route.enabled:
+                            # V11 owns the body decision.  Do not spend a full
+                            # catalog PPL pass on an action that would be
+                            # discarded once the structured visual answer is
+                            # available.
+                            action = {
+                                "candidate_id": UNSUPPORTED_DECISION_ID,
+                                "action_id": UNSUPPORTED_DECISION_ID,
+                                "execution_binding": {},
+                                "execute": False,
+                                "support_status": "unknown",
+                                "fallback_applied": False,
+                            }
+                            scores = []
+                            action_context = {
+                                "selection_stages": 0,
+                                "selection_mode": "visual_gesture_answer",
+                                "generic_action_scoring_bypassed": True,
+                            }
+                            emit_structured_log(
+                                "action",
+                                "generic_action_scoring_bypassed",
+                                session_id=self.session_id,
+                                turn_id=turn.turn_id,
+                                trace_id=turn.trace_id,
+                                logical_request_id=turn.request_base,
+                                reason="visual_gesture_answer",
+                            )
+                        else:
+                            assert action_task is not None
+                            action, scores, action_timing, action_context = (
+                                await action_task
+                            )
                 except Exception as exc:
                     if not category_decision_received or "text" not in self.modalities:
                         raise

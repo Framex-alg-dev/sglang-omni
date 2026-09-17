@@ -166,6 +166,18 @@ class ActionScoringStats:
     scheduler_admission_ms: float = 0.0
     scheduler_wait_ms: float = 0.0
     prefix_prefill_ms: float = 0.0
+    candidate_snapshot_ms: float = 0.0
+    candidate_materialize_ms: float = 0.0
+    candidate_prefix_copy_ms: float = 0.0
+    candidate_tensorize_ms: float = 0.0
+    candidate_req_init_ms: float = 0.0
+    candidate_metadata_copy_ms: float = 0.0
+    candidate_mrope_ms: float = 0.0
+    candidate_data_init_ms: float = 0.0
+    candidate_short_suffix_cache_hit: bool = False
+    candidate_materialize_wait_ms: float = 0.0
+    candidate_enqueue_ms: float = 0.0
+    candidate_queue_wait_ms: float = 0.0
     suffix_batch_queue_wait_ms: list[float] = field(default_factory=list)
     preprocessing_ms: float = 0.0
     image_encoder_ms: float = 0.0
@@ -201,6 +213,18 @@ class ActionScoringStats:
             "scheduler_admission_ms": self.scheduler_admission_ms,
             "scheduler_wait_ms": self.scheduler_wait_ms,
             "prefix_prefill_ms": self.prefix_prefill_ms,
+            "candidate_snapshot_ms": self.candidate_snapshot_ms,
+            "candidate_materialize_ms": self.candidate_materialize_ms,
+            "candidate_prefix_copy_ms": self.candidate_prefix_copy_ms,
+            "candidate_tensorize_ms": self.candidate_tensorize_ms,
+            "candidate_req_init_ms": self.candidate_req_init_ms,
+            "candidate_metadata_copy_ms": self.candidate_metadata_copy_ms,
+            "candidate_mrope_ms": self.candidate_mrope_ms,
+            "candidate_data_init_ms": self.candidate_data_init_ms,
+            "candidate_short_suffix_cache_hit": self.candidate_short_suffix_cache_hit,
+            "candidate_materialize_wait_ms": self.candidate_materialize_wait_ms,
+            "candidate_enqueue_ms": self.candidate_enqueue_ms,
+            "candidate_queue_wait_ms": self.candidate_queue_wait_ms,
             "suffix_batch_queue_wait_ms": list(self.suffix_batch_queue_wait_ms),
             "preprocessing_ms": self.preprocessing_ms,
             "image_encoder_ms": self.image_encoder_ms,

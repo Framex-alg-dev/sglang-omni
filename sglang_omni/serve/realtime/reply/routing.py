@@ -20,6 +20,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     ReplySpeechModeResult,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 
@@ -405,6 +406,31 @@ class ReplyRoutingComponent:
                 if turn.intent.history
                 else REPLY_HISTORY_CURRENT_ONLY
             )
+            if (
+                turn.intent.visual_scope_gate
+                and turn.intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
+            ):
+                # V01-V10 are an authoritative language-only gate for an
+                # immediate visual imitation.  Re-running S0/S1 on the same
+                # audio can only contradict that bounded decision and may
+                # accidentally synthesize an unrelated spoken answer.
+                emit_structured_log(
+                    "reply",
+                    "visual_scope_gate_reply_route_applied",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    visual_scope_gate=turn.intent.visual_scope_gate,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    decision=decision,
+                )
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    elapsed_ms=turn.intent.elapsed_ms,
+                    stats={"source": "visual_scope_gate"},
+                )
             if turn.intent.speech != "none":
                 return ReplyHistoryRouteResult(
                     decision=decision,
