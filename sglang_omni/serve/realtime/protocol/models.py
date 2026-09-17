@@ -440,6 +440,9 @@ class TurnBuffer:
     trigger: str | None = None
     text: str | None = None
     intent: Any | None = None
+    # Fixed-label safety decision produced in the same suffix batch as the
+    # concrete actions. Reply semantics continue to use ``intent``.
+    action_decision: Any | None = None
     reply_provided: bool = False
     reply_context: str | None = None
     scene_context: str | None = None

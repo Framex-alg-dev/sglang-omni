@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
 from sglang_omni.serve.realtime.proactive.action_policy import proactive_selection_instruction
+from sglang_omni.serve.realtime.action.decision import action_decision_prompt
 
 import asyncio
 from collections import OrderedDict
@@ -752,14 +753,30 @@ class ActionPromptComponent:
 
 
     def _direct_action_prefix_namespace(self, turn_origin: str, instruction: str) -> str:
+        base_namespace = self.global_action_catalog.action_cache_namespace(
+            self.action_locale, turn_origin
+        )
+        if getattr(self, "action_decision_batch_mode", "off") != "off":
+            visual = bool(getattr(self, "action_decision_batch_visual", False))
+            base_namespace += f":decision-v1:{'visual' if visual else 'core'}"
         return self._session_action_prefix_namespace(
-            base_namespace=self.global_action_catalog.action_cache_namespace(self.action_locale, turn_origin),
+            base_namespace=base_namespace,
             stage="single", turn_origin=turn_origin, session_instruction=instruction,
         )
 
     def _build_action_system_prompt(self, turn_origin: str = "user") -> str:
         if self.direct_action_selection:
-            return self.global_action_catalog.action_system_prompt_for(self.action_locale, turn_origin)
+            prompt = self.global_action_catalog.action_system_prompt_for(
+                self.action_locale, turn_origin
+            )
+            if getattr(self, "action_decision_batch_mode", "off") != "off":
+                prompt += "\n\n" + action_decision_prompt(
+                    include_visual=bool(
+                        getattr(self, "action_decision_batch_visual", False)
+                    ),
+                    english=self.action_language == "en",
+                )
+            return prompt
         if self.action_language == "en":
             lines = [
                 "You are a digital-character action classifier. Select one candidate_id from the fixed set for this conversation.",

@@ -306,6 +306,7 @@ async def infer_turn_intent(
     images=None,
     image_roles=None,
     visual_scope_future: asyncio.Future[str] | None = None,
+    full_intent_start_event: asyncio.Event | None = None,
 ):
     started = time.perf_counter()
     current_images = images or []
@@ -337,6 +338,8 @@ async def infer_turn_intent(
     )
 
     async def classify_full_intent() -> TurnIntent | None:
+        if full_intent_start_event is not None:
+            await full_intent_start_event.wait()
         session._register_turn_request(turn, request_id)
         result = None
         try:

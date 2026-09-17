@@ -1027,6 +1027,7 @@ class TurnPipeline:
                         )
                     if (
                         action_error is None
+                        and action.get("support_status") != "unsupported"
                         and action.get("candidate_id") in self.candidate_by_id
                     ):
                         self._record_action_as_executed(
@@ -1038,28 +1039,116 @@ class TurnPipeline:
 
             async def score_and_publish_action(*args: Any, **kwargs: Any) -> Any:
                 nonlocal action, independently_published_action
-                result = await self._score_action(*args, **kwargs)
-                # Scoring is deliberately speculative.  Publication, and the
-                # value returned to the terminal action path, remain behind the
-                # authoritative intent safety gate.
-                if intent_task is not None:
-                    turn.intent = await intent_task
-                # Shared intent owns channel selection. If it failed, retain the
-                # conservative performance barrier instead of executing a body
-                # action for a possibly facial-only request.
-                intent = turn.intent
-                intent_allows_body = bool(
-                    intent is not None
-                    and intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
-                    and intent.body_mode != "prohibit"
+                try:
+                    result = await self._score_action(*args, **kwargs)
+                finally:
+                    # Do not let the generative reply/detail parser contend
+                    # with the latency-critical suffix batch on the same GPU.
+                    if intent_detail_release is not None:
+                        intent_detail_release.set()
+                scored_action = result[0]
+                action_is_terminal_without_execution = bool(
+                    scored_action is not None
                     and (
-                        intent.body_mode == "perform"
-                        or intent.reaction_mode == "respond"
+                        not scored_action.get("execute")
+                        or scored_action.get("support_status") == "unsupported"
                     )
                 )
+                # Unsupported/no-op is intrinsically safe and must not wait for
+                # either the legacy JSON intent parser or performance control.
+                decision = turn.action_decision
+                decision_mode = getattr(
+                    self, "action_decision_batch_mode", "off"
+                )
+                use_batched_decision = bool(
+                    decision_mode == "enforce"
+                    and decision is not None
+                )
+                if (
+                    not action_is_terminal_without_execution
+                    and not use_batched_decision
+                    and intent_task is not None
+                ):
+                    turn.intent = await intent_task
+                intent = turn.intent
+                if use_batched_decision:
+                    # In enforce mode this grouped result is the authoritative
+                    # latency-path gate. A narrow margin fails closed through
+                    # ActionDecision.allows_body instead of waiting for the
+                    # slower JSON intent parser and missing the action-ready
+                    # latency budget.
+                    intent_allows_body = bool(decision.allows_body)
+                    emit_structured_log(
+                        "action", "batched_action_decision_enforced",
+                        session_id=self.session_id, turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        body_mode=decision.body_mode,
+                        face_mode=decision.face_mode,
+                        reaction_type=decision.reaction_type,
+                        visual_scope=decision.visual_scope,
+                        confidence_margin=decision.min_margin,
+                        low_confidence_fail_closed=not decision.confident,
+                    )
+                else:
+                    # The old parser remains authoritative in shadow/off modes.
+                    intent_allows_body = bool(
+                        intent is not None
+                        and intent.visual_scope_gate
+                        != VISUAL_GESTURE_ANSWER_GATE
+                        and intent.body_mode != "prohibit"
+                        and (
+                            intent.body_mode == "perform"
+                            or intent.reaction_mode == "respond"
+                        )
+                    )
+                if decision is not None and intent is not None:
+                    legacy_reaction_active = intent.reaction_mode == "respond"
+                    decision_reaction_active = decision.reaction_type != "none"
+                    disagreements = {
+                        "body": (
+                            decision.body_mode != intent.body_mode
+                            and not (
+                                decision.body_mode == "capability_query"
+                                and intent.body_mode == "none"
+                            )
+                        ),
+                        "face": (
+                            (decision.face_mode == "perform")
+                            != bool(intent.face)
+                        ),
+                        "reaction": (
+                            decision_reaction_active
+                            != legacy_reaction_active
+                        ),
+                        "visual": bool(
+                            decision.visual_scope
+                            and decision.visual_scope
+                            != intent.visual_scope_gate
+                        ),
+                    }
+                    emit_structured_log(
+                        "diagnostic", "action_decision_shadow_compared",
+                        session_id=self.session_id, turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        mode=decision_mode,
+                        disagreements=disagreements,
+                        unsafe_disagreement=bool(
+                            disagreements["body"]
+                            or disagreements["visual"]
+                        ),
+                        decision_body_mode=decision.body_mode,
+                        legacy_body_mode=intent.body_mode,
+                        decision_face_mode=decision.face_mode,
+                        legacy_has_face=bool(intent.face),
+                        decision_reaction_type=decision.reaction_type,
+                        legacy_reaction_mode=intent.reaction_mode,
+                        decision_visual_scope=decision.visual_scope,
+                        legacy_visual_scope=intent.visual_scope_gate,
+                        confidence_margin=decision.min_margin,
+                    )
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER
-                    and intent is not None
+                    and (intent is not None or use_batched_decision)
                     and not intent_allows_body
                     and result[0] is not None
                     and result[0].get("execute")
@@ -1071,28 +1160,58 @@ class TurnPipeline:
                         intent_gate_blocked=True,
                     )
                     result = (blocked, *result[1:])
+                    action_is_terminal_without_execution = True
                     emit_structured_log(
                         "action", "speculative_action_blocked_by_intent",
                         session_id=self.session_id, turn_id=turn_id,
                         trace_id=turn.trace_id,
-                        body_mode=intent.body_mode,
-                        reaction_mode=intent.reaction_mode,
-                        has_face=bool(intent.face),
-                        visual_scope_gate=intent.visual_scope_gate,
+                        body_mode=(
+                            decision.body_mode
+                            if use_batched_decision else intent.body_mode
+                        ),
+                        reaction_mode=(
+                            decision.reaction_type
+                            if use_batched_decision else intent.reaction_mode
+                        ),
+                        has_face=(
+                            decision.face_mode == "perform"
+                            if use_batched_decision else bool(intent.face)
+                        ),
+                        visual_scope_gate=(
+                            decision.visual_scope
+                            if use_batched_decision
+                            else intent.visual_scope_gate
+                        ),
                         candidate_id=blocked.get("candidate_id"),
+                        intent_gate_source=(
+                            "batched_labels"
+                            if use_batched_decision else "legacy_json"
+                        ),
                     )
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER
-                    and intent_allows_body
+                    and (
+                        intent_allows_body
+                        or action_is_terminal_without_execution
+                    )
                 ):
                     action = result[0]
                     independently_published_action = dict(action) if action else None
                     await send_action_ready()
                     emit_structured_log(
-                        "performance", "body_action_independently_published",
+                        "performance",
+                        (
+                            "body_action_independently_published"
+                            if action and action.get("execute")
+                            else "action_result_independently_published"
+                        ),
                         session_id=self.session_id, turn_id=turn_id,
                         trace_id=turn.trace_id,
                         after_commit_ms=self._after_commit_ms(turn),
+                        execute=bool(action and action.get("execute")),
+                        support_status=(
+                            action.get("support_status") if action else None
+                        ),
                         waited_for_performance=False, waited_for_reply=False,
                     )
                 return result
@@ -1215,27 +1334,101 @@ class TurnPipeline:
             action_current_image_roles = current_image_roles
             visual_scope_code = ""
             visual_gesture_answer = False
+            body_action_not_requested = False
             intent_supports_scope_future = False
+            intent_detail_release: asyncio.Event | None = None
             if turn.turn_origin == TURN_ORIGIN_USER and not provided_reply and (turn.text or current_audio_list):
                 visual_scope_future = asyncio.get_running_loop().create_future()
                 intent_supports_scope_future = (
                     "visual_scope_future"
                     in inspect.signature(infer_turn_intent).parameters
                 )
-                self._ensure_turn_processing(turn)
-
-            visual_gesture_answer = bool(
-                turn.intent is not None
-                and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
-            )
-            body_action_not_requested = bool(
-                turn.turn_origin == TURN_ORIGIN_USER
-                and not provided_reply
-                and turn.intent is not None
-                and turn.intent.body_mode == "none"
-                and turn.intent.reaction_mode == "none"
-                and not visual_gesture_answer
-            )
+                if (
+                    "full_intent_start_event"
+                    in inspect.signature(infer_turn_intent).parameters
+                    and self.direct_action_selection
+                    and "action" in self.modalities
+                    and getattr(self, "action_decision_batch_mode", "off")
+                    == "enforce"
+                ):
+                    intent_detail_release = asyncio.Event()
+                if not intent_supports_scope_future:
+                    visual_scope_future.set_result("")
+                intent_task = track_branch(
+                    infer_turn_intent(
+                        self,
+                        turn,
+                        current_audio_list,
+                        prepared_current_images,
+                        current_image_roles,
+                        **(
+                            {
+                                "visual_scope_future": visual_scope_future,
+                                **(
+                                    {
+                                        "full_intent_start_event": (
+                                            intent_detail_release
+                                        )
+                                    }
+                                    if intent_detail_release is not None
+                                    else {}
+                                ),
+                            }
+                            if intent_supports_scope_future
+                            else {}
+                        ),
+                    ),
+                    name=f"session-intent-{self.session_id}-{turn.turn_id}",
+                )
+                batched_visual_gate = bool(
+                    self.direct_action_selection
+                    and getattr(self, "action_decision_batch_mode", "off")
+                    == "enforce"
+                    and getattr(self, "action_decision_batch_visual", False)
+                )
+                if batched_visual_gate:
+                    # The IV00-IV11 group is scored with the concrete actions.
+                    # Keep current camera pixels because the result is not yet
+                    # known; publication remains behind the grouped gate.
+                    emit_structured_log(
+                        "performance", "visual_scope_gate_deferred_to_action_batch",
+                        session_id=self.session_id, turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        user_camera_image_count=sum(
+                            role == IMAGE_ROLE_USER_CAMERA
+                            for role in current_image_roles
+                        ),
+                    )
+                else:
+                    # This resolves immediately for text-only turns and after
+                    # the bounded language gate for camera turns. V00 can drop
+                    # camera pixels before speculative action scoring starts.
+                    visual_scope_code = await visual_scope_future
+                    visual_gesture_answer = (
+                        visual_scope_code == VISUAL_GESTURE_ANSWER_GATE
+                    )
+                    if visual_scope_code == "V00":
+                        filtered = [
+                            (image, role)
+                            for image, role in zip(
+                                prepared_current_images,
+                                current_image_roles,
+                                strict=True,
+                            )
+                            if role != IMAGE_ROLE_USER_CAMERA
+                        ]
+                        action_current_images = [item[0] for item in filtered]
+                        action_current_image_roles = [item[1] for item in filtered]
+                        emit_structured_log(
+                            "performance", "action_user_camera_omitted",
+                            session_id=self.session_id, turn_id=turn.turn_id,
+                            trace_id=turn.trace_id,
+                            omitted_count=(
+                                len(prepared_current_images)
+                                - len(action_current_images)
+                            ),
+                            visual_scope_gate=visual_scope_code,
+                        )
 
             reply_history_route_task: asyncio.Task[Any] | None = None
             async def start_reply_history_route() -> Any:
@@ -1328,7 +1521,19 @@ class TurnPipeline:
                     and turn.intent.visual_scope_gate
                     == VISUAL_GESTURE_ANSWER_GATE
                 )
-                if visual_gesture_answer and action_task is not None:
+                body_action_not_requested = bool(
+                    turn.turn_origin == TURN_ORIGIN_USER
+                    and not provided_reply
+                    and turn.intent is not None
+                    and turn.intent.body_mode == "none"
+                    and turn.intent.reaction_mode == "none"
+                    and not visual_gesture_answer
+                )
+                if (
+                    visual_gesture_answer
+                    and action_task is not None
+                    and not batched_visual_gate
+                ):
                     action_task.cancel()
                     await asyncio.gather(action_task, return_exceptions=True)
 

@@ -8,8 +8,10 @@ import hashlib
 import json
 import logging
 import time
+from contextlib import suppress
 from typing import Any, Literal
 
+from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.models.qwen3_omni.action_scoring import ActionScoreCandidate
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
@@ -39,6 +41,8 @@ from sglang_omni.serve.realtime.output_capabilities import SessionOutputCapabili
 from sglang_omni.serve.realtime.action.routing import (
     visual_deictic_category_scope,
 )
+from sglang_omni.serve.realtime.action.decision import action_decision_candidates
+from sglang_omni.serve.realtime.turn_intent import SYSTEM as TURN_INTENT_SYSTEM
 from sglang_omni.serve.realtime.knowledge import (
     KnowledgeBinding,
     KnowledgeContext,
@@ -62,6 +66,7 @@ USER_CHILD_PREWARM_LABELS = (
 # headroom in the deployed 222k-token pool. No promise of pinned KV residency.
 USER_CHILD_PREWARM_TOKEN_BUDGET = 85_000
 USER_CHILD_PREWARM_TIMEOUT_SECONDS = 90.0
+TURN_INTENT_PREWARM_TIMEOUT_SECONDS = 10.0
 
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
@@ -75,6 +80,77 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prewarm_turn_intent_prefix(self, prefill: Any) -> bool:
+        """Warm the static intent system/user-header prefix before first Turn."""
+
+        if not callable(prefill):
+            return False
+        request_id = f"session-{self.session_instance_id}-intent-prefill"
+        started = time.perf_counter()
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(role="system", content=TURN_INTENT_SYSTEM),
+                # A non-empty placeholder preserves the user-role header. Real
+                # Turn text/audio diverges only after the reusable static prefix.
+                Message(
+                    role="user",
+                    content=[{"type": "text", "text": " "}],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_turn_intent_prewarm",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+            },
+        )
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            logger.warning(
+                "[SESSION_ACTION_REALTIME] intent prefix prewarm failed; "
+                "continuing without the cache session_id=%s",
+                self.session_id,
+                exc_info=True,
+            )
+            emit_structured_log(
+                "error",
+                "session_turn_intent_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_turn_intent_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
     async def _prewarm_user_child_sessions(self, prefill: Any) -> None:
         if not callable(prefill):
             raise ValueError("session_child_prewarm_unavailable")
@@ -699,6 +775,11 @@ class SessionStartComponent:
             else f"{mode_namespace}:{self.action_locale}:{self.action_catalog_hash}"
         )
         prefill = getattr(self.client, "prefill_action_catalog", None)
+        intent_prefill = getattr(self.client, "prefill_completion_prefix", None)
+        intent_prefill_task = asyncio.create_task(
+            self._prewarm_turn_intent_prefix(intent_prefill),
+            name=f"session-intent-prefill-{self.session_instance_id}",
+        )
         if self.direct_action_selection and candidates:
             # Warm every direct-action prefix that an ordinary Session can use
             # before session.started is emitted.  User camera Turns carry an
@@ -769,7 +850,20 @@ class SessionStartComponent:
                         candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
                         suffix=UNSUPPORTED_CHILD_SCORE_ID,
                         action_id=UNSUPPORTED_DECISION_ID,
-                    )],
+                    )] + (
+                        action_decision_candidates(
+                            include_visual=bool(
+                                getattr(
+                                    self,
+                                    "action_decision_batch_visual",
+                                    False,
+                                )
+                            )
+                        )
+                        if getattr(self, "action_decision_batch_mode", "off")
+                        != "off"
+                        else []
+                    ),
                     prefix_cache_namespace=namespace, stage="single",
                     language=self.action_language, session_instruction=instruction,
                 )
@@ -993,6 +1087,7 @@ class SessionStartComponent:
                     )
         if not self.direct_action_selection and self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
             await self._prewarm_user_child_sessions(prefill)
+        self.turn_intent_prefix_prefilled = await intent_prefill_task
         self.started = True
         emit_structured_log(
             "lifecycle",
@@ -1001,6 +1096,7 @@ class SessionStartComponent:
             outputs=list(self.output_capabilities.outputs),
             tts_manager_created=self.embedded_tts is not None,
             action_prefix_prefilled=self.action_prefix_prefilled,
+            turn_intent_prefix_prefilled=self.turn_intent_prefix_prefilled,
         )
 
         # ``action.allowed_candidates`` is a whitelist of unique candidate IDs.

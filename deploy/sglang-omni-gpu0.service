@@ -23,6 +23,12 @@ Environment=SGLANG_OMNI_STRICT_PORT=1
 Environment=SGLANG_OMNI_SCOPED_RADIX_CACHE=1
 Environment=SGLANG_OMNI_TTS_CONNECTION_COUNT=2
 Environment=SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S=30
+# The grouped labels share the same physical suffix batch as the concrete
+# actions.  They are the latency-path publication gate; the slower JSON intent
+# parser remains available for reply/detail enrichment after action scoring.
+Environment=SGLANG_OMNI_ACTION_DECISION_BATCH_MODE=enforce
+Environment=SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL=1
+Environment=SGLANG_OMNI_ACTION_DECISION_MIN_MARGIN=0.10
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/data/fanshide/sglang-omni/deploy/realtime-knowledge.env

@@ -25,6 +25,12 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
 from sglang_omni.serve.realtime.action.routing import (
     scope_visual_deictic_categories,
 )
+from sglang_omni.serve.realtime.action.decision import (
+    ACTION_DECISION_LABELS,
+    action_decision_candidates,
+    aggregate_action_decision,
+    decision_as_dict,
+)
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.common import (
     _action_timing_breakdown,
@@ -236,6 +242,27 @@ class ActionCandidateComponent:
             )
             for item in eligible_candidates
         ]
+        decision_batch_enabled = bool(
+            self.direct_action_selection
+            and turn_origin == TURN_ORIGIN_USER
+            and getattr(self, "action_decision_batch_mode", "off") != "off"
+        )
+        decision_visual_enabled = bool(
+            decision_batch_enabled
+            and getattr(self, "action_decision_batch_visual", False)
+        )
+        if decision_batch_enabled:
+            candidates.extend(
+                action_decision_candidates(
+                    include_visual=decision_visual_enabled,
+                )
+            )
+            if len(candidates) > self.action_micro_batch_size:
+                raise ValueError(
+                    "grouped action decision requires one physical suffix batch: "
+                    f"candidate_count={len(candidates)} exceeds "
+                    f"action_micro_batch_size={self.action_micro_batch_size}"
+                )
         action_system_prompt = self._build_action_system_prompt(turn_origin)
         prompt_hash = hashlib.sha256(
             action_system_prompt.encode("utf-8")
@@ -258,6 +285,8 @@ class ActionCandidateComponent:
             images=action_images,
             image_roles=action_image_roles,
             sample_rate=16000,
+            # Capacity is an upper bound only. The request contains exactly the
+            # real action and decision candidates and is never padded to it.
             micro_batch_size=min(self.action_micro_batch_size, len(candidates)),
             prefix_cache_namespace=self._direct_action_prefix_namespace(turn_origin, session_instruction)
             if self.direct_action_selection else self._session_action_prefix_namespace(
@@ -295,7 +324,46 @@ class ActionCandidateComponent:
             result.prefix_cached,
             json.dumps(result.stats, ensure_ascii=False, default=str),
         )
-        ranked = sorted(result.scores, key=lambda x: x.mean_logprob, reverse=True)
+        action_scores = [
+            score
+            for score in result.scores
+            if score.candidate_id not in ACTION_DECISION_LABELS
+        ]
+        if not action_scores:
+            raise ValueError("action scoring returned no concrete action scores")
+        action_decision = None
+        if decision_batch_enabled:
+            action_decision = aggregate_action_decision(
+                result.scores,
+                include_visual=decision_visual_enabled,
+                min_margin=float(
+                    getattr(self, "action_decision_min_margin", 0.10)
+                ),
+            )
+            turn.action_decision = action_decision
+            action_context["action_decision"] = decision_as_dict(action_decision)
+            action_context["action_decision_batch_mode"] = getattr(
+                self, "action_decision_batch_mode", "shadow"
+            )
+            action_context["action_decision_visual_enabled"] = (
+                decision_visual_enabled
+            )
+            emit_structured_log(
+                "action",
+                "action_decision_batch_completed",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=request_base,
+                physical_candidate_count=len(candidates),
+                concrete_action_candidate_count=len(action_scores),
+                decision_candidate_count=len(candidates) - len(action_scores),
+                decision=action_context["action_decision"],
+                mode=action_context["action_decision_batch_mode"],
+            )
+        ranked = sorted(
+            action_scores, key=lambda x: x.mean_logprob, reverse=True
+        )
         scores: list[dict[str, Any]] = []
         for score in ranked:
             candidate = candidate_by_id[score.candidate_id]

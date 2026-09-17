@@ -236,6 +236,21 @@ def test_batches_cover_386_candidates_without_reordering():
     assert [item.candidate_id for batch in batches for item in batch.candidates] == [str(i) for i in range(386)]
 
 
+def test_batch_capacity_does_not_pad_169_candidates_to_200():
+    items = [
+        type("Item", (), {"candidate_id": str(index)})()
+        for index in range(169)
+    ]
+
+    batches = build_suffix_batches(items, 200)
+
+    assert len(batches) == 1
+    assert len(batches[0].candidates) == 169
+    assert [item.candidate_id for item in batches[0].candidates] == [
+        str(index) for index in range(169)
+    ]
+
+
 def test_math_counts_only_finite_suffix_tokens():
     scores = aggregate_candidate_score("left", [TokenScore(1, -0.1), TokenScore(2, -0.3)])
     assert scores.token_count == 2

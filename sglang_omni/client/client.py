@@ -1344,6 +1344,23 @@ class Client:
             weight_version=weight_version,
         )
 
+    async def prefill_completion_prefix(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+    ) -> bool:
+        """Populate the normal completion radix cache and discard the output.
+
+        This intentionally uses the ordinary completion path so prewarm and
+        runtime requests have identical chat-template/tokenization behavior.
+        The separate method lets session startup detect support without
+        treating every lightweight test or third-party client as prewarmable.
+        """
+
+        await self.completion(request, request_id=request_id)
+        return True
+
     # ------------------------------------------------------------------
     # High-level: streaming completion
     # ------------------------------------------------------------------

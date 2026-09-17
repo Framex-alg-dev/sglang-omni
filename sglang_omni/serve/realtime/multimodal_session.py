@@ -229,6 +229,27 @@ class MultimodalSession:
             ROUTE_ACTION_PARALLEL_ENV,
             default=True,
         )
+        action_decision_mode = os.environ.get(
+            ACTION_DECISION_BATCH_MODE_ENV, "shadow"
+        ).strip().lower()
+        if action_decision_mode not in {"off", "shadow", "enforce"}:
+            raise ValueError(
+                f"{ACTION_DECISION_BATCH_MODE_ENV} must be off, shadow, or enforce"
+            )
+        self.action_decision_batch_mode = action_decision_mode
+        self.action_decision_batch_visual = _env_flag(
+            ACTION_DECISION_BATCH_VISUAL_ENV,
+            default=False,
+        )
+        try:
+            self.action_decision_min_margin = max(
+                float(os.environ.get(ACTION_DECISION_MIN_MARGIN_ENV, "0.10")),
+                0.0,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{ACTION_DECISION_MIN_MARGIN_ENV} must be a non-negative number"
+            ) from exc
         self.session_instance_id = uuid.uuid4().hex
         self.session_memory_config = (
             session_memory_config

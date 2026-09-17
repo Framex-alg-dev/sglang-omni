@@ -232,7 +232,7 @@ async def test_non_visual_gate_falls_through_to_language_only_general_intent():
 
 
 @pytest.mark.asyncio
-async def test_visual_gate_and_full_intent_run_concurrently_and_publish_v00():
+async def test_visual_gate_and_full_intent_run_concurrently_for_general_route():
     gate_entered = asyncio.Event()
     full_entered = asyncio.Event()
 
@@ -241,7 +241,7 @@ async def test_visual_gate_and_full_intent_run_concurrently_and_publish_v00():
             if request.metadata['task'] == 'session_visual_scope_gate':
                 gate_entered.set()
                 await asyncio.wait_for(full_entered.wait(), timeout=.5)
-                return SimpleNamespace(text='V00')
+                return SimpleNamespace(text='GENERAL')
             full_entered.set()
             await asyncio.wait_for(gate_entered.wait(), timeout=.5)
             return SimpleNamespace(text=json.dumps({
@@ -271,7 +271,7 @@ async def test_visual_gate_and_full_intent_run_concurrently_and_publish_v00():
     )
 
     assert intent is not None and intent.text == '普通问答'
-    assert scope.result() == 'V00'
+    assert scope.result() == ''
     assert gate_entered.is_set() and full_entered.is_set()
 
 
