@@ -1713,6 +1713,29 @@ class OmniScheduler:
         return plan.batch_to_run
 
     def get_new_batch_prefill(self, running_batch):
+        # A complete action-suffix cohort is published atomically immediately
+        # after its shared prefix finishes.  Holding it for the generic prefill
+        # coalescing deadline adds a fixed ~40-60 ms without collecting any
+        # additional useful requests, so admit that cohort on the next scheduler
+        # iteration.
+        if self.chunked_req is None and self.waiting_queue:
+            action_suffix, other = [], []
+            for req in self.waiting_queue:
+                data = getattr(req, "_omni_data", None)
+                target = (
+                    action_suffix
+                    if getattr(data, "action_scoring_role", None) == "candidate"
+                    else other
+                )
+                target.append(req)
+            if action_suffix:
+                if not other:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                self.waiting_queue = action_suffix
+                try:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                finally:
+                    self.waiting_queue.extend(other)
         # Isolate latency-critical action work from new long reply prefills.
         # Never detach an in-progress chunk: upstream owns its KV lifecycle.
         # After 250 ms give deferred work a normal scheduling opportunity.

@@ -305,9 +305,9 @@ async def infer_turn_intent(
     audios,
     images=None,
     image_roles=None,
+    visual_scope_future: asyncio.Future[str] | None = None,
 ):
     started = time.perf_counter()
-    request_id = turn.request_base + '-intent'
     current_images = images or []
     current_image_roles = image_roles or []
     if len(current_images) != len(current_image_roles):
@@ -322,27 +322,7 @@ async def infer_turn_intent(
         if role == IMAGE_ROLE_USER_CAMERA
     ][-1:]
 
-    # Scope comes exclusively from the user's language. Classify this bounded
-    # route first so a pure "do this gesture/expression" request never depends
-    # on free-form JSON generation and never opens the complete action catalog.
-    if user_camera_images and (audios or (isinstance(turn.text, str) and turn.text.strip())):
-        visual_scope = await _classify_visual_scope_gate(session, turn, audios)
-        if visual_scope is not None:
-            code, elapsed_ms = visual_scope
-            intent = _visual_scope_gate_intent(code, elapsed_ms)
-            emit_structured_log(
-                "performance",
-                "turn_intent_ready",
-                session_id=session.session_id,
-                turn_id=turn.turn_id,
-                speech_kind=intent.speech,
-                has_body=bool(intent.body),
-                has_face=bool(intent.face),
-                visual_scope_gate=code,
-                elapsed_ms=intent.elapsed_ms,
-            )
-            return intent
-
+    request_id = turn.request_base + '-intent'
     parts = []
     if turn.text:
         parts.append({'type': 'text', 'text': turn.text})
@@ -355,24 +335,102 @@ async def infer_turn_intent(
 
         metadata={'task': 'session_turn_intent', 'audios': audios, 'images': [], 'image_roles': [], 'session_id': session.session_id, 'session_instance_id': getattr(session, 'session_instance_id', None), 'turn_id': getattr(turn, 'turn_id', None), 'logical_request_id': turn.request_base},
     )
-    session._register_turn_request(turn, request_id)
-    result = None
+
+    async def classify_full_intent() -> TurnIntent | None:
+        session._register_turn_request(turn, request_id)
+        result = None
+        try:
+            result = await asyncio.wait_for(
+                session.client.completion(request, request_id=request_id),
+                timeout=TURN_INTENT_TIMEOUT_SECONDS,
+            )
+            return TurnIntent.parse(
+                result.text, (time.perf_counter() - started) * 1000
+            )
+        except asyncio.CancelledError:
+            if hasattr(session.client, "abort"):
+                with suppress(Exception):
+                    await session.client.abort(request_id)
+            raise
+        except Exception as exc:
+            emit_structured_log(
+                "error", "turn_intent_fallback",
+                session_id=session.session_id,
+                error_type=type(exc).__name__,
+                validation_reason=str(exc) if isinstance(exc, ValueError) else None,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+            )
+            if result is None and hasattr(session.client, "abort"):
+                with suppress(Exception):
+                    await session.client.abort(request_id)
+            return None
+        finally:
+            session._unregister_turn_request(turn, request_id)
+
+    has_visual_gate = bool(
+        user_camera_images
+        and (audios or (isinstance(turn.text, str) and turn.text.strip()))
+    )
+    gate_task = (
+        asyncio.create_task(
+            _classify_visual_scope_gate(session, turn, audios),
+            name=f"turn-intent-visual-gate-{getattr(turn, 'turn_id', '')}",
+        )
+        if has_visual_gate
+        else None
+    )
+    # Let the small bounded gate submit first, then overlap the full parser on
+    # the next event-loop turn. This preserves admission priority without a
+    # serial gate -> full dependency.
+    if gate_task is not None:
+        await asyncio.sleep(0)
+    full_task = asyncio.create_task(
+        classify_full_intent(),
+        name=f"turn-intent-full-{getattr(turn, 'turn_id', '')}",
+    )
+    gate_code = ""
     try:
-        result = await asyncio.wait_for(session.client.completion(request, request_id=request_id), timeout=TURN_INTENT_TIMEOUT_SECONDS)
-        intent = TurnIntent.parse(result.text, (time.perf_counter() - started) * 1000)
-        emit_structured_log("performance", "turn_intent_ready", session_id=session.session_id, turn_id=turn.turn_id, speech_kind=intent.speech, has_body=bool(intent.body), has_face=bool(intent.face), elapsed_ms=intent.elapsed_ms)
+        if gate_task is not None:
+            visual_scope = await gate_task
+            if visual_scope is not None:
+                gate_code, _ = visual_scope
+            if visual_scope_future is not None and not visual_scope_future.done():
+                visual_scope_future.set_result(gate_code)
+            if gate_code and gate_code != "V00":
+                full_task.cancel()
+                await asyncio.gather(full_task, return_exceptions=True)
+                intent = _visual_scope_gate_intent(
+                    gate_code, (time.perf_counter() - started) * 1000
+                )
+            else:
+                intent = await full_task
+        else:
+            if visual_scope_future is not None and not visual_scope_future.done():
+                visual_scope_future.set_result("")
+            intent = await full_task
+
+        if intent is not None:
+            emit_structured_log(
+                "performance", "turn_intent_ready",
+                session_id=session.session_id,
+                turn_id=turn.turn_id,
+                speech_kind=intent.speech,
+                has_body=bool(intent.body),
+                has_face=bool(intent.face),
+                visual_scope_gate=intent.visual_scope_gate,
+                elapsed_ms=intent.elapsed_ms,
+                visual_gate_full_intent_parallel=has_visual_gate,
+            )
         return intent
     except asyncio.CancelledError:
-        if hasattr(session.client, "abort"):
-            with suppress(Exception):
-                await session.client.abort(request_id)
+        for task in (gate_task, full_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (gate_task, full_task) if task is not None),
+            return_exceptions=True,
+        )
         raise
-    except Exception as exc:
-        emit_structured_log("error", "turn_intent_fallback", session_id=session.session_id, error_type=type(exc).__name__, validation_reason=str(exc) if isinstance(exc, ValueError) else None, elapsed_ms=(time.perf_counter() - started) * 1000)
-        # A single fallback to existing classifiers, never a generation retry.
-        if result is None and hasattr(session.client, "abort"):
-            with suppress(Exception):
-                await session.client.abort(request_id)
-        return None
     finally:
-        session._unregister_turn_request(turn, request_id)
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result(gate_code)

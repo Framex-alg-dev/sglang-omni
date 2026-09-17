@@ -9,6 +9,7 @@ from sglang_omni.serve.realtime.turn_intent import (
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import time
@@ -939,6 +940,7 @@ class TurnPipeline:
             expression_ready_sent = False
             numeric_reply_route = None
             independently_published_action = None
+            intent_task: asyncio.Task[Any] | None = None
 
             def track_branch(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
                 started_at = time.perf_counter()
@@ -1037,15 +1039,51 @@ class TurnPipeline:
             async def score_and_publish_action(*args: Any, **kwargs: Any) -> Any:
                 nonlocal action, independently_published_action
                 result = await self._score_action(*args, **kwargs)
+                # Scoring is deliberately speculative.  Publication, and the
+                # value returned to the terminal action path, remain behind the
+                # authoritative intent safety gate.
+                if intent_task is not None:
+                    turn.intent = await intent_task
                 # Shared intent owns channel selection. If it failed, retain the
                 # conservative performance barrier instead of executing a body
                 # action for a possibly facial-only request.
                 intent = turn.intent
+                intent_allows_body = bool(
+                    intent is not None
+                    and intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
+                    and intent.body_mode != "prohibit"
+                    and (
+                        intent.body_mode == "perform"
+                        or intent.reaction_mode == "respond"
+                    )
+                )
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER
                     and intent is not None
-                    and intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
-                    and not (intent.face and intent.body_mode == "none")
+                    and not intent_allows_body
+                    and result[0] is not None
+                    and result[0].get("execute")
+                ):
+                    blocked = dict(result[0])
+                    blocked.update(
+                        execute=False,
+                        support_status="unsupported",
+                        intent_gate_blocked=True,
+                    )
+                    result = (blocked, *result[1:])
+                    emit_structured_log(
+                        "action", "speculative_action_blocked_by_intent",
+                        session_id=self.session_id, turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        body_mode=intent.body_mode,
+                        reaction_mode=intent.reaction_mode,
+                        has_face=bool(intent.face),
+                        visual_scope_gate=intent.visual_scope_gate,
+                        candidate_id=blocked.get("candidate_id"),
+                    )
+                if (
+                    turn.turn_origin == TURN_ORIGIN_USER
+                    and intent_allows_body
                 ):
                     action = result[0]
                     independently_published_action = dict(action) if action else None
@@ -1173,13 +1211,16 @@ class TurnPipeline:
                     source="provided" if provided_reply else "generated",
                 )
 
+            action_current_images = prepared_current_images
+            action_current_image_roles = current_image_roles
+            visual_scope_code = ""
+            visual_gesture_answer = False
+            intent_supports_scope_future = False
             if turn.turn_origin == TURN_ORIGIN_USER and not provided_reply and (turn.text or current_audio_list):
-                turn.intent = await infer_turn_intent(
-                    self,
-                    turn,
-                    current_audio_list,
-                    prepared_current_images,
-                    current_image_roles,
+                visual_scope_future = asyncio.get_running_loop().create_future()
+                intent_supports_scope_future = (
+                    "visual_scope_future"
+                    in inspect.signature(infer_turn_intent).parameters
                 )
                 self._ensure_turn_processing(turn)
 
@@ -1249,8 +1290,8 @@ class TurnPipeline:
                 action_task = track_branch(
                     score_and_publish_action(
                         current_audio_list,
-                        prepared_current_images,
-                        current_image_roles,
+                        action_current_images,
+                        action_current_image_roles,
                         turn.intent.body_context(turn.text) if turn.intent and not self.direct_action_selection else turn.text,
                         turn.avatar_state,
                         turn_origin=turn.turn_origin,
@@ -1268,6 +1309,28 @@ class TurnPipeline:
                     ),
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
                 )
+
+            # Direct selection consumes the raw turn, so it can run while the
+            # full intent parser is still finishing.  Legacy hierarchical mode
+            # continues to wait because it consumes intent.body_context().
+            if (
+                intent_task is not None
+                and intent_supports_scope_future
+                and self.direct_action_selection
+                and not visual_gesture_answer
+            ):
+                start_action_scoring()
+            if intent_task is not None:
+                turn.intent = await intent_task
+                self._ensure_turn_processing(turn)
+                visual_gesture_answer = bool(
+                    turn.intent is not None
+                    and turn.intent.visual_scope_gate
+                    == VISUAL_GESTURE_ANSWER_GATE
+                )
+                if visual_gesture_answer and action_task is not None:
+                    action_task.cancel()
+                    await asyncio.gather(action_task, return_exceptions=True)
 
             async def infer_performance_and_release() -> PerformanceDecision:
                 nonlocal performance, expression, action, early_expression
@@ -1534,7 +1597,10 @@ class TurnPipeline:
                 has_action_output="action" in self.modalities,
                 candidates=eligible_turn_candidates,
             )
-            if self.direct_action_selection or (turn.turn_origin == TURN_ORIGIN_USER and not visual_gesture_answer):
+            if not visual_gesture_answer and (
+                self.direct_action_selection
+                or turn.turn_origin == TURN_ORIGIN_USER
+            ):
                 numeric_reply_route = replace(
                     numeric_reply_route, enabled=False,
                     reason="disabled_action_first_policy",

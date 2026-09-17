@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -231,6 +232,50 @@ async def test_non_visual_gate_falls_through_to_language_only_general_intent():
 
 
 @pytest.mark.asyncio
+async def test_visual_gate_and_full_intent_run_concurrently_and_publish_v00():
+    gate_entered = asyncio.Event()
+    full_entered = asyncio.Event()
+
+    class Client:
+        async def completion(self, request, request_id):
+            if request.metadata['task'] == 'session_visual_scope_gate':
+                gate_entered.set()
+                await asyncio.wait_for(full_entered.wait(), timeout=.5)
+                return SimpleNamespace(text='V00')
+            full_entered.set()
+            await asyncio.wait_for(gate_entered.wait(), timeout=.5)
+            return SimpleNamespace(text=json.dumps({
+                'speech': 'generated', 'text': '普通问答', 'body': '',
+                'body_mode': 'none', 'face': '', 'history': False,
+            }))
+
+        async def abort(self, request_id):
+            del request_id
+
+    session = SimpleNamespace(
+        client=Client(), model_name='model', session_id='session',
+        _register_turn_request=lambda *args: None,
+        _unregister_turn_request=lambda *args: None,
+    )
+    turn = SimpleNamespace(
+        text='这是什么', request_base='parallel-intent', turn_id='parallel-intent'
+    )
+    scope = asyncio.get_running_loop().create_future()
+
+    intent = await asyncio.wait_for(
+        infer_turn_intent(
+            session, turn, ['audio'], ['camera'], ['user_camera'],
+            visual_scope_future=scope,
+        ),
+        timeout=1,
+    )
+
+    assert intent is not None and intent.text == '普通问答'
+    assert scope.result() == 'V00'
+    assert gate_entered.is_set() and full_entered.is_set()
+
+
+@pytest.mark.asyncio
 async def test_visual_scope_gate_places_optional_text_before_audio():
     requests = []
 
@@ -385,10 +430,10 @@ async def test_visual_scope_gate_failure_aborts_and_falls_through(
         'session_turn_intent',
     ]
     assert aborted == ['gate-fallback-visual-scope-gate']
-    assert registered == removed == [
+    assert set(registered) == set(removed) == {
         'gate-fallback-visual-scope-gate',
         'gate-fallback-intent',
-    ]
+    }
 
 
 @pytest.mark.asyncio
@@ -434,7 +479,10 @@ async def test_visual_scope_gate_cancellation_aborts_and_unregisters():
 
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert aborted == removed == ['gate-cancelled-visual-scope-gate']
+    assert set(aborted) == set(removed) == {
+        'gate-cancelled-visual-scope-gate',
+        'gate-cancelled-intent',
+    }
 
 
 @pytest.mark.asyncio

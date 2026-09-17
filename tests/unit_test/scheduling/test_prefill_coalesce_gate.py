@@ -117,6 +117,20 @@ def test_full_batch_passes_through_immediately(upstream):
     assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
 
 
+def test_complete_action_suffix_cohort_bypasses_coalesce_deadline(upstream):
+    sched = _StubScheduler(
+        coalesce_requests=256,
+        wait_ms=60.0,
+        coalesce_when_idle=True,
+    )
+    sched.waiting_queue = [_req(100.0) for _ in range(169)]
+    for req in sched.waiting_queue:
+        req._omni_data = SimpleNamespace(action_scoring_role="candidate")
+
+    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
+    upstream.assert_called_once()
+
+
 def test_small_queue_is_held_until_oldest_expires(upstream, clock):
     sched = _StubScheduler(coalesce_requests=8, wait_ms=60.0)
     sched.waiting_queue = [_req(100.0), _req(100.01)]

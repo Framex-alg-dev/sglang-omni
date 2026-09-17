@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -317,6 +319,70 @@ class Qwen3OmniPreprocessor:
         # media/history. Keep only a small, one-shot cache of the prepared
         # media objects so child preprocessing does not decode them again.
         self._action_context_cache = PreparedMediaCache()
+        self._action_token_blueprints: OrderedDict[
+            tuple[str, str], tuple[str, torch.Tensor]
+        ] = OrderedDict()
+        self._action_token_blueprint_limit = 64
+        self._action_token_blueprint_invalid_scopes: set[str] = set()
+
+    def _action_token_blueprint(
+        self,
+        payload: StagePayload,
+        prompt_text: str,
+    ) -> tuple[torch.Tensor | None, str, str]:
+        """Return cached immutable action-prefix IDs and the dynamic prompt tail."""
+        if payload.request.metadata.get("task") != "action_suffix_scoring":
+            return None, prompt_text, "disabled"
+        action_spec = payload.request.params.get("action_scoring")
+        if not isinstance(action_spec, dict):
+            return None, prompt_text, "disabled"
+        session_instruction = action_spec.get("session_instruction")
+        namespace = action_spec.get("prefix_cache_namespace")
+        if not isinstance(namespace, str) or not namespace.strip():
+            return None, prompt_text, "disabled"
+        if isinstance(session_instruction, str) and session_instruction:
+            rendered_session = session_instruction
+            if not rendered_session.endswith("\n"):
+                rendered_session += "\n"
+            start = prompt_text.find(rendered_session)
+            if start < 0:
+                return None, prompt_text, "boundary_not_found"
+            boundary_end = start + len(rendered_session)
+            boundary_text = prompt_text[:boundary_end]
+            cache_scope = namespace.strip()
+        else:
+            static_system_prompt = action_spec.get("static_system_prompt")
+            if not isinstance(static_system_prompt, str) or not static_system_prompt:
+                return None, prompt_text, "disabled"
+            boundary_text = self.processor.apply_chat_template(
+                [{"role": "system", "content": static_system_prompt}],
+                add_generation_prompt=False,
+                tokenize=False,
+            )
+            if not prompt_text.startswith(boundary_text):
+                return None, prompt_text, "boundary_not_found"
+            boundary_end = len(boundary_text)
+            # This boundary contains only the immutable public action catalog;
+            # share its CPU token blueprint across sessions with identical text.
+            cache_scope = "public-static-system"
+        if cache_scope in self._action_token_blueprint_invalid_scopes:
+            return None, prompt_text, "validation_failed"
+        digest = hashlib.sha256(boundary_text.encode("utf-8")).hexdigest()
+        key = (cache_scope, digest)
+        cached = self._action_token_blueprints.get(key)
+        if cached is not None and cached[0] == boundary_text:
+            self._action_token_blueprints.move_to_end(key)
+            return cached[1], prompt_text[boundary_end:], "hit"
+        boundary_ids = self.tokenizer(
+            boundary_text,
+            add_special_tokens=False,
+            return_tensors="pt",
+        )["input_ids"][0].to(dtype=torch.long)
+        self._action_token_blueprints[key] = (boundary_text, boundary_ids)
+        self._action_token_blueprints.move_to_end(key)
+        while len(self._action_token_blueprints) > self._action_token_blueprint_limit:
+            self._action_token_blueprints.popitem(last=False)
+        return boundary_ids, prompt_text[boundary_end:], "miss"
 
     def _action_context_cache_key(self, payload: StagePayload) -> tuple[str, str] | None:
         metadata = getattr(payload.request, "metadata", None)
@@ -432,6 +498,9 @@ class Qwen3OmniPreprocessor:
                     "action_context_cache_status": metadata.get(
                         "action_context_cache_status", "disabled"
                     ),
+                    "action_token_blueprint_status": metadata.get(
+                        "action_token_blueprint_status", "disabled"
+                    ),
                 }
                 logger.info(
                     "action_media %s",
@@ -446,6 +515,9 @@ class Qwen3OmniPreprocessor:
                     image_count=diagnostics["image_count"],
                     context_cache_status=diagnostics[
                         "action_context_cache_status"
+                    ],
+                    token_blueprint_status=diagnostics[
+                        "action_token_blueprint_status"
                     ],
                 )
         finally:
@@ -505,11 +577,15 @@ class Qwen3OmniPreprocessor:
             start = prompt_text.find(rendered_session)
             if start >= 0:
                 boundary_text = prompt_text[: start + len(rendered_session)]
-                boundary_ids = self.tokenizer(
-                    boundary_text,
-                    add_special_tokens=False,
-                    return_tensors="pt",
-                )["input_ids"][0]
+                boundary_ids, _, _ = self._action_token_blueprint(
+                    payload, prompt_text
+                )
+                if boundary_ids is None:
+                    boundary_ids = self.tokenizer(
+                        boundary_text,
+                        add_special_tokens=False,
+                        return_tensors="pt",
+                    )["input_ids"][0]
                 max_common = min(
                     int(boundary_ids.numel()),
                     int(input_ids.numel()),
@@ -987,14 +1063,62 @@ class Qwen3OmniPreprocessor:
         if videos_kwargs:
             processor_kwargs["videos_kwargs"] = videos_kwargs
 
+        blueprint_ids, processor_text, blueprint_status = (
+            self._action_token_blueprint(payload, prompt_text)
+        )
+        # A miss uses the official full-prompt path once and validates the
+        # boundary. Session prewarm pays that cost; normal turns process only
+        # the dynamic state/media/current-input tail.
+        use_blueprint = blueprint_ids is not None and blueprint_status == "hit"
         hf_inputs = self.processor(
-            text=prompt_text,
+            text=processor_text if use_blueprint else prompt_text,
             images=images or None,
             videos=videos or None,
             audio=audios or None,
             add_special_tokens=False,
             return_tensors="pt",
             **processor_kwargs,
+        )
+
+        if use_blueprint:
+            dynamic_ids = hf_inputs["input_ids"][0]
+            input_ids = torch.cat(
+                [blueprint_ids.to(device=dynamic_ids.device), dynamic_ids], dim=0
+            )
+            hf_inputs["input_ids"] = input_ids.unsqueeze(0)
+            hf_inputs["attention_mask"] = torch.ones_like(
+                hf_inputs["input_ids"]
+            )
+        elif blueprint_ids is not None:
+            full_ids = hf_inputs["input_ids"][0]
+            if (
+                int(full_ids.numel()) < int(blueprint_ids.numel())
+                or not torch.equal(
+                    full_ids[: int(blueprint_ids.numel())].cpu(),
+                    blueprint_ids.cpu(),
+                )
+            ):
+                action_spec = payload.request.params.get("action_scoring") or {}
+                namespace = action_spec.get("prefix_cache_namespace")
+                session_instruction = action_spec.get("session_instruction")
+                failed_scope = (
+                    namespace.strip()
+                    if isinstance(namespace, str)
+                    and isinstance(session_instruction, str)
+                    and session_instruction
+                    else "public-static-system"
+                )
+                stale_keys = [
+                    key
+                    for key in self._action_token_blueprints
+                    if key[0] == failed_scope
+                ]
+                for key in stale_keys:
+                    self._action_token_blueprints.pop(key, None)
+                self._action_token_blueprint_invalid_scopes.add(failed_scope)
+                blueprint_status = "validation_failed"
+        payload.request.metadata["action_token_blueprint_status"] = (
+            blueprint_status
         )
 
         input_ids = hf_inputs["input_ids"][0]
