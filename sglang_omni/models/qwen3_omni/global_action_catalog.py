@@ -414,15 +414,42 @@ class GlobalActionCandidate:
     category_id: str
     proactive_expression: str = ""
     user_reaction_expression: str = ""
+    expressions_by_locale: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     aliases: tuple[str, ...] = ()
     reaction_sources: frozenset[str] = frozenset()
 
-    def effective_definition(self, turn_origin: str) -> str:
-        contextual = (
+    def expression_for(
+        self,
+        turn_origin: str,
+        locale: str | None = None,
+    ) -> str:
+        field_name = (
+            "proactive_expression"
+            if turn_origin == "proactive"
+            else "user_reaction_expression"
+        )
+        localized = (
+            self.expressions_by_locale.get(
+                _normalize_prompt_locale(locale), {}
+            ).get(field_name, "")
+            if locale is not None
+            else ""
+        )
+        contextual = localized or (
             self.proactive_expression
             if turn_origin == "proactive"
             else self.user_reaction_expression
         )
+        return contextual.strip()
+
+    def effective_definition(
+        self,
+        turn_origin: str,
+        locale: str | None = None,
+    ) -> str:
+        contextual = self.expression_for(turn_origin, locale)
         return contextual.strip() or self.short_definition
 
 
@@ -488,7 +515,7 @@ class GlobalActionCatalog:
                       "用户明确要求执行动作，但完整动作列表中没有候选能够完成该请求"),
         ]
         for item in self.candidate_by_id.values():
-            definition = item.effective_definition(turn_origin)
+            definition = item.effective_definition(turn_origin, locale)
             lines.append(
                 f"candidate_id={item.candidate_id} | action={item.source_label} | description={definition}"
                 if english else
@@ -1071,7 +1098,7 @@ def build_child_system_prompt(
         else:
             lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY_EN)
         lines.extend(
-            f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.effective_definition(turn_origin)}"
+            f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.effective_definition(turn_origin, locale)}"
             for item in category.children
         )
         lines.append(
@@ -1094,7 +1121,7 @@ def build_child_system_prompt(
     else:
         lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY)
     lines.extend(
-        f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.effective_definition(turn_origin)}"
+        f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.effective_definition(turn_origin, locale)}"
         for item in category.children
     )
     lines.append(
@@ -1232,6 +1259,53 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 raise ValueError(
                     f"{child_prefix}.user_reaction_expression must be a string"
                 )
+            raw_expressions_by_locale = raw_child.get(
+                "expressions_by_locale", {}
+            )
+            if raw_expressions_by_locale is None:
+                raw_expressions_by_locale = {}
+            if not isinstance(raw_expressions_by_locale, dict):
+                raise ValueError(
+                    f"{child_prefix}.expressions_by_locale must be an object"
+                )
+            expressions_by_locale: dict[str, Mapping[str, str]] = {}
+            for expression_locale, raw_expressions in (
+                raw_expressions_by_locale.items()
+            ):
+                normalized_locale = _normalize_prompt_locale(
+                    expression_locale
+                )
+                if not isinstance(raw_expressions, dict):
+                    raise ValueError(
+                        f"{child_prefix}.expressions_by_locale[{expression_locale!r}] "
+                        "must be an object"
+                    )
+                unknown_fields = set(raw_expressions) - {
+                    "proactive_expression",
+                    "user_reaction_expression",
+                }
+                if unknown_fields:
+                    raise ValueError(
+                        f"{child_prefix}.expressions_by_locale[{expression_locale!r}] "
+                        "contains unsupported fields: "
+                        + ", ".join(sorted(unknown_fields))
+                    )
+                localized_expressions: dict[str, str] = {}
+                for expression_field, expression_value in (
+                    raw_expressions.items()
+                ):
+                    if not isinstance(expression_value, str):
+                        raise ValueError(
+                            f"{child_prefix}.expressions_by_locale"
+                            f"[{expression_locale!r}][{expression_field!r}] "
+                            "must be a string"
+                        )
+                    localized_expressions[expression_field] = (
+                        expression_value.strip()
+                    )
+                expressions_by_locale[normalized_locale] = MappingProxyType(
+                    localized_expressions
+                )
             raw_aliases = raw_child.get("aliases", [])
             if not isinstance(raw_aliases, list):
                 raise ValueError(f"{child_prefix}.aliases must be a string list")
@@ -1294,6 +1368,9 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 category_id=category_id,
                 proactive_expression=proactive_expression.strip(),
                 user_reaction_expression=user_reaction_expression.strip(),
+                expressions_by_locale=MappingProxyType(
+                    expressions_by_locale
+                ),
                 aliases=aliases,
                 reaction_sources=reaction_sources,
             )

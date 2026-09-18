@@ -218,10 +218,7 @@ class ActionCandidateComponent:
                 child_definition_mode="visual",
             )
         prefix = (
-            self._last_user_action_reference_instruction(
-                turn_origin=turn_origin,
-            )
-            + self._proactive_action_repeat_instruction(
+            self._proactive_action_repeat_instruction(
                 turn_origin=turn_origin,
                 client_last_action_id=turn.client_last_executed_action_id,
             )

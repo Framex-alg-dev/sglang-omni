@@ -161,32 +161,15 @@ class ActionCategoryComponent:
         )
         if persona_first:
             base += proactive_selection_instruction(self.action_language)
-        last_user_action_reference = (
-            self._last_user_action_reference_instruction(
-                turn_origin=turn_origin,
-            )
-        )
         proactive_repeat_instruction = self._proactive_action_repeat_instruction(
             turn_origin=turn_origin,
             client_last_action_id=turn.client_last_executed_action_id,
         )
         action_context.update(
             {
-                "last_user_action_reference_injected": bool(
-                    last_user_action_reference
-                ),
-                "last_user_action_reference_turn_id": (
-                    self.last_user_executed_action.turn_id
-                    if last_user_action_reference
-                    and self.last_user_executed_action is not None
-                    else None
-                ),
-                "last_user_action_reference_candidate_id": (
-                    self.last_user_executed_action.candidate_id
-                    if last_user_action_reference
-                    and self.last_user_executed_action is not None
-                    else None
-                ),
+                "last_user_action_reference_injected": False,
+                "last_user_action_reference_turn_id": None,
+                "last_user_action_reference_candidate_id": None,
             }
         )
         category_session_instruction = (
@@ -629,8 +612,7 @@ class ActionCategoryComponent:
                 request_id=request_base + "-category",
                 session_instruction=category_session_instruction,
                 prefix=(
-                    last_user_action_reference
-                    + proactive_repeat_instruction
+                    proactive_repeat_instruction
                     + base
                     + visual_deictic_instruction
                     + implicit_reaction_instruction
@@ -1422,8 +1404,7 @@ class ActionCategoryComponent:
             request_id=request_base + "-child",
             session_instruction=child_session_instruction,
             prefix=(
-                last_user_action_reference
-                + proactive_repeat_instruction
+                proactive_repeat_instruction
                 + base
                 + visual_deictic_instruction
                 + visual_deictic_child_instruction

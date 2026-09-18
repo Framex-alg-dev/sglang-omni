@@ -1624,9 +1624,11 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
                 session_children.append(child)
@@ -1696,9 +1698,11 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=global_child.category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
             )

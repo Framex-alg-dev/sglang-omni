@@ -6079,7 +6079,7 @@ async def test_failed_child_does_not_replace_last_executed_action_fact() -> None
 
 
 @pytest.mark.asyncio
-async def test_action_scoring_uses_only_last_user_action_as_reference_anchor() -> None:
+async def test_action_scoring_keeps_last_user_action_out_of_scoring_prefix() -> None:
     ws = FakeWebSocket()
     client = ScriptedChildFusionClient(["123", "124", "123"])
     session = make_session(ws, client)
@@ -6145,17 +6145,16 @@ async def test_action_scoring_uses_only_last_user_action_as_reference_anchor() -
     assert child_request.history == []
     assert "[当前实际动作状态]" not in category_request.system_prompt
     assert "[最近一次用户触发动作]" not in category_request.system_prompt
-    assert "[最近一次用户触发动作，仅用于指代解析]" in category_request.prefix
+    assert "[最近一次用户触发动作，仅用于指代解析]" not in category_request.prefix
     assert (
         "category_id=10｜candidate_id=123｜action_id=wave"
-        in category_request.prefix
+        not in category_request.prefix
     )
-    assert "动作=挥手" in category_request.prefix
     assert "candidate_id=124" not in category_request.prefix
-    assert "[最近一次用户触发动作，仅用于指代解析]" in child_request.prefix
+    assert "[最近一次用户触发动作，仅用于指代解析]" not in child_request.prefix
     assert (
         "category_id=10｜candidate_id=123｜action_id=wave"
-        in child_request.prefix
+        not in child_request.prefix
     )
     assert "candidate_id=124" not in child_request.prefix
     result = next(
@@ -6165,6 +6164,64 @@ async def test_action_scoring_uses_only_last_user_action_as_reference_anchor() -
         and event.get("turn_id") == "turn-repeat-user-action"
     )
     assert result["action"]["candidate_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_repeated_current_turn_action_has_identical_scoring_prefix() -> None:
+    ws = FakeWebSocket()
+    client = ScriptedChildFusionClient(["123", "124", "123"])
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-current-turn-action-only",
+            "language": "zh",
+            "modalities": ["action"],
+            "include_scores": True,
+            "action_candidates": fusion_catalog(),
+        }
+    )
+
+    for turn_id, text in (
+        ("turn-heart-first", "双手比心"),
+        ("turn-like", "点个赞"),
+        ("turn-heart-second", "双手比心"),
+    ):
+        await session.handle_turn_start(user_turn_start(turn_id))
+        await session._dispatch_turn_commit(user_turn_commit(turn_id, text=text))
+        await asyncio.wait_for(session.active_turn.inference_task, timeout=1)
+
+    category_requests = [
+        request for request in client.score_requests if request.stage == "category"
+    ]
+    child_requests = [
+        request for request in client.score_requests if request.stage == "child"
+    ]
+    assert len(category_requests) == 3
+    assert len(child_requests) == 3
+    assert category_requests[0].prefix == category_requests[2].prefix
+    assert child_requests[0].prefix == child_requests[2].prefix
+    assert [
+        candidate.candidate_id for candidate in child_requests[0].candidates
+    ] == [
+        candidate.candidate_id for candidate in child_requests[2].candidates
+    ]
+    assert all(
+        "[最近一次用户触发动作，仅用于指代解析]" not in request.prefix
+        for request in (*category_requests, *child_requests)
+    )
+    third_result = next(
+        event
+        for event in ws.events
+        if event.get("type") == "turn.result"
+        and event.get("turn_id") == "turn-heart-second"
+    )
+    action_context = third_result["media_summary"]["action_context"]
+    assert action_context["history_policy"] == "current_turn_only"
+    assert action_context["cross_turn_history_omitted"] is True
+    assert action_context["last_user_action_reference_injected"] is False
+    assert action_context["last_user_action_reference_turn_id"] is None
+    assert action_context["last_user_action_reference_candidate_id"] is None
 
 
 @pytest.mark.asyncio
@@ -10840,6 +10897,75 @@ async def test_nested_catalog_flat_children_runs_one_stage() -> None:
     assert result["media_summary"]["action_context"]["selection_stages"] == 1
     assert result["media_summary"]["action_context"]["selection_mode"] == "flat_children"
     assert result["media_summary"]["action_context"]["flattened_child_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_flat_action_scoring_ignores_prior_selected_action() -> None:
+    ws = FakeWebSocket()
+    client = NestedFakeClient()
+    session = make_session(ws, client, action_selection_mode="flat_children")
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "modalities": ["action"],
+            "session_id": "session-flat-current-turn-only",
+            "include_scores": True,
+            "action_candidates": [
+                {
+                    "category_id": "B1",
+                    "source_label": "手势",
+                    "short_definition": "手部动作",
+                    "children": [
+                        {
+                            "candidate_id": "A1",
+                            "action_id": "heart",
+                            "source_label": "双手比心",
+                            "short_definition": "双手比出爱心",
+                        },
+                        {
+                            "candidate_id": "A2",
+                            "action_id": "like",
+                            "source_label": "点赞",
+                            "short_definition": "单手竖起拇指",
+                        },
+                        {
+                            "candidate_id": "A0",
+                            "action_id": "no_action",
+                            "source_label": "不做动作",
+                            "short_definition": "保持当前姿态",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    for turn_id, text in (
+        ("turn-flat-heart-first", "双手比心"),
+        ("turn-flat-like", "点个赞"),
+        ("turn-flat-heart-second", "双手比心"),
+    ):
+        await session.handle_turn_start(user_turn_start(turn_id))
+        await session.handle_turn_commit(user_turn_commit(turn_id, text=text))
+
+    assert len(client.score_requests) == 3
+    first_request, _, third_request = client.score_requests
+    assert first_request.stage == third_request.stage == "single"
+    assert first_request.prefix == third_request.prefix
+    assert [item.candidate_id for item in first_request.candidates] == [
+        item.candidate_id for item in third_request.candidates
+    ]
+    assert "[最近一次用户触发动作，仅用于指代解析]" not in third_request.prefix
+    third_result = next(
+        event
+        for event in ws.events
+        if event.get("type") == "turn.result"
+        and event.get("turn_id") == "turn-flat-heart-second"
+    )
+    action_context = third_result["media_summary"]["action_context"]
+    assert action_context["history_policy"] == "current_turn_only"
+    assert action_context["cross_turn_history_omitted"] is True
+
 
 @pytest.mark.asyncio
 async def test_turn_result_defaults_to_compact_action_payload() -> None:
