@@ -3749,13 +3749,16 @@ async def test_action_ready_does_not_wait_for_performance_or_reply(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enforced_grouped_decision_publishes_before_full_intent(monkeypatch):
+async def test_enforced_grouped_decision_scores_in_parallel_but_waits_to_publish(
+    monkeypatch,
+):
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
 
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
     detail_release = asyncio.Event()
     published = asyncio.Event()
+    scored = asyncio.Event()
 
     async def slow_intent(
         session,
@@ -3793,6 +3796,110 @@ async def test_enforced_grouped_decision_publishes_before_full_intent(monkeypatc
             self.score_requests.append(request)
             candidate_ids = [item.candidate_id for item in request.candidates]
             winners = {"288", "IB1", "IF0", "IR0"}
+            result = ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=candidate_id,
+                        token_count=1,
+                        mean_logprob=(
+                            -0.01 if candidate_id in winners else -10.0
+                        ),
+                        mean_nll=(
+                            0.01 if candidate_id in winners else 10.0
+                        ),
+                        ppl=1.01 if candidate_id in winners else 22026.0,
+                        token_scores=[],
+                    )
+                    for candidate_id in candidate_ids
+                ],
+            )
+            scored.set()
+            return result
+
+    catalog = load_runtime_action_catalog()
+    assert catalog.direct_action_selection is True
+    ws = Socket()
+    client = GroupedDecisionClient("P201", body_id="288")
+    session = make_session(ws, client, global_action_catalog=catalog)
+    await session.dispatch(
+        protocol_v1_session_start(
+            "grouped-action-first",
+            outputs=["action"],
+            action={},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("grouped-action"))
+    task = asyncio.create_task(
+        session.handle_turn_commit(
+            user_turn_commit("grouped-action", text="挥手")
+        )
+    )
+    try:
+        await asyncio.wait_for(scored.wait(), 2)
+        await asyncio.sleep(0)
+        assert not published.is_set()
+        assert not task.done()
+        request = next(
+            item for item in client.score_requests if item.stage == "single"
+        )
+        concrete_count = sum(
+            not item.candidate_id.startswith("I")
+            for item in request.candidates
+        )
+        assert len(request.candidates) == concrete_count + 12
+        assert len(request.candidates) <= 200
+    finally:
+        detail_release.set()
+        await asyncio.wait_for(task, 2)
+    assert published.is_set()
+    action_ready = next(
+        event for event in ws.events
+        if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["candidate_id"] == "288"
+
+
+@pytest.mark.asyncio
+async def test_parallel_action_target_mismatch_falls_back_without_rescoring(
+    monkeypatch,
+):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
+
+    async def normalized_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        full_intent_start_event=None,
+    ):
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        assert full_intent_start_event is not None
+        await full_intent_start_event.wait()
+        return TurnIntent(
+            speech="verbatim",
+            text="二",
+            body="数字一手势",
+            body_mode="perform",
+            face="",
+            history=False,
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", normalized_intent)
+
+    class WrongActionClient(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            self.score_requests.append(request)
+            candidate_ids = [item.candidate_id for item in request.candidates]
+            winners = {"259", "IB1", "IF0", "IR0"}
             return ActionSuffixScoreResult(
                 request_id=request.request_id,
                 model=request.model,
@@ -3815,43 +3922,31 @@ async def test_enforced_grouped_decision_publishes_before_full_intent(monkeypatc
             )
 
     catalog = load_runtime_action_catalog()
-    assert catalog.direct_action_selection is True
-    ws = Socket()
-    client = GroupedDecisionClient("P201", body_id="288")
+    ws = FakeWebSocket()
+    client = WrongActionClient("P201", body_id="259", body_category="31")
     session = make_session(ws, client, global_action_catalog=catalog)
     await session.dispatch(
         protocol_v1_session_start(
-            "grouped-action-first",
+            "parallel-target-mismatch",
             outputs=["action"],
             action={},
         )
     )
-    await session.handle_turn_start(user_turn_start("grouped-action"))
-    task = asyncio.create_task(
-        session.handle_turn_commit(
-            user_turn_commit("grouped-action", text="挥手")
-        )
+    requests_before_turn = len(client.score_requests)
+    await session.handle_turn_start(user_turn_start("say-two-show-one"))
+    await session.handle_turn_commit(
+        user_turn_commit("say-two-show-one", text="说二比一")
     )
-    try:
-        await asyncio.wait_for(published.wait(), 2)
-        assert not task.done()
-        request = next(
-            item for item in client.score_requests if item.stage == "single"
-        )
-        concrete_count = sum(
-            not item.candidate_id.startswith("I")
-            for item in request.candidates
-        )
-        assert len(request.candidates) == concrete_count + 12
-        assert len(request.candidates) <= 200
-        action_ready = next(
-            event for event in ws.events
-            if event["type"] == "turn.action.ready"
-        )
-        assert action_ready["action"]["candidate_id"] == "288"
-    finally:
-        detail_release.set()
-        await asyncio.wait_for(task, 2)
+
+    turn_requests = client.score_requests[requests_before_turn:]
+    assert len([request for request in turn_requests if request.stage == "single"]) == 1
+    action_ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["candidate_id"] == "259"
+    assert action_ready["action"]["execute"] is False
+    assert action_ready["action"]["support_status"] == "unsupported"
+    assert action_ready["action"]["reason_code"] == "intent_action_mismatch"
 
 
 @pytest.mark.asyncio
@@ -3985,7 +4080,7 @@ async def test_shadow_mode_uses_canonical_intent_for_exact_mixed_action(
 
 
 @pytest.mark.asyncio
-async def test_enforced_low_margin_decision_fails_closed_without_waiting_for_intent(
+async def test_enforced_low_margin_decision_waits_for_intent_then_fails_closed(
     monkeypatch,
 ):
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
@@ -3994,6 +4089,7 @@ async def test_enforced_low_margin_decision_fails_closed_without_waiting_for_int
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
     detail_release = asyncio.Event()
     published = asyncio.Event()
+    scored = asyncio.Event()
 
     async def slow_intent(
         session,
@@ -4051,12 +4147,14 @@ async def test_enforced_low_margin_decision_fails_closed_without_waiting_for_int
                         token_scores=[],
                     )
                 )
-            return ActionSuffixScoreResult(
+            result = ActionSuffixScoreResult(
                 request_id=request.request_id,
                 model=request.model,
                 prefix_cached=True,
                 scores=scores,
             )
+            scored.set()
+            return result
 
     catalog = load_runtime_action_catalog()
     ws = Socket()
@@ -4079,19 +4177,22 @@ async def test_enforced_low_margin_decision_fails_closed_without_waiting_for_int
         )
     )
     try:
-        await asyncio.wait_for(published.wait(), 2)
+        await asyncio.wait_for(scored.wait(), 2)
+        await asyncio.sleep(0)
+        assert not published.is_set()
         assert not task.done()
-        action_ready = next(
-            event
-            for event in ws.events
-            if event["type"] == "turn.action.ready"
-        )
-        assert action_ready["action"]["candidate_id"] == "288"
-        assert action_ready["action"]["execute"] is False
-        assert action_ready["action"]["support_status"] == "unsupported"
     finally:
         detail_release.set()
         await asyncio.wait_for(task, 2)
+    assert published.is_set()
+    action_ready = next(
+        event
+        for event in ws.events
+        if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["candidate_id"] == "288"
+    assert action_ready["action"]["execute"] is False
+    assert action_ready["action"]["support_status"] == "unsupported"
 
 
 @pytest.mark.asyncio

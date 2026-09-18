@@ -40,7 +40,10 @@ from sglang_omni.serve.realtime.performance import (
     PerformanceDecision,
     fuse_performance_decision,
 )
-from sglang_omni.serve.realtime.action.routing import route_numeric_reply_action
+from sglang_omni.serve.realtime.action.routing import (
+    resolve_unique_explicit_action,
+    route_numeric_reply_action,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1064,20 +1067,31 @@ class TurnPipeline:
                     decision_mode == "enforce"
                     and decision is not None
                 )
-                if (
-                    not action_is_terminal_without_execution
-                    and not use_batched_decision
-                    and intent_task is not None
-                ):
+                # Scoring may run in parallel with the unified intent request,
+                # but no user action result is published before that request
+                # reaches a terminal result.  This is a publication barrier,
+                # not a compute barrier: the two GPU requests still overlap.
+                if turn.turn_origin == TURN_ORIGIN_USER and intent_task is not None:
                     turn.intent = await intent_task
                 intent = turn.intent
+
+                unified_intent_allows_body = bool(
+                    intent is not None
+                    and intent.visual_scope_gate
+                    != VISUAL_GESTURE_ANSWER_GATE
+                    and intent.body_mode != "prohibit"
+                    and (
+                        intent.body_mode == "perform"
+                        or intent.reaction_mode == "respond"
+                    )
+                )
                 if use_batched_decision:
-                    # In enforce mode this grouped result is the authoritative
-                    # latency-path gate. A narrow margin fails closed through
-                    # ActionDecision.allows_body instead of waiting for the
-                    # slower JSON intent parser and missing the action-ready
-                    # latency budget.
-                    intent_allows_body = bool(decision.allows_body)
+                    # The bounded grouped labels remain an independent
+                    # fail-closed safety check.  They no longer authorize early
+                    # publication without the unified intent result.
+                    intent_allows_body = bool(
+                        unified_intent_allows_body and decision.allows_body
+                    )
                     emit_structured_log(
                         "action", "batched_action_decision_enforced",
                         session_id=self.session_id, turn_id=turn_id,
@@ -1092,19 +1106,60 @@ class TurnPipeline:
                         ),
                         all_groups_min_margin=decision.min_margin,
                         all_groups_confident=decision.confident,
+                        waited_for_unified_intent=True,
                     )
                 else:
-                    # The old parser remains authoritative in shadow/off modes.
-                    intent_allows_body = bool(
-                        intent is not None
-                        and intent.visual_scope_gate
-                        != VISUAL_GESTURE_ANSWER_GATE
-                        and intent.body_mode != "prohibit"
-                        and (
-                            intent.body_mode == "perform"
-                            or intent.reaction_mode == "respond"
-                        )
+                    intent_allows_body = unified_intent_allows_body
+
+                action_target_mismatch = False
+                expected_candidate_id: str | None = None
+                if (
+                    self.direct_action_selection
+                    and intent is not None
+                    and intent.body_mode == "perform"
+                ):
+                    category_by_id = {
+                        category.category_id: category
+                        for category in self.categories
+                    }
+                    explicit_route = resolve_unique_explicit_action(
+                        intent.body,
+                        [
+                            (category_by_id[candidate.category_id], candidate)
+                            for candidate in self._filter_turn_action_candidates(
+                                turn, list(self.candidates)
+                            )
+                            if candidate.category_id in category_by_id
+                        ],
                     )
+                    if explicit_route is not None:
+                        expected_candidate_id = (
+                            explicit_route.candidate.candidate_id
+                        )
+                        action_target_mismatch = bool(
+                            scored_action is not None
+                            and scored_action.get("execute")
+                            and scored_action.get("candidate_id")
+                            != expected_candidate_id
+                        )
+                        if action_target_mismatch:
+                            intent_allows_body = False
+                            emit_structured_log(
+                                "action",
+                                "speculative_action_target_mismatch",
+                                session_id=self.session_id,
+                                turn_id=turn_id,
+                                trace_id=turn.trace_id,
+                                selected_candidate_id=scored_action.get(
+                                    "candidate_id"
+                                ),
+                                expected_candidate_id=expected_candidate_id,
+                                body_task=intent.body,
+                                fallback="unsupported",
+                                rescored=False,
+                            )
+
+                unsafe_decision_disagreement = False
                 if decision is not None and intent is not None:
                     legacy_reaction_active = intent.reaction_mode == "respond"
                     decision_reaction_active = decision.reaction_type != "none"
@@ -1124,35 +1179,42 @@ class TurnPipeline:
                             decision_reaction_active
                             != legacy_reaction_active
                         ),
-                        "visual": (
-                            (
-                                "answer"
-                                if decision.visual_scope
-                                == VISUAL_GESTURE_ANSWER_GATE
-                                else "copy"
-                                if decision.visual_scope
-                                else "general"
+                        "visual": bool(
+                            getattr(
+                                self, "action_decision_batch_visual", False
                             )
-                            != (
-                                "answer"
-                                if intent.visual_scope_gate
-                                == VISUAL_GESTURE_ANSWER_GATE
-                                else "copy"
-                                if intent.visual_scope_gate
-                                else "general"
+                            and (
+                                (
+                                    "answer"
+                                    if decision.visual_scope
+                                    == VISUAL_GESTURE_ANSWER_GATE
+                                    else "copy"
+                                    if decision.visual_scope
+                                    else "general"
+                                )
+                                != (
+                                    "answer"
+                                    if intent.visual_scope_gate
+                                    == VISUAL_GESTURE_ANSWER_GATE
+                                    else "copy"
+                                    if intent.visual_scope_gate
+                                    else "general"
+                                )
                             )
                         ),
                     }
+                    unsafe_decision_disagreement = bool(
+                        disagreements["body"] or disagreements["visual"]
+                    )
+                    if use_batched_decision and unsafe_decision_disagreement:
+                        intent_allows_body = False
                     emit_structured_log(
                         "diagnostic", "action_decision_shadow_compared",
                         session_id=self.session_id, turn_id=turn_id,
                         trace_id=turn.trace_id,
                         mode=decision_mode,
                         disagreements=disagreements,
-                        unsafe_disagreement=bool(
-                            disagreements["body"]
-                            or disagreements["visual"]
-                        ),
+                        unsafe_disagreement=unsafe_decision_disagreement,
                         decision_body_mode=decision.body_mode,
                         legacy_body_mode=intent.body_mode,
                         decision_face_mode=decision.face_mode,
@@ -1176,6 +1238,11 @@ class TurnPipeline:
                         execute=False,
                         support_status="unsupported",
                         intent_gate_blocked=True,
+                        reason_code=(
+                            "intent_action_mismatch"
+                            if action_target_mismatch
+                            else "intent_gate_blocked"
+                        ),
                     )
                     result = (blocked, *result[1:])
                     action_is_terminal_without_execution = True
@@ -1202,8 +1269,13 @@ class TurnPipeline:
                         ),
                         candidate_id=blocked.get("candidate_id"),
                         intent_gate_source=(
-                            "batched_labels"
-                            if use_batched_decision else "legacy_json"
+                            "unified_intent+batched_labels"
+                            if use_batched_decision else "unified_intent"
+                        ),
+                        action_target_mismatch=action_target_mismatch,
+                        expected_candidate_id=expected_candidate_id,
+                        unsafe_decision_disagreement=(
+                            unsafe_decision_disagreement
                         ),
                     )
                 if (
