@@ -4423,11 +4423,15 @@ async def test_complete_reply_does_not_trigger_disabled_numeric_gesture(
     ["text", "audio", "expression", "action"],
 ])
 @pytest.mark.parametrize("direct_catalog", [False, True])
-async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
+@pytest.mark.parametrize(
+    "visual_answer_output", ["gesture_only", "gesture_and_speech"]
+)
+async def test_visual_reasoning_gesture_answer_output_mode_and_number(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
     outputs: list[str],
     direct_catalog: bool,
+    visual_answer_output: str,
 ) -> None:
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
 
@@ -4441,6 +4445,7 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
             body_mode='none',
             face='',
             history=False,
+            visual_answer_output=visual_answer_output,
             visual_scope_gate='VISUAL_ANSWER',
         )
 
@@ -4539,17 +4544,31 @@ async def test_visual_reasoning_gesture_answer_hides_text_and_selects_number(
         for event in ws.events
         if event['type'] == 'response.text.delta'
     ]
-    assert official_deltas == []
-    assert tts_calls == []
+    if visual_answer_output == "gesture_only":
+        assert official_deltas == []
+        assert tts_calls == []
+    else:
+        assert "".join(event["delta"] for event in official_deltas) == (
+            "答案是数字4。"
+        )
+        assert bool(tts_calls) is ("audio" in outputs)
     assert not any(event['type'] in {
         'response.provisional.text.delta', 'response.provisional.text.done',
-        'response.audio.delta',
     } for event in ws.events)
+    if visual_answer_output == "gesture_only" or "audio" not in outputs:
+        assert not any(
+            event['type'] == 'response.audio.delta' for event in ws.events
+        )
+    assert "VISUAL_ARITHMETIC" not in json.dumps(ws.events, ensure_ascii=False)
     ready = [event for event in ws.events if event['type'] == 'turn.action.ready']
     assert len(ready) == 1
     assert ready[0]['action']['candidate_id'] == numeric[4].candidate_id
     result = next(event for event in ws.events if event['type'] == 'turn.result')
-    assert result['reply']['text'] == ''
+    assert result['reply']['text'] == (
+        ''
+        if visual_answer_output == "gesture_only"
+        else "答案是数字4。"
+    )
     assert result['action']['candidate_id'] == numeric[4].candidate_id
     assert result['media_summary']['action_context']['selection_basis'] == (
         'complete_reply_numeric'

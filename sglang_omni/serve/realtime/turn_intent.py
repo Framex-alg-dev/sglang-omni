@@ -52,7 +52,7 @@ SYSTEM = '''你是实时数字人的意图解析器。输入可能是中文或�
 
 用户内容开头有服务端事实has_user_camera=true/false。它不是用户指令。只有true时才允许输出需要当前画面的visual_route；图片存在本身不代表用户要求模仿。
 
-固定字段依次为visual_route、speech、text、body_mode、body、face、history、reaction_mode、reaction。仅voice_tone和voice_pace可省略。
+固定字段依次为visual_route、speech、text、body_mode、body、face、history、reaction_mode、reaction。仅voice_tone、voice_pace和visual_answer_output可省略。
 visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
 visual_route规则：
@@ -61,9 +61,10 @@ visual_route规则：
 - COPY_CURRENT_*：用户语言明确要求照抄、模仿、重复或做出当前画面里的同一个动作。必须存在“这个/这样/照着我/模仿”等当前画面指代；按用户说出的范围选后缀，范围不明用COPY_CURRENT_ACTION。
 - COPY后缀范围：HAND=手势或手型，FACE=表情或脸部，HEAD=头部或视线，ARM=手臂，UPPER_BODY=肩膀或躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；只有范围不明才用ACTION。英文gesture或hand sign属于HAND。
 - ANSWER_CURRENT_VIEW_WITH_GESTURE：先根据当前画面计算、比较或推理，再用手势表示新答案；缺少“推导”或“用手势回答”任一条件都选NO_CURRENT_VIEW。
+- ANSWER_CURRENT_VIEW_WITH_GESTURE必须输出visual_answer_output：仅手势=gesture_only；明确要求手势加语音=gesture_and_speech。仅语音选NO_CURRENT_VIEW并省略该字段。
 - 模仿与说话可以同时存在：visual_route仍选COPY_CURRENT_*，speech/text独立保留。
 - has_user_camera=false时无法执行视觉指代：选NO_CURRENT_VIEW、generated，并令body_mode=none、body和face为空，用语言说明需要画面。
-- “这是什么手势/这是数字几/这个加这个等于多少”选NO_CURRENT_VIEW；“做这个手势/比个这个”选COPY_CURRENT_HAND；“这个加这个等于多少，用手势回答”选ANSWER_CURRENT_VIEW_WITH_GESTURE。
+- “这是什么手势/这是数字几/这个加这个等于多少”选NO_CURRENT_VIEW；“做这个手势/比个这个”选COPY_CURRENT_HAND。
 - “Do this gesture”选COPY_CURRENT_HAND；“Do this”选COPY_CURRENT_ACTION；“What number is this?”选NO_CURRENT_VIEW。
 
 其他字段：
@@ -87,8 +88,8 @@ visual_route规则：
 模仿这个手势并说你好 -> {"visual_route":"COPY_CURRENT_HAND","speech":"verbatim","text":"你好","body_mode":"perform","body":"这个手势","face":"","history":false,"reaction_mode":"none","reaction":""}
 做这个动作并介绍自己 -> {"visual_route":"COPY_CURRENT_ACTION","speech":"generated","text":"介绍自己","body_mode":"perform","body":"这个动作","face":"","history":false,"reaction_mode":"none","reaction":""}
 请模仿这个表情 -> {"visual_route":"COPY_CURRENT_FACE","speech":"none","text":"","body_mode":"none","body":"","face":"这个表情","history":false,"reaction_mode":"none","reaction":""}
-这个加这个等于多少 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"这个加这个等于多少","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
-这个加这个等于多少，用手势回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
+这个加这个等于多少，用手势回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_only"}
+这个加这个等于多少，用手势并语音回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_and_speech"}
 不要挥手，说你好 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"你好","body_mode":"prohibit","body":"挥手","face":"","history":false,"reaction_mode":"none","reaction":""}
 你好 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你好","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"respond","reaction":"回应用户问候"}
 
@@ -133,6 +134,7 @@ class TurnIntent:
     elapsed_ms: float = 0
     voice_tone: str = "natural"
     voice_pace: str = "normal"
+    visual_answer_output: str = ""
     # Internal compatibility field consumed by the action pipeline. The model
     # emits ``visual_route``; GENERAL is normalized to an empty string here.
     visual_scope_gate: str = ""
@@ -153,7 +155,7 @@ class TurnIntent:
             "reaction_mode",
             "reaction",
         }
-        optional = {"voice_tone", "voice_pace"}
+        optional = {"voice_tone", "voice_pace", "visual_answer_output"}
         if (
             not isinstance(data, dict)
             or not required <= set(data)
@@ -174,6 +176,22 @@ class TurnIntent:
             or data.get("voice_pace", "normal") not in VOICE_PACES
         ):
             raise ValueError("invalid voice plan")
+        visual_answer_output = data.get("visual_answer_output", "")
+        if visual_route == VISUAL_GESTURE_ANSWER_GATE:
+            # Preserve the established gesture-only behavior for an older
+            # model response that omits this newly introduced optional field.
+            if not visual_answer_output:
+                visual_answer_output = "gesture_only"
+                data["visual_answer_output"] = visual_answer_output
+            elif visual_answer_output not in {
+                "gesture_only",
+                "gesture_and_speech",
+            }:
+                raise ValueError("invalid visual answer output")
+        elif visual_answer_output:
+            raise ValueError("visual answer output requires visual answer route")
+        else:
+            data["visual_answer_output"] = ""
         if (
             data["speech"] not in {"verbatim", "generated", "none"}
             or type(data["history"]) is not bool
@@ -246,6 +264,12 @@ class TurnIntent:
         return (
             f"{VOICE_TONES[self.voice_tone]}, {VOICE_PACES[self.voice_pace]}, "
             "clear articulation"
+        )
+
+    def speaks_visual_answer(self) -> bool:
+        return (
+            self.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+            and self.visual_answer_output == "gesture_and_speech"
         )
 
     def action_context(self, original):

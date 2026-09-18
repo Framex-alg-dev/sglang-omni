@@ -198,6 +198,34 @@ def test_visual_answer_is_normalized_for_downstream_reasoning():
     assert intent.speech == "generated"
     assert intent.text == "根据当前画面完成计算或推理"
     assert intent.body_mode == "none" and intent.body == ""
+    assert intent.visual_answer_output == "gesture_only"
+    assert intent.speaks_visual_answer() is False
+
+    spoken = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route="VISUAL_ANSWER",
+                speech="generated",
+                text="根据当前画面计算答案",
+                body="",
+                body_mode="none",
+                visual_answer_output="gesture_and_speech",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+    assert spoken.speaks_visual_answer() is True
+
+
+def test_visual_answer_output_is_rejected_on_non_visual_answer_route():
+    with pytest.raises(ValueError, match="requires visual answer route"):
+        TurnIntent.parse(
+            json.dumps(
+                payload(visual_answer_output="gesture_and_speech"),
+                ensure_ascii=False,
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -490,5 +518,6 @@ def test_unified_prompt_has_consistent_visual_and_action_boundaries():
     assert "这是什么手势/这是数字几/这个加这个等于多少”选NO_CURRENT_VIEW" in SYSTEM
     assert "能挥挥手吗”" in SYSTEM and "是perform" in SYSTEM
     assert "你会挥手吗”" in SYSTEM and "body_mode=none" in SYSTEM
+    assert "gesture_only" in SYSTEM and "gesture_and_speech" in SYSTEM
     assert "模仿同时说话则输出 GENERAL" not in SYSTEM
     assert len(SYSTEM) < 5000

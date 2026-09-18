@@ -927,6 +927,9 @@ class TurnPipeline:
             category_decision_received = False
             category_support_status: str | None = None
             reply_task: asyncio.Task[tuple[str, dict[str, Any]]] | None = None
+            visual_answer_public_reply_task: (
+                asyncio.Task[tuple[str, dict[str, Any]]] | None
+            ) = None
             provisional_state: ProvisionalReplyState | None = None
             provisional_discard_task: asyncio.Task[Any] | None = None
             rejection_task: asyncio.Task[Any] | None = None
@@ -2258,6 +2261,53 @@ class TurnPipeline:
                             )["numeric_reply_action"] = (
                                 numeric_resolution.timing_breakdown
                             )
+                    if (
+                        visual_gesture_answer
+                        and turn.intent is not None
+                        and turn.intent.speaks_visual_answer()
+                    ):
+                        # The generated VISUAL_ARITHMETIC contract is private
+                        # model evidence, not user-facing prose. Publish a
+                        # deterministic answer from the same resolved number so
+                        # speech and the selected gesture cannot disagree.
+                        await reply_task
+                        await self._suppress_provisional_reply_content(
+                            turn,
+                            provisional_state,
+                            reason="visual_answer_internal_evidence",
+                        )
+                        await self._discard_provisional_reply(
+                            turn,
+                            provisional_state,
+                            reason="visual_answer_internal_evidence",
+                            abort_request=False,
+                            wait_for_cleanup=True,
+                        )
+                        selected_number = numeric_resolution.route_context.get(
+                            "selected_number"
+                        )
+                        public_answer = (
+                            self._prompt(
+                                zh=f"答案是数字{selected_number}。",
+                                en=f"The answer is {selected_number}.",
+                            )
+                            if isinstance(selected_number, int)
+                            else self._prompt(
+                                zh="我没能识别出答案。",
+                                en="I couldn't determine the answer.",
+                            )
+                        )
+                        visual_answer_public_reply_task = track_branch(
+                            self._run_provided_reply(
+                                turn,
+                                public_answer,
+                                source="generated",
+                            ),
+                            name=(
+                                f"session-visual-answer-public-reply-"
+                                f"{self.session_id}-{turn.turn_id}"
+                            ),
+                        )
 
                 if performance is not None:
                     fused = fuse_performance_decision(
@@ -2299,7 +2349,11 @@ class TurnPipeline:
                     and not preserve_language_reply_on_unsupported_action
                 )
                 if provisional_state is not None:
-                    if visual_gesture_answer and reply_task is not None:
+                    if (
+                        visual_gesture_answer
+                        and reply_task is not None
+                        and visual_answer_public_reply_task is None
+                    ):
                         await reply_task
                         await self._suppress_provisional_reply_content(
                             turn,
@@ -2387,7 +2441,12 @@ class TurnPipeline:
                 action_unsupported
                 and not preserve_language_reply_on_unsupported_action
             )
-            if reply_task is not None and not suppress_reply_for_unsupported_action:
+            if (
+                visual_answer_public_reply_task is not None
+                and not suppress_reply_for_unsupported_action
+            ):
+                reply_text, reply_timing = await visual_answer_public_reply_task
+            elif reply_task is not None and not suppress_reply_for_unsupported_action:
                 reply_text, reply_timing = await reply_task
                 if visual_gesture_answer:
                     reply_text = ""
@@ -2408,7 +2467,11 @@ class TurnPipeline:
                     cancelled=action_task.cancelled(),
                 )
             await self._wait_for_provisional_background_tasks(provisional_state)
-            if provisional_state is not None and reply_timing is not None:
+            if (
+                provisional_state is not None
+                and reply_timing is not None
+                and visual_answer_public_reply_task is None
+            ):
                 reply_timing = self._provisional_reply_timing(provisional_state)
 
             if rejection_task is not None:
