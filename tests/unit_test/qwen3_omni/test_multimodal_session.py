@@ -11743,3 +11743,23 @@ async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkey
     assert result['reply']['text'] == '一比二'
     assert_body_action_not_requested(result['action'])
     assert_generic_action_scoring_was_bypassed(client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preview", [False, True])
+async def test_prompt_preview_disables_memory_without_changing_normal_sessions(preview):
+    ws = FakeWebSocket()
+    session = make_session(ws, FakeClient(), session_memory_config=SessionMemoryConfig(
+        enabled=True, write_enabled=False, read_enabled=True))
+    original_store = session.session_memory_store
+    assert original_store is not None
+    await session.dispatch(protocol_v1_session_start("prompt-preview", preview=preview))
+    assert any(event["type"] == "session.started" for event in ws.events)
+    assert session.session_memory_store is (None if preview else original_store)
+
+
+@pytest.mark.parametrize("preview", ["true", 1, None])
+def test_prompt_preview_requires_boolean(preview):
+    session = make_session(FakeWebSocket(), FakeClient())
+    with pytest.raises(ValueError, match="preview must be boolean"):
+        session._normalize_session_start(protocol_v1_session_start("bad-preview", preview=preview))

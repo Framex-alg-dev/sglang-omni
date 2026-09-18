@@ -578,6 +578,7 @@ class ProtocolValidationComponent:
                 "output_audio",
                 "diagnostics",
                 "knowledge",
+                "preview",
             },
             required={"type", "protocol_version", "session_id"},
         )
@@ -837,7 +838,10 @@ class ProtocolValidationComponent:
                 "knowledge.entity_snapshot requires mode='provided_context'"
             )
 
+        if type(event.get("preview", False)) is not bool:
+            raise ValueError("preview must be boolean")
         normalized: dict[str, Any] = {
+            "_preview": event.get("preview", False),
             "type": "session.start",
             "session_id": session_id.strip(),
             "modalities": list(outputs),
