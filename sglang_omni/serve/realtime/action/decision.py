@@ -31,7 +31,15 @@ REACTION_LABELS = {
     "IR4": "congratulation",
     "IR5": "affection",
 }
-VISUAL_LABELS = {f"IV{index:02d}": f"V{index:02d}" for index in range(12)}
+# The grouped PPL decision is only an action-publication safety gate.  Exact
+# visual scope (hand, face, head, body, and so on) is owned by the unified turn
+# intent JSON, so scoring one suffix per body part here duplicates semantics and
+# creates avoidable low-margin ties for generic requests such as "do this".
+VISUAL_LABELS = {
+    "IV00": "",
+    "IV01": "COPY_ACTION",
+    "IV11": "VISUAL_ANSWER",
+}
 
 ACTION_DECISION_LABELS = frozenset(
     (*BODY_LABELS, *FACE_LABELS, *REACTION_LABELS, *VISUAL_LABELS)
@@ -91,20 +99,21 @@ IR0=没有直接社交反应；IR1=问候；IR2=道别；IR3=感谢；IR4=祝贺
     if not include_visual:
         return prompt
     visual = """
-IV00=非视觉模仿；IV01=模仿手势；IV02=模仿表情；IV03=模仿头部或视线；
-IV04=模仿手臂；IV05=模仿肩膀或躯干；IV06=模仿腿脚；IV07=模仿全身；
-IV08=模仿姿势；IV09=模仿物品交互；IV10=模仿屏幕交互；
-IV11=观察、计算或推理画面后用手势表达答案。
-普通问句、识别描述、能力询问、禁止、明确同时说话、无需看图的具体动作均选 IV00。
+IV00=不依赖当前画面执行动作；IV01=照抄、模仿或重复当前画面里的动作；
+IV11=观察、计算或推理当前画面后，用手势表达新答案。
+普通问答、识别或描述画面、能力询问、禁止动作和无需看图的明确动作均选 IV00。
+模仿画面动作时，即使同时要求说话，仍选 IV01。具体身体范围由统一意图解析，
+本组只判断是否依赖当前画面，不区分手、脸、头部或全身。
 """.strip()
     if english:
         visual = """
-IV00=no visual imitation; IV01=imitate a hand gesture; IV02=imitate a facial
-expression; IV03=head/gaze; IV04=arm; IV05=shoulder/torso; IV06=leg/foot;
-IV07=full body; IV08=pose; IV09=object interaction; IV10=screen interaction;
-IV11=reason over the image and express the derived answer with a gesture.
-Questions, descriptions, capability queries, prohibitions, explicit concurrent
-speech, and named actions not requiring the image use IV00.
+IV00=no action execution dependency on the current image; IV01=copy, imitate,
+or repeat an action visible in the current image; IV11=reason over the current
+image and express the newly derived answer with a gesture. Questions, image
+recognition or description, capability queries, prohibitions, and named actions
+not requiring the image use IV00. Visual imitation remains IV01 when speech is
+also requested. Exact body scope is owned by the unified intent parser; this
+group only decides whether current-image-dependent execution is required.
 """.strip()
     return prompt + "\n" + visual
 
@@ -139,7 +148,7 @@ class ActionDecision:
     def allows_body(self) -> bool:
         return (
             self.body_gate_confident
-            and self.visual_scope != "V11"
+            and self.visual_scope != "VISUAL_ANSWER"
             and self.body_mode not in {"prohibit", "capability_query"}
             and (self.body_mode == "perform" or self.reaction_type != "none")
         )

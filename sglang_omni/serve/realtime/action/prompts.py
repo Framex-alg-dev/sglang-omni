@@ -758,7 +758,7 @@ class ActionPromptComponent:
         )
         if getattr(self, "action_decision_batch_mode", "off") != "off":
             visual = bool(getattr(self, "action_decision_batch_visual", False))
-            base_namespace += f":decision-v1:{'visual' if visual else 'core'}"
+            base_namespace += f":decision-v2:{'visual' if visual else 'core'}"
         return self._session_action_prefix_namespace(
             base_namespace=base_namespace,
             stage="single", turn_origin=turn_origin, session_instruction=instruction,

@@ -1124,10 +1124,23 @@ class TurnPipeline:
                             decision_reaction_active
                             != legacy_reaction_active
                         ),
-                        "visual": bool(
-                            decision.visual_scope
-                            and decision.visual_scope
-                            != intent.visual_scope_gate
+                        "visual": (
+                            (
+                                "answer"
+                                if decision.visual_scope
+                                == VISUAL_GESTURE_ANSWER_GATE
+                                else "copy"
+                                if decision.visual_scope
+                                else "general"
+                            )
+                            != (
+                                "answer"
+                                if intent.visual_scope_gate
+                                == VISUAL_GESTURE_ANSWER_GATE
+                                else "copy"
+                                if intent.visual_scope_gate
+                                else "general"
+                            )
                         ),
                     }
                     emit_structured_log(
@@ -1392,7 +1405,9 @@ class TurnPipeline:
                     and getattr(self, "action_decision_batch_visual", False)
                 )
                 if batched_visual_gate:
-                    # The IV00-IV11 group is scored with the concrete actions.
+                    # The IV00/IV01/IV11 safety group is scored with the
+                    # concrete actions. Exact copy scope comes from the unified
+                    # intent parser and is not duplicated in this PPL batch.
                     # Keep current camera pixels because the result is not yet
                     # known; publication remains behind the grouped gate.
                     emit_structured_log(
@@ -1412,7 +1427,7 @@ class TurnPipeline:
                     visual_gesture_answer = (
                         visual_scope_code == VISUAL_GESTURE_ANSWER_GATE
                     )
-                    if visual_scope_code == "V00":
+                    if intent_supports_scope_future and not visual_scope_code:
                         filtered = [
                             (image, role)
                             for image, role in zip(
