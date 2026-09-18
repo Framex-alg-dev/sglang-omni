@@ -409,11 +409,11 @@ class ReplyRoutingComponent:
             if (
                 turn.intent.visual_scope_gate
                 and turn.intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
+                and turn.intent.speech == "none"
             ):
-                # COPY_* is an authoritative language-only gate for an
-                # immediate visual imitation.  Re-running S0/S1 on the same
-                # audio can only contradict that bounded decision and may
-                # accidentally synthesize an unrelated spoken answer.
+                # A silent COPY_* route is authoritative pure action. Mixed
+                # copy-and-speech requests continue below so the independent
+                # speech task is not discarded.
                 emit_structured_log(
                     "reply",
                     "visual_scope_gate_reply_route_applied",

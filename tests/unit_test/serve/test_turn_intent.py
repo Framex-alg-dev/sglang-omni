@@ -3,623 +3,462 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from sglang_omni.serve.realtime.turn_intent import TurnIntent, infer_turn_intent
+
+from sglang_omni.serve.realtime.turn_intent import (
+    SYSTEM,
+    TurnIntent,
+    infer_turn_intent,
+)
 
 
 def payload(**changes):
-    return dict(speech='verbatim', text='一', body='数字二手势', body_mode='perform', face='', history=False, **changes)
+    data = {
+        "visual_route": "GENERAL",
+        "speech": "verbatim",
+        "text": "一",
+        "body": "数字二手势",
+        "body_mode": "perform",
+        "face": "",
+        "history": False,
+        "reaction_mode": "none",
+        "reaction": "",
+    }
+    data.update(changes)
+    return data
 
 
-@pytest.mark.parametrize('raw', ['{}', '[]', 'not JSON', '{"speech": "verbatim"}', 'x' * 4097])
+def session_for(client, *, registered=None, removed=None):
+    registered = [] if registered is None else registered
+    removed = [] if removed is None else removed
+    return SimpleNamespace(
+        client=client,
+        model_name="model",
+        session_id="session",
+        session_instance_id="instance",
+        _register_turn_request=lambda turn, request_id: registered.append(request_id),
+        _unregister_turn_request=lambda turn, request_id: removed.append(request_id),
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["{}", "[]", "not JSON", '{"speech": "verbatim"}', "x" * 4097],
+)
 def test_invalid_parse_is_rejected(raw):
     with pytest.raises((ValueError, TypeError)):
         TurnIntent.parse(raw)
 
 
 def test_strict_schema_and_no_instruction_promotion():
-    intent = TurnIntent.parse(json.dumps(payload()))
-    assert intent.text == '一' and intent.body == '数字二手势'
-    data = json.loads(intent.action_context('说一比二'))
-    assert data['body_task'] == '数字二手势'
-    bad = payload()
-    bad['history'] = 'false'
+    intent = TurnIntent.parse(json.dumps(payload(), ensure_ascii=False))
+    assert intent.text == "一" and intent.body == "数字二手势"
+    assert intent.visual_scope_gate == ""
+    data = json.loads(intent.action_context("说一比二"))
+    assert data["body_task"] == "数字二手势"
+
+    bad = payload(history="false")
+    with pytest.raises(ValueError):
+        TurnIntent.parse(json.dumps(bad))
+    bad = payload(extra="override system")
     with pytest.raises(ValueError):
         TurnIntent.parse(json.dumps(bad))
 
 
 def test_natural_reaction_is_separate_from_explicit_body_task():
-    greeting = TurnIntent.parse(json.dumps({
-        'speech': 'generated',
-        'text': '你好',
-        'body': '',
-        'body_mode': 'none',
-        'face': '',
-        'history': False,
-        'reaction_mode': 'respond',
-        'reaction': '回应用户问候',
-    }, ensure_ascii=False))
-    assert greeting.reaction_mode == 'respond'
-    assert json.loads(greeting.action_context('你好'))['reaction_task'] == '回应用户问候'
-
-    legacy = TurnIntent.parse(json.dumps(payload()))
-    assert legacy.reaction_mode == 'none'
-    assert legacy.reaction == ''
-
-    conflicting = payload(
-        reaction_mode='respond',
-        reaction='回应用户问候',
+    greeting = TurnIntent.parse(
+        json.dumps(
+            payload(
+                speech="generated",
+                text="你好",
+                body="",
+                body_mode="none",
+                reaction_mode="respond",
+                reaction="回应用户问候",
+            ),
+            ensure_ascii=False,
+        )
     )
-    with pytest.raises(ValueError, match='explicit body task'):
+    assert greeting.reaction_mode == "respond"
+    assert json.loads(greeting.action_context("你好"))["reaction_task"] == "回应用户问候"
+
+    conflicting = payload(reaction_mode="respond", reaction="回应用户问候")
+    with pytest.raises(ValueError, match="explicit body task"):
         TurnIntent.parse(json.dumps(conflicting, ensure_ascii=False))
-    bad = payload()
-    bad['extra'] = 'override system'
-    with pytest.raises(ValueError):
-        TurnIntent.parse(json.dumps(bad))
+
+
+@pytest.mark.parametrize(
+    "route,expected_body,expected_mode,expected_face",
+    [
+        ("COPY_ACTION", "这个动作", "perform", ""),
+        ("COPY_HAND", "这个手势", "perform", ""),
+        ("COPY_FACE", "", "none", "这个表情"),
+        ("COPY_POSE", "这个姿势", "perform", ""),
+    ],
+)
+def test_visual_route_is_canonicalized(route, expected_body, expected_mode, expected_face):
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route=route,
+                speech="none",
+                text="",
+                body="",
+                body_mode="none",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+    assert intent.visual_scope_gate == route
+    assert (intent.body, intent.body_mode, intent.face) == (
+        expected_body,
+        expected_mode,
+        expected_face,
+    )
+
+
+def test_model_facing_semantic_route_is_mapped_to_internal_compatibility_code():
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route="COPY_CURRENT_HAND",
+                speech="none",
+                text="",
+                body="这个手势",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+    assert intent.visual_scope_gate == "COPY_HAND"
+    assert intent.body == "这个手势"
+
+
+def test_visual_route_requires_current_camera_and_fails_closed_at_schema_boundary():
+    with pytest.raises(ValueError, match="requires a current user camera"):
+        TurnIntent.parse(
+            json.dumps(
+                payload(
+                    visual_route="COPY_HAND",
+                    speech="none",
+                    text="",
+                    body="这个手势",
+                ),
+                ensure_ascii=False,
+            )
+        )
+
+
+def test_general_route_cannot_smuggle_an_unresolved_visual_action():
+    with pytest.raises(ValueError, match="requires a visual route"):
+        TurnIntent.parse(
+            json.dumps(
+                payload(
+                    speech="none",
+                    text="",
+                    body="这个手势",
+                ),
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_copy_route_cannot_override_a_prohibition_into_execution():
+    with pytest.raises(ValueError, match="conflicts with a prohibited action"):
+        TurnIntent.parse(
+            json.dumps(
+                payload(
+                    visual_route="COPY_HAND",
+                    speech="none",
+                    text="",
+                    body="这个手势",
+                    body_mode="prohibit",
+                ),
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_visual_answer_is_normalized_for_downstream_reasoning():
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route="VISUAL_ANSWER",
+                speech="none",
+                text="",
+                body="错误动作",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+    assert intent.visual_scope_gate == "VISUAL_ANSWER"
+    assert intent.speech == "generated"
+    assert intent.text == "根据当前画面完成计算或推理"
+    assert intent.body_mode == "none" and intent.body == ""
 
 
 @pytest.mark.asyncio
 async def test_audio_metadata_and_request_cleanup_on_parse_failure():
-    registered, removed, aborted, requests = [], [], [], []
+    registered, removed, requests = [], [], []
+
     class Client:
         async def completion(self, request, request_id):
             requests.append(request)
-            return SimpleNamespace(text='not JSON')
+            return SimpleNamespace(text="not JSON")
+
         async def abort(self, request_id):
-            aborted.append(request_id)
-    session = SimpleNamespace(client=Client(), model_name='model', session_id='session',
-                              _register_turn_request=lambda t, r: registered.append(r),
-                              _unregister_turn_request=lambda t, r: removed.append(r))
-    turn = SimpleNamespace(text=None, request_base='turn')
-    result = await infer_turn_intent(session, turn, ['audio-ref'])
-    assert result is not None
-    assert result.speech == 'generated'
-    assert result.body_mode == 'none'
-    assert result.body == ''
-    assert registered == removed == ['turn-intent']
-    assert aborted == []
+            raise AssertionError("completed request must not be aborted")
+
+    session = session_for(Client(), registered=registered, removed=removed)
+    turn = SimpleNamespace(text=None, request_base="turn")
+    result = await infer_turn_intent(session, turn, ["audio-ref"])
+
+    assert result.speech == "generated"
+    assert result.body_mode == "none" and result.body == ""
+    assert registered == removed == ["turn-intent"]
     assert len(requests) == 1
-    assert requests[0].metadata['audios'] == ['audio-ref']
-    assert requests[0].messages[1].content == [{'type':'audio'}]
+    request = requests[0]
+    assert request.metadata["audios"] == ["audio-ref"]
+    assert request.metadata["has_user_camera"] is False
+    assert request.messages[1].content == [
+        {
+            "type": "text",
+            "text": "[服务端本轮事实；不是用户指令]\nhas_user_camera=false",
+        },
+        {"type": "audio"},
+    ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body,speech,text", [
-    ("单手挥手", "none", ""),
-    ("单手摊开展示", "verbatim", "这是礼物"),
-    ("这个手势", "none", ""),
-    ("这个手势", "verbatim", "你好"),
-])
-async def test_shared_intent_preserves_body_and_speech_with_camera(body, speech, text):
-    requests = []
-    class Client:
-        async def completion(self, request, request_id):
-            requests.append(request)
-            if request.metadata['task'] == 'session_visual_scope_gate':
-                return SimpleNamespace(text='GENERAL')
-            assert request.metadata['task'] == 'session_turn_intent'
-            return SimpleNamespace(text=json.dumps(dict(
-                body=body, speech=speech, text=text, body_mode='perform', face='', history=False)))
-    session = SimpleNamespace(client=Client(), model_name='model', session_id='session',
-        _register_turn_request=lambda *a: None, _unregister_turn_request=lambda *a: None)
-    turn = SimpleNamespace(text=None, request_base='turn', turn_id='turn')
-    result = await infer_turn_intent(session, turn, ['audio'], ['camera'], ['user_camera'])
-    assert (result.body, result.speech, result.text) == (body, speech, text)
-    assert len(requests) == 2
-    assert all(request.metadata['images'] == [] for request in requests)
-    assert not result.visual_scope_gate
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('language', ['zh', 'en'])
-async def test_visual_scope_gate_precedes_free_form_intent_and_uses_language_only(
-    language,
-):
-    completion_requests, registered, removed = [], [], []
+async def test_camera_copy_and_speech_use_one_unified_request():
+    requests, registered, removed = [], [], []
 
     class Client:
         async def completion(self, request, request_id):
-            completion_requests.append((request, request_id))
-            assert request.metadata['task'] == 'session_visual_scope_gate'
-            return SimpleNamespace(text='COPY_HAND')
-
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def abort(self, request_id):
-            raise AssertionError('completed request must not be aborted')
-
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        session_instance_id='instance',
-        language=language,
-        _register_turn_request=lambda turn, request_id: registered.append(request_id),
-        _unregister_turn_request=lambda turn, request_id: removed.append(request_id),
-    )
-    turn = SimpleNamespace(
-        text=None,
-        request_base='visual-turn',
-        turn_id='visual-turn',
-    )
-
-    intent = await infer_turn_intent(
-        session,
-        turn,
-        ['audio-ref'],
-        ['old-camera', 'avatar', 'latest-camera'],
-        ['user_camera', 'character_avatar', 'user_camera'],
-    )
-
-    assert intent is not None
-    assert intent.body_mode == 'perform'
-    assert intent.body == '这个手势'
-    assert intent.speech == 'none'
-    assert intent.visual_scope_gate == 'COPY_HAND'
-    assert len(completion_requests) == 1
-    request, request_id = completion_requests[0]
-    assert request_id == 'visual-turn-visual-scope-gate'
-    assert [message.role for message in request.messages] == ['system', 'user']
-    assert '根据当前用户音频或文本选择一个语义路由' in request.messages[0].content
-    assert '输入可能是中文或英文' in request.messages[0].content
-    assert 'Do this gesture” => COPY_HAND' in request.messages[0].content
-    assert '这是数字一，照着做这个手势” => COPY_HAND' in request.messages[0].content
-    assert '“比个这个” => COPY_HAND' in request.messages[0].content
-    assert '“请做出这个动作” => COPY_ACTION' in request.messages[0].content
-    assert '这是中间类别，不直接输出；继续执行第二步' in request.messages[0].content
-    assert request.messages[1].content == [{'type': 'audio'}]
-    assert request.metadata['audios'] == ['audio-ref']
-    assert request.metadata['images'] == []
-    assert request.metadata['image_roles'] == []
-    assert request.sampling.temperature == 0
-    assert request.sampling.max_new_tokens == 6
-    assert request.stream is False
-    assert request.output_modalities == ['text']
-    assert registered == removed == ['visual-turn-visual-scope-gate']
-
-
-@pytest.mark.asyncio
-async def test_generic_deictic_action_uses_copy_action_scope():
-    class Client:
-        async def completion(self, request, request_id):
-            assert request.metadata['task'] == 'session_visual_scope_gate'
-            return SimpleNamespace(text='COPY_ACTION')
-
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def abort(self, request_id):
-            raise AssertionError('completed request must not be aborted')
-
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        session_instance_id='instance',
-        language='zh',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda *args: None,
-    )
-    turn = SimpleNamespace(
-        text='做这个动作',
-        request_base='generic-visual-turn',
-        turn_id='generic-visual-turn',
-    )
-
-    intent = await infer_turn_intent(
-        session,
-        turn,
-        [],
-        ['camera'],
-        ['user_camera'],
-    )
-
-    assert intent is not None
-    assert intent.speech == 'none'
-    assert intent.body_mode == 'perform'
-    assert intent.body == '这个动作'
-    assert intent.visual_scope_gate == 'COPY_ACTION'
-
-
-@pytest.mark.asyncio
-async def test_non_visual_gate_falls_through_to_language_only_general_intent():
-    completion_requests = []
-
-    class Client:
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def completion(self, request, request_id):
-            completion_requests.append(request)
-            if request.metadata['task'] == 'session_visual_scope_gate':
-                return SimpleNamespace(text='GENERAL')
-            return SimpleNamespace(text=json.dumps({
-                'speech': 'generated',
-                'text': '这是什么手势',
-                'body': '',
-                'body_mode': 'none',
-                'face': '',
-                'history': False,
-            }, ensure_ascii=False))
-
-        async def abort(self, request_id):
-            raise AssertionError('completed request must not be aborted')
-
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        session_instance_id='instance',
-        language='zh',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda *args: None,
-    )
-    turn = SimpleNamespace(
-        text=None,
-        request_base='visual-question',
-        turn_id='visual-question',
-    )
-
-    intent = await infer_turn_intent(
-        session,
-        turn,
-        ['audio-ref'],
-        ['camera'],
-        ['user_camera'],
-    )
-
-    assert intent is not None
-    assert intent.speech == 'generated'
-    assert intent.body_mode == 'none'
-    assert len(completion_requests) == 2
-    assert completion_requests[0].metadata['task'] == 'session_visual_scope_gate'
-    request = completion_requests[1]
-    assert request.metadata['task'] == 'session_turn_intent'
-    assert request.metadata['images'] == []
-    assert request.metadata['image_roles'] == []
-    assert request.messages[1].content == [{'type': 'audio'}]
-
-
-@pytest.mark.asyncio
-async def test_malformed_full_intent_after_general_gate_fails_closed():
-    requests = []
-
-    class Client:
-        async def completion(self, request, request_id):
-            requests.append(request)
-            if request.metadata['task'] == 'session_visual_scope_gate':
-                return SimpleNamespace(
-                    text='GENERAL', finish_reason='stop', usage=None
-                )
+            requests.append((request, request_id))
             return SimpleNamespace(
-                text='{"speech', finish_reason='stop',
-                usage=SimpleNamespace(
-                    to_dict=lambda: {
-                        'prompt_tokens': 100,
-                        'completion_tokens': 2,
-                        'total_tokens': 102,
-                    }
-                ),
+                text=json.dumps(
+                    payload(
+                        visual_route="COPY_HAND",
+                        speech="verbatim",
+                        text="你好",
+                        body="模型自由措辞",
+                    ),
+                    ensure_ascii=False,
+                )
             )
 
         async def abort(self, request_id):
-            raise AssertionError('completed request must not be aborted')
+            raise AssertionError("completed request must not be aborted")
 
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda *args: None,
-    )
+    session = session_for(Client(), registered=registered, removed=removed)
     turn = SimpleNamespace(
-        text='这是数字几',
-        request_base='malformed-general',
-        turn_id='malformed-general',
-    )
-
-    intent = await infer_turn_intent(
-        session,
-        turn,
-        ['audio-ref'],
-        ['camera'],
-        ['user_camera'],
-    )
-
-    assert intent is not None
-    assert intent.speech == 'generated'
-    assert intent.text == '这是数字几'
-    assert intent.body_mode == 'none'
-    assert intent.body == ''
-    assert intent.reaction_mode == 'none'
-    assert [request.metadata['task'] for request in requests] == [
-        'session_visual_scope_gate',
-        'session_turn_intent',
-    ]
-
-
-@pytest.mark.asyncio
-async def test_visual_gate_and_full_intent_run_concurrently_for_general_route():
-    gate_entered = asyncio.Event()
-    full_entered = asyncio.Event()
-
-    class Client:
-        async def completion(self, request, request_id):
-            if request.metadata['task'] == 'session_visual_scope_gate':
-                gate_entered.set()
-                await asyncio.wait_for(full_entered.wait(), timeout=.5)
-                return SimpleNamespace(text='GENERAL')
-            full_entered.set()
-            await asyncio.wait_for(gate_entered.wait(), timeout=.5)
-            return SimpleNamespace(text=json.dumps({
-                'speech': 'generated', 'text': '普通问答', 'body': '',
-                'body_mode': 'none', 'face': '', 'history': False,
-            }))
-
-        async def abort(self, request_id):
-            del request_id
-
-    session = SimpleNamespace(
-        client=Client(), model_name='model', session_id='session',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda *args: None,
-    )
-    turn = SimpleNamespace(
-        text='这是什么', request_base='parallel-intent', turn_id='parallel-intent'
+        text="模仿这个手势并说你好",
+        request_base="visual-turn",
+        turn_id="visual-turn",
     )
     scope = asyncio.get_running_loop().create_future()
-
-    intent = await asyncio.wait_for(
-        infer_turn_intent(
-            session, turn, ['audio'], ['camera'], ['user_camera'],
-            visual_scope_future=scope,
-        ),
-        timeout=1,
-    )
-
-    assert intent is not None and intent.text == '普通问答'
-    assert scope.result() == ''
-    assert gate_entered.is_set() and full_entered.is_set()
-
-
-@pytest.mark.asyncio
-async def test_visual_scope_gate_places_optional_text_before_audio():
-    requests = []
-
-    class Client:
-        async def completion(self, request, request_id):
-            requests.append(request)
-            return SimpleNamespace(text='COPY_HAND')
-
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def abort(self, request_id):
-            raise AssertionError('completed request must not be aborted')
-
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        language='zh',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda *args: None,
-    )
-    turn = SimpleNamespace(
-        text='请做出这个手势',
-        request_base='visual-text-audio',
-        turn_id='visual-text-audio',
-    )
-
     intent = await infer_turn_intent(
         session,
         turn,
-        ['audio-ref'],
-        ['camera'],
-        ['user_camera'],
+        ["audio-ref"],
+        ["old-camera", "avatar", "latest-camera"],
+        ["user_camera", "character_avatar", "user_camera"],
+        visual_scope_future=scope,
     )
 
-    assert intent is not None and intent.visual_scope_gate == 'COPY_HAND'
-    assert requests[0].messages[1].content == [
-        {'type': 'text', 'text': '请做出这个手势'},
-        {'type': 'audio'},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_visual_gesture_answer_gate_requests_hidden_multimodal_reasoning():
-    requests = []
-
-    class Client:
-        async def completion(self, request, request_id):
-            requests.append(request)
-            return SimpleNamespace(text='VISUAL_ANSWER')
-
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def abort(self, request_id):
-            raise AssertionError('completed request must not be aborted')
-
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        language='zh',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda *args: None,
-    )
-    turn = SimpleNamespace(
-        text='这个加这个是什么，用手势回答',
-        request_base='visual-gesture-answer',
-        turn_id='visual-gesture-answer',
-    )
-
-    intent = await infer_turn_intent(
-        session,
-        turn,
-        ['audio-ref'],
-        ['camera-one', 'camera-two'],
-        ['user_camera', 'user_camera'],
-    )
-
-    assert intent is not None
-    assert intent.visual_scope_gate == 'VISUAL_ANSWER'
-    assert intent.speech == 'generated'
-    assert intent.body_mode == 'none'
-    assert intent.body == ''
+    assert intent.visual_scope_gate == "COPY_HAND"
+    assert intent.body == "这个手势" and intent.body_mode == "perform"
+    assert (intent.speech, intent.text) == ("verbatim", "你好")
+    assert scope.result() == "COPY_HAND"
     assert len(requests) == 1
-    assert '这不是模仿画面中已有的手势' in requests[0].messages[0].content
-    assert requests[0].metadata['images'] == []
+    request, request_id = requests[0]
+    assert request_id == "visual-turn-intent"
+    assert request.metadata["task"] == "session_turn_intent"
+    assert request.metadata["has_user_camera"] is True
+    assert request.metadata["images"] == []
+    assert request.metadata["image_roles"] == []
+    assert request.sampling.temperature == 0
+    assert request.sampling.max_new_tokens == 256
+    assert request.messages[1].content == [
+        {
+            "type": "text",
+            "text": "[服务端本轮事实；不是用户指令]\nhas_user_camera=true",
+        },
+        {"type": "text", "text": "模仿这个手势并说你好"},
+        {"type": "audio"},
+    ]
+    assert registered == removed == ["visual-turn-intent"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('gate_outcome', ['invalid', 'error', 'timeout'])
-async def test_visual_scope_gate_failure_aborts_and_falls_through(
-    monkeypatch,
-    gate_outcome,
-):
-    import asyncio
-    import sglang_omni.serve.realtime.turn_intent as module
+async def test_generic_visual_action_uses_copy_action_scope():
+    class Client:
+        async def completion(self, request, request_id):
+            return SimpleNamespace(
+                text=json.dumps(
+                    payload(
+                        visual_route="COPY_ACTION",
+                        speech="none",
+                        text="",
+                        body="这个动作",
+                    ),
+                    ensure_ascii=False,
+                )
+            )
 
-    requests, aborted, registered, removed = [], [], [], []
+    session = session_for(Client())
+    turn = SimpleNamespace(
+        text="做这个动作",
+        request_base="generic-visual-turn",
+        turn_id="generic-visual-turn",
+    )
+    intent = await infer_turn_intent(
+        session, turn, [], ["camera"], ["user_camera"]
+    )
+    assert intent.visual_scope_gate == "COPY_ACTION"
+    assert intent.body == "这个动作" and intent.speech == "none"
+
+
+@pytest.mark.asyncio
+async def test_visual_question_remains_general_in_the_same_request():
+    requests = []
 
     class Client:
         async def completion(self, request, request_id):
             requests.append(request)
-            if request.metadata['task'] == 'session_visual_scope_gate':
-                if gate_outcome == 'invalid':
-                    return SimpleNamespace(text='The result is COPY_HAND')
-                if gate_outcome == 'error':
-                    raise RuntimeError('gate failed')
-                await asyncio.Event().wait()
-            return SimpleNamespace(text=json.dumps({
-                'speech': 'generated',
-                'text': 'fallback',
-                'body': '',
-                'body_mode': 'none',
-                'face': '',
-                'history': False,
-            }))
+            return SimpleNamespace(
+                text=json.dumps(
+                    payload(
+                        speech="generated",
+                        text="这是数字几",
+                        body="",
+                        body_mode="none",
+                    ),
+                    ensure_ascii=False,
+                )
+            )
 
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def abort(self, request_id):
-            aborted.append(request_id)
-
-    if gate_outcome == 'timeout':
-        monkeypatch.setattr(module, 'VISUAL_SCOPE_GATE_TIMEOUT_SECONDS', .01)
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        _register_turn_request=lambda turn, request_id: registered.append(request_id),
-        _unregister_turn_request=lambda turn, request_id: removed.append(request_id),
-    )
+    session = session_for(Client())
     turn = SimpleNamespace(
-        text=None,
-        request_base='gate-fallback',
-        turn_id='gate-fallback',
+        text="这是数字几", request_base="visual-question", turn_id="visual-question"
     )
-
+    scope = asyncio.get_running_loop().create_future()
     intent = await infer_turn_intent(
         session,
         turn,
-        ['audio-ref'],
-        ['camera'],
-        ['user_camera'],
+        ["audio-ref"],
+        ["camera"],
+        ["user_camera"],
+        visual_scope_future=scope,
     )
-
-    assert intent is not None and intent.text == 'fallback'
-    assert [request.metadata['task'] for request in requests] == [
-        'session_visual_scope_gate',
-        'session_turn_intent',
-    ]
-    assert aborted == ['gate-fallback-visual-scope-gate']
-    assert set(registered) == set(removed) == {
-        'gate-fallback-visual-scope-gate',
-        'gate-fallback-intent',
-    }
+    assert intent.speech == "generated" and intent.body_mode == "none"
+    assert intent.visual_scope_gate == "" and scope.result() == ""
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio
-async def test_visual_scope_gate_cancellation_aborts_and_unregisters():
-    import asyncio
-
-    entered = asyncio.Event()
-    aborted, removed = [], []
-
+async def test_visual_gesture_answer_uses_unified_route():
     class Client:
         async def completion(self, request, request_id):
-            assert request.metadata['task'] == 'session_visual_scope_gate'
-            entered.set()
-            await asyncio.Event().wait()
+            return SimpleNamespace(
+                text=json.dumps(
+                    payload(
+                        visual_route="VISUAL_ANSWER",
+                        speech="generated",
+                        text="根据当前画面计算答案",
+                        body="",
+                        body_mode="none",
+                    ),
+                    ensure_ascii=False,
+                )
+            )
 
-        async def score_action_suffixes(self, request):
-            raise AssertionError('visual scope generation must not score suffixes')
-
-        async def abort(self, request_id):
-            aborted.append(request_id)
-
-    session = SimpleNamespace(
-        client=Client(),
-        model_name='model',
-        session_id='session',
-        _register_turn_request=lambda *args: None,
-        _unregister_turn_request=lambda turn, request_id: removed.append(request_id),
-    )
+    session = session_for(Client())
     turn = SimpleNamespace(
-        text=None,
-        request_base='gate-cancelled',
-        turn_id='gate-cancelled',
+        text="这个加这个是什么，用手势回答",
+        request_base="visual-answer",
+        turn_id="visual-answer",
     )
-    task = asyncio.create_task(infer_turn_intent(
-        session,
-        turn,
-        ['audio-ref'],
-        ['camera'],
-        ['user_camera'],
-    ))
-    await entered.wait()
-    task.cancel()
+    intent = await infer_turn_intent(
+        session, turn, ["audio"], ["camera"], ["user_camera"]
+    )
+    assert intent.visual_scope_gate == "VISUAL_ANSWER"
+    assert intent.speech == "generated" and intent.body_mode == "none"
 
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert set(aborted) == set(removed) == {
-        'gate-cancelled-visual-scope-gate',
-        'gate-cancelled-intent',
-    }
+
+@pytest.mark.asyncio
+async def test_model_visual_route_without_camera_fails_closed():
+    class Client:
+        async def completion(self, request, request_id):
+            return SimpleNamespace(
+                text=json.dumps(
+                    payload(
+                        visual_route="COPY_HAND",
+                        speech="none",
+                        text="",
+                        body="这个手势",
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+
+    session = session_for(Client())
+    turn = SimpleNamespace(text="做这个手势", request_base="no-camera")
+    intent = await infer_turn_intent(session, turn, [])
+    assert intent.visual_scope_gate == ""
+    assert intent.speech == "generated"
+    assert intent.body_mode == "none" and intent.body == ""
+
+
+@pytest.mark.asyncio
+async def test_malformed_unified_intent_fails_closed():
+    class Client:
+        async def completion(self, request, request_id):
+            return SimpleNamespace(text='{"visual_route', finish_reason="stop", usage=None)
+
+    session = session_for(Client())
+    turn = SimpleNamespace(
+        text="这是数字几", request_base="malformed", turn_id="malformed"
+    )
+    intent = await infer_turn_intent(
+        session, turn, ["audio"], ["camera"], ["user_camera"]
+    )
+    assert intent.speech == "generated" and intent.text == "这是数字几"
+    assert intent.body_mode == "none" and intent.visual_scope_gate == ""
 
 
 @pytest.mark.asyncio
 async def test_intent_rejects_misaligned_current_image_roles():
-    session = SimpleNamespace(model_name='model', session_id='session')
-    turn = SimpleNamespace(text='请做出这个手势', request_base='bad-images')
-
-    with pytest.raises(ValueError, match='images and image_roles'):
-        await infer_turn_intent(session, turn, [], ['camera'], [])
+    session = SimpleNamespace(model_name="model", session_id="session")
+    turn = SimpleNamespace(text="请做出这个手势", request_base="bad-images")
+    with pytest.raises(ValueError, match="images and image_roles"):
+        await infer_turn_intent(session, turn, [], ["camera"], [])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('cancel', [False, True])
+@pytest.mark.parametrize("cancel", [False, True])
 async def test_pending_parse_aborts_on_timeout_or_cancellation(monkeypatch, cancel):
-    import asyncio
     import sglang_omni.serve.realtime.turn_intent as module
-    calls, removed = [], []
+
+    aborted, removed = [], []
     entered = asyncio.Event()
+
     class Client:
         async def completion(self, request, request_id):
             entered.set()
             await asyncio.Event().wait()
+
         async def abort(self, request_id):
-            calls.append(request_id)
-    session = SimpleNamespace(client=Client(), model_name='model', session_id='session',
-                              _register_turn_request=lambda *args: None,
-                              _unregister_turn_request=lambda t, r: removed.append(r))
-    turn = SimpleNamespace(text='说一比二', request_base='pending')
+            aborted.append(request_id)
+
+    session = session_for(Client(), removed=removed)
+    turn = SimpleNamespace(text="说一比二", request_base="pending")
     if not cancel:
-        monkeypatch.setattr(module, 'TURN_INTENT_TIMEOUT_SECONDS', .01)
+        monkeypatch.setattr(module, "TURN_INTENT_TIMEOUT_SECONDS", 0.01)
     task = asyncio.create_task(infer_turn_intent(session, turn, []))
     await entered.wait()
     if cancel:
@@ -628,40 +467,28 @@ async def test_pending_parse_aborts_on_timeout_or_cancellation(monkeypatch, canc
             await task
     else:
         intent = await task
-        assert intent is not None
-        assert intent.speech == 'generated'
-        assert intent.body_mode == 'none'
-    assert calls == removed == ['pending-intent']
+        assert intent.speech == "generated" and intent.body_mode == "none"
+    assert aborted == removed == ["pending-intent"]
 
 
 def test_generated_reply_context_preserves_original_question_not_predicted_answer():
-    intent = TurnIntent(speech='generated', text='我不知道你的名字', body='', body_mode='none', face='', history=True)
-    data = json.loads(intent.action_context('你知道我叫什么名字吗'))
-    assert data['speech_task'] == '你知道我叫什么名字吗'
+    intent = TurnIntent(
+        speech="generated",
+        text="我不知道你的名字",
+        body="",
+        body_mode="none",
+        face="",
+        history=True,
+    )
+    data = json.loads(intent.action_context("你知道我叫什么名字吗"))
+    assert data["speech_task"] == "你知道我叫什么名字吗"
 
 
-def test_visual_imitation_prompt_preserves_the_unresolved_image_reference():
-    from sglang_omni.serve.realtime.turn_intent import SYSTEM
-
-    assert '请做出这个手势' in SYSTEM
-    assert '"body":"这个手势"' in SYSTEM
-    assert '请做出手势' in SYSTEM
-    assert '"body":"做出手势"' in SYSTEM
-    assert '请做出这个表情' in SYSTEM
-    assert '"face":"这个表情"' in SYSTEM
-    assert '请做出表情' in SYSTEM
-    assert '"face":"做出表情"' in SYSTEM
-    assert '请做出这个动作' in SYSTEM
-    assert '"body":"这个动作"' in SYSTEM
-    assert '这个动作叫什么' in SYSTEM
-    assert '"body_mode":"none"' in SYSTEM
-
-
-def test_permission_shaped_body_command_is_distinct_from_capability_question():
-    from sglang_omni.serve.realtime.turn_intent import SYSTEM
-
-    assert '你可以站起来 -> {"speech":"none"' in SYSTEM
-    assert '你可以站起来吗？ -> {"speech":"generated"' in SYSTEM
-    assert '你不可以站起来 -> {"speech":"none"' in SYSTEM
-    assert 'You can stand up now. -> {"speech":"none"' in SYSTEM
-    assert 'Can you stand up? -> {"speech":"generated"' in SYSTEM
+def test_unified_prompt_has_consistent_visual_and_action_boundaries():
+    assert "模仿与说话可以同时存在" in SYSTEM
+    assert "挥手、点头、比个心、比数字二、做个手势" in SYSTEM
+    assert "这是什么手势/这是数字几/这个加这个等于多少”选NO_CURRENT_VIEW" in SYSTEM
+    assert "能挥挥手吗”" in SYSTEM and "是perform" in SYSTEM
+    assert "你会挥手吗”" in SYSTEM and "body_mode=none" in SYSTEM
+    assert "模仿同时说话则输出 GENERAL" not in SYSTEM
+    assert len(SYSTEM) < 5000

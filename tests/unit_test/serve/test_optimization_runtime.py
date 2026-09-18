@@ -28,12 +28,13 @@ def test_private_media_budgets_expiry_and_one_shot():
 
 
 def test_voice_plan_is_independent_of_face_and_preserves_contractions():
-    intent = TurnIntent.parse(json.dumps(dict(speech='verbatim', text="What's new?", body='', body_mode='none', face='严肃', history=False, voice_tone='cheerful', voice_pace='fast')))
+    base = dict(visual_route='GENERAL', speech='verbatim', text="What's new?", body='', body_mode='none', face='严肃', history=False, reaction_mode='none', reaction='')
+    intent = TurnIntent.parse(json.dumps(dict(base, voice_tone='cheerful', voice_pace='fast')))
     assert intent.text == "What's new?"
     assert 'cheerful' in intent.tts_instruction()
     assert 'serious' not in intent.tts_instruction()
     with pytest.raises(ValueError):
-        TurnIntent.parse(json.dumps(dict(speech='none', text='', body='', body_mode='none', face='', history=False, voice_tone='execute arbitrary code')))
+        TurnIntent.parse(json.dumps(dict(base, speech='none', text='', face='', voice_tone='execute arbitrary code')))
 
 
 def test_gpu_scalar_logging_never_synchronizes():

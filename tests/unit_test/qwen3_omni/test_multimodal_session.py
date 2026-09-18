@@ -7050,6 +7050,47 @@ async def test_visual_imitation_gate_is_authoritative_pure_action_route() -> Non
 
 
 @pytest.mark.asyncio
+async def test_visual_imitation_with_speech_keeps_language_route() -> None:
+    client = ReplySpeechModeClient("S0")
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-visual-imitation-speech-route",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(
+        user_turn_start("turn-visual-imitation-speech-route")
+    )
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-visual-imitation-speech-route"
+    turn.intent = TurnIntent(
+        speech="verbatim",
+        text="你好",
+        body="这个手势",
+        body_mode="perform",
+        face="",
+        history=False,
+        elapsed_ms=11.0,
+        visual_scope_gate="COPY_HAND",
+    )
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        ["audio-current"],
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "LANGUAGE_REQUIRED"
+    assert route.stats == {"source": "shared_turn_intent"}
+    assert client.score_requests == []
+
+
+@pytest.mark.asyncio
 async def test_shared_generated_intent_keeps_language_fast_path() -> None:
     from sglang_omni.serve.realtime.turn_intent import TurnIntent
 
@@ -11392,7 +11433,23 @@ async def test_mixed_numeric_turn_preserves_reply_and_visual_channels(scope, uns
         async def completion(self, request, *, request_id):
             self.chat_requests.append(request)
             if request.metadata.get("task") == "session_turn_intent":
-                return CompletionResult(request_id=request_id, text=json.dumps({"speech":"verbatim", "text":"一。", "body":"数字二手势", "body_mode":"perform", "face":"微笑" if scope == "P301" else "", "history":False}, ensure_ascii=False))
+                return CompletionResult(
+                    request_id=request_id,
+                    text=json.dumps(
+                        {
+                            "visual_route": "NO_CURRENT_VIEW",
+                            "speech": "verbatim",
+                            "text": "一。",
+                            "body": "数字二手势",
+                            "body_mode": "perform",
+                            "face": "微笑" if scope == "P301" else "",
+                            "history": False,
+                            "reaction_mode": "none",
+                            "reaction": "",
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
             return CompletionResult(request_id=request_id, text="一。")
 
         async def score_action_suffixes(self, request):
@@ -11595,7 +11652,9 @@ async def test_no_body_intent_cannot_select_numeric_child_from_joint_topk(monkey
         async def completion(self, request, *, request_id):
             if request.metadata.get('task') == 'session_turn_intent':
                 return CompletionResult(request_id=request_id, text=json.dumps(dict(
-                    speech='verbatim', text='一比二', body='', body_mode='none', face='', history=False)))
+                    visual_route='NO_CURRENT_VIEW', speech='verbatim', text='一比二',
+                    body='', body_mode='none', face='', history=False,
+                    reaction_mode='none', reaction='')))
             return CompletionResult(request_id=request_id, text='一比二')
         async def score_action_suffixes(self, request):
             if request.stage == 'child':
