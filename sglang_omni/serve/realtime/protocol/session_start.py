@@ -274,6 +274,7 @@ class SessionStartComponent:
     async def handle_session_start(self, event: dict[str, Any]) -> None:
         if self.started:
             raise ValueError("session.start can only be sent once")
+        self.preview = bool(event.get("_preview", False))
         session_id = event.get("session_id")
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("session_id must be a non-empty string")
@@ -1131,6 +1132,8 @@ class SessionStartComponent:
                 "unsupported_action_text", self.unsupported_action_text or None
             )["unsupported_action_text_sha256"],
         }
+        if self.preview:
+            self.session_memory_store = None
         if self.protocol_version is not None:
             started_payload.update(
                 {

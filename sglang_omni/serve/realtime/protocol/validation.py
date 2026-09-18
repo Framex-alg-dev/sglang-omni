@@ -578,6 +578,7 @@ class ProtocolValidationComponent:
                 "output_audio",
                 "diagnostics",
                 "knowledge",
+                "preview",
             },
             required={"type", "protocol_version", "session_id"},
         )
@@ -837,7 +838,10 @@ class ProtocolValidationComponent:
                 "knowledge.entity_snapshot requires mode='provided_context'"
             )
 
+        if type(event.get("preview", False)) is not bool:
+            raise ValueError("preview must be boolean")
         normalized: dict[str, Any] = {
+            "_preview": event.get("preview", False),
             "type": "session.start",
             "session_id": session_id.strip(),
             "modalities": list(outputs),
@@ -1624,9 +1628,11 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
                 session_children.append(child)
@@ -1696,9 +1702,11 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=global_child.category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
             )
