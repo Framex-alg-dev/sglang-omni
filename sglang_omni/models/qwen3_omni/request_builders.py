@@ -7,6 +7,7 @@ import copy
 import functools
 import hashlib
 import logging
+import threading
 import time
 from array import array
 from collections.abc import Callable, Iterable
@@ -50,6 +51,8 @@ ACTION_SCORE_STAGE = "action_score"
 ACTION_SCORE_TASK = "action_suffix_scoring"
 ENCODER_PREFETCH_STAGE = "encoder_prefetch_done"
 IMAGE_ENCODER_PREFETCH_TASK = "image_encoder_prefetch"
+_ACTION_SELECTION_TOKEN_VALIDATION_LOCK = threading.Lock()
+_VALIDATED_ACTION_SELECTION_TOKEN_MAPS: set[tuple[int, str]] = set()
 
 # Note(Chenchen Hong): PyTorch sampling_seed must fit a positive int32.
 MAX_INT32_POSITIVE = 0x7FFFFFFF
@@ -865,6 +868,13 @@ def _prepare_action_scoring_request(
             suffix=str(item["suffix"]),
             action_id=item.get("action_id"),
             execution_binding=dict(item.get("execution_binding") or {}),
+            selection_token=item.get("selection_token"),
+            selection_token_id=(
+                int(item["selection_token_id"])
+                if item.get("selection_token_id") is not None
+                else None
+            ),
+            selection_score_bias=float(item.get("selection_score_bias", 0.0)),
         )
         for item in raw_candidates
     ]
@@ -884,6 +894,11 @@ def _prepare_action_scoring_request(
             images=list(images) if isinstance(images, list) else [str(images)],
             sample_rate=int(action_spec.get("sample_rate", 16000)),
             micro_batch_size=int(action_spec.get("micro_batch_size", 64)),
+            scoring_mode=str(action_spec.get("scoring_mode", "suffix_ppl")),
+            selection_mapping_version=action_spec.get("selection_mapping_version"),
+            selection_mapping_hash=action_spec.get("selection_mapping_hash"),
+            selection_calibration_version=action_spec.get("selection_calibration_version"),
+            selection_calibration_hash=action_spec.get("selection_calibration_hash"),
         )
     )
     prompt_text = str((state.prompt or {}).get("prompt_text") or "")
@@ -897,9 +912,37 @@ def _prepare_action_scoring_request(
         if value is not None
     )
     terminal_token_id = _resolve_action_terminal_token_id(tokenizer)
+    scoring_mode = str(action_spec.get("scoring_mode", "suffix_ppl"))
+    if scoring_mode.startswith("single_token_"):
+        validation_key = (
+            id(tokenizer),
+            str(action_spec.get("selection_mapping_hash") or ""),
+        )
+        with _ACTION_SELECTION_TOKEN_VALIDATION_LOCK:
+            if validation_key not in _VALIDATED_ACTION_SELECTION_TOKEN_MAPS:
+                special_ids = set(special_token_ids)
+                for item in candidates:
+                    encoded = tokenizer.encode(
+                        item.selection_token, add_special_tokens=False
+                    )
+                    encoded = [int(value) for value in encoded]
+                    if encoded != [item.selection_token_id]:
+                        raise ValueError(
+                            "selection-token mapping does not match the runtime tokenizer: "
+                            f"candidate_id={item.candidate_id!r} expected="
+                            f"{[item.selection_token_id]} actual={encoded}"
+                        )
+                    if item.selection_token_id in special_ids:
+                        raise ValueError(
+                            f"selection token is special: {item.candidate_id!r}"
+                        )
+                _VALIDATED_ACTION_SELECTION_TOKEN_MAPS.add(validation_key)
     suffix_tokenization_mode = action_spec.get("suffix_tokenization_mode")
     short_suffix_cache_hit = False
-    if prompt_text and suffix_tokenization_mode == "short_id":
+    enforce_without_suffix = scoring_mode == "single_token_enforce"
+    if enforce_without_suffix:
+        suffix_ids = [tuple() for _ in candidates]
+    elif prompt_text and suffix_tokenization_mode == "short_id":
         cache_info_before = _cached_short_action_suffix_ids.cache_info()
         suffix_ids = list(
             _cached_short_action_suffix_ids(
@@ -931,7 +974,7 @@ def _prepare_action_scoring_request(
             )
             for item in candidates
         ]
-    if any(not item for item in suffix_ids):
+    if not enforce_without_suffix and any(not item for item in suffix_ids):
         raise ValueError("all action suffixes must contain at least one token")
 
     raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
@@ -1006,7 +1049,25 @@ def _prepare_action_scoring_request(
         prefix_req.multimodal_inputs.mrope_positions = torch.cat(
             [prefix_positions, prefix_positions[..., -1:] + 1], dim=-1
         )
-    first_token_ids = sorted({int(ids[0]) for ids in suffix_ids})
+    legacy_first_token_ids = {
+        int(ids[0])
+        for ids in suffix_ids
+        if ids
+    }
+    selection_token_ids = {
+        item.candidate_id: int(item.selection_token_id)
+        for item in candidates
+        if item.selection_token_id is not None
+    }
+    first_token_ids = sorted(
+        (
+            legacy_first_token_ids | set(selection_token_ids.values())
+            if scoring_mode == "single_token_shadow"
+            else set(selection_token_ids.values())
+            if scoring_mode == "single_token_enforce"
+            else legacy_first_token_ids
+        )
+    )
     # SGLang stores token-id probes under Req.logprob. Keeping this on the
     # request logprob object lets ForwardBatch.init_new carry the probes into
     # the prefill-only logits path.
@@ -1028,20 +1089,43 @@ def _prepare_action_scoring_request(
         "session_instance_id": action_spec.get("session_instance_id"),
         "logical_request_id": action_spec.get("logical_request_id"),
         "candidate_ids": [item.candidate_id for item in candidates],
+        "suffix_candidate_ids": [
+            item.candidate_id
+            for item in candidates
+        ],
+        "scoring_mode": scoring_mode,
+        "selection_mapping_version": action_spec.get("selection_mapping_version"),
+        "selection_mapping_hash": action_spec.get("selection_mapping_hash"),
+        "selection_token_ids": selection_token_ids,
+        "selection_score_bias": {
+            item.candidate_id: float(item.selection_score_bias)
+            for item in candidates
+        },
+        "selection_calibration_version": action_spec.get("selection_calibration_version"),
+        "selection_calibration_hash": action_spec.get("selection_calibration_hash"),
         "candidate_suffix_ids": {
             item.candidate_id: tuple(ids)
             for item, ids in zip(candidates, suffix_ids, strict=True)
         },
         "candidate_short_suffix_cache_hit": short_suffix_cache_hit,
         "terminal_token_id": terminal_token_id,
-        "suffix_total_tokens": sum(len(ids) for ids in suffix_ids),
-        "suffix_unique_trie_edges": len({tuple(ids[:end]) for ids in suffix_ids for end in range(1, len(ids) + 1)}),
+        "suffix_total_tokens": sum(
+            len(ids)
+            for ids in suffix_ids
+        ),
+        "suffix_unique_trie_edges": len({
+            tuple(ids[:end])
+            for ids in suffix_ids
+            for end in range(1, len(ids) + 1)
+        }),
         "suffix_unique_first_tokens": len(first_token_ids),
         # Candidate Req objects are not built in the request-builder critical
         # path. The scheduler may materialize them on a background worker while
         # the shared prefix runs, then releases the complete physical batch.
         "candidate_data": [],
-        "candidate_tokenizer": tokenizer,
+        "candidate_tokenizer": (
+            tokenizer if not enforce_without_suffix else None
+        ),
         "candidate_vocab_size": vocab_size,
         "candidate_prefix_positions": prefix_positions,
         # Immutable snapshots used by the background candidate materializer.
@@ -1050,14 +1134,26 @@ def _prepare_action_scoring_request(
         # Req needs a private mutable array, but cloning an array is a C-level
         # memcpy. Rebuilding it from the Python tuple for every candidate walks
         # the entire prefix under the GIL.
-        "candidate_prefix_array": array("q", prefix_ids),
+        "candidate_prefix_array": (
+            array("q", prefix_ids)
+            if not enforce_without_suffix else None
+        ),
         "candidate_omni_model_inputs": (
             dict(prefix_req.omni_model_inputs)
-            if prefix_req.omni_model_inputs is not None
+            if (
+                not enforce_without_suffix
+                and prefix_req.omni_model_inputs is not None
+            )
             else None
         ),
-        "candidate_model_inputs": dict(prefix_data.model_inputs),
-        "candidate_sampling_params": copy.copy(prefix_req.sampling_params),
+        "candidate_model_inputs": (
+            dict(prefix_data.model_inputs)
+            if not enforce_without_suffix else None
+        ),
+        "candidate_sampling_params": (
+            copy.copy(prefix_req.sampling_params)
+            if not enforce_without_suffix else None
+        ),
         "candidate_mrope_position_delta": (
             getattr(prefix_req.multimodal_inputs, "mrope_position_delta", None)
             if prefix_req.multimodal_inputs is not None

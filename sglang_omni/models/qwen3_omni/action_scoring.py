@@ -41,6 +41,11 @@ class ActionScoreCandidate:
     suffix: str
     action_id: str | None = None
     execution_binding: dict[str, str] = field(default_factory=dict)
+    # Optional one-token output label. The logical candidate_id remains the
+    # public/downstream identifier; this alias exists only at model scoring.
+    selection_token: str | None = None
+    selection_token_id: int | None = None
+    selection_score_bias: float = 0.0
 
 
 @dataclass(slots=True)
@@ -100,6 +105,18 @@ class ActionSuffixScoreRequest:
     # Scheme B uses identifier-only suffixes (for example 328, 329, ...).
     # These can be tokenized independently of the long multimodal prefix.
     suffix_tokenization_mode: Literal["exact", "short_id"] = "exact"
+    # ``shadow`` computes both paths and returns the legacy suffix-PPL result;
+    # ``enforce`` reads the one-token probabilities directly from prefix logits
+    # and never materializes candidate suffix requests.
+    scoring_mode: Literal[
+        "suffix_ppl",
+        "single_token_shadow",
+        "single_token_enforce",
+    ] = "suffix_ppl"
+    selection_mapping_version: str | None = None
+    selection_mapping_hash: str | None = None
+    selection_calibration_version: str | None = None
+    selection_calibration_hash: str | None = None
 
 
 @dataclass(slots=True)
@@ -266,6 +283,12 @@ def validate_action_suffix_request(
         raise ValueError("language must be 'zh' or 'en'")
     if request.suffix_tokenization_mode not in ("exact", "short_id"):
         raise ValueError("suffix_tokenization_mode must be 'exact' or 'short_id'")
+    if request.scoring_mode not in (
+        "suffix_ppl",
+        "single_token_shadow",
+        "single_token_enforce",
+    ):
+        raise ValueError("invalid action scoring_mode")
     if not request.prefix or not request.prefix.strip():
         raise ValueError("prefix must be non-empty")
     if not isinstance(request.session_instruction, str):
@@ -285,6 +308,8 @@ def validate_action_suffix_request(
     if len(request.candidates) > MAX_ACTION_CANDIDATES:
         raise ValueError(f"candidates must contain at most {MAX_ACTION_CANDIDATES} items")
     ids: set[str] = set()
+    selection_tokens: set[str] = set()
+    selection_token_ids: set[int] = set()
     for candidate in request.candidates:
         if not candidate.candidate_id or candidate.candidate_id in ids:
             raise ValueError("candidate_id must be non-empty and unique")
@@ -301,6 +326,36 @@ def validate_action_suffix_request(
                 "suffix must not end with automatically excluded punctuation: "
                 f"{candidate.candidate_id}"
             )
+        if request.scoring_mode.startswith("single_token_"):
+            if (
+                not isinstance(candidate.selection_token, str)
+                or not candidate.selection_token
+                or candidate.selection_token.strip() != candidate.selection_token
+            ):
+                raise ValueError(
+                    f"missing/invalid selection_token: {candidate.candidate_id}"
+                )
+            if (
+                not isinstance(candidate.selection_token_id, int)
+                or candidate.selection_token_id < 0
+            ):
+                raise ValueError(
+                    f"missing/invalid selection_token_id: {candidate.candidate_id}"
+                )
+            if candidate.selection_token in selection_tokens:
+                raise ValueError("selection_token values must be unique")
+            if candidate.selection_token_id in selection_token_ids:
+                raise ValueError("selection_token_id values must be unique")
+            selection_tokens.add(candidate.selection_token)
+            selection_token_ids.add(candidate.selection_token_id)
+            if not math.isfinite(float(candidate.selection_score_bias)):
+                raise ValueError(
+                    f"selection_score_bias must be finite: {candidate.candidate_id}"
+                )
+    if request.scoring_mode.startswith("single_token_") and (
+        not request.selection_mapping_version or not request.selection_mapping_hash
+    ):
+        raise ValueError("single-token scoring requires mapping version and hash")
     if not isinstance(request.micro_batch_size, int) or not (
         MIN_MICRO_BATCH_SIZE <= request.micro_batch_size <= MAX_MICRO_BATCH_SIZE
     ):
@@ -644,7 +699,7 @@ def validate_score_result(
         raise ValueError("score result model does not match request")
     if actual != expected:
         raise ValueError("score result candidate order/set does not match request")
-    if not result.prefix_cached:
+    if not result.prefix_cached and request.scoring_mode != "single_token_enforce":
         raise RuntimeError("action scoring did not obtain a verified cached prefix")
     for score in result.scores:
         if score.token_count <= 0 or not score.token_scores:
@@ -798,6 +853,41 @@ def score_candidate_from_runtime(
     return aggregate_runtime_scores(token_scores)
 
 
+def score_single_token_from_prefix(
+    candidate_id: str,
+    token_id: int,
+    prefix_next_token_logits: Any,
+    *,
+    score_bias: float = 0.0,
+) -> CandidateScore:
+    """Score one candidate from the final shared-prefix distribution only."""
+
+    logits = prefix_next_token_logits
+    if isinstance(logits, dict):
+        try:
+            logprob = float(logits[int(token_id)])
+        except KeyError as exc:
+            raise ValueError(
+                f"prefix logprob is missing selection token {token_id}"
+            ) from exc
+    else:
+        if hasattr(logits, "detach"):
+            logits = logits.detach().float().cpu()
+        if hasattr(logits, "tolist"):
+            logits = logits.tolist()
+        if isinstance(logits, list) and logits and isinstance(logits[0], list):
+            logits = logits[0]
+        maximum = max(float(value) for value in logits)
+        log_denom = maximum + math.log(
+            math.fsum(math.exp(float(value) - maximum) for value in logits)
+        )
+        logprob = float(logits[int(token_id)]) - log_denom
+    return aggregate_candidate_score(
+        candidate_id,
+        [TokenScore(token_id=int(token_id), logprob=logprob + float(score_bias))],
+    )
+
+
 __all__ = [
     "ActionScoreCandidate",
     "ActionScoringStats",
@@ -811,6 +901,7 @@ __all__ = [
     "TokenScore",
     "aggregate_candidate_score",
     "score_candidate_from_runtime",
+    "score_single_token_from_prefix",
     "align_suffix_logprobs",
     "build_multimodal_cache_identity",
     "build_suffix_batches",

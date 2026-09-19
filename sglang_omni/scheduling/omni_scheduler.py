@@ -42,8 +42,8 @@ from sglang.srt.mem_cache.common import release_kv_cache
 from sglang.srt.utils import broadcast_pyobj
 
 from sglang_omni.models.qwen3_omni.action_scoring import (
-    aggregate_candidate_score,
     score_candidate_from_runtime,
+    score_single_token_from_prefix,
 )
 from sglang_omni.models.qwen3_omni.action_timing import get_action_stage_timings
 from sglang_omni.models.qwen3_omni.request_builders import (
@@ -1246,9 +1246,14 @@ class OmniScheduler:
 
     def _start_action_candidate_materialization(self, parent: Any) -> None:
         plan = parent.action_scoring_plan
+        if plan.get("scoring_mode") == "single_token_enforce":
+            return
         if plan.get("candidate_materialize_submitted_at") is not None:
             return
-        candidate_ids = tuple(plan.get("candidate_ids", ()))
+        candidate_ids = tuple(
+            plan.get("suffix_candidate_ids")
+            or plan.get("candidate_ids", ())
+        )
         micro_batch_size = int(plan.get("micro_batch_size", 0))
         executor = getattr(self, "_action_candidate_build_executor", None)
         # Multi-batch requests retain the existing just-in-time behavior to
@@ -1336,6 +1341,7 @@ class OmniScheduler:
     def _handle_action_prefix_terminal(self, req: Any, data: Any) -> None:
         parent = data.action_scoring_parent
         plan = data.action_scoring_plan
+        scoring_mode = str(plan.get("scoring_mode", "suffix_ppl"))
         logits = data.extra_model_outputs.get("action_prefix_token_logprobs")
         if logits is None:
             raise RuntimeError("action scoring prefix logits were not captured")
@@ -1371,10 +1377,23 @@ class OmniScheduler:
             1,
         )
         candidate_ids = list(plan["candidate_ids"])
-        plan["candidate_batches"] = [
-            tuple(candidate_ids[start : start + plan["micro_batch_size"]])
-            for start in range(0, len(candidate_ids), plan["micro_batch_size"])
-        ]
+        suffix_candidate_ids = list(
+            plan.get("suffix_candidate_ids") or candidate_ids
+        )
+        plan["candidate_batches"] = (
+            []
+            if scoring_mode == "single_token_enforce"
+            else [
+                tuple(
+                    suffix_candidate_ids[
+                        start : start + plan["micro_batch_size"]
+                    ]
+                )
+                for start in range(
+                    0, len(suffix_candidate_ids), plan["micro_batch_size"]
+                )
+            ]
+        )
         plan["candidate_data"] = []
         plan["candidate_results"] = {}
         plan["candidate_cached_tokens"] = {}
@@ -1383,7 +1402,25 @@ class OmniScheduler:
         plan["suffix_batch_ms"] = []
         plan["suffix_batch_sizes"] = []
         plan["next_batch_index"] = 0
+        if scoring_mode.startswith("single_token_"):
+            selection_token_ids = plan.get("selection_token_ids") or {}
+            plan["single_token_scores"] = [
+                score_single_token_from_prefix(
+                    candidate_id,
+                    int(selection_token_ids[candidate_id]),
+                    logits,
+                    score_bias=float(
+                        (plan.get("selection_score_bias") or {}).get(
+                            candidate_id, 0.0
+                        )
+                    ),
+                )
+                for candidate_id in candidate_ids
+            ]
         self._close_completed_request(req)
+        if scoring_mode == "single_token_enforce":
+            self._finish_action_scoring(parent, plan)
+            return
         if plan["candidate_batches"]:
             self._build_and_enqueue_action_candidate_batch(
                 parent,
@@ -1394,21 +1431,30 @@ class OmniScheduler:
         prefix_logits = plan.get("prefix_next_token_logits")
         if prefix_logits is None:
             raise RuntimeError("action scoring has no shared prefix logits")
-        scores = []
-        for candidate_id in plan["candidate_ids"]:
-            suffix_ids = plan["candidate_suffix_ids"][candidate_id]
-            raw = plan["candidate_results"].get(candidate_id)
-            if raw is None:
-                raise RuntimeError(f"missing action suffix result: {candidate_id}")
-            scores.append(
-                score_candidate_from_runtime(
-                    candidate_id,
-                    suffix_ids,
-                    prefix_logits,
-                    raw,
-                    terminal_token_id=plan.get("terminal_token_id"),
+        scoring_mode = str(plan.get("scoring_mode", "suffix_ppl"))
+        direct_scores = list(
+            plan.get("single_token_scores") or []
+        )
+        legacy_scores = []
+        enforce_without_suffix = scoring_mode == "single_token_enforce"
+        if not enforce_without_suffix:
+            for candidate_id in (
+                plan.get("suffix_candidate_ids") or plan["candidate_ids"]
+            ):
+                suffix_ids = plan["candidate_suffix_ids"][candidate_id]
+                raw = plan["candidate_results"].get(candidate_id)
+                if raw is None:
+                    raise RuntimeError(f"missing action suffix result: {candidate_id}")
+                legacy_scores.append(
+                    score_candidate_from_runtime(
+                        candidate_id,
+                        suffix_ids,
+                        prefix_logits,
+                        raw,
+                        terminal_token_id=plan.get("terminal_token_id"),
+                    )
                 )
-            )
+        scores = direct_scores if enforce_without_suffix else legacy_scores
         prefix_len = int(plan["prefix_token_count"])
         reusable_boundary_len = min(
             int(plan.get("cache_prefix_token_count", 0)),
@@ -1419,10 +1465,13 @@ class OmniScheduler:
             prefix_len,
         )
         parent_computed_len = max(prefix_len - parent_cached_len, 0)
-        prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
-            int(value) >= prefix_len
-            for value in plan["candidate_cached_tokens"].values()
-        )
+        if enforce_without_suffix:
+            prefix_cached = parent_cached_len >= reusable_boundary_len
+        else:
+            prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
+                int(value) >= prefix_len
+                for value in plan["candidate_cached_tokens"].values()
+            )
         plan["prefix_cached"] = prefix_cached
         recompute_tokens = sum(plan.get("candidate_prefix_recompute_tokens", {}).values())
         aggregation_started = time.perf_counter()
@@ -1458,6 +1507,51 @@ class OmniScheduler:
         audio_encoder_ms = float(
             pipeline_stage_timing.get("audio_encoder", {}).get("wall_ms", 0.0)
         )
+        cached_values = list(plan.get("candidate_cached_tokens", {}).values())
+        cached_prefix_token_count = (
+            min(cached_values) if cached_values else parent_cached_len
+        )
+        shadow_scores = {
+            score.candidate_id: score.mean_logprob for score in direct_scores
+        }
+        legacy_by_id = {
+            score.candidate_id: score.mean_logprob for score in legacy_scores
+        }
+
+        def _winner(values: dict[str, float], prefix: str | None = None) -> str | None:
+            items = [
+                (candidate_id, value)
+                for candidate_id, value in values.items()
+                if (candidate_id.startswith(prefix) if prefix else not candidate_id.startswith("I"))
+            ]
+            return max(items, key=lambda item: item[1])[0] if items else None
+
+        def _rank(
+            values: dict[str, float], candidate_id: str | None, prefix: str | None
+        ) -> int | None:
+            if candidate_id is None:
+                return None
+            ranked = sorted(
+                (
+                    (current_id, value)
+                    for current_id, value in values.items()
+                    if (
+                        current_id.startswith(prefix)
+                        if prefix else not current_id.startswith("I")
+                    )
+                ),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            return next(
+                (
+                    index
+                    for index, (current_id, _) in enumerate(ranked, start=1)
+                    if current_id == candidate_id
+                ),
+                None,
+            )
+
         stats = {
             "queue_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "client_request_build_ms": float(plan.get("client_request_build_ms", 0.0)),
@@ -1525,18 +1619,55 @@ class OmniScheduler:
                 else 0.0
             ),
             "prefix_chunks": list(plan.get("prefix_chunks", [])),
-            "cached_prefix_token_count": min(plan["candidate_cached_tokens"].values()),
-            "candidate_cached_prefix_token_count": min(
-                plan["candidate_cached_tokens"].values()
-            ),
+            "cached_prefix_token_count": cached_prefix_token_count,
+            "candidate_cached_prefix_token_count": cached_prefix_token_count,
             "candidate_prefix_recompute_tokens": recompute_tokens,
-            "suffix_batch_count": len(plan["candidate_batches"]),
+            "suffix_batch_count": (
+                0 if enforce_without_suffix
+                else len(plan["candidate_batches"])
+            ),
             "suffix_batch_sizes": list(plan.get("suffix_batch_sizes", [])),
             "suffix_batch_ms": suffix_batch_ms,
             "aggregation_ms": (time.perf_counter() - aggregation_started) * 1000.0,
             "total_ms": (time.perf_counter() - plan.get("started_at", aggregation_started)) * 1000.0,
             "gpu": gpu_stats,
+            "scoring_mode": scoring_mode,
+            "selection_mapping_version": plan.get("selection_mapping_version"),
+            "selection_mapping_hash": plan.get("selection_mapping_hash"),
+            "selection_calibration_version": plan.get("selection_calibration_version"),
+            "selection_calibration_hash": plan.get("selection_calibration_hash"),
         }
+        if scoring_mode == "single_token_shadow":
+            groups = (
+                ("action", None),
+                ("body", "IB"),
+                ("face", "IF"),
+                ("reaction", "IR"),
+                ("visual", "IV"),
+            )
+            direct_winners = {
+                group: _winner(shadow_scores, prefix)
+                for group, prefix in groups
+            }
+            suffix_winners = {
+                group: _winner(legacy_by_id, prefix)
+                for group, prefix in groups
+            }
+            shadow_key = "single_token_shadow"
+            stats[f"{shadow_key}_scores"] = shadow_scores
+            stats[f"{shadow_key}_winners"] = direct_winners
+            stats["suffix_ppl_winners"] = suffix_winners
+            stats[f"{shadow_key}_agreement"] = {
+                group: (
+                    direct_winners[group] == suffix_winners[group]
+                    if suffix_winners[group] is not None else None
+                )
+                for group, _ in groups
+            }
+            stats[f"suffix_winner_{shadow_key}_rank"] = {
+                group: _rank(shadow_scores, suffix_winners[group], prefix)
+                for group, prefix in groups
+            }
         result = {
             "request_id": parent.req.rid,
             "model": (
@@ -1601,7 +1732,9 @@ class OmniScheduler:
             if plan["next_batch_index"] < len(plan["candidate_batches"]):
                 next_batch = plan["candidate_batches"][plan["next_batch_index"]]
                 self._build_and_enqueue_action_candidate_batch(parent, next_batch)
-            elif len(plan["completed_candidate_ids"]) == len(plan["candidate_ids"]):
+            elif len(plan["completed_candidate_ids"]) == len(
+                plan.get("suffix_candidate_ids") or plan["candidate_ids"]
+            ):
                 self._finish_action_scoring(parent, plan)
 
 

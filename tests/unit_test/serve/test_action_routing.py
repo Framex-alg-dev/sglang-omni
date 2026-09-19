@@ -6,6 +6,7 @@ from sglang_omni.serve.realtime.action.routing import (
     is_visual_deictic_expression_request,
     numeric_gesture_candidates,
     resolve_unique_explicit_action,
+    resolve_unique_source_label_action,
     route_numeric_reply_action,
     scope_visual_deictic_categories,
     visual_deictic_scope_candidates,
@@ -84,6 +85,26 @@ def test_explicit_route_accepts_versioned_catalog_aliases() -> None:
     assert route is not None
     assert route.candidate.candidate_id == "288"
     assert route.matched_alias == "挥挥手跟我打个招呼"
+
+
+def test_source_label_route_excludes_ids_aliases_and_substrings() -> None:
+    one = _candidate("258", "数字一手势")
+    two = _candidate("259", "数字二手势")
+    category = _category(one, two)
+
+    route = resolve_unique_source_label_action(
+        "数字二手势。", [(category, one), (category, two)]
+    )
+
+    assert route is not None
+    assert route.candidate.candidate_id == "259"
+    assert resolve_unique_source_label_action("259", [(category, two)]) is None
+    assert (
+        resolve_unique_source_label_action(
+            "请做数字二手势", [(category, two)]
+        )
+        is None
+    )
 
 
 def test_category_width_uses_top1_only_for_confident_prewarmed_winner() -> None:

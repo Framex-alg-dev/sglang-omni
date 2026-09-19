@@ -49,78 +49,8 @@ _MODEL_VISUAL_ROUTE_TO_INTERNAL = {
     "ANSWER_CURRENT_VIEW_WITH_GESTURE": VISUAL_GESTURE_ANSWER_GATE,
 }
 _VISUAL_ROUTE_PREFIX_RE = re.compile(
-    r'"visual_route"\s*:\s*"(?P<route>[A-Z0-9_]+)"'
+    r'"(?:visual_route|visual)"\s*:\s*"(?P<route>[A-Z0-9_]+)"'
 )
-_PURE_DEICTIC_COPY_ROUTES = {
-    # This is deliberately a narrow semantic consistency repair, not a second
-    # intent classifier. It only covers complete, unambiguous imperatives that
-    # the model transcribed into ``text`` while contradicting itself with
-    # NO_CURRENT_VIEW/body_mode=none.
-    "COPY_ACTION": frozenset(
-        {
-            "做这个动作",
-            "模仿这个动作",
-            "复刻这个动作",
-            "重复这个动作",
-            "照着我做",
-            "do this",
-            "copy this action",
-            "imitate this action",
-        }
-    ),
-    "COPY_HAND": frozenset(
-        {
-            "做这个手势",
-            "比这个手势",
-            "比这个数字",
-            "做这个数字",
-            "比个这个",
-            "模仿这个手势",
-            "复刻这个手势",
-            "重复这个手势",
-            "do this gesture",
-            "make this gesture",
-            "copy this gesture",
-            "imitate this gesture",
-        }
-    ),
-}
-_PURE_TASK_TRAILING_PUNCTUATION_RE = re.compile(r"[\s。！？!?，,；;：:]+$")
-
-
-def _repair_contradictory_copy_route(
-    data: dict,
-    visual_route: str,
-    *,
-    has_user_camera: bool,
-) -> str:
-    """Repair only an exact pure-copy imperative contradicted by its fields."""
-
-    if (
-        not has_user_camera
-        or visual_route != GENERAL_INTENT_GATE
-        or data.get("speech") != "generated"
-        or data.get("body_mode") != "none"
-        or data.get("body")
-        or data.get("face")
-    ):
-        return visual_route
-    task = data.get("text")
-    if not isinstance(task, str):
-        return visual_route
-    normalized_task = _PURE_TASK_TRAILING_PUNCTUATION_RE.sub(
-        "", task.strip().lower()
-    )
-    for repaired_route, phrases in _PURE_DEICTIC_COPY_ROUTES.items():
-        if normalized_task in phrases:
-            # A complete pure-action imperative must not leak into the spoken
-            # reply channel after the visual route is repaired.
-            data["speech"] = "none"
-            data["text"] = ""
-            return repaired_route
-    return visual_route
-
-
 def _visual_route_from_partial_output(
     raw: str,
     *,
@@ -144,12 +74,15 @@ def _visual_route_from_partial_output(
         return ""
     return "" if route == GENERAL_INTENT_GATE else route
 
-SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文本，不识别图片；只输出JSON。
+SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文本，不识别图片；只输出紧凑JSON。
 
 has_user_camera=true/false是服务端事实。只有true才允许需要当前画面的visual_route；有图片不等于要求模仿。
 
-首字段必须是visual_route。非视觉计算输出speech、text、body_mode、body、face、history、reaction_mode、reaction全部字段。
-视觉计算只输出visual_route、visual_answer_operation、visual_answer_output；额外原样话术才追加speech=verbatim和text，明确表情/语气/语速才追加face/voice_tone/voice_pace，其余空字段省略。数字手势占用身体动作位；若另有身体动作，必须追加body_mode/body而不得丢弃。
+首字段必须是route，route必须依次包含visual、speech、body_intent、reaction。
+visual使用下文visual_route枚举；speech只能是verbatim/generated/none；
+body_intent只能是perform/prohibit/capability/none；reaction只能是respond/none。
+route之后只输出非默认载荷：text、body_task、face_task、history、reaction_task、
+voice_tone、voice_pace、visual_answer_operation、visual_answer_output。空字符串、history=false、natural和normal不得输出。
 visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
 visual_route先于其他字段按以下互斥顺序判定：
@@ -159,36 +92,34 @@ visual_route先于其他字段按以下互斥顺序判定：
 
 最小对比：“做个手势”是任意手势，选NO_CURRENT_VIEW并提取动作；“做这个手势/比这个数字”指向画面，必须COPY_CURRENT_HAND。“比数字二”选NO_CURRENT_VIEW；“比个这个”必须COPY_CURRENT_HAND。“不要做这个动作”和“做这个动作是什么意思”不得转COPY。“这是什么手势/这是数字几”选NO_CURRENT_VIEW；“这个加这个等于多少”依赖当前画面，必须选ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”不依赖当前画面，选NO_CURRENT_VIEW。
 
-COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_mode=none，body/face为空并说明需要画面。
+COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_intent=none，省略body_task/face_task并说明需要画面。
 
 一致性：模仿与说话可以同时存在，visual_route仍为COPY；纯复现speech=none。“做这个动作/手势”不得选NO_CURRENT_VIEW。视觉计算必须带visual_answer_operation：加/减/乘/除对应add/subtract/multiply/divide，禁止缺省，减除保留顺序；必须带visual_answer_output：仅手势或不播报答案=gesture_only，未指定或手势加语音播报答案=gesture_and_speech；仅语音回答则选NO_CURRENT_VIEW并省略两字段。“并说出来”只由visual_answer_output表达；额外原样话术的speech/text与答案播报独立。明确的表情、语气、语速必须保留，未指定时不得编造。
 
 其他字段：
-- speech：verbatim=明确要求朗读指定正文；generated=需要语言回应；none=不说话。text为正文或语言任务。
-- body_mode：perform=执行明确身体动作；prohibit=禁止动作；none=未要求。body写动作目标，无动作则空串。
-- face写明确表情目标；history表示是否必须查阅先前对话。
-- reaction_mode仅为respond/none；用户直接问候、道别、感谢或亲昵，且无明确或禁止动作时可respond并写reaction，否则none和空串。
-- body_mode不是none时reaction_mode必须none。未指定的动作、表情不要编造。只要求动作时speech=none；动作请求的礼貌疑问形式不会自动产生语言回答。
+- route.speech：verbatim=明确要求朗读指定正文；generated=需要语言回应；none=不说话。text为正文或语言任务。
+- route.body_intent：perform=执行明确身体动作；prohibit=禁止动作；capability=询问动作能力；none=未要求。perform/prohibit时用body_task写动作目标。
+- face_task写明确表情目标；history仅在必须查阅先前对话时输出true。
+- route.reaction仅为respond/none；用户直接问候、道别、感谢或亲昵，且无明确或禁止动作时可respond并写reaction_task。
+- body_intent不是none时reaction必须none。未指定的动作、表情不要编造。只要求动作时speech=none；动作请求的礼貌疑问形式不会自动产生语言回答。
 
-先确定要说的正文边界，再提取正文之外的动作和表情。语言与动作是独立通道：“说一比二”=说“一”并做数字二手势；“说二比一”=说“二”并做数字一手势。“说一比二这三个字”才是完整朗读“一比二”，其中“这三个字”不进入text。引用的动作词不执行，text里的否定不改变body_mode。数字动作统一写中文标准名，如数字一手势、数字二手势。generated的text保留用户的问题或语言任务，不提前作答、不变换人称。
+先确定要说的正文边界，再提取正文之外的动作和表情。语言与动作是独立通道：“说一比二”=说“一”并做数字二手势；“说二比一”=说“二”并做数字一手势。“说一比二这三个字”才是完整朗读“一比二”，其中“这三个字”不进入text。引用的动作词不执行，text里的否定不改变route.body_intent。数字动作统一写中文标准名，如数字一手势、数字二手势。generated的text保留用户的问题或语言任务，不提前作答、不变换人称。
 
-具体立即请求通常要执行：“能挥挥手吗”“可以比个心吗”是perform；真正询问能力或范围才回答：“你会挥手吗”“你支持哪些动作”是generated且body_mode=none。
+具体立即请求通常要执行：“能挥挥手吗”“可以比个心吗”是perform；真正询问能力或范围才回答：“你会挥手吗”“你支持哪些动作”是generated且body_intent=capability。
 
 示例：
-说二比一 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"二","body_mode":"perform","body":"数字一手势","face":"","history":false,"reaction_mode":"none","reaction":""}
-说一比二这三个字 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"一比二","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
-笑着说一比二 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"一","body_mode":"perform","body":"数字二手势","face":"微笑","history":false,"reaction_mode":"none","reaction":""}
-能挥挥手吗 -> {"visual_route":"NO_CURRENT_VIEW","speech":"none","text":"","body_mode":"perform","body":"挥手","face":"","history":false,"reaction_mode":"none","reaction":""}
-你会挥手吗 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你会挥手吗","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
-模仿这个手势并说你好 -> {"visual_route":"COPY_CURRENT_HAND","speech":"verbatim","text":"你好","body_mode":"perform","body":"这个手势","face":"","history":false,"reaction_mode":"none","reaction":""}
-做这个动作并介绍自己 -> {"visual_route":"COPY_CURRENT_ACTION","speech":"generated","text":"介绍自己","body_mode":"perform","body":"这个动作","face":"","history":false,"reaction_mode":"none","reaction":""}
-这个加这个等于多少，用手势回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"add","visual_answer_output":"gesture_only"}
-这个除以这个等于多少 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"divide","visual_answer_output":"gesture_and_speech"}
-微笑着用手势回答这个加这个并说出来 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"add","visual_answer_output":"gesture_and_speech","face":"微笑"}
-用手势回答这个加这个，并说你好 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"add","visual_answer_output":"gesture_only","speech":"verbatim","text":"你好"}
-你好 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你好","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"respond","reaction":"回应用户问候"}
+说二比一 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"verbatim","body_intent":"perform","reaction":"none"},"text":"二","body_task":"数字一手势"}
+说一比二这三个字 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"verbatim","body_intent":"none","reaction":"none"},"text":"一比二"}
+笑着说一比二 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"verbatim","body_intent":"perform","reaction":"none"},"text":"一","body_task":"数字二手势","face_task":"微笑"}
+能挥挥手吗 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"none","body_intent":"perform","reaction":"none"},"body_task":"挥手"}
+你会挥手吗 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"generated","body_intent":"capability","reaction":"none"},"text":"你会挥手吗"}
+模仿这个手势并说你好 -> {"route":{"visual":"COPY_CURRENT_HAND","speech":"verbatim","body_intent":"perform","reaction":"none"},"text":"你好","body_task":"这个手势"}
+做这个动作并介绍自己 -> {"route":{"visual":"COPY_CURRENT_ACTION","speech":"generated","body_intent":"perform","reaction":"none"},"text":"介绍自己","body_task":"这个动作"}
+这个加这个等于多少，用手势回答 -> {"route":{"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"none","body_intent":"none","reaction":"none"},"visual_answer_operation":"add","visual_answer_output":"gesture_only"}
+这个除以这个等于多少 -> {"route":{"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"none","body_intent":"none","reaction":"none"},"visual_answer_operation":"divide","visual_answer_output":"gesture_and_speech"}
+你好 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"generated","body_intent":"none","reaction":"respond"},"text":"你好","reaction_task":"回应用户问候"}
 
-保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才令history=true。非视觉计算的固定字段必须存在；视觉计算必须是以上稀疏格式，不得输出未激活的空字段；输出最多256个token。'''
+保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才输出history=true。route四字段必须存在，其余字段仅在非默认时输出；输出最多128个token。'''
 
 # Voice is selected by the same semantic pass, independently of face scoring.
 VOICE_TONES = {
@@ -226,11 +157,12 @@ class TurnIntent:
     history: bool
     reaction_mode: str = "none"
     reaction: str = ""
+    body_intent: str = ""
     elapsed_ms: float = 0
     voice_tone: str = "natural"
     voice_pace: str = "normal"
-    visual_answer_operation: str = ""
     visual_answer_output: str = ""
+    visual_answer_operation: str = ""
     # Internal compatibility field consumed by the action pipeline. The model
     # emits ``visual_route``; GENERAL is normalized to an empty string here.
     visual_scope_gate: str = ""
@@ -240,62 +172,99 @@ class TurnIntent:
         if len(raw) > 4096:
             raise ValueError("intent too long")
         data = json.loads(raw)
-        if not isinstance(data, dict) or "visual_route" not in data:
-            raise ValueError("invalid intent fields")
-
-        model_visual_route = data["visual_route"]
-        visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
-            model_visual_route, model_visual_route
-        )
-        if visual_route not in _VISUAL_SCOPE_GATE_RESULTS:
-            raise ValueError("invalid visual route")
-
-        full_required = {
-            "visual_route",
-            "speech",
-            "text",
-            "body",
-            "body_mode",
-            "face",
-            "history",
-            "reaction_mode",
-            "reaction",
-        }
-        visual_required = {
-            "visual_route",
-            "visual_answer_operation",
-            "visual_answer_output",
-        }
-        allowed = full_required | {
+        optional = {
             "voice_tone",
             "voice_pace",
             "visual_answer_operation",
             "visual_answer_output",
         }
-        required = (
-            visual_required
-            if visual_route == VISUAL_GESTURE_ANSWER_GATE
-            else full_required
-        )
-        if not required <= set(data) or set(data) - allowed:
+        if not isinstance(data, dict):
             raise ValueError("invalid intent fields")
 
-        data.pop("visual_route")
-        if visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            # The visual-arithmetic wire format is sparse. Missing common
-            # fields mean that the user did not activate those channels; an
-            # explicitly emitted value is preserved and validated below.
-            for key, default in {
-                "speech": "none",
-                "text": "",
-                "body_mode": "none",
-                "body": "",
-                "face": "",
-                "history": False,
-                "reaction_mode": "none",
-                "reaction": "",
-            }.items():
-                data.setdefault(key, default)
+        body_intent = ""
+        if "route" in data:
+            allowed = {
+                "route",
+                "text",
+                "body_task",
+                "face_task",
+                "history",
+                "reaction_task",
+                *optional,
+            }
+            if set(data) - allowed:
+                raise ValueError("invalid intent fields")
+            route = data.get("route")
+            route_fields = {"visual", "speech", "body_intent", "reaction"}
+            if not isinstance(route, dict) or set(route) != route_fields:
+                raise ValueError("invalid intent route fields")
+            body_intent = route.get("body_intent")
+            if body_intent not in {"none", "perform", "prohibit", "capability"}:
+                raise ValueError("invalid body intent")
+            speech = route.get("speech")
+            if body_intent == "capability" and speech != "generated":
+                raise ValueError("capability intent requires generated speech")
+            normalized = {
+                "visual_route": route.get("visual"),
+                "speech": speech,
+                "text": data.get("text", ""),
+                "body_mode": (
+                    body_intent if body_intent in {"perform", "prohibit"} else "none"
+                ),
+                "body": data.get("body_task", ""),
+                "face": data.get("face_task", ""),
+                "history": data.get("history", False),
+                "reaction_mode": route.get("reaction"),
+                "reaction": data.get("reaction_task", ""),
+            }
+            normalized.update({key: data[key] for key in optional if key in data})
+            data = normalized
+        else:
+            required = {
+                "visual_route",
+                "speech",
+                "text",
+                "body",
+                "body_mode",
+                "face",
+                "history",
+                "reaction_mode",
+                "reaction",
+            }
+            model_visual_route = data.get("visual_route")
+            legacy_visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
+                model_visual_route, model_visual_route
+            )
+            if legacy_visual_route == VISUAL_GESTURE_ANSWER_GATE:
+                visual_required = {
+                    "visual_route",
+                    "visual_answer_operation",
+                    "visual_answer_output",
+                }
+                allowed = required | optional
+                if not visual_required <= set(data) or set(data) - allowed:
+                    raise ValueError("invalid intent fields")
+                for key, default in {
+                    "speech": "none",
+                    "text": "",
+                    "body_mode": "none",
+                    "body": "",
+                    "face": "",
+                    "history": False,
+                    "reaction_mode": "none",
+                    "reaction": "",
+                }.items():
+                    data.setdefault(key, default)
+            elif not required <= set(data) or set(data) - required - optional:
+                raise ValueError("invalid intent fields")
+            body_intent = data.get("body_mode", "none")
+
+        model_visual_route = data.pop("visual_route")
+        visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
+            model_visual_route, model_visual_route
+        )
+        if visual_route not in _VISUAL_SCOPE_GATE_RESULTS:
+            raise ValueError("invalid visual route")
         if visual_route != GENERAL_INTENT_GATE and not has_user_camera:
             raise ValueError("visual route requires a current user camera image")
         if (
@@ -336,12 +305,6 @@ class TurnIntent:
             if not isinstance(data[key], str) or len(data[key]) > 512:
                 raise ValueError("invalid intent content")
 
-        visual_route = _repair_contradictory_copy_route(
-            data,
-            visual_route,
-            has_user_camera=has_user_camera,
-        )
-
         visual_targets = {target for _, target in _VISUAL_SCOPE_GATE_CHOICES.values()}
         if visual_route == GENERAL_INTENT_GATE and (
             (
@@ -367,12 +330,10 @@ class TurnIntent:
             if channel == "body":
                 data["body_mode"] = "perform"
                 data["body"] = target
+                body_intent = "perform"
             else:
                 data["face"] = target
         elif visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            # The numeric gesture already owns the single body-action slot.
-            # Reject a second body directive instead of silently overwriting
-            # user intent. Face, voice and explicit speech remain independent.
             if data["body_mode"] != "none" or data["body"]:
                 raise ValueError(
                     "visual answer cannot combine with another body action"
@@ -402,6 +363,7 @@ class TurnIntent:
 
         return cls(
             **data,
+            body_intent=body_intent,
             elapsed_ms=elapsed_ms,
             visual_scope_gate=(
                 "" if visual_route == GENERAL_INTENT_GATE else visual_route
@@ -450,6 +412,7 @@ class TurnIntent:
                     else self.body
                 ),
                 "body_mode": self.body_mode,
+                "body_intent": self.body_intent or self.body_mode,
                 "face_task": self.face,
                 "speech_task": (
                     original
@@ -530,7 +493,7 @@ async def infer_turn_intent(
             Message(role="system", content=SYSTEM),
             Message(role="user", content=parts),
         ],
-        sampling=SamplingParams(temperature=0, max_new_tokens=256),
+        sampling=SamplingParams(temperature=0, max_new_tokens=128),
         stream=stream_intent,
         output_modalities=["text"],
         metadata={

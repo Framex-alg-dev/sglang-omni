@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from starlette.websockets import WebSocketState
@@ -27,6 +28,56 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     prewarm_global_action_catalog,
 )
 from sglang_omni.serve.realtime.multimodal import MultimodalSession
+
+
+def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action() -> None:
+    catalog_path = (
+        Path(__file__).parents[3]
+        / "sglang_omni/assets/character_limited_action_global_catalog.json"
+    )
+    catalog = load_global_action_catalog(catalog_path)
+
+    assert catalog.candidate_count == 117
+    assert all(
+        candidate.user_reaction_expression.strip()
+        and candidate.proactive_expression.strip()
+        for candidate in catalog.candidate_by_id.values()
+    )
+    assert all(
+        candidate.effective_definition("user")
+        == candidate.user_reaction_expression
+        and candidate.effective_definition("proactive")
+        == candidate.proactive_expression
+        for candidate in catalog.candidate_by_id.values()
+    )
+    idle = catalog.candidate_by_id["130"]
+    assert "不得替代任何明确" in idle.user_reaction_expression
+    assert "有具体表达、演示或交互目标时不得选择" in idle.proactive_expression
+
+
+def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
+    catalog_path = (
+        Path(__file__).parents[3]
+        / "sglang_omni/assets/character_limited_action_global_catalog.json"
+    )
+    catalog = load_global_action_catalog(catalog_path)
+    idle = catalog.candidate_by_id["130"]
+
+    zh_user = idle.effective_definition("user", "zh-CN")
+    en_user = idle.effective_definition("user", "en-US")
+    zh_proactive = idle.effective_definition("proactive", "zh-CN")
+    en_proactive = idle.effective_definition("proactive", "en-US")
+
+    assert zh_user.startswith("仅在用户要求自然呼吸")
+    assert en_user.startswith("Select only for natural breathing")
+    assert zh_proactive.startswith("仅在没有表意目标")
+    assert en_proactive.startswith("Select only when no expressive goal")
+    assert en_user in catalog.action_system_prompt_for("en-US", "user")
+    assert en_user not in catalog.action_system_prompt_for("zh-CN", "user")
+    assert sum(
+        "en-US" in candidate.expressions_by_locale
+        for candidate in catalog.candidate_by_id.values()
+    ) == 80
 
 
 def test_action_prompts_do_not_include_cross_turn_action_history() -> None:

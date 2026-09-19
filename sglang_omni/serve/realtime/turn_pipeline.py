@@ -26,6 +26,7 @@ from sglang_omni.serve.realtime.action.category import (
     DIRECT_GREETING_REACTION,
     DIRECT_GREETING_ROUTE,
 )
+from sglang_omni.serve.realtime.action.decision import decision_as_dict
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.common import _summarize_media
 from sglang_omni.serve.realtime.protocol.models import (
@@ -47,7 +48,7 @@ from sglang_omni.serve.realtime.performance import (
     fuse_performance_decision,
 )
 from sglang_omni.serve.realtime.action.routing import (
-    resolve_unique_explicit_action,
+    resolve_unique_source_label_action,
     route_numeric_reply_action,
 )
 from sglang_omni.serve.realtime.action.visual_generation import (
@@ -121,6 +122,44 @@ def _replace_speculative_action_with_greeting(
         "category_id": greeting_candidate.category_id,
         "execution_binding": dict(greeting_candidate.execution_binding),
         "execute": greeting_candidate.action_id != "no_action",
+        "support_status": "supported",
+        "fallback_applied": False,
+    }
+    return action, [], result[2], action_context
+
+
+def _replace_speculative_action_with_exact_intent_candidate(
+    result: tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]],
+    candidate: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
+    """Replace an ambiguous speculative winner without another model call."""
+
+    previous_action = result[0]
+    action_context = dict(result[3])
+    action_context.update(
+        {
+            "selection_stages": 1,
+            "selection_mode": "intent_reconciled",
+            "selection_basis": "structured_intent_exact_source_label",
+            "speculative_candidate_id": (
+                previous_action.get("candidate_id")
+                if previous_action is not None
+                else None
+            ),
+            "child_scoring_skipped": True,
+            "child_scoring_skip_reason": (
+                "structured_intent_exact_source_label"
+            ),
+            "support_status": "supported",
+            "fallback_applied": False,
+        }
+    )
+    action = {
+        "candidate_id": candidate.candidate_id,
+        "action_id": candidate.action_id,
+        "category_id": candidate.category_id,
+        "execution_binding": dict(candidate.execution_binding),
+        "execute": candidate.action_id != "no_action",
         "support_status": "supported",
         "fallback_applied": False,
     }
@@ -781,6 +820,18 @@ class TurnPipeline:
             result["timing"]["server_performance_compute_ms"] = (
                 performance.elapsed_ms
             )
+        elif turn.intent is not None:
+            body_requested = turn.intent.body_mode == "perform"
+            face_requested = bool(turn.intent.face)
+            result["timing"]["request_scope"] = (
+                "both"
+                if body_requested and face_requested
+                else "body_only"
+                if body_requested
+                else "expression_only"
+                if face_requested
+                else "none"
+            )
         if turn.knowledge_context is not None:
             result["knowledge"] = {
                 "decision": turn.knowledge_context.decision,
@@ -1145,13 +1196,118 @@ class TurnPipeline:
                     decision_mode == "enforce"
                     and decision is not None
                 )
-                # Scoring may run in parallel with the unified intent request,
-                # but no user action result is published before that request
-                # reaches a terminal result.  This is a publication barrier,
-                # not a compute barrier: the two GPU requests still overlap.
-                if turn.turn_origin == TURN_ORIGIN_USER and intent_task is not None:
+                # In enforce mode, the bounded grouped labels are the action
+                # publication authority. A non-executing result is always safe
+                # to publish, and a non-social grouped result no longer waits
+                # for the autoregressive detail JSON. Social reactions retain
+                # the barrier because the completed intent may reconcile the
+                # selected catalog action to the dedicated greeting action.
+                waited_for_unified_intent = False
+                category_decision = turn.action_category_decision
+                ambiguous_concrete_category = bool(
+                    category_decision is not None
+                    and category_decision.category_id is not None
+                    and category_decision.margin is not None
+                    and category_decision.margin
+                    < float(
+                        getattr(self, "action_decision_min_margin", 0.10)
+                    )
+                )
+                should_wait_for_unified_intent = bool(
+                    turn.turn_origin == TURN_ORIGIN_USER
+                    and intent_task is not None
+                    and not action_is_terminal_without_execution
+                    and (
+                        not use_batched_decision
+                        or decision.reaction_type != "none"
+                        or ambiguous_concrete_category
+                    )
+                )
+                if should_wait_for_unified_intent:
                     turn.intent = await intent_task
+                    waited_for_unified_intent = True
                 intent = turn.intent
+
+                if (
+                    waited_for_unified_intent
+                    and ambiguous_concrete_category
+                    and intent is not None
+                    and intent.body_mode == "perform"
+                    and scored_action is not None
+                    and scored_action.get("execute")
+                ):
+                    eligible_pairs = [
+                        (category, candidate)
+                        for category in self.categories
+                        for candidate in self._filter_turn_action_candidates(
+                            turn, list(category.children)
+                        )
+                    ]
+                    exact_route = resolve_unique_source_label_action(
+                        intent.body, eligible_pairs
+                    )
+                    if exact_route is not None:
+                        action_image_roles = (
+                            args[2]
+                            if len(args) > 2
+                            else kwargs.get("image_roles", [])
+                        )
+                        action_avatar_state = (
+                            args[4]
+                            if len(args) > 4
+                            else kwargs.get("avatar_state")
+                        )
+                        effective_avatar_state = self._effective_avatar_state(
+                            action_avatar_state,
+                            turn_origin=turn.turn_origin,
+                            has_avatar_image=(
+                                IMAGE_ROLE_AVATAR_STATE in action_image_roles
+                            ),
+                        )
+                        state_description = effective_avatar_state.get(
+                            "state_description"
+                        )
+                        route_is_prohibited = bool(
+                            exact_route.category.category_id
+                            in self._state_description_excluded_category_ids(
+                                state_description
+                            )
+                            or exact_route.candidate.candidate_id
+                            in self._state_description_excluded_candidate_ids(
+                                state_description,
+                                [exact_route.candidate],
+                            )
+                        )
+                        if (
+                            not route_is_prohibited
+                            and exact_route.candidate.candidate_id
+                            != scored_action.get("candidate_id")
+                        ):
+                            speculative_candidate_id = scored_action.get(
+                                "candidate_id"
+                            )
+                            result = (
+                                _replace_speculative_action_with_exact_intent_candidate(
+                                    result, exact_route.candidate
+                                )
+                            )
+                            scored_action = result[0]
+                            emit_structured_log(
+                                "action",
+                                "ambiguous_action_reconciled_from_intent",
+                                session_id=self.session_id,
+                                turn_id=turn_id,
+                                trace_id=turn.trace_id,
+                                speculative_candidate_id=(
+                                    speculative_candidate_id
+                                ),
+                                selected_candidate_id=(
+                                    exact_route.candidate.candidate_id
+                                ),
+                                category_margin=category_decision.margin,
+                                model_request_added=False,
+                                match_mode="exact_source_label",
+                            )
 
                 # In enforce mode, action scoring is intentionally speculative:
                 # it may finish before unified intent identifies a plain greeting.
@@ -1264,12 +1420,13 @@ class TurnPipeline:
                     )
                 )
                 if use_batched_decision:
-                    # The bounded grouped labels remain an independent
-                    # fail-closed safety check.  They no longer authorize early
-                    # publication without the unified intent result.
-                    intent_allows_body = bool(
-                        unified_intent_allows_body and decision.allows_body
-                    )
+                    # A confident grouped perform/reaction gate is the
+                    # authoritative publication decision.  The generated JSON
+                    # remains a detail/fallback parser and must not veto an
+                    # independently confident bounded classification.  Deny
+                    # and low-confidence grouped outcomes remain fail-closed.
+                    grouped_authoritative_allow = decision.allows_body
+                    intent_allows_body = bool(grouped_authoritative_allow)
                     emit_structured_log(
                         "action", "batched_action_decision_enforced",
                         session_id=self.session_id, turn_id=turn_id,
@@ -1284,58 +1441,13 @@ class TurnPipeline:
                         ),
                         all_groups_min_margin=decision.min_margin,
                         all_groups_confident=decision.confident,
-                        waited_for_unified_intent=True,
+                        waited_for_unified_intent=waited_for_unified_intent,
+                        grouped_authoritative_allow=(
+                            grouped_authoritative_allow
+                        ),
                     )
                 else:
                     intent_allows_body = unified_intent_allows_body
-
-                action_target_mismatch = False
-                expected_candidate_id: str | None = None
-                if (
-                    self.direct_action_selection
-                    and intent is not None
-                    and intent.body_mode == "perform"
-                ):
-                    category_by_id = {
-                        category.category_id: category
-                        for category in self.categories
-                    }
-                    explicit_route = resolve_unique_explicit_action(
-                        intent.body,
-                        [
-                            (category_by_id[candidate.category_id], candidate)
-                            for candidate in self._filter_turn_action_candidates(
-                                turn, list(self.candidates)
-                            )
-                            if candidate.category_id in category_by_id
-                        ],
-                    )
-                    if explicit_route is not None:
-                        expected_candidate_id = (
-                            explicit_route.candidate.candidate_id
-                        )
-                        action_target_mismatch = bool(
-                            scored_action is not None
-                            and scored_action.get("execute")
-                            and scored_action.get("candidate_id")
-                            != expected_candidate_id
-                        )
-                        if action_target_mismatch:
-                            intent_allows_body = False
-                            emit_structured_log(
-                                "action",
-                                "speculative_action_target_mismatch",
-                                session_id=self.session_id,
-                                turn_id=turn_id,
-                                trace_id=turn.trace_id,
-                                selected_candidate_id=scored_action.get(
-                                    "candidate_id"
-                                ),
-                                expected_candidate_id=expected_candidate_id,
-                                body_task=intent.body,
-                                fallback="unsupported",
-                                rescored=False,
-                            )
 
                 unsafe_decision_disagreement = False
                 if decision is not None and intent is not None:
@@ -1391,7 +1503,11 @@ class TurnPipeline:
                     unsafe_decision_disagreement = bool(
                         disagreements["body"] or disagreements["visual"]
                     )
-                    if use_batched_decision and unsafe_decision_disagreement:
+                    if (
+                        use_batched_decision
+                        and unsafe_decision_disagreement
+                        and not grouped_authoritative_allow
+                    ):
                         intent_allows_body = False
                     emit_structured_log(
                         "diagnostic", "action_decision_shadow_compared",
@@ -1426,11 +1542,7 @@ class TurnPipeline:
                         execute=False,
                         support_status="unsupported",
                         intent_gate_blocked=True,
-                        reason_code=(
-                            "intent_action_mismatch"
-                            if action_target_mismatch
-                            else "intent_gate_blocked"
-                        ),
+                        reason_code="intent_gate_blocked",
                     )
                     result = (blocked, *result[1:])
                     action_is_terminal_without_execution = True
@@ -1460,8 +1572,6 @@ class TurnPipeline:
                             "unified_intent+batched_labels"
                             if use_batched_decision else "unified_intent"
                         ),
-                        action_target_mismatch=action_target_mismatch,
-                        expected_candidate_id=expected_candidate_id,
                         unsafe_decision_disagreement=(
                             unsafe_decision_disagreement
                         ),
@@ -2000,6 +2110,14 @@ class TurnPipeline:
                     and turn.intent.body_mode == "none"
                     and turn.intent.reaction_mode == "none"
                     and not visual_gesture_answer
+                    and not (
+                        getattr(
+                            self, "action_decision_batch_mode", "off"
+                        )
+                        == "enforce"
+                        and turn.action_decision is not None
+                        and turn.action_decision.allows_body
+                    )
                 )
                 if (
                     visual_gesture_answer
@@ -2650,6 +2768,17 @@ class TurnPipeline:
                                 "selection_mode": "not_requested",
                                 "generic_action_scoring_bypassed": True,
                             }
+                            if turn.action_decision is not None:
+                                action_context["action_decision"] = (
+                                    decision_as_dict(turn.action_decision)
+                                )
+                                action_context[
+                                    "action_decision_batch_mode"
+                                ] = getattr(
+                                    self,
+                                    "action_decision_batch_mode",
+                                    "off",
+                                )
                             emit_structured_log(
                                 "action",
                                 "generic_action_scoring_bypassed",

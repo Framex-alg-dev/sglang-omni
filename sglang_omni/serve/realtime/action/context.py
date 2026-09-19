@@ -386,7 +386,10 @@ class ActionPipeline:
         *,
         turn_origin: Literal["user", "proactive"],
     ) -> str:
-        """Expose one user-action anchor without restoring action history."""
+        """Build the anchor only for a future explicit ``repeat_last`` route.
+
+        Ordinary action scoring deliberately does not call this helper.
+        """
         record = self.last_user_executed_action
         if (
             turn_origin != TURN_ORIGIN_USER
