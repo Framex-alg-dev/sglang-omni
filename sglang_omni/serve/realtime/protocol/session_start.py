@@ -46,7 +46,11 @@ from sglang_omni.serve.realtime.action.visual_generation import (
     build_visual_gesture_system_prompt,
     visual_gesture_candidates,
 )
-from sglang_omni.serve.realtime.action.decision import action_decision_candidates
+from sglang_omni.serve.realtime.action.decision import (
+    action_decision_candidates,
+    action_support_candidates,
+    category_gate_candidates,
+)
 from sglang_omni.serve.realtime.turn_intent import SYSTEM as TURN_INTENT_SYSTEM
 from sglang_omni.serve.realtime.knowledge import (
     KnowledgeBinding,
@@ -1001,38 +1005,80 @@ class SessionStartComponent:
                         for candidate in candidates
                         if candidate.candidate_id in scoped_candidate_ids
                     ]
-                namespace = self._direct_action_prefix_namespace(origin, instruction)
+                prefill_decision_visual = bool(
+                    getattr(self, "action_decision_batch_visual", False)
+                    and has_user_camera
+                )
+                prefill_category_ids = {
+                    candidate.category_id
+                    for candidate in prefill_candidates
+                    if candidate.category_id is not None
+                }
+                prefill_gate_categories = [
+                    category
+                    for category in self.categories
+                    if category.category_id in prefill_category_ids
+                ]
+                prefill_category_gate = bool(
+                    self._direct_category_gate_enabled(origin)
+                    and visual_scope is None
+                    and prefill_gate_categories
+                )
+                namespace = self._direct_action_prefix_namespace(
+                    origin,
+                    instruction,
+                    include_visual=prefill_decision_visual,
+                    include_category_gate=prefill_category_gate,
+                    category_gate_category_ids=tuple(
+                        category.category_id
+                        for category in prefill_gate_categories
+                    ),
+                )
+                prefill_score_candidates = [
+                    ActionScoreCandidate(
+                        candidate_id=c.candidate_id,
+                        suffix=c.candidate_id,
+                        action_id=c.action_id,
+                    )
+                    for c in prefill_candidates
+                ] + [ActionScoreCandidate(
+                    candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
+                    suffix=UNSUPPORTED_CHILD_SCORE_ID,
+                    action_id=UNSUPPORTED_DECISION_ID,
+                )] + (
+                    action_decision_candidates(
+                        include_visual=prefill_decision_visual,
+                        english=self.action_language == "en",
+                    )
+                    if getattr(self, "action_decision_batch_mode", "off")
+                    != "off"
+                    else []
+                ) + (
+                    category_gate_candidates(
+                        prefill_gate_categories,
+                        english=self.action_language == "en",
+                    )
+                    if prefill_category_gate
+                    else []
+                ) + (
+                    action_support_candidates(
+                        english=self.action_language == "en"
+                    )
+                    if prefill_category_gate
+                    else []
+                )
                 ready = callable(prefill) and await self._prefill_action_catalog_degraded(
                     prefill, request_id=request_id,
                     stats_out=prefill_stats,
                     model=self.model_name,
                     session_instance_id=self.session_instance_id,
-                    system_prompt=self._build_action_system_prompt(origin),
-                    candidates=[
-                        ActionScoreCandidate(
-                            candidate_id=c.candidate_id,
-                            suffix=c.candidate_id,
-                            action_id=c.action_id,
-                        )
-                        for c in prefill_candidates
-                    ] + [ActionScoreCandidate(
-                        candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
-                        suffix=UNSUPPORTED_CHILD_SCORE_ID,
-                        action_id=UNSUPPORTED_DECISION_ID,
-                    )] + (
-                        action_decision_candidates(
-                            include_visual=bool(
-                                getattr(
-                                    self,
-                                    "action_decision_batch_visual",
-                                    False,
-                                )
-                            )
-                        )
-                        if getattr(self, "action_decision_batch_mode", "off")
-                        != "off"
-                        else []
+                    system_prompt=self._build_action_system_prompt(
+                        origin,
+                        include_visual=prefill_decision_visual,
+                        include_category_gate=prefill_category_gate,
+                        category_gate_categories=prefill_gate_categories,
                     ),
+                    candidates=prefill_score_candidates,
                     prefix_cache_namespace=namespace, stage="single",
                     language=self.action_language, session_instruction=instruction,
                 )
@@ -1050,7 +1096,7 @@ class SessionStartComponent:
                     request_id=request_id, prefix_cache_namespace=namespace,
                     catalog_hash=self.global_action_catalog.catalog_hash,
                     action_count=len(prefill_candidates),
-                    candidate_count=len(prefill_candidates) + 1,
+                    candidate_count=len(prefill_score_candidates),
                     visual_scope=(
                         visual_scope.name if visual_scope is not None else None
                     ),
@@ -1294,6 +1340,9 @@ class SessionStartComponent:
             "action_candidate_count": unique_candidate_count,
             "action_category_count": len(categories),
             "action_selection_mode": self.action_selection_mode,
+            "action_single_token_mode": getattr(
+                self, "action_single_token_mode", "off"
+            ),
             "action_selection_stages": (
                 2
                 if categories
@@ -1362,6 +1411,18 @@ class SessionStartComponent:
                     ),
                 }
             )
+        selection_mapping = getattr(
+            self, "action_selection_token_mapping", None
+        )
+        if selection_mapping is not None:
+            started_payload.update(
+                {
+                    "action_selection_mapping_version": selection_mapping.mapping_version,
+                    "action_selection_mapping_hash": selection_mapping.mapping_hash,
+                    "action_selection_calibration_version": selection_mapping.calibration_version,
+                    "action_selection_calibration_hash": selection_mapping.calibration_hash,
+                }
+            )
         if await self.send(started_payload):
             emit_structured_log(
                 "lifecycle",
@@ -1378,6 +1439,17 @@ class SessionStartComponent:
             action_locale=self.action_locale,
             modalities=list(self.modalities),
             action_selection_mode=self.action_selection_mode,
+            action_single_token_mode=getattr(
+                self, "action_single_token_mode", "off"
+            ),
+            action_selection_mapping_hash=(
+                selection_mapping.mapping_hash
+                if selection_mapping is not None else None
+            ),
+            action_selection_calibration_hash=(
+                selection_mapping.calibration_hash
+                if selection_mapping is not None else None
+            ),
             action_ready_tts_decoupled=self.action_ready_tts_decoupled,
             route_action_parallel=self.route_action_parallel,
             visual_gesture_generation_enabled=(

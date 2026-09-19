@@ -88,6 +88,28 @@ class SGLangOutputProcessor:
             return {}
         logits_output = model_output.logits_output
         if role == "prefix":
+            return self._action_prefix_logprobs(
+                logits_output, index=index, data=data
+            )
+        if role != "candidate":
+            return {}
+        values = getattr(logits_output, "input_token_logprobs", None)
+        if values is None:
+            raise RuntimeError("action scoring candidate forward returned no input token logprobs")
+        values = list(_to_cpu_python(values))
+        batch = scheduler_output.batch_data
+        lengths = list(getattr(batch, "extend_lens", []) or [])
+        starts = list(getattr(batch, "extend_logprob_start_lens", []) or [])
+        if len(lengths) != len(scheduler_output.requests):
+            lengths = [len(getattr(req, "origin_input_ids", [])) for req in batch.reqs]
+            starts = [0] * len(lengths)
+        offset = sum(max(length - start, 0) for length, start in zip(lengths[:index], starts[:index], strict=True))
+        count = max(lengths[index] - starts[index] - 1, 0)
+        return {"action_candidate_input_token_logprobs": values[offset : offset + count]}
+
+    def _action_prefix_logprobs(
+        self, logits_output: Any, *, index: int, data: Any
+    ) -> dict[str, Any]:
             values = getattr(logits_output, "input_token_ids_logprobs_val", None)
             token_ids = getattr(logits_output, "input_token_ids_logprobs_idx", None)
             if values is not None and token_ids is not None:
@@ -178,21 +200,6 @@ class SGLangOutputProcessor:
                         }
 
             raise RuntimeError("action scoring prefix selected-token logprobs are missing")
-        if role != "candidate":
-            return {}
-        values = getattr(logits_output, "input_token_logprobs", None)
-        if values is None:
-            raise RuntimeError("action scoring candidate forward returned no input token logprobs")
-        values = list(_to_cpu_python(values))
-        batch = scheduler_output.batch_data
-        lengths = list(getattr(batch, "extend_lens", []) or [])
-        starts = list(getattr(batch, "extend_logprob_start_lens", []) or [])
-        if len(lengths) != len(scheduler_output.requests):
-            lengths = [len(getattr(req, "origin_input_ids", [])) for req in batch.reqs]
-            starts = [0] * len(lengths)
-        offset = sum(max(length - start, 0) for length, start in zip(lengths[:index], starts[:index], strict=True))
-        count = max(lengths[index] - starts[index] - 1, 0)
-        return {"action_candidate_input_token_logprobs": values[offset : offset + count]}
 
     def _should_emit_hidden_for_request(self, request: Any) -> bool:
         if self._should_emit_hidden is None:

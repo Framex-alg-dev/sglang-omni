@@ -17,6 +17,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     TokenScore,
     aggregate_candidate_score,
     score_candidate_from_runtime,
+    score_single_token_from_prefix,
     align_suffix_logprobs,
     build_multimodal_cache_identity,
     build_suffix_batches,
@@ -111,6 +112,62 @@ def test_contract_validation_and_limits():
         )
     with pytest.raises(ValueError, match="image_roles must be a list"):
         validate_action_suffix_request(request(image_roles=[""]))
+
+
+def test_single_token_contract_requires_unique_complete_mapping() -> None:
+    mapped = candidate("left", "使用左手挥手")
+    mapped.selection_token = "AA"
+    mapped.selection_token_id = 123
+    validate_action_suffix_request(
+        request(
+            candidates=[mapped],
+            scoring_mode="single_token_enforce",
+            selection_mapping_version="v1",
+            selection_mapping_hash="sha256:test",
+        )
+    )
+
+    missing = candidate("left", "使用左手挥手")
+    with pytest.raises(ValueError, match="selection_token"):
+        validate_action_suffix_request(
+            request(
+                candidates=[missing],
+                scoring_mode="single_token_enforce",
+                selection_mapping_version="v1",
+                selection_mapping_hash="sha256:test",
+            )
+        )
+
+
+def test_single_token_score_reads_probed_prefix_logprob() -> None:
+    score = score_single_token_from_prefix("wave", 123, {123: -0.25})
+
+    assert score.candidate_id == "wave"
+    assert score.token_count == 1
+    assert score.mean_logprob == pytest.approx(-0.25)
+    assert score.ppl == pytest.approx(math.exp(0.25))
+    assert score.token_scores == [TokenScore(token_id=123, logprob=-0.25)]
+
+
+def test_single_token_request_serializes_mapping_contract() -> None:
+    mapped = candidate("left", "使用左手挥手")
+    mapped.selection_token = "AA"
+    mapped.selection_token_id = 123
+    req = request(
+        candidates=[mapped],
+        scoring_mode="single_token_enforce",
+        selection_mapping_version="v1",
+        selection_mapping_hash="sha256:test",
+    )
+
+    omni = Client._build_action_scoring_request(req)
+    spec = omni.params["action_scoring"]
+
+    assert spec["scoring_mode"] == "single_token_enforce"
+    assert spec["selection_mapping_version"] == "v1"
+    assert spec["selection_mapping_hash"] == "sha256:test"
+    assert spec["candidates"][0]["selection_token"] == "AA"
+    assert spec["candidates"][0]["selection_token_id"] == 123
 
 
 def test_turn_semantics_validation_and_metadata_propagation():
@@ -371,6 +428,21 @@ def test_result_contract_requires_verified_cache_and_input_order():
             req,
             ActionSuffixScoreResult(req.request_id, req.model, False, good_scores),
         )
+    direct_req = request(
+        candidates=[candidate("left", "左手"), candidate("right", "右手")],
+        scoring_mode="single_token_enforce",
+        selection_mapping_version="v1",
+        selection_mapping_hash="sha256:test",
+    )
+    for index, item in enumerate(direct_req.candidates):
+        item.selection_token = f"A{index}"
+        item.selection_token_id = 100 + index
+    validate_score_result(
+        direct_req,
+        ActionSuffixScoreResult(
+            direct_req.request_id, direct_req.model, False, good_scores
+        ),
+    )
 
 
 @pytest.mark.asyncio

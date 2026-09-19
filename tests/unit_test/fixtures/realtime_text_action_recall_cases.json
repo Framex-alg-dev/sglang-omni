@@ -1,0 +1,3274 @@
+{
+  "schema_version": 1,
+  "description": "Text-only, isolated-session recall evaluation for the limited action catalog.",
+  "catalog_path": "sglang_omni/assets/character_limited_action_global_catalog.json",
+  "catalog_hash": "sha256:85d017c72dfc64459e03df5d06583e748d74e33a31c801366978e287e7d9bdaa",
+  "catalog_candidate_count": 117,
+  "groups": {
+    "canonical_label": "One exact catalog-label command per action; measures catalog coverage.",
+    "natural_request": "Human-authored paraphrases; primary natural-language accuracy set.",
+    "intent_boundary": "Minimal pairs for speech-only, capability, prohibition, greeting, and reaction routing.",
+    "unsupported_request": "Explicit actions absent from the limited catalog."
+  },
+  "case_count": 238,
+  "cases": [
+    {
+      "id": "canonical-130",
+      "group": "canonical_label",
+      "text": "请做出“自然呼吸起伏”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "130"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "13",
+      "source_label": "自然呼吸起伏"
+    },
+    {
+      "id": "canonical-135",
+      "group": "canonical_label",
+      "text": "请做出“连续摇头”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "135"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "14",
+      "source_label": "连续摇头"
+    },
+    {
+      "id": "canonical-137",
+      "group": "canonical_label",
+      "text": "请做出“低头”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "137"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "15",
+      "source_label": "低头"
+    },
+    {
+      "id": "canonical-138",
+      "group": "canonical_label",
+      "text": "请做出“看镜头”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "138"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "16",
+      "source_label": "看镜头"
+    },
+    {
+      "id": "canonical-142",
+      "group": "canonical_label",
+      "text": "请做出“看下方”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "142"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "16",
+      "source_label": "看下方"
+    },
+    {
+      "id": "canonical-143",
+      "group": "canonical_label",
+      "text": "请做出“视线扫视”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "143"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "16",
+      "source_label": "视线扫视"
+    },
+    {
+      "id": "canonical-156",
+      "group": "canonical_label",
+      "text": "请做出“严肃”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "156"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "严肃"
+    },
+    {
+      "id": "canonical-157",
+      "group": "canonical_label",
+      "text": "请做出“惊讶”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "157"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "惊讶"
+    },
+    {
+      "id": "canonical-159",
+      "group": "canonical_label",
+      "text": "请做出“害怕”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "159"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "害怕"
+    },
+    {
+      "id": "canonical-160",
+      "group": "canonical_label",
+      "text": "请做出“委屈”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "160"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "委屈"
+    },
+    {
+      "id": "canonical-161",
+      "group": "canonical_label",
+      "text": "请做出“悲伤”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "161"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "悲伤"
+    },
+    {
+      "id": "canonical-162",
+      "group": "canonical_label",
+      "text": "请做出“疑惑”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "162"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "疑惑"
+    },
+    {
+      "id": "canonical-163",
+      "group": "canonical_label",
+      "text": "请做出“生气”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "163"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "生气"
+    },
+    {
+      "id": "canonical-164",
+      "group": "canonical_label",
+      "text": "请做出“装可怜（低头咬唇抬眼）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "164"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "装可怜（低头咬唇抬眼）"
+    },
+    {
+      "id": "canonical-170",
+      "group": "canonical_label",
+      "text": "请做出“身体前倾”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "170"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "21",
+      "source_label": "身体前倾"
+    },
+    {
+      "id": "canonical-189",
+      "group": "canonical_label",
+      "text": "请做出“轻微点头致意”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "189"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "24",
+      "source_label": "轻微点头致意"
+    },
+    {
+      "id": "canonical-194",
+      "group": "canonical_label",
+      "text": "请做出“单臂向侧方抬起”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "194"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂向侧方抬起"
+    },
+    {
+      "id": "canonical-196",
+      "group": "canonical_label",
+      "text": "请做出“学生举手”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "196"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "学生举手"
+    },
+    {
+      "id": "canonical-197",
+      "group": "canonical_label",
+      "text": "请做出“单臂伸向前方”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "197"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂伸向前方"
+    },
+    {
+      "id": "canonical-199",
+      "group": "canonical_label",
+      "text": "请做出“单臂伸向右侧”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "199"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂伸向右侧"
+    },
+    {
+      "id": "canonical-200",
+      "group": "canonical_label",
+      "text": "请做出“伸手摸摸头”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "200"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "伸手摸摸头"
+    },
+    {
+      "id": "canonical-201",
+      "group": "canonical_label",
+      "text": "请做出“单臂叉腰”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "201"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂叉腰"
+    },
+    {
+      "id": "canonical-211",
+      "group": "canonical_label",
+      "text": "请做出“手臂交叠”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "211"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "26",
+      "source_label": "手臂交叠"
+    },
+    {
+      "id": "canonical-220",
+      "group": "canonical_label",
+      "text": "请做出“伸肘”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "220"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "28",
+      "source_label": "伸肘"
+    },
+    {
+      "id": "canonical-223",
+      "group": "canonical_label",
+      "text": "请做出“手肘支撑姿态”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "223"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "28",
+      "source_label": "手肘支撑姿态"
+    },
+    {
+      "id": "canonical-225",
+      "group": "canonical_label",
+      "text": "请做出“指向前方”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "225"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向前方"
+    },
+    {
+      "id": "canonical-226",
+      "group": "canonical_label",
+      "text": "请做出“指向左侧”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "226"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向左侧"
+    },
+    {
+      "id": "canonical-228",
+      "group": "canonical_label",
+      "text": "请做出“指向上方”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "228"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向上方"
+    },
+    {
+      "id": "canonical-230",
+      "group": "canonical_label",
+      "text": "请做出“单手指向下方”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "230"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "单手指向下方"
+    },
+    {
+      "id": "canonical-232",
+      "group": "canonical_label",
+      "text": "请做出“单手手指指向自己”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "232"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "单手手指指向自己"
+    },
+    {
+      "id": "canonical-233",
+      "group": "canonical_label",
+      "text": "请做出“双手手指指向自己”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "233"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "双手手指指向自己"
+    },
+    {
+      "id": "canonical-234",
+      "group": "canonical_label",
+      "text": "请做出“双手手掌指向自己”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "234"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "双手手掌指向自己"
+    },
+    {
+      "id": "canonical-236",
+      "group": "canonical_label",
+      "text": "请做出“指向黑板”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "236"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向黑板"
+    },
+    {
+      "id": "canonical-237",
+      "group": "canonical_label",
+      "text": "请做出“单手摊开展示”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "237"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "单手摊开展示"
+    },
+    {
+      "id": "canonical-242",
+      "group": "canonical_label",
+      "text": "请做出“手掌向上承接”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "242"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "手掌向上承接"
+    },
+    {
+      "id": "canonical-245",
+      "group": "canonical_label",
+      "text": "请做出“从左到右展示（手心朝上）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "245"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "从左到右展示（手心朝上）"
+    },
+    {
+      "id": "canonical-247",
+      "group": "canonical_label",
+      "text": "请做出“从左到右展示（手背朝上）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "247"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "从左到右展示（手背朝上）"
+    },
+    {
+      "id": "canonical-248",
+      "group": "canonical_label",
+      "text": "请做出“从右到左展示（手背朝上）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "248"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "从右到左展示（手背朝上）"
+    },
+    {
+      "id": "canonical-249",
+      "group": "canonical_label",
+      "text": "请做出“用手指向下画一圈”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "249"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "用手指向下画一圈"
+    },
+    {
+      "id": "canonical-250",
+      "group": "canonical_label",
+      "text": "请做出“用手指向前画一圈”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "250"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "用手指向前画一圈"
+    },
+    {
+      "id": "canonical-251",
+      "group": "canonical_label",
+      "text": "请做出“用手指向上画一圈”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "251"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "用手指向上画一圈"
+    },
+    {
+      "id": "canonical-253",
+      "group": "canonical_label",
+      "text": "请做出“单手翻手”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "253"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "单手翻手"
+    },
+    {
+      "id": "canonical-254",
+      "group": "canonical_label",
+      "text": "请做出“双手翻手”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "254"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "双手翻手"
+    },
+    {
+      "id": "canonical-255",
+      "group": "canonical_label",
+      "text": "请做出“双手五指张开相对”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "255"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "双手五指张开相对"
+    },
+    {
+      "id": "canonical-258",
+      "group": "canonical_label",
+      "text": "请做出“数字一手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "258"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字一手势"
+    },
+    {
+      "id": "canonical-259",
+      "group": "canonical_label",
+      "text": "请做出“数字二手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "259"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字二手势"
+    },
+    {
+      "id": "canonical-260",
+      "group": "canonical_label",
+      "text": "请做出“数字三手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "260"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字三手势"
+    },
+    {
+      "id": "canonical-261",
+      "group": "canonical_label",
+      "text": "请做出“数字四手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "261"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字四手势"
+    },
+    {
+      "id": "canonical-262",
+      "group": "canonical_label",
+      "text": "请做出“数字五手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "262"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字五手势"
+    },
+    {
+      "id": "canonical-263",
+      "group": "canonical_label",
+      "text": "请做出“数字六手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "263"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字六手势"
+    },
+    {
+      "id": "canonical-264",
+      "group": "canonical_label",
+      "text": "请做出“数字七手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "264"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字七手势"
+    },
+    {
+      "id": "canonical-265",
+      "group": "canonical_label",
+      "text": "请做出“数字八手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "265"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字八手势"
+    },
+    {
+      "id": "canonical-266",
+      "group": "canonical_label",
+      "text": "请做出“数字九手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "266"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字九手势"
+    },
+    {
+      "id": "canonical-268",
+      "group": "canonical_label",
+      "text": "请做出“单手字母C/括号手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "268"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "单手字母C/括号手势"
+    },
+    {
+      "id": "canonical-269",
+      "group": "canonical_label",
+      "text": "请做出“双手字母C/括号手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "269"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手字母C/括号手势"
+    },
+    {
+      "id": "canonical-270",
+      "group": "canonical_label",
+      "text": "请做出“点赞”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "270"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "点赞"
+    },
+    {
+      "id": "canonical-271",
+      "group": "canonical_label",
+      "text": "请做出“双手点赞”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "271"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手点赞"
+    },
+    {
+      "id": "canonical-274",
+      "group": "canonical_label",
+      "text": "请做出“单手比耶”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "274"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "单手比耶"
+    },
+    {
+      "id": "canonical-275",
+      "group": "canonical_label",
+      "text": "请做出“双手比耶”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "275"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手比耶"
+    },
+    {
+      "id": "canonical-277",
+      "group": "canonical_label",
+      "text": "请做出“双手脸旁比耶”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "277"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手脸旁比耶"
+    },
+    {
+      "id": "canonical-278",
+      "group": "canonical_label",
+      "text": "请做出“比耶轻摆”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "278"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "比耶轻摆"
+    },
+    {
+      "id": "canonical-279",
+      "group": "canonical_label",
+      "text": "请做出“比兔子手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "279"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "比兔子手势"
+    },
+    {
+      "id": "canonical-285",
+      "group": "canonical_label",
+      "text": "请做出“双手比心”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "285"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手比心"
+    },
+    {
+      "id": "canonical-287",
+      "group": "canonical_label",
+      "text": "请做出“单手飞吻”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "287"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "单手飞吻"
+    },
+    {
+      "id": "canonical-288",
+      "group": "canonical_label",
+      "text": "请做出“单手挥手”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "288"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "32",
+      "source_label": "单手挥手"
+    },
+    {
+      "id": "canonical-290",
+      "group": "canonical_label",
+      "text": "请做出“单手下压强调”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "290"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "单手下压强调"
+    },
+    {
+      "id": "canonical-292",
+      "group": "canonical_label",
+      "text": "请做出“拳头轻握强调”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "292"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "拳头轻握强调"
+    },
+    {
+      "id": "canonical-293",
+      "group": "canonical_label",
+      "text": "请做出“单手拍桌子强调”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "293"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "单手拍桌子强调"
+    },
+    {
+      "id": "canonical-294",
+      "group": "canonical_label",
+      "text": "请做出“双手拍桌子强调”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "294"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "双手拍桌子强调"
+    },
+    {
+      "id": "canonical-296",
+      "group": "canonical_label",
+      "text": "请做出“双手相对旋转摇晃”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "296"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "双手相对旋转摇晃"
+    },
+    {
+      "id": "canonical-300",
+      "group": "canonical_label",
+      "text": "请做出“手掌前推表示停止”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "300"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "手掌前推表示停止"
+    },
+    {
+      "id": "canonical-305",
+      "group": "canonical_label",
+      "text": "请做出“握拳加油”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "305"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "34",
+      "source_label": "握拳加油"
+    },
+    {
+      "id": "canonical-307",
+      "group": "canonical_label",
+      "text": "请做出“振臂欢呼”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "307"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "34",
+      "source_label": "振臂欢呼"
+    },
+    {
+      "id": "canonical-310",
+      "group": "canonical_label",
+      "text": "请做出“单手招手靠近”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "310"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "35",
+      "source_label": "单手招手靠近"
+    },
+    {
+      "id": "canonical-311",
+      "group": "canonical_label",
+      "text": "请做出“双手招手靠近”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "311"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "35",
+      "source_label": "双手招手靠近"
+    },
+    {
+      "id": "canonical-316",
+      "group": "canonical_label",
+      "text": "请做出“敬礼”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "316"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "36",
+      "source_label": "敬礼"
+    },
+    {
+      "id": "canonical-322",
+      "group": "canonical_label",
+      "text": "请做出“摸鼻子”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "322"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸鼻子"
+    },
+    {
+      "id": "canonical-323",
+      "group": "canonical_label",
+      "text": "请做出“摸耳朵”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "323"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸耳朵"
+    },
+    {
+      "id": "canonical-324",
+      "group": "canonical_label",
+      "text": "请做出“摸耳后”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "324"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸耳后"
+    },
+    {
+      "id": "canonical-326",
+      "group": "canonical_label",
+      "text": "请做出“摸额头”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "326"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸额头"
+    },
+    {
+      "id": "canonical-335",
+      "group": "canonical_label",
+      "text": "请做出“单手摸脸”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "335"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "单手摸脸"
+    },
+    {
+      "id": "canonical-336",
+      "group": "canonical_label",
+      "text": "请做出“双手摸脸”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "336"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "双手摸脸"
+    },
+    {
+      "id": "canonical-337",
+      "group": "canonical_label",
+      "text": "请做出“戳脸颊”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "337"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "戳脸颊"
+    },
+    {
+      "id": "canonical-342",
+      "group": "canonical_label",
+      "text": "请做出“单手放后脑勺”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "342"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "单手放后脑勺"
+    },
+    {
+      "id": "canonical-344",
+      "group": "canonical_label",
+      "text": "请做出“调整发型”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "344"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "调整发型"
+    },
+    {
+      "id": "canonical-346",
+      "group": "canonical_label",
+      "text": "请做出“手摸肩带”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "346"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "手摸肩带"
+    },
+    {
+      "id": "canonical-347",
+      "group": "canonical_label",
+      "text": "请做出“手指指手心”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "347"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "手指指手心"
+    },
+    {
+      "id": "canonical-348",
+      "group": "canonical_label",
+      "text": "请做出“咬手指”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "348"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "咬手指"
+    },
+    {
+      "id": "canonical-351",
+      "group": "canonical_label",
+      "text": "请做出“指向耳朵请听”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "351"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "指向耳朵请听"
+    },
+    {
+      "id": "canonical-352",
+      "group": "canonical_label",
+      "text": "请做出“侧耳倾听”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "352"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "侧耳倾听"
+    },
+    {
+      "id": "canonical-353",
+      "group": "canonical_label",
+      "text": "请做出“手托脸颊”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "353"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "手托脸颊"
+    },
+    {
+      "id": "canonical-354",
+      "group": "canonical_label",
+      "text": "请做出“双手托腮”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "354"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "双手托腮"
+    },
+    {
+      "id": "canonical-355",
+      "group": "canonical_label",
+      "text": "请做出“拍胸口表示放心”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "355"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "拍胸口表示放心"
+    },
+    {
+      "id": "canonical-356",
+      "group": "canonical_label",
+      "text": "请做出“双手捂胸口”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "356"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "双手捂胸口"
+    },
+    {
+      "id": "canonical-357",
+      "group": "canonical_label",
+      "text": "请做出“单手手指并拢”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "357"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "单手手指并拢"
+    },
+    {
+      "id": "canonical-360",
+      "group": "canonical_label",
+      "text": "请做出“双手手指张开”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "360"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "双手手指张开"
+    },
+    {
+      "id": "canonical-362",
+      "group": "canonical_label",
+      "text": "请做出“手指轻点”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "362"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "手指轻点"
+    },
+    {
+      "id": "canonical-363",
+      "group": "canonical_label",
+      "text": "请做出“两指捏合”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "363"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "两指捏合"
+    },
+    {
+      "id": "canonical-364",
+      "group": "canonical_label",
+      "text": "请做出“手指滑动”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "364"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "手指滑动"
+    },
+    {
+      "id": "canonical-367",
+      "group": "canonical_label",
+      "text": "请做出“单手握拳”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "367"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "单手握拳"
+    },
+    {
+      "id": "canonical-369",
+      "group": "canonical_label",
+      "text": "请做出“打双引号手势”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "369"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "打双引号手势"
+    },
+    {
+      "id": "canonical-371",
+      "group": "canonical_label",
+      "text": "请做出“花手”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "371"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "花手"
+    },
+    {
+      "id": "canonical-375",
+      "group": "canonical_label",
+      "text": "请做出“食指左右摇摆否定”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "375"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "食指左右摇摆否定"
+    },
+    {
+      "id": "canonical-403",
+      "group": "canonical_label",
+      "text": "请做出“引导看向左侧”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "403"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "44",
+      "source_label": "引导看向左侧"
+    },
+    {
+      "id": "canonical-438",
+      "group": "canonical_label",
+      "text": "请做出“自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "438"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）"
+    },
+    {
+      "id": "canonical-444",
+      "group": "canonical_label",
+      "text": "请做出“娇羞（低头双手捂脸，身体左右轻晃）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "444"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "娇羞（低头双手捂脸，身体左右轻晃）"
+    },
+    {
+      "id": "canonical-449",
+      "group": "canonical_label",
+      "text": "请做出“打哈欠（单手捂嘴身体后仰）”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "449"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "打哈欠（单手捂嘴身体后仰）"
+    },
+    {
+      "id": "canonical-450",
+      "group": "canonical_label",
+      "text": "请做出“头疼”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "450"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "头疼"
+    },
+    {
+      "id": "canonical-455",
+      "group": "canonical_label",
+      "text": "请做出“单手捂脸无奈”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "455"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单手捂脸无奈"
+    },
+    {
+      "id": "canonical-462",
+      "group": "canonical_label",
+      "text": "请做出“单手捂嘴笑”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "462"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单手捂嘴笑"
+    },
+    {
+      "id": "canonical-465",
+      "group": "canonical_label",
+      "text": "请做出“单指轻抚下巴表示思考”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "465"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单指轻抚下巴表示思考"
+    },
+    {
+      "id": "canonical-467",
+      "group": "canonical_label",
+      "text": "请做出“单手指太阳穴表示思考”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "467"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单手指太阳穴表示思考"
+    },
+    {
+      "id": "canonical-468",
+      "group": "canonical_label",
+      "text": "请做出“咳嗽”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "468"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "咳嗽"
+    },
+    {
+      "id": "canonical-472",
+      "group": "canonical_label",
+      "text": "请做出“向左歪头耸肩”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "472"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "向左歪头耸肩"
+    },
+    {
+      "id": "canonical-578",
+      "group": "canonical_label",
+      "text": "请做出“使用手机查看”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "578"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "56",
+      "source_label": "使用手机查看"
+    },
+    {
+      "id": "canonical-624",
+      "group": "canonical_label",
+      "text": "请做出“单手抚胸”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "624"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "57",
+      "source_label": "单手抚胸"
+    },
+    {
+      "id": "canonical-639",
+      "group": "canonical_label",
+      "text": "请做出“按下实体按钮”这个动作。",
+      "expected": {
+        "candidate_ids": [
+          "639"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "58",
+      "source_label": "按下实体按钮"
+    },
+    {
+      "id": "natural-idle-breathe",
+      "group": "natural_request",
+      "text": "请保持自然呼吸，安静待机。",
+      "expected": {
+        "candidate_ids": [
+          "130"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "13",
+      "source_label": "自然呼吸起伏"
+    },
+    {
+      "id": "natural-head-shake",
+      "group": "natural_request",
+      "text": "连续摇摇头。",
+      "expected": {
+        "candidate_ids": [
+          "135"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "14",
+      "source_label": "连续摇头"
+    },
+    {
+      "id": "natural-head-down",
+      "group": "natural_request",
+      "text": "把头低下来。",
+      "expected": {
+        "candidate_ids": [
+          "137"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "15",
+      "source_label": "低头"
+    },
+    {
+      "id": "natural-look-camera",
+      "group": "natural_request",
+      "text": "看着镜头。",
+      "expected": {
+        "candidate_ids": [
+          "138"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "16",
+      "source_label": "看镜头"
+    },
+    {
+      "id": "natural-look-down",
+      "group": "natural_request",
+      "text": "头别动，只把眼睛往下看。",
+      "expected": {
+        "candidate_ids": [
+          "142"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "16",
+      "source_label": "看下方"
+    },
+    {
+      "id": "natural-eye-scan",
+      "group": "natural_request",
+      "text": "用眼睛左右扫视一下。",
+      "expected": {
+        "candidate_ids": [
+          "143"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "16",
+      "source_label": "视线扫视"
+    },
+    {
+      "id": "natural-serious-face",
+      "group": "natural_request",
+      "text": "做一个严肃的表情。",
+      "expected": {
+        "candidate_ids": [
+          "156"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "严肃"
+    },
+    {
+      "id": "natural-surprised-face",
+      "group": "natural_request",
+      "text": "露出惊讶的表情。",
+      "expected": {
+        "candidate_ids": [
+          "157"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "惊讶"
+    },
+    {
+      "id": "natural-afraid-face",
+      "group": "natural_request",
+      "text": "做个害怕的表情。",
+      "expected": {
+        "candidate_ids": [
+          "159"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "害怕"
+    },
+    {
+      "id": "natural-aggrieved-face",
+      "group": "natural_request",
+      "text": "做一个委屈的表情。",
+      "expected": {
+        "candidate_ids": [
+          "160"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "委屈"
+    },
+    {
+      "id": "natural-sad-face",
+      "group": "natural_request",
+      "text": "表现得悲伤一点。",
+      "expected": {
+        "candidate_ids": [
+          "161"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "悲伤"
+    },
+    {
+      "id": "natural-confused-face",
+      "group": "natural_request",
+      "text": "露出疑惑的表情。",
+      "expected": {
+        "candidate_ids": [
+          "162"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "疑惑"
+    },
+    {
+      "id": "natural-angry-face",
+      "group": "natural_request",
+      "text": "做出生气的表情。",
+      "expected": {
+        "candidate_ids": [
+          "163"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "生气"
+    },
+    {
+      "id": "natural-pitiful-face",
+      "group": "natural_request",
+      "text": "低头咬唇抬眼，装一下可怜。",
+      "expected": {
+        "candidate_ids": [
+          "164"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "19",
+      "source_label": "装可怜（低头咬唇抬眼）"
+    },
+    {
+      "id": "natural-lean-forward",
+      "group": "natural_request",
+      "text": "身体往前倾一点。",
+      "expected": {
+        "candidate_ids": [
+          "170"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "21",
+      "source_label": "身体前倾"
+    },
+    {
+      "id": "natural-nod-greeting",
+      "group": "natural_request",
+      "text": "轻轻点一下头表示致意。",
+      "expected": {
+        "candidate_ids": [
+          "189"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "24",
+      "source_label": "轻微点头致意"
+    },
+    {
+      "id": "natural-raise-arm-side",
+      "group": "natural_request",
+      "text": "把一只手臂向侧面抬起来。",
+      "expected": {
+        "candidate_ids": [
+          "194"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂向侧方抬起"
+    },
+    {
+      "id": "natural-student-hand",
+      "group": "natural_request",
+      "text": "像学生回答问题那样举手。",
+      "expected": {
+        "candidate_ids": [
+          "196"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "学生举手"
+    },
+    {
+      "id": "natural-arm-forward",
+      "group": "natural_request",
+      "text": "把一只手臂伸到前方。",
+      "expected": {
+        "candidate_ids": [
+          "197"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂伸向前方"
+    },
+    {
+      "id": "natural-arm-right",
+      "group": "natural_request",
+      "text": "把一只手臂伸向右边。",
+      "expected": {
+        "candidate_ids": [
+          "199"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂伸向右侧"
+    },
+    {
+      "id": "natural-touch-head",
+      "group": "natural_request",
+      "text": "伸手摸摸自己的头。",
+      "expected": {
+        "candidate_ids": [
+          "200"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "伸手摸摸头"
+    },
+    {
+      "id": "natural-one-hand-hip",
+      "group": "natural_request",
+      "text": "单手叉腰。",
+      "expected": {
+        "candidate_ids": [
+          "201"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "25",
+      "source_label": "单臂叉腰"
+    },
+    {
+      "id": "natural-arms-crossed",
+      "group": "natural_request",
+      "text": "把两条手臂交叠起来。",
+      "expected": {
+        "candidate_ids": [
+          "211"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "26",
+      "source_label": "手臂交叠"
+    },
+    {
+      "id": "natural-extend-elbow",
+      "group": "natural_request",
+      "text": "把手肘伸直。",
+      "expected": {
+        "candidate_ids": [
+          "220"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "28",
+      "source_label": "伸肘"
+    },
+    {
+      "id": "natural-elbow-support",
+      "group": "natural_request",
+      "text": "用手肘支撑身体。",
+      "expected": {
+        "candidate_ids": [
+          "223"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "28",
+      "source_label": "手肘支撑姿态"
+    },
+    {
+      "id": "natural-point-front",
+      "group": "natural_request",
+      "text": "用手指向你的正前方。",
+      "expected": {
+        "candidate_ids": [
+          "225"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向前方"
+    },
+    {
+      "id": "natural-point-left",
+      "group": "natural_request",
+      "text": "帮我指一下左边。",
+      "expected": {
+        "candidate_ids": [
+          "226"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向左侧"
+    },
+    {
+      "id": "natural-point-up",
+      "group": "natural_request",
+      "text": "请指向上方。",
+      "expected": {
+        "candidate_ids": [
+          "228"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向上方"
+    },
+    {
+      "id": "natural-point-down",
+      "group": "natural_request",
+      "text": "单手指一下下方。",
+      "expected": {
+        "candidate_ids": [
+          "230"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "单手指向下方"
+    },
+    {
+      "id": "natural-point-self-one",
+      "group": "natural_request",
+      "text": "用一根手指指向自己。",
+      "expected": {
+        "candidate_ids": [
+          "232"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "单手手指指向自己"
+    },
+    {
+      "id": "natural-point-self-two",
+      "group": "natural_request",
+      "text": "用双手的手指指向自己。",
+      "expected": {
+        "candidate_ids": [
+          "233"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "双手手指指向自己"
+    },
+    {
+      "id": "natural-palms-self",
+      "group": "natural_request",
+      "text": "用双手手掌指向自己。",
+      "expected": {
+        "candidate_ids": [
+          "234"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "双手手掌指向自己"
+    },
+    {
+      "id": "natural-point-board",
+      "group": "natural_request",
+      "text": "指一下黑板。",
+      "expected": {
+        "candidate_ids": [
+          "236"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "29",
+      "source_label": "指向黑板"
+    },
+    {
+      "id": "natural-palm-display",
+      "group": "natural_request",
+      "text": "单手摊开手掌做展示。",
+      "expected": {
+        "candidate_ids": [
+          "237"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "单手摊开展示"
+    },
+    {
+      "id": "natural-palm-receive",
+      "group": "natural_request",
+      "text": "手掌朝上做一个承接动作。",
+      "expected": {
+        "candidate_ids": [
+          "242"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "手掌向上承接"
+    },
+    {
+      "id": "natural-display-left-right",
+      "group": "natural_request",
+      "text": "手心朝上，从左到右展示一下。",
+      "expected": {
+        "candidate_ids": [
+          "245"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "从左到右展示（手心朝上）"
+    },
+    {
+      "id": "natural-finger-circle-down",
+      "group": "natural_request",
+      "text": "用手指朝下画一个圈。",
+      "expected": {
+        "candidate_ids": [
+          "249"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "用手指向下画一圈"
+    },
+    {
+      "id": "natural-finger-circle-front",
+      "group": "natural_request",
+      "text": "用手指在前方画一个圈。",
+      "expected": {
+        "candidate_ids": [
+          "250"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "用手指向前画一圈"
+    },
+    {
+      "id": "natural-finger-circle-up",
+      "group": "natural_request",
+      "text": "用手指朝上画一个圈。",
+      "expected": {
+        "candidate_ids": [
+          "251"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "用手指向上画一圈"
+    },
+    {
+      "id": "natural-flip-one-hand",
+      "group": "natural_request",
+      "text": "翻转一下单手手掌。",
+      "expected": {
+        "candidate_ids": [
+          "253"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "单手翻手"
+    },
+    {
+      "id": "natural-flip-two-hands",
+      "group": "natural_request",
+      "text": "双手同时翻掌。",
+      "expected": {
+        "candidate_ids": [
+          "254"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "双手翻手"
+    },
+    {
+      "id": "natural-hands-facing",
+      "group": "natural_request",
+      "text": "双手五指张开，掌心相对。",
+      "expected": {
+        "candidate_ids": [
+          "255"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "30",
+      "source_label": "双手五指张开相对"
+    },
+    {
+      "id": "natural-number-one",
+      "group": "natural_request",
+      "text": "比个数字一。",
+      "expected": {
+        "candidate_ids": [
+          "258"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字一手势"
+    },
+    {
+      "id": "natural-number-two",
+      "group": "natural_request",
+      "text": "用手表示数字二。",
+      "expected": {
+        "candidate_ids": [
+          "259"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字二手势"
+    },
+    {
+      "id": "natural-number-three",
+      "group": "natural_request",
+      "text": "给我比个三。",
+      "expected": {
+        "candidate_ids": [
+          "260"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字三手势"
+    },
+    {
+      "id": "natural-number-four",
+      "group": "natural_request",
+      "text": "用手比出数字四。",
+      "expected": {
+        "candidate_ids": [
+          "261"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字四手势"
+    },
+    {
+      "id": "natural-number-five",
+      "group": "natural_request",
+      "text": "比一个数字五的手势。",
+      "expected": {
+        "candidate_ids": [
+          "262"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字五手势"
+    },
+    {
+      "id": "natural-number-six",
+      "group": "natural_request",
+      "text": "给我比个六。",
+      "expected": {
+        "candidate_ids": [
+          "263"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字六手势"
+    },
+    {
+      "id": "natural-number-seven",
+      "group": "natural_request",
+      "text": "用手表示数字七。",
+      "expected": {
+        "candidate_ids": [
+          "264"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字七手势"
+    },
+    {
+      "id": "natural-number-eight",
+      "group": "natural_request",
+      "text": "比个数字八。",
+      "expected": {
+        "candidate_ids": [
+          "265"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字八手势"
+    },
+    {
+      "id": "natural-number-nine",
+      "group": "natural_request",
+      "text": "用手比出数字九。",
+      "expected": {
+        "candidate_ids": [
+          "266"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "数字九手势"
+    },
+    {
+      "id": "natural-letter-c",
+      "group": "natural_request",
+      "text": "单手比一个字母 C。",
+      "expected": {
+        "candidate_ids": [
+          "268"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "单手字母C/括号手势"
+    },
+    {
+      "id": "natural-brackets",
+      "group": "natural_request",
+      "text": "用双手比一对括号。",
+      "expected": {
+        "candidate_ids": [
+          "269"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手字母C/括号手势"
+    },
+    {
+      "id": "natural-thumb-up",
+      "group": "natural_request",
+      "text": "给我点个赞。",
+      "expected": {
+        "candidate_ids": [
+          "270"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "点赞"
+    },
+    {
+      "id": "natural-two-thumbs-up",
+      "group": "natural_request",
+      "text": "双手一起给我点赞。",
+      "expected": {
+        "candidate_ids": [
+          "271"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手点赞"
+    },
+    {
+      "id": "natural-victory-one",
+      "group": "natural_request",
+      "text": "单手比个耶。",
+      "expected": {
+        "candidate_ids": [
+          "274"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "单手比耶"
+    },
+    {
+      "id": "natural-victory-two",
+      "group": "natural_request",
+      "text": "双手比耶。",
+      "expected": {
+        "candidate_ids": [
+          "275"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手比耶"
+    },
+    {
+      "id": "natural-victory-face",
+      "group": "natural_request",
+      "text": "双手在脸旁比耶。",
+      "expected": {
+        "candidate_ids": [
+          "277"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手脸旁比耶"
+    },
+    {
+      "id": "natural-victory-wave",
+      "group": "natural_request",
+      "text": "比耶以后轻轻晃一晃手。",
+      "expected": {
+        "candidate_ids": [
+          "278"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "比耶轻摆"
+    },
+    {
+      "id": "natural-rabbit",
+      "group": "natural_request",
+      "text": "比个小兔子耳朵。",
+      "expected": {
+        "candidate_ids": [
+          "279"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "比兔子手势"
+    },
+    {
+      "id": "natural-heart",
+      "group": "natural_request",
+      "text": "给我比个爱心。",
+      "expected": {
+        "candidate_ids": [
+          "285"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "双手比心"
+    },
+    {
+      "id": "natural-flying-kiss",
+      "group": "natural_request",
+      "text": "给我一个飞吻吧。",
+      "expected": {
+        "candidate_ids": [
+          "287"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "31",
+      "source_label": "单手飞吻"
+    },
+    {
+      "id": "natural-wave",
+      "group": "natural_request",
+      "text": "挥挥手跟我打个招呼。",
+      "expected": {
+        "candidate_ids": [
+          "288"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "32",
+      "source_label": "单手挥手"
+    },
+    {
+      "id": "natural-stop",
+      "group": "natural_request",
+      "text": "手掌向前推，表示停止。",
+      "expected": {
+        "candidate_ids": [
+          "300"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "33",
+      "source_label": "手掌前推表示停止"
+    },
+    {
+      "id": "natural-cheer-fist",
+      "group": "natural_request",
+      "text": "握拳给我加油。",
+      "expected": {
+        "candidate_ids": [
+          "305"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "34",
+      "source_label": "握拳加油"
+    },
+    {
+      "id": "natural-celebrate",
+      "group": "natural_request",
+      "text": "振臂欢呼一下。",
+      "expected": {
+        "candidate_ids": [
+          "307"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "34",
+      "source_label": "振臂欢呼"
+    },
+    {
+      "id": "natural-beckon-one",
+      "group": "natural_request",
+      "text": "用一只手招呼我靠近。",
+      "expected": {
+        "candidate_ids": [
+          "310"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "35",
+      "source_label": "单手招手靠近"
+    },
+    {
+      "id": "natural-beckon-two",
+      "group": "natural_request",
+      "text": "用双手招呼我过来。",
+      "expected": {
+        "candidate_ids": [
+          "311"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "35",
+      "source_label": "双手招手靠近"
+    },
+    {
+      "id": "natural-salute",
+      "group": "natural_request",
+      "text": "向我敬个礼。",
+      "expected": {
+        "candidate_ids": [
+          "316"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "36",
+      "source_label": "敬礼"
+    },
+    {
+      "id": "natural-touch-nose",
+      "group": "natural_request",
+      "text": "摸一下鼻子。",
+      "expected": {
+        "candidate_ids": [
+          "322"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸鼻子"
+    },
+    {
+      "id": "natural-touch-ear",
+      "group": "natural_request",
+      "text": "摸摸耳朵。",
+      "expected": {
+        "candidate_ids": [
+          "323"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸耳朵"
+    },
+    {
+      "id": "natural-touch-behind-ear",
+      "group": "natural_request",
+      "text": "用手摸一下耳朵后面。",
+      "expected": {
+        "candidate_ids": [
+          "324"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸耳后"
+    },
+    {
+      "id": "natural-touch-forehead",
+      "group": "natural_request",
+      "text": "摸一下额头。",
+      "expected": {
+        "candidate_ids": [
+          "326"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "摸额头"
+    },
+    {
+      "id": "natural-touch-face",
+      "group": "natural_request",
+      "text": "用一只手摸脸。",
+      "expected": {
+        "candidate_ids": [
+          "335"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "单手摸脸"
+    },
+    {
+      "id": "natural-touch-face-two",
+      "group": "natural_request",
+      "text": "双手摸脸。",
+      "expected": {
+        "candidate_ids": [
+          "336"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "双手摸脸"
+    },
+    {
+      "id": "natural-poke-cheek",
+      "group": "natural_request",
+      "text": "用一根手指戳一下脸颊。",
+      "expected": {
+        "candidate_ids": [
+          "337"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "戳脸颊"
+    },
+    {
+      "id": "natural-fix-hair",
+      "group": "natural_request",
+      "text": "用手整理一下头发。",
+      "expected": {
+        "candidate_ids": [
+          "344"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "调整发型"
+    },
+    {
+      "id": "natural-listen-ear",
+      "group": "natural_request",
+      "text": "手指向耳朵，示意我听。",
+      "expected": {
+        "candidate_ids": [
+          "351"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "指向耳朵请听"
+    },
+    {
+      "id": "natural-listen-lean",
+      "group": "natural_request",
+      "text": "侧过耳朵认真听。",
+      "expected": {
+        "candidate_ids": [
+          "352"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "侧耳倾听"
+    },
+    {
+      "id": "natural-chin-hand",
+      "group": "natural_request",
+      "text": "单手托着脸颊。",
+      "expected": {
+        "candidate_ids": [
+          "353"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "手托脸颊"
+    },
+    {
+      "id": "natural-chin-two-hands",
+      "group": "natural_request",
+      "text": "双手托腮。",
+      "expected": {
+        "candidate_ids": [
+          "354"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "双手托腮"
+    },
+    {
+      "id": "natural-reassure-chest",
+      "group": "natural_request",
+      "text": "拍拍胸口表示放心。",
+      "expected": {
+        "candidate_ids": [
+          "355"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "拍胸口表示放心"
+    },
+    {
+      "id": "natural-cover-chest",
+      "group": "natural_request",
+      "text": "双手捂住胸口。",
+      "expected": {
+        "candidate_ids": [
+          "356"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "37",
+      "source_label": "双手捂胸口"
+    },
+    {
+      "id": "natural-one-fist",
+      "group": "natural_request",
+      "text": "单手握拳。",
+      "expected": {
+        "candidate_ids": [
+          "367"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "单手握拳"
+    },
+    {
+      "id": "natural-air-quotes",
+      "group": "natural_request",
+      "text": "用双手做一个双引号手势。",
+      "expected": {
+        "candidate_ids": [
+          "369"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "打双引号手势"
+    },
+    {
+      "id": "natural-finger-flower",
+      "group": "natural_request",
+      "text": "用双手转一个花手。",
+      "expected": {
+        "candidate_ids": [
+          "371"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "花手"
+    },
+    {
+      "id": "natural-finger-no",
+      "group": "natural_request",
+      "text": "伸出食指左右摇摆表示不行。",
+      "expected": {
+        "candidate_ids": [
+          "375"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "38",
+      "source_label": "食指左右摇摆否定"
+    },
+    {
+      "id": "natural-confident",
+      "group": "natural_request",
+      "text": "双手叉腰、挺胸抬头，表现得自信一点。",
+      "expected": {
+        "candidate_ids": [
+          "438"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）"
+    },
+    {
+      "id": "natural-yawn",
+      "group": "natural_request",
+      "text": "单手捂嘴打个哈欠。",
+      "expected": {
+        "candidate_ids": [
+          "449"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "打哈欠（单手捂嘴身体后仰）"
+    },
+    {
+      "id": "natural-headache",
+      "group": "natural_request",
+      "text": "扶着头表现头疼。",
+      "expected": {
+        "candidate_ids": [
+          "450"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "头疼"
+    },
+    {
+      "id": "natural-facepalm",
+      "group": "natural_request",
+      "text": "单手捂脸表示无奈。",
+      "expected": {
+        "candidate_ids": [
+          "455"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单手捂脸无奈"
+    },
+    {
+      "id": "natural-cover-mouth-laugh",
+      "group": "natural_request",
+      "text": "单手捂着嘴笑。",
+      "expected": {
+        "candidate_ids": [
+          "462"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单手捂嘴笑"
+    },
+    {
+      "id": "natural-think-chin",
+      "group": "natural_request",
+      "text": "用手指轻抚下巴思考。",
+      "expected": {
+        "candidate_ids": [
+          "465"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单指轻抚下巴表示思考"
+    },
+    {
+      "id": "natural-think-temple",
+      "group": "natural_request",
+      "text": "用一根手指抵住太阳穴思考。",
+      "expected": {
+        "candidate_ids": [
+          "467"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "单手指太阳穴表示思考"
+    },
+    {
+      "id": "natural-cough",
+      "group": "natural_request",
+      "text": "捂嘴咳嗽一下。",
+      "expected": {
+        "candidate_ids": [
+          "468"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "咳嗽"
+    },
+    {
+      "id": "natural-tilt-shrug",
+      "group": "natural_request",
+      "text": "向左歪头并耸一下肩。",
+      "expected": {
+        "candidate_ids": [
+          "472"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "47",
+      "source_label": "向左歪头耸肩"
+    },
+    {
+      "id": "natural-check-phone",
+      "group": "natural_request",
+      "text": "拿起手机看一下。",
+      "expected": {
+        "candidate_ids": [
+          "578"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "56",
+      "source_label": "使用手机查看"
+    },
+    {
+      "id": "natural-hand-chest",
+      "group": "natural_request",
+      "text": "单手轻抚胸口。",
+      "expected": {
+        "candidate_ids": [
+          "624"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "57",
+      "source_label": "单手抚胸"
+    },
+    {
+      "id": "natural-press-button",
+      "group": "natural_request",
+      "text": "按一下实体按钮。",
+      "expected": {
+        "candidate_ids": [
+          "639"
+        ],
+        "execute": true,
+        "support_status": "supported"
+      },
+      "category_id": "58",
+      "source_label": "按下实体按钮"
+    },
+    {
+      "id": "boundary-say-score",
+      "group": "intent_boundary",
+      "text": "说二比一。",
+      "expected": {
+        "execute": false
+      }
+    },
+    {
+      "id": "boundary-say-number-one",
+      "group": "intent_boundary",
+      "text": "请说数字一。",
+      "expected": {
+        "execute": false
+      }
+    },
+    {
+      "id": "boundary-read-like",
+      "group": "intent_boundary",
+      "text": "请念出“点赞”这两个字。",
+      "expected": {
+        "execute": false
+      }
+    },
+    {
+      "id": "boundary-capability-heart",
+      "group": "intent_boundary",
+      "text": "你会比心吗？",
+      "expected": {
+        "execute": false
+      }
+    },
+    {
+      "id": "boundary-prohibit-like",
+      "group": "intent_boundary",
+      "text": "不要点赞。",
+      "expected": {
+        "execute": false
+      }
+    },
+    {
+      "id": "boundary-prohibit-wave",
+      "group": "intent_boundary",
+      "text": "别挥手。",
+      "expected": {
+        "execute": false
+      }
+    },
+    {
+      "id": "boundary-explicit-number-one",
+      "group": "intent_boundary",
+      "text": "比个数字一。",
+      "expected": {
+        "candidate_ids": [
+          "258"
+        ],
+        "execute": true
+      }
+    },
+    {
+      "id": "boundary-explicit-like",
+      "group": "intent_boundary",
+      "text": "给我点个赞。",
+      "expected": {
+        "candidate_ids": [
+          "270"
+        ],
+        "execute": true
+      }
+    },
+    {
+      "id": "boundary-explicit-heart",
+      "group": "intent_boundary",
+      "text": "双手比心。",
+      "expected": {
+        "candidate_ids": [
+          "285"
+        ],
+        "execute": true
+      }
+    },
+    {
+      "id": "boundary-greeting",
+      "group": "intent_boundary",
+      "text": "你好呀。",
+      "expected": {
+        "candidate_ids": [
+          "288"
+        ],
+        "execute": true
+      }
+    },
+    {
+      "id": "boundary-farewell",
+      "group": "intent_boundary",
+      "text": "拜拜。",
+      "expected": {
+        "candidate_ids": [
+          "288"
+        ],
+        "execute": true
+      }
+    },
+    {
+      "id": "boundary-reaction-surprise",
+      "group": "intent_boundary",
+      "text": "我中奖了！",
+      "expected": {
+        "candidate_ids": [
+          "157"
+        ],
+        "execute": true
+      }
+    },
+    {
+      "id": "unsupported-01",
+      "group": "unsupported_request",
+      "text": "请后空翻。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-02",
+      "group": "unsupported_request",
+      "text": "请倒立行走。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-03",
+      "group": "unsupported_request",
+      "text": "请原地劈叉。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-04",
+      "group": "unsupported_request",
+      "text": "请连续转三个圈。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-05",
+      "group": "unsupported_request",
+      "text": "请跳一段芭蕾舞。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-06",
+      "group": "unsupported_request",
+      "text": "请用左手写字。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-07",
+      "group": "unsupported_request",
+      "text": "请拿起水杯喝水。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-08",
+      "group": "unsupported_request",
+      "text": "请弹一段钢琴。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-09",
+      "group": "unsupported_request",
+      "text": "请蹲下来系鞋带。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    },
+    {
+      "id": "unsupported-10",
+      "group": "unsupported_request",
+      "text": "请双脚向前跳两步。",
+      "expected": {
+        "candidate_ids": [
+          "UNSUPPORTED"
+        ],
+        "execute": false,
+        "support_status": "unsupported"
+      }
+    }
+  ]
+}

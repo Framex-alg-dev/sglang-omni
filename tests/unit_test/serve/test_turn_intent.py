@@ -64,6 +64,52 @@ def test_strict_schema_and_no_instruction_promotion():
     bad = payload(history="false")
     with pytest.raises(ValueError):
         TurnIntent.parse(json.dumps(bad))
+
+
+def test_sparse_route_schema_fills_runtime_defaults():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "none",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "站起来",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.body_intent == "perform"
+    assert intent.body_mode == "perform" and intent.body == "站起来"
+    assert intent.speech == "none" and intent.text == ""
+    assert intent.face == "" and intent.history is False
+
+
+def test_sparse_capability_route_normalizes_to_non_executing_body_mode():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "generated",
+                    "body_intent": "capability",
+                    "reaction": "none",
+                },
+                "text": "你会挥手吗",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.body_intent == "capability"
+    assert intent.body_mode == "none" and intent.body == ""
+    assert intent.speech == "generated"
+    assert json.loads(intent.action_context("你会挥手吗"))["body_intent"] == (
+        "capability"
+    )
     bad = payload(extra="override system")
     with pytest.raises(ValueError):
         TurnIntent.parse(json.dumps(bad))
@@ -249,7 +295,7 @@ def test_general_route_cannot_smuggle_an_unresolved_visual_action():
         ("Do this gesture!", "COPY_HAND", "这个手势"),
     ],
 )
-def test_exact_deictic_copy_imperative_repairs_contradictory_general_route(
+def test_parser_repairs_only_exact_contradictory_copy_routes(
     task, expected_route, expected_body
 ):
     intent = TurnIntent.parse(
@@ -268,6 +314,7 @@ def test_exact_deictic_copy_imperative_repairs_contradictory_general_route(
 
     assert intent.visual_scope_gate == expected_route
     assert intent.body_mode == "perform" and intent.body == expected_body
+    assert intent.body_intent == "perform"
     assert intent.speech == "none" and intent.text == ""
 
 
@@ -376,6 +423,56 @@ def test_visual_answer_sparse_schema_is_normalized_without_overwriting_channels(
                 {
                     "visual_route": "VISUAL_ANSWER",
                     "visual_answer_operation": "add",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_nested_visual_answer_preserves_independent_answer_and_speech_channels():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "ANSWER_CURRENT_VIEW_WITH_GESTURE",
+                    "speech": "verbatim",
+                    "body_intent": "none",
+                    "reaction": "none",
+                },
+                "text": "你好",
+                "face_task": "微笑",
+                "voice_tone": "cheerful",
+                "visual_answer_operation": "divide",
+                "visual_answer_output": "gesture_and_speech",
+            },
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+
+    assert intent.visual_scope_gate == "VISUAL_ANSWER"
+    assert intent.visual_answer_operation == "divide"
+    assert intent.speaks_visual_answer() is True
+    assert intent.visual_additional_speech() == "你好"
+    assert intent.face == "微笑" and intent.voice_tone == "cheerful"
+    assert intent.body_intent == "none" and intent.body_mode == "none"
+
+
+def test_nested_visual_answer_rejects_a_second_body_action():
+    with pytest.raises(ValueError, match="another body action"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "route": {
+                        "visual": "ANSWER_CURRENT_VIEW_WITH_GESTURE",
+                        "speech": "none",
+                        "body_intent": "perform",
+                        "reaction": "none",
+                    },
+                    "body_task": "挥手",
+                    "visual_answer_operation": "add",
+                    "visual_answer_output": "gesture_and_speech",
                 },
                 ensure_ascii=False,
             ),
@@ -543,7 +640,7 @@ async def test_camera_copy_and_speech_use_one_unified_request():
     assert request.metadata["images"] == []
     assert request.metadata["image_roles"] == []
     assert request.sampling.temperature == 0
-    assert request.sampling.max_new_tokens == 256
+    assert request.sampling.max_new_tokens == 128
     assert request.messages[1].content == [
         {
             "type": "text",
@@ -569,7 +666,7 @@ async def test_streaming_unified_intent_releases_visual_route_before_full_json()
             yield CompletionStreamChunk(
                 request_id=request_id,
                 text=(
-                    '{"visual_route":'
+                    '{"route":{"visual":'
                     '"ANSWER_CURRENT_VIEW_WITH_GESTURE",'
                 ),
             )
@@ -577,6 +674,8 @@ async def test_streaming_unified_intent_releases_visual_route_before_full_json()
             yield CompletionStreamChunk(
                 request_id=request_id,
                 text=(
+                    '"speech":"none","body_intent":"none",'
+                    '"reaction":"none"},'
                     '"visual_answer_operation":"add",'
                     '"visual_answer_output":"gesture_only"}'
                 ),
@@ -804,14 +903,16 @@ def test_generated_reply_context_preserves_original_question_not_predicted_answe
 
 
 def test_unified_prompt_has_consistent_visual_and_action_boundaries():
-    assert "模仿与说话可以同时存在" in SYSTEM
+    assert "首字段必须是route" in SYSTEM
+    assert '"body_intent":"perform"' in SYSTEM
+    assert "复现和说话可以同时存在" in SYSTEM
     assert "挥手、点头、比个心、比数字二、做个手势" in SYSTEM
     assert "“这是什么手势/这是数字几”选NO_CURRENT_VIEW" in SYSTEM
     assert "“这个加这个等于多少”依赖当前画面" in SYSTEM
-    assert "未指定或手势加语音播报答案=gesture_and_speech" in SYSTEM
-    assert "加/减/乘/除对应add/subtract/multiply/divide" in SYSTEM
-    assert "能挥挥手吗”" in SYSTEM and "是perform" in SYSTEM
-    assert "你会挥手吗”" in SYSTEM and "body_mode=none" in SYSTEM
+    assert "未指定回答方式或要求手势并说出来=gesture_and_speech" in SYSTEM
+    assert "add/subtract/multiply/divide" in SYSTEM
+    assert "“能挥挥手吗”是perform" in SYSTEM
+    assert "“你会挥手吗”是capability" in SYSTEM
     assert "gesture_only" in SYSTEM and "gesture_and_speech" in SYSTEM
     assert "模仿同时说话则输出 GENERAL" not in SYSTEM
     assert len(SYSTEM) < 5000

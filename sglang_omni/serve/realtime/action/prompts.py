@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
 from sglang_omni.serve.realtime.proactive.action_policy import proactive_selection_instruction
-from sglang_omni.serve.realtime.action.decision import action_decision_prompt
+from sglang_omni.serve.realtime.action.decision import (
+    action_decision_prompt,
+    category_gate_prompt,
+)
 
 import asyncio
 from collections import OrderedDict
@@ -93,6 +96,14 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 
 
 class ActionPromptComponent:
+    def _direct_category_gate_enabled(self, turn_origin: str) -> bool:
+        return bool(
+            self.direct_action_selection
+            and turn_origin == TURN_ORIGIN_USER
+            and getattr(self, "action_decision_batch_mode", "off") == "enforce"
+            and getattr(self, "action_single_token_mode", "off") == "off"
+        )
+
     def _visual_deictic_catalog_instruction(
         self,
         scope: VisualDeicticCategoryScope,
@@ -788,28 +799,113 @@ class ActionPromptComponent:
         return ""
 
 
-    def _direct_action_prefix_namespace(self, turn_origin: str, instruction: str) -> str:
+    def _direct_action_prefix_namespace(
+        self,
+        turn_origin: str,
+        instruction: str,
+        *,
+        include_visual: bool | None = None,
+        include_category_gate: bool | None = None,
+        category_gate_category_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
         base_namespace = self.global_action_catalog.action_cache_namespace(
             self.action_locale, turn_origin
         )
+        selection_mapping = getattr(
+            self, "action_selection_token_mapping", None
+        )
+        if selection_mapping is not None:
+            base_namespace += (
+                ":" + selection_mapping.namespace + ":"
+                + getattr(self, "action_single_token_mode", "off")
+            )
         if getattr(self, "action_decision_batch_mode", "off") != "off":
-            visual = bool(getattr(self, "action_decision_batch_visual", False))
+            visual = (
+                bool(getattr(self, "action_decision_batch_visual", False))
+                if include_visual is None
+                else include_visual
+            )
             base_namespace += f":decision-v2:{'visual' if visual else 'core'}"
+        category_gate = (
+            self._direct_category_gate_enabled(turn_origin)
+            if include_category_gate is None
+            else include_category_gate
+        )
+        if category_gate:
+            category_ids = category_gate_category_ids or tuple(
+                category.category_id for category in self.categories
+            )
+            category_digest = hashlib.sha256(
+                ",".join(category_ids).encode("utf-8")
+            ).hexdigest()[:16]
+            base_namespace += f":category-gate-v1:{category_digest}"
         return self._session_action_prefix_namespace(
             base_namespace=base_namespace,
             stage="single", turn_origin=turn_origin, session_instruction=instruction,
         )
 
-    def _build_action_system_prompt(self, turn_origin: str = "user") -> str:
+    def _build_action_system_prompt(
+        self,
+        turn_origin: str = "user",
+        *,
+        include_visual: bool | None = None,
+        include_category_gate: bool | None = None,
+        category_gate_categories: list[Any] | tuple[Any, ...] | None = None,
+    ) -> str:
         if self.direct_action_selection:
-            prompt = self.global_action_catalog.action_system_prompt_for(
-                self.action_locale, turn_origin
+            selection_mapping = getattr(
+                self, "action_selection_token_mapping", None
             )
-            if getattr(self, "action_decision_batch_mode", "off") != "off":
-                prompt += "\n\n" + action_decision_prompt(
-                    include_visual=bool(
-                        getattr(self, "action_decision_batch_visual", False)
+            selection_tokens = (
+                {
+                    candidate_id: entry.text
+                    for candidate_id, entry in selection_mapping.by_candidate_id.items()
+                }
+                if selection_mapping is not None else None
+            )
+            output_selection_token = (
+                getattr(self, "action_single_token_mode", "off") == "enforce"
+            )
+            prompt = self.global_action_catalog.action_system_prompt_for(
+                self.action_locale,
+                turn_origin,
+                selection_tokens=selection_tokens,
+                output_selection_token=output_selection_token,
+            )
+            if selection_tokens is not None:
+                prompt += self._action_prompt(
+                    zh=(
+                        "\nselection_token="
+                        f"{selection_tokens[UNSUPPORTED_CHILD_SCORE_ID]}｜"
+                        f"candidate_id={UNSUPPORTED_CHILD_SCORE_ID}｜决策=不支持的具体动作"
                     ),
+                    en=(
+                        "\nselection_token="
+                        f"{selection_tokens[UNSUPPORTED_CHILD_SCORE_ID]} | "
+                        f"candidate_id={UNSUPPORTED_CHILD_SCORE_ID} | "
+                        "decision=unsupported concrete action"
+                    ),
+                )
+            if getattr(self, "action_decision_batch_mode", "off") != "off":
+                decision_visual = (
+                    bool(getattr(self, "action_decision_batch_visual", False))
+                    if include_visual is None
+                    else include_visual
+                )
+                prompt += "\n\n" + action_decision_prompt(
+                    include_visual=decision_visual,
+                    english=self.action_language == "en",
+                    selection_tokens=selection_tokens,
+                    output_selection_token=output_selection_token,
+                )
+            category_gate = (
+                self._direct_category_gate_enabled(turn_origin)
+                if include_category_gate is None
+                else include_category_gate
+            )
+            if category_gate:
+                prompt += "\n\n" + category_gate_prompt(
+                    category_gate_categories or self.categories,
                     english=self.action_language == "en",
                 )
             return prompt

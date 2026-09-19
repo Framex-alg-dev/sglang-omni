@@ -244,6 +244,9 @@ def _action_request_debug_payload(
                 "suffix": item.suffix,
                 "action_id": item.action_id,
                 "execution_binding": dict(item.execution_binding),
+                "selection_token": item.selection_token,
+                "selection_token_id": item.selection_token_id,
+                "selection_score_bias": item.selection_score_bias,
             }
             for item in request.candidates
         ],
@@ -327,6 +330,9 @@ class Client:
                 "suffix": item.suffix,
                 "action_id": item.action_id,
                 "execution_binding": dict(item.execution_binding),
+                "selection_token": item.selection_token,
+                "selection_token_id": item.selection_token_id,
+                "selection_score_bias": item.selection_score_bias,
             }
             for item in request.candidates
         ]
@@ -1153,6 +1159,9 @@ class Client:
                     "suffix": item.suffix,
                     "action_id": item.action_id,
                     "execution_binding": dict(item.execution_binding),
+                    "selection_token": item.selection_token,
+                    "selection_token_id": item.selection_token_id,
+                    "selection_score_bias": item.selection_score_bias,
                 }
                 for item in request.candidates
             ]
@@ -1231,6 +1240,11 @@ class Client:
                     "history_audio_count": history_audio_count,
                     "history_image_count": history_image_count,
                     "suffix_tokenization_mode": request.suffix_tokenization_mode,
+                    "scoring_mode": request.scoring_mode,
+                    "selection_mapping_version": request.selection_mapping_version,
+                    "selection_mapping_hash": request.selection_mapping_hash,
+                    "selection_calibration_version": request.selection_calibration_version,
+                    "selection_calibration_hash": request.selection_calibration_hash,
                 },
             },
             metadata=metadata,

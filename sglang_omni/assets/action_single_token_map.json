@@ -1,0 +1,844 @@
+{
+  "assignment_sha256": "sha256:f7054813381afa96e068b0dfe6210c6af4ba5c42f042fb909bc7ab764747f1c4",
+  "calibration": {
+    "score_bias": {},
+    "version": "uncalibrated"
+  },
+  "catalog_hash": "sha256:85d017c72dfc64459e03df5d06583e748d74e33a31c801366978e287e7d9bdaa",
+  "counts": {
+    "actions": 117,
+    "decisions": 15,
+    "pool_size": 484,
+    "total": 133,
+    "unsupported": 1
+  },
+  "entries": [
+    {
+      "active": true,
+      "candidate_id": "130",
+      "short_id": "RH",
+      "token_id": 66973
+    },
+    {
+      "active": true,
+      "candidate_id": "135",
+      "short_id": "MI",
+      "token_id": 9773
+    },
+    {
+      "active": true,
+      "candidate_id": "137",
+      "short_id": "QM",
+      "token_id": 88878
+    },
+    {
+      "active": true,
+      "candidate_id": "138",
+      "short_id": "IE",
+      "token_id": 5371
+    },
+    {
+      "active": true,
+      "candidate_id": "142",
+      "short_id": "ZW",
+      "token_id": 81756
+    },
+    {
+      "active": true,
+      "candidate_id": "143",
+      "short_id": "TU",
+      "token_id": 98582
+    },
+    {
+      "active": true,
+      "candidate_id": "156",
+      "short_id": "LG",
+      "token_id": 47130
+    },
+    {
+      "active": true,
+      "candidate_id": "157",
+      "short_id": "PM",
+      "token_id": 8795
+    },
+    {
+      "active": true,
+      "candidate_id": "159",
+      "short_id": "DL",
+      "token_id": 16524
+    },
+    {
+      "active": true,
+      "candidate_id": "160",
+      "short_id": "RY",
+      "token_id": 11242
+    },
+    {
+      "active": true,
+      "candidate_id": "161",
+      "short_id": "PS",
+      "token_id": 5012
+    },
+    {
+      "active": true,
+      "candidate_id": "162",
+      "short_id": "FH",
+      "token_id": 83314
+    },
+    {
+      "active": true,
+      "candidate_id": "163",
+      "short_id": "TW",
+      "token_id": 47069
+    },
+    {
+      "active": true,
+      "candidate_id": "164",
+      "short_id": "QA",
+      "token_id": 47522
+    },
+    {
+      "active": true,
+      "candidate_id": "170",
+      "short_id": "NG",
+      "token_id": 6140
+    },
+    {
+      "active": true,
+      "candidate_id": "189",
+      "short_id": "VG",
+      "token_id": 46641
+    },
+    {
+      "active": true,
+      "candidate_id": "194",
+      "short_id": "GX",
+      "token_id": 84432
+    },
+    {
+      "active": true,
+      "candidate_id": "196",
+      "short_id": "KT",
+      "token_id": 33539
+    },
+    {
+      "active": true,
+      "candidate_id": "197",
+      "short_id": "BN",
+      "token_id": 15594
+    },
+    {
+      "active": true,
+      "candidate_id": "199",
+      "short_id": "VF",
+      "token_id": 49063
+    },
+    {
+      "active": true,
+      "candidate_id": "200",
+      "short_id": "OS",
+      "token_id": 3126
+    },
+    {
+      "active": true,
+      "candidate_id": "201",
+      "short_id": "HR",
+      "token_id": 17088
+    },
+    {
+      "active": true,
+      "candidate_id": "211",
+      "short_id": "FA",
+      "token_id": 3627
+    },
+    {
+      "active": true,
+      "candidate_id": "220",
+      "short_id": "WI",
+      "token_id": 60195
+    },
+    {
+      "active": true,
+      "candidate_id": "223",
+      "short_id": "FC",
+      "token_id": 6754
+    },
+    {
+      "active": true,
+      "candidate_id": "225",
+      "short_id": "ND",
+      "token_id": 8065
+    },
+    {
+      "active": true,
+      "candidate_id": "226",
+      "short_id": "VD",
+      "token_id": 12474
+    },
+    {
+      "active": true,
+      "candidate_id": "228",
+      "short_id": "MZ",
+      "token_id": 96988
+    },
+    {
+      "active": true,
+      "candidate_id": "230",
+      "short_id": "YC",
+      "token_id": 92844
+    },
+    {
+      "active": true,
+      "candidate_id": "232",
+      "short_id": "OH",
+      "token_id": 46761
+    },
+    {
+      "active": true,
+      "candidate_id": "233",
+      "short_id": "FB",
+      "token_id": 16208
+    },
+    {
+      "active": true,
+      "candidate_id": "234",
+      "short_id": "EQ",
+      "token_id": 54007
+    },
+    {
+      "active": true,
+      "candidate_id": "236",
+      "short_id": "GL",
+      "token_id": 3825
+    },
+    {
+      "active": true,
+      "candidate_id": "237",
+      "short_id": "YT",
+      "token_id": 78345
+    },
+    {
+      "active": true,
+      "candidate_id": "242",
+      "short_id": "FW",
+      "token_id": 18222
+    },
+    {
+      "active": true,
+      "candidate_id": "245",
+      "short_id": "JV",
+      "token_id": 77891
+    },
+    {
+      "active": true,
+      "candidate_id": "247",
+      "short_id": "MB",
+      "token_id": 8412
+    },
+    {
+      "active": true,
+      "candidate_id": "248",
+      "short_id": "ZN",
+      "token_id": 44847
+    },
+    {
+      "active": true,
+      "candidate_id": "249",
+      "short_id": "GB",
+      "token_id": 5381
+    },
+    {
+      "active": true,
+      "candidate_id": "250",
+      "short_id": "FG",
+      "token_id": 12001
+    },
+    {
+      "active": true,
+      "candidate_id": "251",
+      "short_id": "SK",
+      "token_id": 15699
+    },
+    {
+      "active": true,
+      "candidate_id": "253",
+      "short_id": "PN",
+      "token_id": 17896
+    },
+    {
+      "active": true,
+      "candidate_id": "254",
+      "short_id": "OI",
+      "token_id": 79781
+    },
+    {
+      "active": true,
+      "candidate_id": "255",
+      "short_id": "XT",
+      "token_id": 9036
+    },
+    {
+      "active": true,
+      "candidate_id": "258",
+      "short_id": "ZY",
+      "token_id": 80501
+    },
+    {
+      "active": true,
+      "candidate_id": "259",
+      "short_id": "MD",
+      "token_id": 6076
+    },
+    {
+      "active": true,
+      "candidate_id": "260",
+      "short_id": "AQ",
+      "token_id": 92073
+    },
+    {
+      "active": true,
+      "candidate_id": "261",
+      "short_id": "GN",
+      "token_id": 25167
+    },
+    {
+      "active": true,
+      "candidate_id": "262",
+      "short_id": "XL",
+      "token_id": 36530
+    },
+    {
+      "active": true,
+      "candidate_id": "263",
+      "short_id": "BF",
+      "token_id": 19883
+    },
+    {
+      "active": true,
+      "candidate_id": "264",
+      "short_id": "AE",
+      "token_id": 13669
+    },
+    {
+      "active": true,
+      "candidate_id": "265",
+      "short_id": "HK",
+      "token_id": 57447
+    },
+    {
+      "active": true,
+      "candidate_id": "266",
+      "short_id": "PX",
+      "token_id": 73812
+    },
+    {
+      "active": true,
+      "candidate_id": "268",
+      "short_id": "BB",
+      "token_id": 10098
+    },
+    {
+      "active": true,
+      "candidate_id": "269",
+      "short_id": "IV",
+      "token_id": 3090
+    },
+    {
+      "active": true,
+      "candidate_id": "270",
+      "short_id": "DK",
+      "token_id": 18301
+    },
+    {
+      "active": true,
+      "candidate_id": "271",
+      "short_id": "MC",
+      "token_id": 11604
+    },
+    {
+      "active": true,
+      "candidate_id": "274",
+      "short_id": "SG",
+      "token_id": 7783
+    },
+    {
+      "active": true,
+      "candidate_id": "275",
+      "short_id": "RS",
+      "token_id": 11451
+    },
+    {
+      "active": true,
+      "candidate_id": "277",
+      "short_id": "AF",
+      "token_id": 8276
+    },
+    {
+      "active": true,
+      "candidate_id": "278",
+      "short_id": "FP",
+      "token_id": 11698
+    },
+    {
+      "active": true,
+      "candidate_id": "279",
+      "short_id": "EA",
+      "token_id": 19112
+    },
+    {
+      "active": true,
+      "candidate_id": "285",
+      "short_id": "OA",
+      "token_id": 41339
+    },
+    {
+      "active": true,
+      "candidate_id": "287",
+      "short_id": "CX",
+      "token_id": 65240
+    },
+    {
+      "active": true,
+      "candidate_id": "288",
+      "short_id": "LI",
+      "token_id": 18537
+    },
+    {
+      "active": true,
+      "candidate_id": "290",
+      "short_id": "HY",
+      "token_id": 48852
+    },
+    {
+      "active": true,
+      "candidate_id": "292",
+      "short_id": "CR",
+      "token_id": 8973
+    },
+    {
+      "active": true,
+      "candidate_id": "293",
+      "short_id": "DD",
+      "token_id": 4103
+    },
+    {
+      "active": true,
+      "candidate_id": "294",
+      "short_id": "ZR",
+      "token_id": 72830
+    },
+    {
+      "active": true,
+      "candidate_id": "296",
+      "short_id": "AO",
+      "token_id": 18746
+    },
+    {
+      "active": true,
+      "candidate_id": "300",
+      "short_id": "CO",
+      "token_id": 8281
+    },
+    {
+      "active": true,
+      "candidate_id": "305",
+      "short_id": "JR",
+      "token_id": 84692
+    },
+    {
+      "active": true,
+      "candidate_id": "307",
+      "short_id": "PH",
+      "token_id": 10842
+    },
+    {
+      "active": true,
+      "candidate_id": "310",
+      "short_id": "HU",
+      "token_id": 88014
+    },
+    {
+      "active": true,
+      "candidate_id": "311",
+      "short_id": "YM",
+      "token_id": 63787
+    },
+    {
+      "active": true,
+      "candidate_id": "316",
+      "short_id": "GF",
+      "token_id": 36332
+    },
+    {
+      "active": true,
+      "candidate_id": "322",
+      "short_id": "RD",
+      "token_id": 36690
+    },
+    {
+      "active": true,
+      "candidate_id": "323",
+      "short_id": "XC",
+      "token_id": 37946
+    },
+    {
+      "active": true,
+      "candidate_id": "324",
+      "short_id": "LK",
+      "token_id": 92963
+    },
+    {
+      "active": true,
+      "candidate_id": "326",
+      "short_id": "GD",
+      "token_id": 40849
+    },
+    {
+      "active": true,
+      "candidate_id": "335",
+      "short_id": "EH",
+      "token_id": 45589
+    },
+    {
+      "active": true,
+      "candidate_id": "336",
+      "short_id": "IH",
+      "token_id": 75023
+    },
+    {
+      "active": true,
+      "candidate_id": "337",
+      "short_id": "YP",
+      "token_id": 9954
+    },
+    {
+      "active": true,
+      "candidate_id": "342",
+      "short_id": "KF",
+      "token_id": 65008
+    },
+    {
+      "active": true,
+      "candidate_id": "344",
+      "short_id": "GP",
+      "token_id": 24430
+    },
+    {
+      "active": true,
+      "candidate_id": "346",
+      "short_id": "DI",
+      "token_id": 17625
+    },
+    {
+      "active": true,
+      "candidate_id": "347",
+      "short_id": "MR",
+      "token_id": 18446
+    },
+    {
+      "active": true,
+      "candidate_id": "348",
+      "short_id": "WL",
+      "token_id": 61139
+    },
+    {
+      "active": true,
+      "candidate_id": "351",
+      "short_id": "PB",
+      "token_id": 40637
+    },
+    {
+      "active": true,
+      "candidate_id": "352",
+      "short_id": "JJ",
+      "token_id": 63391
+    },
+    {
+      "active": true,
+      "candidate_id": "353",
+      "short_id": "FU",
+      "token_id": 81213
+    },
+    {
+      "active": true,
+      "candidate_id": "354",
+      "short_id": "TO",
+      "token_id": 5207
+    },
+    {
+      "active": true,
+      "candidate_id": "355",
+      "short_id": "XD",
+      "token_id": 67677
+    },
+    {
+      "active": true,
+      "candidate_id": "356",
+      "short_id": "KS",
+      "token_id": 40449
+    },
+    {
+      "active": true,
+      "candidate_id": "357",
+      "short_id": "CM",
+      "token_id": 9985
+    },
+    {
+      "active": true,
+      "candidate_id": "360",
+      "short_id": "PU",
+      "token_id": 6325
+    },
+    {
+      "active": true,
+      "candidate_id": "362",
+      "short_id": "EX",
+      "token_id": 3257
+    },
+    {
+      "active": true,
+      "candidate_id": "363",
+      "short_id": "XA",
+      "token_id": 59450
+    },
+    {
+      "active": true,
+      "candidate_id": "364",
+      "short_id": "WF",
+      "token_id": 32131
+    },
+    {
+      "active": true,
+      "candidate_id": "367",
+      "short_id": "VE",
+      "token_id": 4491
+    },
+    {
+      "active": true,
+      "candidate_id": "369",
+      "short_id": "BE",
+      "token_id": 11594
+    },
+    {
+      "active": true,
+      "candidate_id": "371",
+      "short_id": "OF",
+      "token_id": 12483
+    },
+    {
+      "active": true,
+      "candidate_id": "375",
+      "short_id": "BS",
+      "token_id": 7347
+    },
+    {
+      "active": true,
+      "candidate_id": "403",
+      "short_id": "WR",
+      "token_id": 17925
+    },
+    {
+      "active": true,
+      "candidate_id": "438",
+      "short_id": "DR",
+      "token_id": 7687
+    },
+    {
+      "active": true,
+      "candidate_id": "444",
+      "short_id": "GS",
+      "token_id": 16522
+    },
+    {
+      "active": true,
+      "candidate_id": "449",
+      "short_id": "BR",
+      "token_id": 13095
+    },
+    {
+      "active": true,
+      "candidate_id": "450",
+      "short_id": "CL",
+      "token_id": 3140
+    },
+    {
+      "active": true,
+      "candidate_id": "455",
+      "short_id": "SP",
+      "token_id": 4592
+    },
+    {
+      "active": true,
+      "candidate_id": "462",
+      "short_id": "II",
+      "token_id": 5543
+    },
+    {
+      "active": true,
+      "candidate_id": "465",
+      "short_id": "JP",
+      "token_id": 27188
+    },
+    {
+      "active": true,
+      "candidate_id": "467",
+      "short_id": "PJ",
+      "token_id": 94235
+    },
+    {
+      "active": true,
+      "candidate_id": "468",
+      "short_id": "RR",
+      "token_id": 8106
+    },
+    {
+      "active": true,
+      "candidate_id": "472",
+      "short_id": "DO",
+      "token_id": 5865
+    },
+    {
+      "active": true,
+      "candidate_id": "578",
+      "short_id": "AA",
+      "token_id": 6029
+    },
+    {
+      "active": true,
+      "candidate_id": "624",
+      "short_id": "DP",
+      "token_id": 10298
+    },
+    {
+      "active": true,
+      "candidate_id": "639",
+      "short_id": "WA",
+      "token_id": 26388
+    },
+    {
+      "active": true,
+      "candidate_id": "000",
+      "short_id": "BG",
+      "token_id": 37762
+    },
+    {
+      "active": true,
+      "candidate_id": "IB0",
+      "short_id": "EF",
+      "token_id": 14884
+    },
+    {
+      "active": true,
+      "candidate_id": "IB1",
+      "short_id": "ZZ",
+      "token_id": 33536
+    },
+    {
+      "active": true,
+      "candidate_id": "IB2",
+      "short_id": "IQ",
+      "token_id": 61950
+    },
+    {
+      "active": true,
+      "candidate_id": "IB3",
+      "short_id": "TT",
+      "token_id": 14903
+    },
+    {
+      "active": true,
+      "candidate_id": "IF0",
+      "short_id": "YA",
+      "token_id": 86482
+    },
+    {
+      "active": true,
+      "candidate_id": "IF1",
+      "short_id": "ZH",
+      "token_id": 95911
+    },
+    {
+      "active": true,
+      "candidate_id": "IR0",
+      "short_id": "HD",
+      "token_id": 19147
+    },
+    {
+      "active": true,
+      "candidate_id": "IR1",
+      "short_id": "FD",
+      "token_id": 14596
+    },
+    {
+      "active": true,
+      "candidate_id": "IR2",
+      "short_id": "TK",
+      "token_id": 15778
+    },
+    {
+      "active": true,
+      "candidate_id": "IR3",
+      "short_id": "TN",
+      "token_id": 29171
+    },
+    {
+      "active": true,
+      "candidate_id": "IR4",
+      "short_id": "TB",
+      "token_id": 31160
+    },
+    {
+      "active": true,
+      "candidate_id": "IR5",
+      "short_id": "QE",
+      "token_id": 98025
+    },
+    {
+      "active": true,
+      "candidate_id": "IV00",
+      "short_id": "HW",
+      "token_id": 38252
+    },
+    {
+      "active": true,
+      "candidate_id": "IV01",
+      "short_id": "ZF",
+      "token_id": 90814
+    },
+    {
+      "active": true,
+      "candidate_id": "IV11",
+      "short_id": "OU",
+      "token_id": 11922
+    }
+  ],
+  "mapping_kind": "action_selection",
+  "mapping_version": "v1",
+  "policy": {
+    "allocation_salt": "sglang-omni-action-token-v1",
+    "min_token_id": 3000,
+    "pattern": "[A-Z]{2}",
+    "single_token_required": true
+  },
+  "schema_version": 1,
+  "tokenizer": {
+    "bos_token_id": null,
+    "class": "Qwen2Tokenizer",
+    "eos_token_id": 151645,
+    "fingerprint": "sha256:2faf54aee879d0c4992147d6d3dbd49c2854f29fbd1cf610b6e6b7c0abf433f8",
+    "model_path": "/data/models/Qwen3-Omni-30B-A3B-FP8",
+    "pad_token_id": 151643,
+    "special_ids": [
+      151643,
+      151645,
+      151652,
+      151653,
+      151655,
+      151656,
+      151669,
+      151670,
+      151675
+    ],
+    "vocab_size": 151676
+  }
+}

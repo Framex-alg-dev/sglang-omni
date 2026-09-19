@@ -5,8 +5,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib.resources import files
+from pathlib import Path
+from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Any, Iterable, Literal
 
 
@@ -14,12 +21,187 @@ MAPPING_SCHEMA_VERSION = 1
 RUNTIME_CATALOG_SCHEMA_VERSION = 1
 DEFAULT_ID_PATTERN = r"[A-Z]{2}"
 DEFAULT_ALLOCATION_SALT = "sglang-omni-action-token-v1"
+ACTION_SINGLE_TOKEN_MODE_ENV = "SGLANG_OMNI_ACTION_SINGLE_TOKEN_MODE"
+ACTION_SINGLE_TOKEN_MAP_ENV = "SGLANG_OMNI_ACTION_SINGLE_TOKEN_MAP"
+DEFAULT_ACTION_SINGLE_TOKEN_MAP_RESOURCE = "assets/action_single_token_map.json"
+SUPPORTED_ACTION_SINGLE_TOKEN_MODES = frozenset({"off", "shadow", "enforce"})
 
 
 @dataclass(frozen=True, slots=True)
 class SingleTokenId:
     text: str
     token_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionToken:
+    candidate_id: str
+    text: str
+    token_id: int
+    score_bias: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionTokenMapping:
+    mapping_version: str
+    mapping_hash: str
+    catalog_hash: str
+    tokenizer_fingerprint: str
+    calibration_version: str
+    calibration_hash: str
+    entries: tuple[SelectionToken, ...]
+    by_candidate_id: Mapping[str, SelectionToken]
+
+    def entry(self, candidate_id: str) -> SelectionToken:
+        try:
+            return self.by_candidate_id[candidate_id]
+        except KeyError as exc:
+            raise KeyError(f"no selection token for {candidate_id!r}") from exc
+
+    @property
+    def namespace(self) -> str:
+        return f"single-token:{self.mapping_version}:{self.mapping_hash}"
+
+    def validate_expected_ids(self, expected_ids: Iterable[str]) -> None:
+        expected = set(expected_ids)
+        actual = set(self.by_candidate_id)
+        if expected != actual:
+            raise ValueError(
+                "single-token selection map candidate mismatch: "
+                f"missing={sorted(expected - actual)} extra={sorted(actual - expected)}"
+            )
+
+    def validate_tokenizer(self, tokenizer: Any) -> None:
+        actual = tokenizer_fingerprint(tokenizer)
+        if actual != self.tokenizer_fingerprint:
+            raise ValueError(
+                "single-token selection tokenizer mismatch: "
+                f"expected={self.tokenizer_fingerprint} actual={actual}"
+            )
+        special_ids = {int(value) for value in tokenizer.all_special_ids}
+        for entry in self.entries:
+            encoded = _encode(tokenizer, entry.text)
+            if encoded != [entry.token_id]:
+                raise ValueError(
+                    "selection token no longer has one-token encoding: "
+                    f"candidate_id={entry.candidate_id!r} text={entry.text!r} "
+                    f"expected={[entry.token_id]} actual={encoded}"
+                )
+            if entry.token_id in special_ids:
+                raise ValueError(
+                    f"selection token is special: {entry.candidate_id!r}"
+                )
+
+
+def normalize_action_single_token_mode(value: str | None) -> str:
+    mode = (value or "off").strip().lower()
+    if mode not in SUPPORTED_ACTION_SINGLE_TOKEN_MODES:
+        raise ValueError(
+            f"{ACTION_SINGLE_TOKEN_MODE_ENV} must be one of "
+            f"{sorted(SUPPORTED_ACTION_SINGLE_TOKEN_MODES)}, got {value!r}"
+        )
+    return mode
+
+
+def configured_action_single_token_mode() -> str:
+    return normalize_action_single_token_mode(os.getenv(ACTION_SINGLE_TOKEN_MODE_ENV))
+
+
+def _selection_mapping_path(path: str | Path | None = None) -> Path:
+    if path is not None:
+        return Path(path).expanduser().resolve()
+    configured = os.getenv(ACTION_SINGLE_TOKEN_MAP_ENV)
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(str(files("sglang_omni").joinpath(DEFAULT_ACTION_SINGLE_TOKEN_MAP_RESOURCE)))
+
+
+@lru_cache(maxsize=8)
+def load_selection_token_mapping(
+    path: str | Path | None = None,
+) -> SelectionTokenMapping:
+    source = _selection_mapping_path(path)
+    manifest = json.loads(source.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != MAPPING_SCHEMA_VERSION:
+        raise ValueError(f"unsupported selection-token map schema: {source}")
+    if manifest.get("mapping_kind") != "action_selection":
+        raise ValueError(f"not an action-selection token map: {source}")
+    rows = manifest.get("entries")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("selection-token map entries must be a non-empty list")
+    entries = tuple(
+        SelectionToken(
+            candidate_id=str(row["candidate_id"]),
+            text=str(row["short_id"]),
+            token_id=int(row["token_id"]),
+            score_bias=0.0,
+        )
+        for row in rows
+        if row.get("active", True)
+    )
+    candidate_ids = [entry.candidate_id for entry in entries]
+    texts = [entry.text for entry in entries]
+    token_ids = [entry.token_id for entry in entries]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("selection-token map contains duplicate candidate IDs")
+    if len(texts) != len(set(texts)) or len(token_ids) != len(set(token_ids)):
+        raise ValueError("selection-token map aliases and token IDs must be unique")
+    expected_hash = str(manifest.get("assignment_sha256") or "")
+    hash_rows = [
+        {
+            "candidate_id": entry.candidate_id,
+            "short_id": entry.text,
+            "token_id": entry.token_id,
+        }
+        for entry in entries
+    ]
+    actual_hash = sha256_json(hash_rows)
+    if actual_hash != expected_hash:
+        raise ValueError(
+            "selection-token map assignment hash mismatch: "
+            f"expected={expected_hash} actual={actual_hash}"
+        )
+    tokenizer_info = manifest.get("tokenizer")
+    if not isinstance(tokenizer_info, dict) or not tokenizer_info.get("fingerprint"):
+        raise ValueError("selection-token map has no tokenizer fingerprint")
+    calibration = manifest.get("calibration") or {
+        "version": "uncalibrated",
+        "score_bias": {},
+    }
+    if not isinstance(calibration, dict):
+        raise ValueError("selection-token calibration must be an object")
+    raw_bias = calibration.get("score_bias") or {}
+    if not isinstance(raw_bias, dict):
+        raise ValueError("selection-token score_bias must be an object")
+    unknown_bias_ids = set(raw_bias) - set(candidate_ids)
+    if unknown_bias_ids:
+        raise ValueError(
+            f"selection-token calibration contains unknown IDs: {sorted(unknown_bias_ids)}"
+        )
+    calibrated_entries = tuple(
+        SelectionToken(
+            candidate_id=entry.candidate_id,
+            text=entry.text,
+            token_id=entry.token_id,
+            score_bias=float(raw_bias.get(entry.candidate_id, 0.0)),
+        )
+        for entry in entries
+    )
+    if any(not math.isfinite(entry.score_bias) for entry in calibrated_entries):
+        raise ValueError("selection-token score biases must be finite")
+    calibration_hash = sha256_json(calibration)
+    return SelectionTokenMapping(
+        mapping_version=str(manifest.get("mapping_version") or ""),
+        mapping_hash=actual_hash,
+        catalog_hash=str(manifest.get("catalog_hash") or ""),
+        tokenizer_fingerprint=str(tokenizer_info["fingerprint"]),
+        calibration_version=str(calibration.get("version") or "uncalibrated"),
+        calibration_hash=calibration_hash,
+        entries=calibrated_entries,
+        by_candidate_id=MappingProxyType(
+            {entry.candidate_id: entry for entry in calibrated_entries}
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,18 +799,25 @@ def validate_mapping_manifest(
 
 
 __all__ = [
+    "ACTION_SINGLE_TOKEN_MAP_ENV",
+    "ACTION_SINGLE_TOKEN_MODE_ENV",
     "CatalogEntity",
     "DEFAULT_ALLOCATION_SALT",
     "DEFAULT_ID_PATTERN",
     "MAPPING_SCHEMA_VERSION",
     "ParsedCatalog",
     "SingleTokenId",
+    "SelectionToken",
+    "SelectionTokenMapping",
     "allocate_single_token_ids",
     "assignment_hash",
     "build_mapping_manifest",
     "build_runtime_catalog",
     "canonical_json",
     "discover_single_token_ids",
+    "configured_action_single_token_mode",
+    "load_selection_token_mapping",
+    "normalize_action_single_token_mode",
     "parse_canonical_action_catalog",
     "sha256_json",
     "tokenizer_fingerprint",
