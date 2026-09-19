@@ -319,6 +319,10 @@ class ReplyGenerationComponent:
             trace_id=turn.trace_id,
             logical_request_id=turn.request_base,
             request_id=request_id,
+            # The private contract permits only a bounded ``A,B`` value or
+            # ``INVALID``. Persisting it makes operand errors diagnosable
+            # without logging user audio, transcripts, or images.
+            model_output=text,
             output_chars=len(text),
             accepted_output_chars=len(accepted_text),
             visual_observation_confidence=confidence.as_dict(),

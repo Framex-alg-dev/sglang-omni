@@ -12407,6 +12407,27 @@ async def test_visual_arithmetic_prewarm_uses_runtime_static_prefix() -> None:
     assert request.messages[1].role == "user"
 
 
+def test_visual_arithmetic_prompt_uses_temporal_display_segments() -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.language = "zh"
+
+    prompt = session._visual_arithmetic_operand_output_part()["text"]
+
+    assert "相同数字手型的连续图片" in prompt
+    assert "只短暂出现一次的中间手型" in prompt
+    assert "首帧或末帧" in prompt
+    assert "最先和最后的清晰数字手势" not in prompt
+    assert "拇指与食指指尖相接成圈、其余三指伸直" in prompt
+    assert "只输出且必须严格输出 A,B" in prompt
+
+    session.language = "en"
+    english_prompt = session._visual_arithmetic_operand_output_part()["text"]
+    assert (
+        "thumb and index fingertips touching in a circle with the other three "
+        "fingers extended"
+    ) in english_prompt
+
+
 @pytest.mark.asyncio
 async def test_session_start_prewarms_selected_child_catalog_without_fallback() -> None:
     ws = FakeWebSocket()

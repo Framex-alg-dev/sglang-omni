@@ -269,6 +269,8 @@ class NumericReplyActionComponent:
                 turn_id=turn.turn_id,
                 trace_id=turn.trace_id,
                 logical_request_id=turn.request_base,
+                operand_values=list(operand_values),
+                operation=visual_operation,
                 selected_number=direct_number,
                 selected_candidate_id=candidate.candidate_id,
             )
