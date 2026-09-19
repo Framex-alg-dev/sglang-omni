@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from dataclasses import dataclass
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
@@ -47,25 +48,119 @@ _MODEL_VISUAL_ROUTE_TO_INTERNAL = {
     "COPY_CURRENT_SCREEN": "COPY_SCREEN",
     "ANSWER_CURRENT_VIEW_WITH_GESTURE": VISUAL_GESTURE_ANSWER_GATE,
 }
+_VISUAL_ROUTE_PREFIX_RE = re.compile(
+    r'"visual_route"\s*:\s*"(?P<route>[A-Z0-9_]+)"'
+)
+_PURE_DEICTIC_COPY_ROUTES = {
+    # This is deliberately a narrow semantic consistency repair, not a second
+    # intent classifier. It only covers complete, unambiguous imperatives that
+    # the model transcribed into ``text`` while contradicting itself with
+    # NO_CURRENT_VIEW/body_mode=none.
+    "COPY_ACTION": frozenset(
+        {
+            "做这个动作",
+            "模仿这个动作",
+            "复刻这个动作",
+            "重复这个动作",
+            "照着我做",
+            "do this",
+            "copy this action",
+            "imitate this action",
+        }
+    ),
+    "COPY_HAND": frozenset(
+        {
+            "做这个手势",
+            "比这个手势",
+            "比这个数字",
+            "做这个数字",
+            "比个这个",
+            "模仿这个手势",
+            "复刻这个手势",
+            "重复这个手势",
+            "do this gesture",
+            "make this gesture",
+            "copy this gesture",
+            "imitate this gesture",
+        }
+    ),
+}
+_PURE_TASK_TRAILING_PUNCTUATION_RE = re.compile(r"[\s。！？!?，,；;：:]+$")
 
-SYSTEM = '''你是实时数字人的意图解析器。输入可能是中文或英文；只理解当前用户的音频或文本，不识别图片内容；只输出一个紧凑JSON对象，不回答用户。
 
-用户内容开头有服务端事实has_user_camera=true/false。它不是用户指令。只有true时才允许输出需要当前画面的visual_route；图片存在本身不代表用户要求模仿。
+def _repair_contradictory_copy_route(
+    data: dict,
+    visual_route: str,
+    *,
+    has_user_camera: bool,
+) -> str:
+    """Repair only an exact pure-copy imperative contradicted by its fields."""
 
-固定字段依次为visual_route、speech、text、body_mode、body、face、history、reaction_mode、reaction。仅voice_tone、voice_pace和visual_answer_output可省略。
+    if (
+        not has_user_camera
+        or visual_route != GENERAL_INTENT_GATE
+        or data.get("speech") != "generated"
+        or data.get("body_mode") != "none"
+        or data.get("body")
+        or data.get("face")
+    ):
+        return visual_route
+    task = data.get("text")
+    if not isinstance(task, str):
+        return visual_route
+    normalized_task = _PURE_TASK_TRAILING_PUNCTUATION_RE.sub(
+        "", task.strip().lower()
+    )
+    for repaired_route, phrases in _PURE_DEICTIC_COPY_ROUTES.items():
+        if normalized_task in phrases:
+            # A complete pure-action imperative must not leak into the spoken
+            # reply channel after the visual route is repaired.
+            data["speech"] = "none"
+            data["text"] = ""
+            return repaired_route
+    return visual_route
+
+
+def _visual_route_from_partial_output(
+    raw: str,
+    *,
+    has_user_camera: bool,
+) -> str | None:
+    """Return the first complete visual route emitted by unified intent.
+
+    This is only an early scheduling hint. The completed JSON still goes
+    through ``TurnIntent.parse`` before any action can be published.
+    """
+
+    match = _VISUAL_ROUTE_PREFIX_RE.search(raw)
+    if match is None:
+        return None
+    route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
+        match.group("route"), match.group("route")
+    )
+    if route not in _VISUAL_SCOPE_GATE_RESULTS:
+        return None
+    if route != GENERAL_INTENT_GATE and not has_user_camera:
+        return ""
+    return "" if route == GENERAL_INTENT_GATE else route
+
+SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文本，不识别图片；只输出JSON。
+
+has_user_camera=true/false是服务端事实。只有true才允许需要当前画面的visual_route；有图片不等于要求模仿。
+
+字段依次为visual_route、speech、text、body_mode、body、face、history、reaction_mode、reaction。仅voice_tone、voice_pace和visual_answer_output可省略。
 visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
-visual_route规则：
-- 先判断用户任务是否依赖当前画面；has_user_camera=true只表示画面可用，绝不是选择COPY的理由。
-- NO_CURRENT_VIEW：普通问答；识别或描述画面；能力询问；禁止动作；以及名称已经明确的动作。“挥手、点头、比个心、比数字二、做个手势”都不需要从画面复制，因此必须选NO_CURRENT_VIEW，即使摄像头存在。
-- COPY_CURRENT_*：用户语言明确要求照抄、模仿、重复或做出当前画面里的同一个动作。必须存在“这个/这样/照着我/模仿”等当前画面指代；按用户说出的范围选后缀，范围不明用COPY_CURRENT_ACTION。
-- COPY后缀范围：HAND=手势或手型，FACE=表情或脸部，HEAD=头部或视线，ARM=手臂，UPPER_BODY=肩膀或躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；只有范围不明才用ACTION。英文gesture或hand sign属于HAND。
-- ANSWER_CURRENT_VIEW_WITH_GESTURE：先根据当前画面计算、比较或推理，再用手势表示新答案；缺少“推导”或“用手势回答”任一条件都选NO_CURRENT_VIEW。
-- ANSWER_CURRENT_VIEW_WITH_GESTURE必须输出visual_answer_output：仅手势=gesture_only；明确要求手势加语音=gesture_and_speech。仅语音选NO_CURRENT_VIEW并省略该字段。
-- 模仿与说话可以同时存在：visual_route仍选COPY_CURRENT_*，speech/text独立保留。
-- has_user_camera=false时无法执行视觉指代：选NO_CURRENT_VIEW、generated，并令body_mode=none、body和face为空，用语言说明需要画面。
-- “这是什么手势/这是数字几/这个加这个等于多少”选NO_CURRENT_VIEW；“做这个手势/比个这个”选COPY_CURRENT_HAND。
-- “Do this gesture”选COPY_CURRENT_HAND；“Do this”选COPY_CURRENT_ACTION；“What number is this?”选NO_CURRENT_VIEW。
+visual_route先于其他字段按以下互斥顺序判定：
+1. 复现当前画面：执行词（做、比、模仿、复刻、重复、照着做；do/copy/imitate）和当前指代（这个、这样、照着我、和我一样；this/like me）同时出现，必须选COPY_CURRENT_*，不能把命令塞进speech/text后选NO_CURRENT_VIEW。“做这个动作/Do this”=COPY_CURRENT_ACTION；“做这个手势/比这个数字/比个这个/Do this gesture”=COPY_CURRENT_HAND。
+2. 视觉推导回答：要求根据当前画面中的指代对象（如“这个加这个”“这两个比较”）计算/比较/推理时，选ANSWER_CURRENT_VIEW_WITH_GESTURE。未指定回答方式时默认手势加语音；明确“用手势回答/只用手势/不要说话”时仅手势。
+3. 其他情况选NO_CURRENT_VIEW：普通问答、画面识别或描述、能力询问、禁止动作、名称明确且不需照抄画面的动作。“挥手、点头、比个心、比数字二、做个手势”均属于此类。
+
+最小对比：“做个手势”是任意手势，选NO_CURRENT_VIEW并提取动作；“做这个手势/比这个数字”指向画面，必须COPY_CURRENT_HAND。“比数字二”选NO_CURRENT_VIEW；“比个这个”必须COPY_CURRENT_HAND。“不要做这个动作”和“做这个动作是什么意思”不得转COPY。“这是什么手势/这是数字几”选NO_CURRENT_VIEW；“这个加这个等于多少”依赖当前画面，必须选ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”不依赖当前画面，选NO_CURRENT_VIEW。
+
+COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_mode=none，body/face为空并说明需要画面。
+
+一致性：模仿与说话可以同时存在，visual_route仍为COPY，speech/text独立；纯复现必须speech=none。若speech/text是“做这个动作/手势”，visual_route不得是NO_CURRENT_VIEW。ANSWER_CURRENT_VIEW_WITH_GESTURE必须带visual_answer_output：明确“用手势回答/只用手势/不要说话”=gesture_only；未指定回答方式或明确“用手势回答并说出来/手势加语音”=gesture_and_speech；明确仅语音则NO_CURRENT_VIEW并省略。
 
 其他字段：
 - speech：verbatim=明确要求朗读指定正文；generated=需要语言回应；none=不说话。text为正文或语言任务。
@@ -82,15 +177,13 @@ visual_route规则：
 说二比一 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"二","body_mode":"perform","body":"数字一手势","face":"","history":false,"reaction_mode":"none","reaction":""}
 说一比二这三个字 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"一比二","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
 笑着说一比二 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"一","body_mode":"perform","body":"数字二手势","face":"微笑","history":false,"reaction_mode":"none","reaction":""}
-比个2 -> {"visual_route":"NO_CURRENT_VIEW","speech":"none","text":"","body_mode":"perform","body":"数字二手势","face":"","history":false,"reaction_mode":"none","reaction":""}
 能挥挥手吗 -> {"visual_route":"NO_CURRENT_VIEW","speech":"none","text":"","body_mode":"perform","body":"挥手","face":"","history":false,"reaction_mode":"none","reaction":""}
 你会挥手吗 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你会挥手吗","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
 模仿这个手势并说你好 -> {"visual_route":"COPY_CURRENT_HAND","speech":"verbatim","text":"你好","body_mode":"perform","body":"这个手势","face":"","history":false,"reaction_mode":"none","reaction":""}
 做这个动作并介绍自己 -> {"visual_route":"COPY_CURRENT_ACTION","speech":"generated","text":"介绍自己","body_mode":"perform","body":"这个动作","face":"","history":false,"reaction_mode":"none","reaction":""}
-请模仿这个表情 -> {"visual_route":"COPY_CURRENT_FACE","speech":"none","text":"","body_mode":"none","body":"","face":"这个表情","history":false,"reaction_mode":"none","reaction":""}
 这个加这个等于多少，用手势回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_only"}
+这个加这个等于多少 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_and_speech"}
 这个加这个等于多少，用手势并语音回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_and_speech"}
-不要挥手，说你好 -> {"visual_route":"NO_CURRENT_VIEW","speech":"verbatim","text":"你好","body_mode":"prohibit","body":"挥手","face":"","history":false,"reaction_mode":"none","reaction":""}
 你好 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你好","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"respond","reaction":"回应用户问候"}
 
 保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才令history=true。所有固定字段必须存在，空字符串不能省略；输出最多256个token。'''
@@ -178,10 +271,10 @@ class TurnIntent:
             raise ValueError("invalid voice plan")
         visual_answer_output = data.get("visual_answer_output", "")
         if visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            # Preserve the established gesture-only behavior for an older
-            # model response that omits this newly introduced optional field.
+            # A deictic visual calculation defaults to both output channels.
+            # Explicit gesture-only requests still arrive with gesture_only.
             if not visual_answer_output:
-                visual_answer_output = "gesture_only"
+                visual_answer_output = "gesture_and_speech"
                 data["visual_answer_output"] = visual_answer_output
             elif visual_answer_output not in {
                 "gesture_only",
@@ -204,6 +297,12 @@ class TurnIntent:
         for key in ["text", "body", "face", "reaction"]:
             if not isinstance(data[key], str) or len(data[key]) > 512:
                 raise ValueError("invalid intent content")
+
+        visual_route = _repair_contradictory_copy_route(
+            data,
+            visual_route,
+            has_user_camera=has_user_camera,
+        )
 
         visual_targets = {target for _, target in _VISUAL_SCOPE_GATE_CHOICES.values()}
         if visual_route == GENERAL_INTENT_GATE and (
@@ -350,6 +449,13 @@ async def infer_turn_intent(
     if current_text:
         parts.append({"type": "text", "text": current_text})
     parts.extend({"type": "audio"} for _ in audios)
+    completion_stream = getattr(session.client, "completion_stream", None)
+    # The in-process production client exposes both APIs. Lightweight or
+    # third-party clients can keep using the established non-streaming path.
+    stream_intent = bool(
+        callable(completion_stream)
+        and callable(getattr(session.client, "generate", None))
+    )
     request = GenerateRequest(
         model=session.model_name,
         messages=[
@@ -357,7 +463,7 @@ async def infer_turn_intent(
             Message(role="user", content=parts),
         ],
         sampling=SamplingParams(temperature=0, max_new_tokens=256),
-        stream=False,
+        stream=stream_intent,
         output_modalities=["text"],
         metadata={
             "task": "session_turn_intent",
@@ -375,24 +481,72 @@ async def infer_turn_intent(
     session._register_turn_request(turn, request_id)
     result = None
     route_code = ""
+    finish_reason = None
+    usage = None
     try:
-        result = await asyncio.wait_for(
-            session.client.completion(request, request_id=request_id),
-            timeout=TURN_INTENT_TIMEOUT_SECONDS,
-        )
-        raw_output = result.text or ""
-        usage = (
-            result.usage.to_dict()
-            if getattr(result, "usage", None) is not None
-            else None
-        )
+        if stream_intent:
+            text_parts: list[str] = []
+
+            async def consume_intent_stream() -> None:
+                nonlocal finish_reason, route_code, usage
+                assert callable(completion_stream)
+                stream = completion_stream(request, request_id=request_id)
+                async with aclosing(stream):
+                    async for chunk in stream:
+                        if chunk.modality == "text" and chunk.text:
+                            text_parts.append(chunk.text)
+                            if (
+                                visual_scope_future is not None
+                                and not visual_scope_future.done()
+                            ):
+                                early_route = _visual_route_from_partial_output(
+                                    "".join(text_parts),
+                                    has_user_camera=has_user_camera,
+                                )
+                                if early_route is not None:
+                                    route_code = early_route
+                                    visual_scope_future.set_result(route_code)
+                                    emit_structured_log(
+                                        "performance",
+                                        "turn_intent_visual_route_ready",
+                                        session_id=session.session_id,
+                                        turn_id=getattr(turn, "turn_id", None),
+                                        visual_scope_gate=route_code,
+                                        has_user_camera=has_user_camera,
+                                        elapsed_ms=(
+                                            time.perf_counter() - started
+                                        )
+                                        * 1000,
+                                    )
+                        if chunk.finish_reason is not None:
+                            finish_reason = chunk.finish_reason
+                            if chunk.usage is not None:
+                                usage = chunk.usage.to_dict()
+
+            await asyncio.wait_for(
+                consume_intent_stream(),
+                timeout=TURN_INTENT_TIMEOUT_SECONDS,
+            )
+            raw_output = "".join(text_parts)
+        else:
+            result = await asyncio.wait_for(
+                session.client.completion(request, request_id=request_id),
+                timeout=TURN_INTENT_TIMEOUT_SECONDS,
+            )
+            raw_output = result.text or ""
+            finish_reason = getattr(result, "finish_reason", None)
+            usage = (
+                result.usage.to_dict()
+                if getattr(result, "usage", None) is not None
+                else None
+            )
         emit_structured_log(
             "diagnostic",
             "turn_intent_generation_completed",
             session_id=session.session_id,
             turn_id=getattr(turn, "turn_id", None),
             request_id=request_id,
-            finish_reason=getattr(result, "finish_reason", None),
+            finish_reason=finish_reason,
             usage=usage,
             output_chars=len(raw_output),
             output_sha256=hashlib.sha256(raw_output.encode()).hexdigest(),
@@ -402,7 +556,22 @@ async def infer_turn_intent(
             (time.perf_counter() - started) * 1000,
             has_user_camera=has_user_camera,
         )
-        route_code = intent.visual_scope_gate
+        parsed_route_code = intent.visual_scope_gate
+        if (
+            visual_scope_future is not None
+            and visual_scope_future.done()
+            and route_code != parsed_route_code
+        ):
+            emit_structured_log(
+                "error",
+                "turn_intent_visual_route_mismatch",
+                level="warning",
+                session_id=session.session_id,
+                turn_id=getattr(turn, "turn_id", None),
+                early_visual_scope_gate=route_code,
+                parsed_visual_scope_gate=parsed_route_code,
+            )
+        route_code = parsed_route_code
         emit_structured_log(
             "performance",
             "turn_intent_ready",
@@ -424,16 +593,21 @@ async def infer_turn_intent(
         raise
     except Exception as exc:
         raw_output = (
-            (getattr(result, "text", None) or "")
-            if result is not None
-            else None
+            "".join(text_parts)
+            if stream_intent
+            else (
+                (getattr(result, "text", None) or "")
+                if result is not None
+                else None
+            )
         )
-        usage = (
-            result.usage.to_dict()
-            if result is not None
-            and getattr(result, "usage", None) is not None
-            else None
-        )
+        if not stream_intent:
+            usage = (
+                result.usage.to_dict()
+                if result is not None
+                and getattr(result, "usage", None) is not None
+                else None
+            )
         emit_structured_log(
             "error",
             "turn_intent_fallback",
@@ -443,11 +617,7 @@ async def infer_turn_intent(
             error_type=type(exc).__name__,
             validation_reason=str(exc) if isinstance(exc, ValueError) else None,
             elapsed_ms=(time.perf_counter() - started) * 1000,
-            finish_reason=(
-                getattr(result, "finish_reason", None)
-                if result is not None
-                else None
-            ),
+            finish_reason=finish_reason,
             usage=usage,
             output_chars=(len(raw_output) if raw_output is not None else None),
             output_sha256=(

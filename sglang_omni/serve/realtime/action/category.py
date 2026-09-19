@@ -34,6 +34,7 @@ from sglang_omni.serve.realtime.action.routing import (
     choose_category_width,
     resolve_unique_explicit_action,
     scope_visual_deictic_categories,
+    visual_deictic_scope_candidates,
 )
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.common import (
@@ -340,8 +341,22 @@ class ActionCategoryComponent:
         )
         visual_deictic_instruction = ""
         visual_deictic_child_instruction = ""
+        visual_deictic_candidate_ids: set[str] | None = None
         if visual_deictic_scope is not None:
-            eligible_categories = list(visual_deictic_scope.categories)
+            visual_deictic_candidate_ids = {
+                candidate.candidate_id
+                for candidate in visual_deictic_scope_candidates(
+                    visual_deictic_scope
+                )
+            }
+            eligible_categories = [
+                category
+                for category in visual_deictic_scope.categories
+                if any(
+                    child.candidate_id in visual_deictic_candidate_ids
+                    for child in category.children
+                )
+            ]
             visual_deictic_category_ids = [
                 category.category_id for category in eligible_categories
             ]
@@ -910,6 +925,12 @@ class ActionCategoryComponent:
         )
 
         child_candidates = self._child_candidates_for_categories(selected_categories)
+        if visual_deictic_candidate_ids is not None:
+            child_candidates = [
+                item
+                for item in child_candidates
+                if item.candidate_id in visual_deictic_candidate_ids
+            ]
         if exact_body_ids:
             child_candidates = [item for item in child_candidates if item.candidate_id in exact_body_ids]
         if implicit_reaction_active:
@@ -1621,6 +1642,12 @@ class ActionCategoryComponent:
                 )
             ):
                 raise ValueError("action exceeds parsed accompaniment scope")
+        if (
+            visual_deictic_scope is not None
+            and visual_deictic_scope.name == "gesture"
+            and action.get("support_status") != "unsupported"
+        ):
+            action["allow_adjacent_repeat"] = True
         selected_candidate = self.candidate_by_id.get(
             action["candidate_id"]
         )

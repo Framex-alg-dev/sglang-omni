@@ -73,6 +73,60 @@ from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
     ReplyHistoryComponent,
 )
 class ReplyPipeline:
+    def _build_visual_arithmetic_probe_request(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+        images: list[Any],
+        image_roles: list[str],
+    ) -> tuple[GenerateRequest, list[str]]:
+        """Build a private, current-turn-only visual arithmetic request.
+
+        This request is safe to start after the unified intent stream emits its
+        first visual route but before the complete intent is available. Its
+        output is never published directly; the turn pipeline consumes it only
+        if the authoritative intent later resolves to ``VISUAL_ANSWER``.
+        """
+
+        reply_images, reply_image_roles = self._select_reply_user_camera_images(
+            images, image_roles
+        )
+        parts: list[dict[str, Any]] = []
+        if reply_image_roles:
+            parts.append(self._reply_user_camera_context_part())
+            parts.extend({"type": "image"} for _ in reply_image_roles)
+        parts.extend({"type": "audio"} for _ in audios)
+        if isinstance(turn.text, str) and turn.text.strip():
+            parts.append({"type": "text", "text": turn.text.strip()})
+
+        contract = self._visual_arithmetic_operand_output_part()["text"]
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(role="system", content=contract),
+                Message(role="user", content=parts),
+            ],
+            sampling=SamplingParams(
+                temperature=0,
+                top_p=1.0,
+                max_new_tokens=32,
+            ),
+            stream=True,
+            output_modalities=["text"],
+            metadata={
+                "audios": list(audios),
+                "images": list(reply_images),
+                "image_roles": list(reply_image_roles),
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "turn_id": turn.turn_id,
+                "logical_request_id": turn.request_base,
+                "task": "session_visual_arithmetic_probe",
+                "private_output": True,
+            },
+        )
+        return request, reply_image_roles
+
     def _build_reply_request(
         self,
         turn: TurnBuffer,

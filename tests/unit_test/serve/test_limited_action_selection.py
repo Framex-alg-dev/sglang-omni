@@ -7,6 +7,11 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     prewarm_global_action_catalog,
 )
 from sglang_omni.serve.realtime.multimodal import MultimodalSession
+from sglang_omni.serve.realtime.action.decision import ACTION_DECISION_LABELS
+from sglang_omni.serve.realtime.action.routing import (
+    visual_deictic_category_scope,
+    visual_deictic_scope_candidates,
+)
 from tests.unit_test.qwen3_omni.test_global_action_catalog import _ScoreClient, _WebSocket
 
 
@@ -103,7 +108,16 @@ async def test_limited_turn_scores_all_actions_once_and_hits_session_prefix(monk
     )
     assert "[视觉模仿硬约束]" in gesture_prefill["session_instruction"]
     assert "视觉定义=" in gesture_prefill["session_instruction"]
-    assert len(gesture_prefill["candidates"]) == 144
+    gesture_scope = visual_deictic_category_scope(session.categories, "gesture")
+    assert gesture_scope is not None
+    expected_gesture_ids = {
+        candidate.candidate_id
+        for candidate in visual_deictic_scope_candidates(gesture_scope)
+    }
+    assert {
+        candidate.candidate_id
+        for candidate in gesture_prefill["candidates"]
+    } == expected_gesture_ids | {"000"} | set(ACTION_DECISION_LABELS)
     assert gesture_prefill["candidates"][-1].candidate_id == "000"
     semantics = {"turn_origin": origin, "text_role": "user_input" if origin == "user" else "character_reply"}
     if origin == "proactive":

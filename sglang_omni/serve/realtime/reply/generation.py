@@ -44,6 +44,253 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 class ReplyGenerationComponent:
     """Model reply generation and terminal response events."""
 
+    async def _run_visual_arithmetic_probe_after_route(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+        images: list[Any],
+        image_roles: list[str],
+        visual_scope_future: asyncio.Future[str],
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Start operand extraction only after unified intent emits its route."""
+
+        route_code = await visual_scope_future
+        if route_code != VISUAL_GESTURE_ANSWER_GATE:
+            emit_structured_log(
+                "reply",
+                "visual_arithmetic_probe_not_started",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                visual_scope_gate=route_code,
+                reason="unified_intent_route_not_visual_answer",
+                after_commit_ms=self._after_commit_ms(turn),
+            )
+            return None
+        return await self._run_visual_arithmetic_probe(
+            turn, audios, images, image_roles
+        )
+
+    async def _run_visual_arithmetic_probe(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+        images: list[Any],
+        image_roles: list[str],
+    ) -> tuple[str, dict[str, Any]]:
+        """Run private operand extraction concurrently with turn intent.
+
+        The result is deliberately eventless. The authoritative intent route
+        decides whether it is adopted as VISUAL_ANSWER evidence or discarded.
+        """
+
+        self._ensure_turn_processing(turn)
+        request_id = f"{turn.request_base}-visual-arithmetic"
+        request, forwarded_image_roles = (
+            self._build_visual_arithmetic_probe_request(
+                turn, audios, images, image_roles
+            )
+        )
+        started = time.perf_counter()
+        first_token_ms: float | None = None
+        text_parts: list[str] = []
+        finish_reason = "stop"
+        usage: dict[str, Any] | None = None
+        self._register_turn_request(turn, request_id)
+        emit_structured_log(
+            "reply",
+            "visual_arithmetic_probe_submitted",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            request_id=request_id,
+            forwarded_image_count=len(forwarded_image_roles),
+            after_commit_ms=self._after_commit_ms(turn),
+        )
+        try:
+            completion_stream = getattr(self.client, "completion_stream", None)
+            if callable(completion_stream):
+                stream = completion_stream(request, request_id=request_id)
+                async with aclosing(stream):
+                    async for chunk in stream:
+                        self._ensure_turn_processing(turn)
+                        if chunk.modality == "text" and chunk.text:
+                            if first_token_ms is None:
+                                first_token_ms = (
+                                    time.perf_counter() - started
+                                ) * 1000.0
+                            text_parts.append(chunk.text)
+                        if chunk.finish_reason is not None:
+                            finish_reason = chunk.finish_reason
+                            if chunk.usage is not None:
+                                usage = chunk.usage.to_dict()
+            else:
+                result = await self.client.completion(
+                    request, request_id=request_id
+                )
+                if result.text:
+                    first_token_ms = (
+                        time.perf_counter() - started
+                    ) * 1000.0
+                    text_parts.append(result.text)
+                finish_reason = result.finish_reason
+                if result.usage is not None:
+                    usage = result.usage.to_dict()
+        except asyncio.CancelledError:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(
+                    abort(request_id), return_exceptions=True
+                )
+            raise
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(
+                    abort(request_id), return_exceptions=True
+                )
+            emit_structured_log(
+                "error",
+                "visual_arithmetic_probe_failed",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                elapsed_ms=round(
+                    (time.perf_counter() - started) * 1000.0, 3
+                ),
+            )
+            raise
+        finally:
+            self._unregister_turn_request(turn, request_id)
+
+        text = "".join(text_parts)
+        total_ms = (time.perf_counter() - started) * 1000.0
+        timing = {
+            "source": "generated",
+            "ttft_ms": round(first_token_ms or total_ms, 3),
+            "total_ms": round(total_ms, 3),
+            "chars": len(text),
+            "completion_tokens": (
+                usage.get("completion_tokens") if usage is not None else None
+            ),
+            "finish_reason": finish_reason,
+            "usage": usage,
+            "private_visual_arithmetic_probe": True,
+        }
+        emit_structured_log(
+            "reply",
+            "visual_arithmetic_probe_completed",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            request_id=request_id,
+            output_chars=len(text),
+            ttft_ms=timing["ttft_ms"],
+            total_ms=timing["total_ms"],
+        )
+        return text, timing
+
+    async def _adopt_visual_arithmetic_probe(
+        self,
+        turn: TurnBuffer,
+        provisional: ProvisionalReplyState,
+        probe_task: asyncio.Task[
+            tuple[str, dict[str, Any]] | None
+        ],
+    ) -> tuple[str, dict[str, Any]]:
+        """Adopt a private probe into the existing provisional reply state."""
+
+        try:
+            result = await probe_task
+            if result is None:
+                done_timing = await self._finish_provisional_reply(
+                    turn,
+                    provisional,
+                    finish_reason="visual_route_unavailable",
+                    usage=None,
+                )
+                return "", {
+                    "source": "visual_arithmetic_probe",
+                    "ttft_ms": None,
+                    "total_ms": 0.0,
+                    "chars": 0,
+                    "completion_tokens": None,
+                    "finish_reason": "visual_route_unavailable",
+                    "private_visual_arithmetic_probe": True,
+                    "fallback_reason": "visual_route_unavailable",
+                    **done_timing,
+                    "provisional": True,
+                }
+            text, timing = result
+            if text:
+                await self._send_provisional_reply_delta(
+                    turn, provisional, text
+                )
+                provisional.first_token_ms = timing.get("ttft_ms")
+            usage = timing.get("usage")
+            done_timing = await self._finish_provisional_reply(
+                turn,
+                provisional,
+                finish_reason=str(timing.get("finish_reason") or "stop"),
+                usage=usage if isinstance(usage, dict) else None,
+            )
+            return text, {**timing, **done_timing, "provisional": True}
+        except asyncio.CancelledError:
+            await self._mark_provisional_reply_terminal(
+                provisional, cancelled=True
+            )
+            raise
+        except Exception as exc:
+            # The private probe is an optimization. Fail closed without
+            # issuing a second model request or failing the whole turn.
+            await self._suppress_provisional_reply_content(
+                turn,
+                provisional,
+                reason="visual_arithmetic_probe_failed",
+            )
+            done_timing = await self._finish_provisional_reply(
+                turn,
+                provisional,
+                finish_reason="visual_arithmetic_probe_failed",
+                usage=None,
+            )
+            emit_structured_log(
+                "error",
+                "visual_arithmetic_probe_fallback",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                fallback="no_numeric_action_without_rescore",
+                after_commit_ms=self._after_commit_ms(turn),
+            )
+            return "", {
+                "source": "visual_arithmetic_probe",
+                "ttft_ms": None,
+                "total_ms": round(
+                    (time.perf_counter() - provisional.started_at) * 1000.0,
+                    3,
+                ),
+                "chars": 0,
+                "completion_tokens": None,
+                "finish_reason": "visual_arithmetic_probe_failed",
+                "private_visual_arithmetic_probe": True,
+                "fallback_reason": "probe_failed",
+                **done_timing,
+                "provisional": True,
+            }
+
     async def _run_generated_reply(
         self,
         turn: TurnBuffer,

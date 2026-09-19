@@ -78,9 +78,16 @@ from sglang_omni.serve.realtime.action.pipeline import ActionScoringPipeline
 
 from sglang_omni.serve.realtime.action.prompts import ActionPromptComponent
 from sglang_omni.serve.realtime.action.entity_view import action_entity_text
+from sglang_omni.serve.realtime.action.visual_generation import (
+    VisualGestureGenerationComponent,
+)
 
 
-@compose_components(ActionScoringPipeline, ActionPromptComponent)
+@compose_components(
+    ActionScoringPipeline,
+    ActionPromptComponent,
+    VisualGestureGenerationComponent,
+)
 class ActionPipeline:
     def _session_action_prefix_namespace(
         self,
@@ -1204,6 +1211,8 @@ class ActionPipeline:
             compact["reason_code"] = action["reason_code"]
         if "fallback_applied" in action:
             compact["fallback_applied"] = bool(action["fallback_applied"])
+        if action.get("allow_adjacent_repeat") is True:
+            compact["allow_adjacent_repeat"] = True
         execution_binding = action.get("execution_binding")
         if execution_binding:
             compact["execution_binding"] = dict(execution_binding)

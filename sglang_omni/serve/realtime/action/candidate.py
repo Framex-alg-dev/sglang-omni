@@ -25,6 +25,7 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
 from sglang_omni.serve.realtime.action.routing import (
     resolve_unique_explicit_action,
     scope_visual_deictic_categories,
+    visual_deictic_scope_candidates,
 )
 from sglang_omni.serve.realtime.action.decision import (
     ACTION_DECISION_LABELS,
@@ -160,11 +161,9 @@ class ActionCandidateComponent:
         visual_deictic_instruction = ""
         scoped_candidate_ids: set[str] | None = None
         if visual_deictic_scope is not None:
-            scoped_candidates = [
-                child
-                for category in visual_deictic_scope.categories
-                for child in category.children
-            ]
+            scoped_candidates = visual_deictic_scope_candidates(
+                visual_deictic_scope
+            )
             scoped_candidate_ids = {
                 candidate.candidate_id for candidate in scoped_candidates
             }
@@ -446,6 +445,15 @@ class ActionCandidateComponent:
             )
             if action["support_status"] == "unsupported":
                 action["candidate_id"] = UNSUPPORTED_DECISION_ID
+        if (
+            visual_deictic_scope is not None
+            and visual_deictic_scope.name == "gesture"
+            and action.get("support_status") != "unsupported"
+        ):
+            # Each explicit camera-backed imitation request is a new execution
+            # command even when it resolves to the same catalog action as the
+            # previous Turn.
+            action["allow_adjacent_repeat"] = True
         action_context.update(
             {
                 "selection_stages": 1,

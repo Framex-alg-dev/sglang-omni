@@ -111,6 +111,25 @@ _GENERIC_VISUAL_ACTION_MARKERS = (
     "thataction",
 )
 
+# ``COPY_HAND`` is intentionally narrower than the catalog's full
+# ``hand-and-gesture`` branch.  That branch also contains pointing, presentation,
+# body-touching, and object-like motions which are poor visual negatives for a
+# user holding one static hand sign in front of the camera.  Keep the bounded
+# set catalog-owned by matching stable source labels rather than candidate IDs.
+_COPY_HAND_PRIMARY_CATEGORY_MARKERS = ("符号化手势", "symbolicgesture")
+_COPY_HAND_ADDITIONAL_LABELS = frozenset(
+    {
+        "单手挥手",
+        "手掌前推表示停止",
+        "单手招手靠近",
+        "双手招手靠近",
+        "敬礼",
+        "两指捏合",
+        "单手握拳",
+        "食指左右摇摆否定",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ExplicitActionRoute:
@@ -240,6 +259,7 @@ def route_numeric_reply_action(
     has_text_output: bool,
     has_action_output: bool,
     candidates: Iterable[SessionActionCandidate],
+    allow_empty_candidates: bool = False,
 ) -> NumericReplyActionRoute:
     """Enable the second action pass only for generated body-neutral replies."""
 
@@ -257,6 +277,13 @@ def route_numeric_reply_action(
         return NumericReplyActionRoute(False, "explicit_body_directive")
     numeric_candidates = numeric_gesture_candidates(candidates)
     if not numeric_candidates:
+        if allow_empty_candidates:
+            # A visual arithmetic turn still needs to resolve its private
+            # numeric evidence for an explicitly requested spoken answer even
+            # when no matching body gesture is available in the catalog.
+            return NumericReplyActionRoute(
+                True, "numeric_candidates_missing", numeric_candidates
+            )
         return NumericReplyActionRoute(False, "numeric_candidates_missing")
     return NumericReplyActionRoute(True, "eligible", numeric_candidates)
 
@@ -357,10 +384,10 @@ def scope_visual_deictic_categories(
         marker in normalized_task
         for marker in _GENERIC_VISUAL_ACTION_MARKERS
     ):
-        return visual_deictic_category_scope(
-            categories,
-            _GENERIC_VISUAL_ACTION_SCOPE,
-        )
+        # The deployed visual imitation capability currently supports hand
+        # gestures only.  Treat a generic "do this action" request as the same
+        # bounded gesture scope; non-hand behavior must fail closed as 000.
+        return visual_deictic_category_scope(categories, "gesture")
     for scope_name, task_markers, path_markers in _VISUAL_CATEGORY_SCOPES:
         if not any(marker in normalized_task for marker in task_markers):
             continue
@@ -414,6 +441,35 @@ def visual_deictic_category_scope(
         )
     )
     return VisualDeicticCategoryScope(name, matches) if matches else None
+
+
+def visual_deictic_scope_candidates(
+    scope: VisualDeicticCategoryScope,
+) -> tuple[SessionActionCandidate, ...]:
+    """Return the candidate-level policy for one visual imitation scope.
+
+    Hand imitation keeps symbolic hand signs plus a small reviewed set of
+    directly observable hand motions. Other visual scopes retain their catalog
+    category membership unchanged. Candidate identity remains catalog-owned.
+    """
+
+    candidates_by_id: dict[str, SessionActionCandidate] = {}
+    for category in scope.categories:
+        normalized_category = _normalized_label(
+            " ".join((*category.category_path, category.source_label))
+        )
+        primary_hand_category = scope.name == "gesture" and any(
+            marker in normalized_category
+            for marker in _COPY_HAND_PRIMARY_CATEGORY_MARKERS
+        )
+        for candidate in category.children:
+            if scope.name == "gesture" and not (
+                primary_hand_category
+                or candidate.source_label in _COPY_HAND_ADDITIONAL_LABELS
+            ):
+                continue
+            candidates_by_id.setdefault(candidate.candidate_id, candidate)
+    return tuple(candidates_by_id.values())
 
 
 def is_visual_deictic_expression_request(

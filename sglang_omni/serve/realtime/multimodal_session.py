@@ -229,6 +229,10 @@ class MultimodalSession:
             ROUTE_ACTION_PARALLEL_ENV,
             default=True,
         )
+        self.visual_gesture_generation_enabled = _env_flag(
+            VISUAL_GESTURE_GENERATION_ENV,
+            default=False,
+        )
         action_decision_mode = os.environ.get(
             ACTION_DECISION_BATCH_MODE_ENV, "shadow"
         ).strip().lower()

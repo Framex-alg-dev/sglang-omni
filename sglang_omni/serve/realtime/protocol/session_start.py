@@ -40,6 +40,11 @@ from sglang_omni.serve.realtime.protocol.models import (
 from sglang_omni.serve.realtime.output_capabilities import SessionOutputCapabilities
 from sglang_omni.serve.realtime.action.routing import (
     visual_deictic_category_scope,
+    visual_deictic_scope_candidates,
+)
+from sglang_omni.serve.realtime.action.visual_generation import (
+    build_visual_gesture_system_prompt,
+    visual_gesture_candidates,
 )
 from sglang_omni.serve.realtime.action.decision import action_decision_candidates
 from sglang_omni.serve.realtime.turn_intent import SYSTEM as TURN_INTENT_SYSTEM
@@ -80,6 +85,79 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prewarm_visual_gesture_prefix(self, prefill: Any) -> bool:
+        """Warm the semantic gesture classifier prefix for the experiment."""
+
+        if (
+            not getattr(self, "visual_gesture_generation_enabled", False)
+            or not callable(prefill)
+        ):
+            return False
+        candidates = visual_gesture_candidates(self.categories, self.candidates)
+        if not candidates:
+            return False
+        request_id = f"session-{self.session_instance_id}-visual-gesture-prefill"
+        started = time.perf_counter()
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(
+                    role="system",
+                    content=build_visual_gesture_system_prompt(candidates),
+                ),
+                Message(
+                    role="user",
+                    content=[{"type": "text", "text": " "}],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_visual_gesture_prewarm",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+            },
+        )
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            emit_structured_log(
+                "error",
+                "session_visual_gesture_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_visual_gesture_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            candidate_count=len(candidates),
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
     async def _prewarm_turn_intent_prefix(self, prefill: Any) -> bool:
         """Warm the static intent system/user-header prefix before first Turn."""
 
@@ -780,6 +858,10 @@ class SessionStartComponent:
             self._prewarm_turn_intent_prefix(intent_prefill),
             name=f"session-intent-prefill-{self.session_instance_id}",
         )
+        visual_gesture_prefill_task = asyncio.create_task(
+            self._prewarm_visual_gesture_prefix(intent_prefill),
+            name=f"session-visual-gesture-prefill-{self.session_instance_id}",
+        )
         if self.direct_action_selection and candidates:
             # Warm every direct-action prefix that an ordinary Session can use
             # before session.started is emitted.  User camera Turns carry an
@@ -794,7 +876,12 @@ class SessionStartComponent:
                 (TURN_ORIGIN_USER, True, None),
                 (TURN_ORIGIN_PROACTIVE, False, None),
             ]
-            if gesture_scope is not None:
+            if (
+                gesture_scope is not None
+                and not getattr(
+                    self, "visual_gesture_generation_enabled", False
+                )
+            ):
                 prefill_routes.append(
                     (TURN_ORIGIN_USER, True, gesture_scope)
                 )
@@ -823,9 +910,10 @@ class SessionStartComponent:
                         origin,
                     )
                     scoped_candidate_ids = {
-                        child.candidate_id
-                        for category in visual_scope.categories
-                        for child in category.children
+                        candidate.candidate_id
+                        for candidate in visual_deictic_scope_candidates(
+                            visual_scope
+                        )
                     }
                     prefill_candidates = [
                         candidate
@@ -1088,6 +1176,7 @@ class SessionStartComponent:
         if not self.direct_action_selection and self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
             await self._prewarm_user_child_sessions(prefill)
         self.turn_intent_prefix_prefilled = await intent_prefill_task
+        self.visual_gesture_prefix_prefilled = await visual_gesture_prefill_task
         self.started = True
         emit_structured_log(
             "lifecycle",
@@ -1097,6 +1186,9 @@ class SessionStartComponent:
             tts_manager_created=self.embedded_tts is not None,
             action_prefix_prefilled=self.action_prefix_prefilled,
             turn_intent_prefix_prefilled=self.turn_intent_prefix_prefilled,
+            visual_gesture_prefix_prefilled=(
+                self.visual_gesture_prefix_prefilled
+            ),
         )
 
         # ``action.allowed_candidates`` is a whitelist of unique candidate IDs.

@@ -8,6 +8,12 @@ from sglang_omni.serve.realtime.action.routing import (
     resolve_unique_explicit_action,
     route_numeric_reply_action,
     scope_visual_deictic_categories,
+    visual_deictic_scope_candidates,
+)
+from sglang_omni.serve.realtime.action.visual_generation import (
+    build_visual_gesture_system_prompt,
+    parse_visual_gesture_output,
+    visual_gesture_candidates,
 )
 from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCandidate,
@@ -168,8 +174,8 @@ def test_visual_deictic_action_requires_camera_and_named_catalog_range() -> None
         has_user_camera=True,
     )
     assert generic_action is not None
-    assert generic_action.name == "action"
-    assert generic_action.categories == (hand, head)
+    assert generic_action.name == "gesture"
+    assert generic_action.categories == (hand,)
     assert scope_visual_deictic_categories(
         categories,
         body_task="这个手势",
@@ -194,6 +200,97 @@ def test_visual_deictic_action_requires_camera_and_named_catalog_range() -> None
         body_mode="perform",
         has_user_camera=True,
     ) is None
+
+
+def test_copy_hand_scope_keeps_only_reviewed_hand_signs() -> None:
+    symbolic = SessionActionCategory(
+        category_id="31",
+        source_label="符号化手势",
+        short_definition="数字和约定手型",
+        category_path=("手部与手势动作", "符号化手势"),
+        children=(
+            _candidate("258", "数字一手势"),
+            _candidate("285", "双手比心"),
+        ),
+    )
+    pointing = SessionActionCategory(
+        category_id="29",
+        source_label="指向类",
+        short_definition="指向动作",
+        category_path=("手部与手势动作", "指向类"),
+        children=(_candidate("225", "指向前方"),),
+    )
+    greeting = SessionActionCategory(
+        category_id="32",
+        source_label="打招呼与告别",
+        short_definition="问候动作",
+        category_path=("手部与手势动作", "打招呼与告别"),
+        children=(_candidate("288", "单手挥手"),),
+    )
+
+    hand_scope = scope_visual_deictic_categories(
+        (symbolic, pointing, greeting),
+        body_task="做这个手势",
+        body_mode="perform",
+        has_user_camera=True,
+    )
+    action_scope = scope_visual_deictic_categories(
+        (symbolic, pointing, greeting),
+        body_task="做这个动作",
+        body_mode="perform",
+        has_user_camera=True,
+    )
+
+    assert hand_scope is not None
+    assert action_scope is not None
+    assert {
+        candidate.candidate_id
+        for candidate in visual_deictic_scope_candidates(hand_scope)
+    } == {"258", "285", "288"}
+    assert {
+        candidate.candidate_id
+        for candidate in visual_deictic_scope_candidates(action_scope)
+    } == {"258", "285", "288"}
+
+
+def test_visual_gesture_generation_uses_catalog_semantic_labels() -> None:
+    digit_four = _candidate("catalog-four", "数字四手势")
+    digit_five = _candidate("catalog-five", "数字五手势")
+    symbolic = SessionActionCategory(
+        category_id="31",
+        source_label="符号化手势",
+        short_definition="数字和约定手型",
+        category_path=("手部与手势动作", "符号化手势"),
+        children=(digit_four, digit_five),
+    )
+
+    eligible = visual_gesture_candidates(
+        (symbolic,), (digit_four, digit_five)
+    )
+    prompt = build_visual_gesture_system_prompt(eligible)
+
+    assert "- 数字四:" in prompt and "- 数字五:" in prompt
+    assert "四指伸直且拇指内扣" in prompt
+    selected = parse_visual_gesture_output("数字五", eligible)
+    assert selected is digit_five
+    assert parse_visual_gesture_output("数字五手势", eligible) is None
+    assert parse_visual_gesture_output("目录外动作", eligible) is None
+    assert parse_visual_gesture_output("UNSUPPORTED", eligible) is None
+    assert parse_visual_gesture_output("数字五。", eligible) is None
+
+
+def test_visual_gesture_generation_drops_ambiguous_catalog_labels() -> None:
+    first = _candidate("one", "数字一手势")
+    second = _candidate("another-one", "数字一")
+    symbolic = SessionActionCategory(
+        category_id="31",
+        source_label="符号化手势",
+        short_definition="数字和约定手型",
+        category_path=("手部与手势动作", "符号化手势"),
+        children=(first, second),
+    )
+
+    assert visual_gesture_candidates((symbolic,), (first, second)) == ()
 
 
 def test_visual_expression_requires_named_scope_and_current_camera() -> None:
@@ -309,6 +406,21 @@ def test_numeric_reply_route_requires_generated_body_neutral_user_reply() -> Non
         candidates=[_candidate("other", "掰手指数数")],
     )
     assert missing.reason == "numeric_candidates_missing"
+
+    visual_answer_without_gesture = route_numeric_reply_action(
+        turn_origin="user",
+        reply_provided=False,
+        speech_kind="generated",
+        body_mode="none",
+        has_user_camera=True,
+        has_text_output=True,
+        has_action_output=True,
+        candidates=[_candidate("other", "掰手指数数")],
+        allow_empty_candidates=True,
+    )
+    assert visual_answer_without_gesture.enabled is True
+    assert visual_answer_without_gesture.candidates == ()
+    assert visual_answer_without_gesture.reason == "numeric_candidates_missing"
 
 
 def test_complete_reply_numeric_gate_is_broad_but_bounded() -> None:

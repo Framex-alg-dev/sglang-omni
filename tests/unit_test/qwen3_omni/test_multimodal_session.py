@@ -60,6 +60,10 @@ from sglang_omni.serve.realtime.action.decision import (
     ACTION_DECISION_LABELS,
     VISUAL_LABELS,
 )
+from sglang_omni.serve.realtime.action.routing import (
+    visual_deictic_category_scope,
+    visual_deictic_scope_candidates,
+)
 from sglang_omni.serve.realtime.turn_intent import TurnIntent
 
 
@@ -4026,6 +4030,92 @@ async def test_visual_scope_intent_is_ready_before_direct_action_scoring(
 
 
 @pytest.mark.asyncio
+async def test_completed_copy_intent_restores_camera_after_early_general_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    async def repaired_visual_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        full_intent_start_event=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result("")
+        await asyncio.sleep(0)
+        return TurnIntent(
+            speech="none",
+            text="",
+            body="这个手势",
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate="COPY_HAND",
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", repaired_visual_intent)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "off")
+    catalog = load_runtime_action_catalog()
+    session = make_session(
+        FakeWebSocket(),
+        PerformanceMatrixClient("P201"),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "repaired-visual-intent",
+            outputs=["action"],
+            action={},
+        )
+    )
+
+    scoring_image_roles = []
+
+    async def score_action(*args, **kwargs):
+        scoring_image_roles.append(args[2])
+        return (
+            {
+                "candidate_id": "000",
+                "action_id": "unsupported",
+                "execution_binding": {},
+                "execute": False,
+                "support_status": "unsupported",
+                "fallback_applied": False,
+            },
+            [],
+            1.0,
+            {"selection_stages": 1},
+        )
+
+    monkeypatch.setattr(session, "_score_action", score_action)
+    turn_id = "repaired-copy-hand"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text="做这个手势")
+    )
+
+    assert scoring_image_roles == [["user_camera"]]
+
+
+@pytest.mark.asyncio
 async def test_shadow_mode_uses_canonical_intent_for_exact_mixed_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4582,6 +4672,408 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
     assert result['media_summary']['action_context']['numeric_reply_action'][
         'operand_values'
     ] == [2, 2]
+
+
+@pytest.mark.asyncio
+async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    catalog = load_global_action_catalog()
+    numeric = numeric_gesture_candidates_by_value(catalog)
+    reply_category = system_accompaniment_categories(catalog)[0]
+    client = PureActionNumericReplyFusionClient(
+        category_id=reply_category.category_id,
+        numeric_candidate_id=numeric[4].candidate_id,
+        reply_chunks=['VISUAL_ARITHMETIC=add,2,2'],
+    )
+
+    async def blocked_until_probe_starts(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        # This deadlocks under the old serial pipeline, where reply inference
+        # is not submitted until after the intent await returns.
+        assert visual_scope_future is not None
+        visual_scope_future.set_result('VISUAL_ANSWER')
+        await asyncio.wait_for(client.reply_started.wait(), timeout=1.0)
+        return TurnIntent(
+            speech='generated',
+            text='根据当前用户语音和摄像头画面完成计算或推理',
+            body='',
+            body_mode='none',
+            face='',
+            history=False,
+            visual_answer_output='gesture_only',
+            visual_scope_gate='VISUAL_ANSWER',
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        'infer_turn_intent',
+        blocked_until_probe_starts,
+    )
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    await start_numeric_reply_session(
+        session, catalog, outputs=['text', 'action']
+    )
+    turn_id = 'visual-arithmetic-parallel-intent'
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new('RGB', (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format='PNG')
+    await session.handle_image_append(
+        {
+            'type': 'input_image.append',
+            'turn_id': turn_id,
+            'seq': 1,
+            'timestamp_ms': 1,
+            'image_role': 'user_camera',
+            'mime_type': 'image/png',
+            'image': base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(
+            turn_id,
+            text='这个加这个是什么，用手势回答',
+        )
+    )
+
+    assert client.reply_requests[0].metadata['task'] == (
+        'session_visual_arithmetic_probe'
+    )
+    ready = next(
+        event for event in ws.events if event['type'] == 'turn.action.ready'
+    )
+    assert ready['action']['candidate_id'] == numeric[4].candidate_id
+    assert 'VISUAL_ARITHMETIC' not in json.dumps(ws.events, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("visual_route", "body", "user_text"),
+    [
+        ("COPY_HAND", "这个手势", "做这个手势"),
+        ("COPY_ACTION", "这个动作", "做这个动作"),
+    ],
+)
+async def test_visual_gesture_generation_replaces_ppl_and_starts_with_intent(
+    monkeypatch: pytest.MonkeyPatch,
+    visual_route: str,
+    body: str,
+    user_text: str,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    catalog = load_global_action_catalog()
+    numeric = numeric_gesture_candidates_by_value(catalog)
+    selected = numeric[5]
+
+    class VisualGestureClient(SystemRouteFusionClient):
+        def __init__(self) -> None:
+            super().__init__(category_id="31", reply_chunks=[])
+            self.gesture_started = asyncio.Event()
+
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            if request.metadata.get("task") != "session_visual_gesture_probe":
+                raise AssertionError(
+                    f"unexpected generation task: {request.metadata.get('task')}"
+                )
+            self.gesture_started.set()
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text="数字五",
+                finish_reason="stop",
+            )
+
+    client = VisualGestureClient()
+
+    async def blocked_until_gesture_probe_starts(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result(visual_route)
+        await asyncio.wait_for(client.gesture_started.wait(), timeout=1.0)
+        return TurnIntent(
+            speech="none",
+            text="",
+            body=body,
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate=visual_route,
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        "infer_turn_intent",
+        blocked_until_gesture_probe_starts,
+    )
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.visual_gesture_generation_enabled = True
+    await start_numeric_reply_session(
+        session, catalog, outputs=["text", "action"]
+    )
+    turn_id = "visual-gesture-generation"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text=user_text)
+    )
+
+    assert [
+        request.metadata.get("task") for request in client.reply_requests
+    ] == ["session_visual_gesture_probe"]
+    assert client.score_requests == []
+    ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert ready["action"]["candidate_id"] == selected.candidate_id
+    assert not any(
+        event["type"] in {"response.text.delta", "response.audio.delta"}
+        for event in ws.events
+    )
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == ""
+    assert result["media_summary"]["action_context"]["selection_mode"] == (
+        "visual_gesture_generation"
+    )
+
+
+@pytest.mark.asyncio
+async def test_nonvisual_camera_turn_does_not_submit_visual_arithmetic_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    async def infer_nonvisual_turn(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result('')
+        return TurnIntent(
+            speech='generated',
+            text='你好',
+            body='',
+            body_mode='none',
+            face='',
+            history=False,
+        )
+
+    monkeypatch.setattr(pipeline, 'infer_turn_intent', infer_nonvisual_turn)
+    catalog = load_global_action_catalog()
+    numeric = numeric_gesture_candidates_by_value(catalog)
+    reply_category = system_accompaniment_categories(catalog)[0]
+    client = PureActionNumericReplyFusionClient(
+        category_id=reply_category.category_id,
+        numeric_candidate_id=numeric[0].candidate_id,
+        reply_chunks=['你好！'],
+    )
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    await start_numeric_reply_session(
+        session, catalog, outputs=['text', 'action']
+    )
+    turn_id = 'nonvisual-camera-no-arithmetic-probe'
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new('RGB', (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format='PNG')
+    await session.handle_image_append(
+        {
+            'type': 'input_image.append',
+            'turn_id': turn_id,
+            'seq': 1,
+            'timestamp_ms': 1,
+            'image_role': 'user_camera',
+            'mime_type': 'image/png',
+            'image': base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text='你好')
+    )
+
+    assert client.reply_requests
+    assert not any(
+        request.metadata.get('task') == 'session_visual_arithmetic_probe'
+        for request in client.reply_requests
+    )
+    result = next(event for event in ws.events if event['type'] == 'turn.result')
+    assert result['reply']['text'] == '你好！'
+    assert_body_action_not_requested(result['action'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "probe_chunks",
+        "probe_error",
+        "expected_reply",
+        "expected_status",
+        "expected_reason",
+        "expected_selected_number",
+    ),
+    [
+        (
+            ["not a structured visual answer"],
+            None,
+            "我没能识别出答案。",
+            "unknown",
+            "visual_answer_unresolved",
+            None,
+        ),
+        (
+            [],
+            RuntimeError("synthetic visual probe failure"),
+            "我没能识别出答案。",
+            "unknown",
+            "visual_answer_unresolved",
+            None,
+        ),
+        (
+            ["VISUAL_ARITHMETIC=add,6,6"],
+            None,
+            "答案是数字12。",
+            "unsupported",
+            "numeric_gesture_unavailable",
+            12,
+        ),
+    ],
+)
+async def test_visual_answer_speech_survives_probe_or_gesture_failure_without_rescore(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_chunks: list[str],
+    probe_error: Exception | None,
+    expected_reply: str,
+    expected_status: str,
+    expected_reason: str,
+    expected_selected_number: int | None,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    async def infer_visual_gesture_and_speech(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result('VISUAL_ANSWER')
+        return TurnIntent(
+            speech='generated',
+            text='根据当前用户语音和摄像头画面完成计算或推理',
+            body='',
+            body_mode='none',
+            face='',
+            history=False,
+            visual_answer_output='gesture_and_speech',
+            visual_scope_gate='VISUAL_ANSWER',
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        'infer_turn_intent',
+        infer_visual_gesture_and_speech,
+    )
+    catalog = load_global_action_catalog()
+    numeric = numeric_gesture_candidates_by_value(catalog)
+    reply_category = system_accompaniment_categories(catalog)[0]
+    client = PureActionNumericReplyFusionClient(
+        category_id=reply_category.category_id,
+        numeric_candidate_id=numeric[0].candidate_id,
+        reply_chunks=probe_chunks,
+    )
+    client.reply_error = probe_error
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    await start_numeric_reply_session(
+        session, catalog, outputs=['text', 'action']
+    )
+    turn_id = 'visual-answer-failure-keeps-speech'
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new('RGB', (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format='PNG')
+    await session.handle_image_append(
+        {
+            'type': 'input_image.append',
+            'turn_id': turn_id,
+            'seq': 1,
+            'timestamp_ms': 1,
+            'image_role': 'user_camera',
+            'mime_type': 'image/png',
+            'image': base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(
+            turn_id,
+            text='这个加这个等于多少，用手势回答并说出来',
+        )
+    )
+
+    assert len(client.reply_requests) == 1
+    assert client.reply_requests[0].metadata['task'] == (
+        'session_visual_arithmetic_probe'
+    )
+    assert not any(
+        request.stage == NUMERIC_REPLY_ACTION_STAGE
+        for request in client.score_requests
+    )
+    ready = next(
+        event for event in ws.events if event['type'] == 'turn.action.ready'
+    )
+    assert ready['action']['support_status'] == expected_status
+    assert ready['action']['reason_code'] == expected_reason
+    result = next(event for event in ws.events if event['type'] == 'turn.result')
+    assert result['reply']['text'] == expected_reply
+    assert result['action']['support_status'] == expected_status
+    assert result['action']['reason_code'] == expected_reason
+    numeric_context = result['media_summary']['action_context'][
+        'numeric_reply_action'
+    ]
+    assert numeric_context.get('selected_number') == expected_selected_number
+    assert 'VISUAL_ARITHMETIC' not in json.dumps(ws.events, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -10312,6 +10804,15 @@ async def test_visual_deictic_action_scores_only_the_named_range(
         for child in category.children
         if child.candidate_id not in expression_ids
     }
+    if scope_name == "gesture":
+        gesture_scope = visual_deictic_category_scope(
+            session.categories, "gesture"
+        )
+        assert gesture_scope is not None
+        expected_child_ids = {
+            child.candidate_id
+            for child in visual_deictic_scope_candidates(gesture_scope)
+        }
     assert {
         candidate.candidate_id for candidate in child_request.candidates
     } == expected_child_ids | {"000"}
@@ -10401,11 +10902,11 @@ async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_fra
         REACTION_LABELS,
     )
     core_decision_ids = set(BODY_LABELS) | set(FACE_LABELS) | set(REACTION_LABELS)
+    gesture_scope = visual_deictic_category_scope(session.categories, "gesture")
+    assert gesture_scope is not None
     expected_ids = {
         child.candidate_id
-        for category in session.categories
-        if "手部与手势" in " ".join(category.category_path)
-        for child in category.children
+        for child in visual_deictic_scope_candidates(gesture_scope)
     }
     assert request_ids == expected_ids | {"000"} | core_decision_ids
     assert len(request_ids) < len(session.candidates) + 1
@@ -10418,6 +10919,7 @@ async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_fra
     ]
     target = session.candidate_by_id["258"]
     assert f"视觉定义={target.short_definition}" in request.session_instruction
+    assert "区分要点=" in request.session_instruction
     assert "avatar_state 只表示数字人当前状态" in request.session_instruction
     assert f"视觉定义={target.short_definition}" not in request.prefix
     assert "[本轮视觉模仿判定]" in request.prefix
@@ -10426,6 +10928,7 @@ async def test_direct_visual_deictic_action_uses_scoped_candidates_and_three_fra
         request.session_instruction,
     )
     assert action["candidate_id"] == "258"
+    assert action["allow_adjacent_repeat"] is True
     assert context["category_scope"] == "visual_deictic:gesture"
     assert context["visual_scope_user_camera_image_count"] == 3
     assert context["selection_definition_source"] == "short_definition_visual"

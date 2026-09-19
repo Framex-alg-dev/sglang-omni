@@ -252,14 +252,23 @@ class NumericReplyActionComponent:
                 selected_number=direct_number,
                 selected_candidate_id=candidate.candidate_id,
             )
-        elif operand_values is not None:
+        elif visual_gesture_answer:
+            # VISUAL_ANSWER is a strict, server-owned contract. A malformed
+            # probe result or a computed number without a catalog gesture must
+            # fail closed without issuing a second model-backed PPL request.
+            # Keep a known numeric answer so an explicitly requested spoken
+            # answer can still be published independently of the body action.
             decision = NumericReplyActionDecision(
                 action=None,
                 scores=[],
                 elapsed_ms=0.0,
                 candidate_count=candidate_count,
                 selected_number=direct_number,
-                fallback_reason="computed_result_not_representable",
+                fallback_reason=(
+                    "computed_result_not_representable"
+                    if direct_number is not None
+                    else "visual_answer_unresolved"
+                ),
             )
         else:
             try:
