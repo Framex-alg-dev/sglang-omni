@@ -2,7 +2,7 @@
   "schema_version": 1,
   "description": "Text-only, isolated-session recall evaluation for the limited action catalog.",
   "catalog_path": "sglang_omni/assets/character_limited_action_global_catalog.json",
-  "catalog_hash": "sha256:180bd7004e3e279ac21c7f19b2702dba7d8b428a35e9997831bd903689cab349",
+  "catalog_hash": "sha256:85d017c72dfc64459e03df5d06583e748d74e33a31c801366978e287e7d9bdaa",
   "catalog_candidate_count": 117,
   "groups": {
     "canonical_label": "One exact catalog-label command per action; measures catalog coverage.",

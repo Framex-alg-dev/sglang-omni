@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from sglang_omni.serve.realtime.turn_intent import (
-    EarlyBodyIntent,
     VISUAL_GESTURE_ANSWER_GATE,
     infer_turn_intent,
 )
@@ -1058,7 +1057,6 @@ class TurnPipeline:
             independently_published_action = None
             intent_task: asyncio.Task[Any] | None = None
             visual_scope_future: asyncio.Future[str] | None = None
-            body_intent_future: asyncio.Future[EarlyBodyIntent] | None = None
             visual_arithmetic_probe_task: (
                 asyncio.Task[tuple[str, dict[str, Any]] | None] | None
             ) = None
@@ -1181,12 +1179,6 @@ class TurnPipeline:
                     if intent_detail_release is not None:
                         intent_detail_release.set()
                 scored_action = result[0]
-                early_body_intent: EarlyBodyIntent | None = None
-                if (
-                    turn.turn_origin == TURN_ORIGIN_USER
-                    and body_intent_future is not None
-                ):
-                    early_body_intent = await body_intent_future
                 action_is_terminal_without_execution = bool(
                     scored_action is not None
                     and (
@@ -1236,19 +1228,13 @@ class TurnPipeline:
                     waited_for_unified_intent = True
                 intent = turn.intent
 
-                reconciled_body_task = (
-                    early_body_intent.body_task
-                    if early_body_intent is not None
-                    and early_body_intent.body_intent == "perform"
-                    else intent.body
-                    if intent is not None and intent.body_mode == "perform"
-                    else ""
-                )
                 if (
-                    reconciled_body_task
+                    waited_for_unified_intent
+                    and ambiguous_concrete_category
+                    and intent is not None
+                    and intent.body_mode == "perform"
                     and scored_action is not None
                     and scored_action.get("execute")
-                    and scored_action.get("support_status") != "unsupported"
                 ):
                     eligible_pairs = [
                         (category, candidate)
@@ -1258,7 +1244,7 @@ class TurnPipeline:
                         )
                     ]
                     exact_route = resolve_unique_source_label_action(
-                        reconciled_body_task, eligible_pairs
+                        intent.body, eligible_pairs
                     )
                     if exact_route is not None:
                         action_image_roles = (
@@ -1308,7 +1294,7 @@ class TurnPipeline:
                             scored_action = result[0]
                             emit_structured_log(
                                 "action",
-                                "action_reconciled_from_body_intent",
+                                "ambiguous_action_reconciled_from_intent",
                                 session_id=self.session_id,
                                 turn_id=turn_id,
                                 trace_id=turn.trace_id,
@@ -1318,16 +1304,9 @@ class TurnPipeline:
                                 selected_candidate_id=(
                                     exact_route.candidate.candidate_id
                                 ),
-                                category_margin=getattr(
-                                    category_decision, "margin", None
-                                ),
+                                category_margin=category_decision.margin,
                                 model_request_added=False,
                                 match_mode="exact_source_label",
-                                body_intent_source=(
-                                    "streaming_body_channel"
-                                    if early_body_intent is not None
-                                    else "completed_intent"
-                                ),
                             )
 
                 # In enforce mode, action scoring is intentionally speculative:
@@ -1448,14 +1427,6 @@ class TurnPipeline:
                     # and low-confidence grouped outcomes remain fail-closed.
                     grouped_authoritative_allow = decision.allows_body
                     intent_allows_body = bool(grouped_authoritative_allow)
-                    if early_body_intent is not None:
-                        if early_body_intent.body_intent == "perform":
-                            intent_allows_body = True
-                        elif not (
-                            early_body_intent.body_intent == "none"
-                            and decision.reaction_type != "none"
-                        ):
-                            intent_allows_body = False
                     emit_structured_log(
                         "action", "batched_action_decision_enforced",
                         session_id=self.session_id, turn_id=turn_id,
@@ -1756,12 +1727,6 @@ class TurnPipeline:
             intent_detail_release: asyncio.Event | None = None
             if turn.turn_origin == TURN_ORIGIN_USER and not provided_reply and (turn.text or current_audio_list):
                 visual_scope_future = asyncio.get_running_loop().create_future()
-                intent_supports_body_future = (
-                    "body_intent_future"
-                    in inspect.signature(infer_turn_intent).parameters
-                )
-                if intent_supports_body_future:
-                    body_intent_future = asyncio.get_running_loop().create_future()
                 intent_supports_scope_future = (
                     "visual_scope_future"
                     in inspect.signature(infer_turn_intent).parameters
@@ -1787,11 +1752,6 @@ class TurnPipeline:
                         **(
                             {
                                 "visual_scope_future": visual_scope_future,
-                                **(
-                                    {"body_intent_future": body_intent_future}
-                                    if intent_supports_body_future
-                                    else {}
-                                ),
                                 **(
                                     {
                                         "full_intent_start_event": (
@@ -2505,11 +2465,6 @@ class TurnPipeline:
                 and turn.turn_origin == TURN_ORIGIN_USER
                 and reply_history_route is not None
                 and reply_history_route.reply_mode == REPLY_MODE_LANGUAGE_REQUIRED
-                and turn.intent is not None
-                and (
-                    turn.intent.speech_independent_of_body
-                    or turn.intent.body_intent == "capability"
-                )
                 and not visual_gesture_answer
             )
             preserve_visual_answer_speech = bool(
@@ -2754,8 +2709,6 @@ class TurnPipeline:
                 preserve_language_reply_on_unsupported_action
                 and provisional_state is not None
                 and reply_task is not None
-                and turn.intent is not None
-                and turn.intent.body_mode == "none"
             ):
                 await self._promote_provisional_reply(
                     turn, provisional_state,
@@ -3068,11 +3021,7 @@ class TurnPipeline:
                 )
                 suppress_reply_for_unsupported_action = bool(
                     action_unsupported
-                    and not (
-                        preserve_language_reply_on_unsupported_action
-                        and turn.intent is not None
-                        and turn.intent.body_intent == "capability"
-                    )
+                    and not preserve_language_reply_on_unsupported_action
                     and not preserve_visual_answer_speech
                 )
                 if provisional_state is not None:
@@ -3166,11 +3115,7 @@ class TurnPipeline:
             )
             suppress_reply_for_unsupported_action = bool(
                 action_unsupported
-                and not (
-                    preserve_language_reply_on_unsupported_action
-                    and turn.intent is not None
-                    and turn.intent.body_intent == "capability"
-                )
+                and not preserve_language_reply_on_unsupported_action
                 and not preserve_visual_answer_speech
             )
             if (

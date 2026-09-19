@@ -9,7 +9,6 @@ from sglang_omni.serve.realtime.action.decision import (
     category_gate_candidates,
     category_gate_prompt,
     category_gate_score_ids,
-    category_gate_selected_category_ids,
     fuse_category_gate_into_action_decision,
 )
 
@@ -125,50 +124,6 @@ def test_category_gate_aggregation_selects_only_within_category_group():
     assert decision.category_id == "32"
     assert decision.unsupported is False
     assert decision.margin == 1.8
-
-
-def test_category_gate_keeps_close_runner_up_category():
-    categories = [
-        _Category("26", "双臂抬起", "双臂抬起或交叠"),
-        _Category("31", "符号化手势", "数字、图形和约定手型"),
-        _Category("32", "挥手", "问候和告别"),
-    ]
-    decision = aggregate_category_gate(
-        [
-            _score("IC26", -8.9237),
-            _score("IC31", -9.8447),
-            _score("IC32", -11.0),
-            _score("IC00", -10.8507),
-            _score("ICN0", -11.8817),
-        ],
-        categories,
-    )
-
-    assert decision.category_id == "26"
-    assert category_gate_selected_category_ids(decision, categories) == (
-        "26",
-        "31",
-    )
-
-
-def test_category_gate_keeps_only_clear_winner_category():
-    categories = [
-        _Category("26", "双臂抬起", "双臂抬起或交叠"),
-        _Category("31", "符号化手势", "数字、图形和约定手型"),
-    ]
-    decision = aggregate_category_gate(
-        [
-            _score("IC26", -1.0),
-            _score("IC31", -2.01),
-            _score("IC00", -4.0),
-            _score("ICN0", -5.0),
-        ],
-        categories,
-    )
-
-    assert category_gate_selected_category_ids(decision, categories) == (
-        "26",
-    )
 
 
 def test_category_gate_can_select_unsupported_category():
