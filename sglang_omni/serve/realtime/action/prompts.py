@@ -64,7 +64,11 @@ logger = logging.getLogger(__name__)
 _VISUAL_CANDIDATE_DISAMBIGUATION_ZH = {
     "数字一手势": "排除：拇指竖起而食指弯曲是点赞，不是数字一。",
     "数字二手势": "排除：拇指与食指围成圆圈是捏合或 OK，不是数字二；三根及以上手指伸直也不是数字二。",
-    "数字三手势": "必须恰好是食指、中指、无名指三根伸直；两根伸直是数字二，拇指与食指围成圆圈不是数字三。",
+    "数字三手势": (
+        "接受两种数字三手型：食指、中指、无名指三根伸直；或拇指与食指"
+        "指尖相接成圈、其余三指伸直。两根伸直是数字二；只有拇指与食指"
+        "成圈而其余三指未伸直才是 OK 或捏合。"
+    ),
     "数字四手势": "必须是除拇指外的四根手指伸直；仅食指和中指伸直是数字二，拇指也展开是数字五。",
     "数字五手势": "必须五根手指全部伸直张开；拇指和食指形成 L 形且其余三指收拢是数字八。",
     "数字八手势": "必须仅拇指和食指伸直形成清晰 L 形；五指展开是数字五，仅食指伸直是数字一。",
@@ -73,7 +77,12 @@ _VISUAL_CANDIDATE_DISAMBIGUATION_ZH = {
 _VISUAL_CANDIDATE_DISAMBIGUATION_EN = {
     "数字一手势": "Exclude thumbs-up: an extended thumb with a curled index finger is not digit one.",
     "数字二手势": "Exclude an OK/pinch circle and any shape with three or more extended fingers.",
-    "数字三手势": "Exactly index, middle, and ring fingers are extended; two fingers or an OK circle do not match.",
+    "数字三手势": (
+        "Accept either three extended index/middle/ring fingers, or thumb and "
+        "index fingertips touching in a circle with the other three fingers "
+        "extended. A circle without those other three extended fingers is an "
+        "OK/pinch gesture, not digit three."
+    ),
     "数字四手势": "Exactly four non-thumb fingers are extended; two fingers mean two and an extended thumb makes five.",
     "数字五手势": "All five fingers must be extended and spread; an L made only by thumb and index is eight.",
     "数字八手势": "Only thumb and index are extended in a clear L; an open five-finger palm is five.",
