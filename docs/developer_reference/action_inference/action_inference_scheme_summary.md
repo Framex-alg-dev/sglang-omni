@@ -124,3 +124,7 @@ Category 和 Child 不读取跨 Turn 回复历史、上一动作 ID、动作名�
 - 当前 Turn 媒体、状态和临时 guidance 位于动态上下文；
 - 资源日志按 20 秒周期采样，并在 Turn 推理前后额外采样；
 - 客户端可以顺序发送媒体和 commit，无需逐 ACK 等待。
+
+统一意图 JSON 拆分为 Action/Language 两个独立流式 Lane 的方案尚未实施，预期收益、
+共享 Prefix 前提、风险和验收标准见
+[双流式意图 Lane 拆分 TODO](intent_two_lane_streaming_TODO_CN.md)。

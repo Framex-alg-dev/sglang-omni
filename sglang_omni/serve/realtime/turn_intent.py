@@ -51,69 +51,92 @@ _MODEL_VISUAL_ROUTE_TO_INTERNAL = {
 _VISUAL_ROUTE_PREFIX_RE = re.compile(
     r'"(?:visual_route|visual)"\s*:\s*"(?P<route>[A-Z0-9_]+)"'
 )
-_PURE_DEICTIC_COPY_ROUTES = {
-    # Deliberately narrow consistency repair, not a second classifier.
-    "COPY_ACTION": frozenset(
-        {
-            "做这个动作",
-            "模仿这个动作",
-            "复刻这个动作",
-            "重复这个动作",
-            "照着我做",
-            "do this",
-            "copy this action",
-            "imitate this action",
-        }
-    ),
-    "COPY_HAND": frozenset(
-        {
-            "做这个手势",
-            "比这个手势",
-            "比这个数字",
-            "做这个数字",
-            "比个这个",
-            "模仿这个手势",
-            "复刻这个手势",
-            "重复这个手势",
-            "do this gesture",
-            "make this gesture",
-            "copy this gesture",
-            "imitate this gesture",
-        }
-    ),
-}
-_PURE_TASK_TRAILING_PUNCTUATION_RE = re.compile(r"[\s。！？!?，,；;：:]+$")
 
 
-def _repair_contradictory_copy_route(
-    data: dict,
+@dataclass(frozen=True)
+class EarlyBodyIntent:
+    """A complete body channel extracted before the full intent JSON ends."""
+
+    body_intent: str
+    body_task: str = ""
+
+
+_BODY_INTENT_PREFIX_RE = re.compile(
+    r'"body_intent"\s*:\s*"(?P<mode>perform|prohibit|capability|none)"'
+)
+_BODY_TASK_PREFIX_RE = re.compile(r'"body_task"\s*:\s*')
+_FACE_TASK_PREFIX_RE = re.compile(r'"face_task"\s*:\s*')
+
+
+def _body_intent_from_partial_output(raw: str) -> EarlyBodyIntent | None:
+    """Extract only complete JSON values; never guess from a partial string."""
+
+    mode_match = _BODY_INTENT_PREFIX_RE.search(raw)
+    if mode_match is None:
+        return None
+    mode = mode_match.group("mode")
+    if mode not in {"perform", "prohibit"}:
+        return EarlyBodyIntent(body_intent=mode)
+    task_match = _BODY_TASK_PREFIX_RE.search(raw)
+    if task_match is None:
+        return None
+    try:
+        task, _ = json.JSONDecoder().raw_decode(raw[task_match.end() :].lstrip())
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(task, str) or not task.strip():
+        return None
+    return EarlyBodyIntent(body_intent=mode, body_task=task.strip())
+
+
+def _string_from_partial_output(
+    raw: str,
+    prefix: re.Pattern[str],
+) -> str | None:
+    """Decode one complete JSON string without accepting a partial value."""
+
+    match = prefix.search(raw)
+    if match is None:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(raw[match.end() :].lstrip())
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def _same_visual_target(value: str, canonical_target: str) -> bool:
+    """Compare model-owned canonical targets without user-phrase matching."""
+
+    return value.strip().rstrip("。.!！?") == canonical_target
+
+
+def _reconcile_copy_route_target(
     visual_route: str,
     *,
-    has_user_camera: bool,
+    body_task: object,
+    face_task: object,
 ) -> str:
-    """Repair an exact pure-copy imperative contradicted by model fields."""
+    """Prevent a resolved action target from being overwritten by COPY_*.
 
-    if (
-        not has_user_camera
-        or visual_route != GENERAL_INTENT_GATE
-        or data.get("speech") != "generated"
-        or data.get("body_mode") != "none"
-        or data.get("body")
-        or data.get("face")
-    ):
+    A COPY route is an unresolved-reference contract. The unified model must
+    use the canonical target owned by that route (or omit it for compatibility).
+    Any other non-empty target is already semantically resolved and therefore
+    belongs to the non-visual action path.
+    """
+
+    choice = _VISUAL_SCOPE_GATE_CHOICES.get(visual_route)
+    if choice is None:
         return visual_route
-    task = data.get("text")
-    if not isinstance(task, str):
+    channel, canonical_target = choice
+    value = body_task if channel == "body" else face_task
+    if not isinstance(value, str) or not value.strip():
         return visual_route
-    normalized_task = _PURE_TASK_TRAILING_PUNCTUATION_RE.sub(
-        "", task.strip().lower()
-    )
-    for repaired_route, phrases in _PURE_DEICTIC_COPY_ROUTES.items():
-        if normalized_task in phrases:
-            data["speech"] = "none"
-            data["text"] = ""
-            return repaired_route
-    return visual_route
+    if _same_visual_target(value, canonical_target):
+        return visual_route
+    return GENERAL_INTENT_GATE
 
 
 def _visual_route_from_partial_output(
@@ -121,10 +144,12 @@ def _visual_route_from_partial_output(
     *,
     has_user_camera: bool,
 ) -> str | None:
-    """Return the first complete visual route emitted by unified intent.
+    """Return a safe early visual decision emitted by unified intent.
 
-    This is only an early scheduling hint. The completed JSON still goes
-    through ``TurnIntent.parse`` before any action can be published.
+    GENERAL and visual arithmetic can be released from the visual field alone.
+    COPY_* must wait for its target field: otherwise a premature model route
+    could start a camera request before a concrete action such as
+    ``数字六手势`` appears later in the same JSON object.
     """
 
     match = _VISUAL_ROUTE_PREFIX_RE.search(raw)
@@ -137,42 +162,70 @@ def _visual_route_from_partial_output(
         return None
     if route != GENERAL_INTENT_GATE and not has_user_camera:
         return ""
+    choice = _VISUAL_SCOPE_GATE_CHOICES.get(route)
+    if choice is not None:
+        channel, canonical_target = choice
+        if channel == "body":
+            early_body = _body_intent_from_partial_output(raw)
+            if early_body is None:
+                return None
+            if early_body.body_intent != "perform" or not early_body.body_task:
+                return None
+            target = early_body.body_task
+        else:
+            target = _string_from_partial_output(raw, _FACE_TASK_PREFIX_RE)
+            if target is None:
+                return None
+        return route if _same_visual_target(target, canonical_target) else ""
     return "" if route == GENERAL_INTENT_GATE else route
 
-SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文本，不识别图片；只输出一行紧凑JSON，不解释。
+SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文本，不识别图片；只输出紧凑JSON。
 
-has_user_camera=true/false是服务端事实。只有true才允许依赖当前画面的视觉路由；有图片不等于用户要求模仿。
+has_user_camera=true/false是服务端事实。只有true才允许需要当前画面的visual；有图片不等于要求模仿。
 
-首字段必须是route，且固定包含visual、speech、body_intent、reaction：
-{"route":{"visual":"NO_CURRENT_VIEW","speech":"generated","body_intent":"none","reaction":"none"},...}
-- visual：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
-- speech：verbatim=朗读指定正文；generated=需要生成回答；none=不说话。需要内容时才输出text。
-- body_intent：perform=执行动作；prohibit=禁止动作；capability=询问能力/动作范围；none=未要求身体动作。perform/prohibit时输出body_task；capability必须speech=generated且不得输出body_task。
-- reaction：respond/none。直接问候、道别、感谢或亲昵且没有明确/禁止动作时可respond并输出reaction_task；否则none。body_intent为perform/prohibit时必须none。
-仅在非默认时输出face_task、history=true、voice_tone、voice_pace；不得编造用户未指定的通道。
+字段必须按流式优先级输出：首字段visual，第二字段body_intent；perform/prohibit时第三字段必须是body_task；
+存在face_task时紧随动作字段输出；然后依次输出speech、reaction，再输出其他非默认载荷。visual使用下文枚举；speech只能是verbatim/generated/none；
+body_intent只能是perform/prohibit/capability/none；reaction只能是respond/none。
+其他非默认载荷依次为：text、speech_independent_of_body、history、reaction_task、voice_tone、
+voice_pace、visual_answer_operation、visual_answer_output。空字符串、history=false、natural和normal不得输出。
+body_task只能在perform/prohibit时输出，且必须早于speech，以便身体通道独立就绪。
+visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
-先按下列互斥顺序确定visual：
-1. 复现当前画面：执行词（做、比、模仿、复刻、重复、照着做；do/copy/imitate）与当前指代（这个、这样、照着我、和我一样；this/like me）同时出现，必须选COPY_CURRENT_*。“做这个动作/Do this”=COPY_CURRENT_ACTION；“做这个手势/比这个数字/比个这个/Do this gesture”=COPY_CURRENT_HAND。纯复现speech=none；复现和说话可以同时存在。身体类COPY令body_intent=perform；COPY_CURRENT_FACE令body_intent=none并输出face_task。
-2. 当前画面中的两个指代数字做加、减、乘、除，选ANSWER_CURRENT_VIEW_WITH_GESTURE，body_intent=none、reaction=none。必须输出visual_answer_operation：add/subtract/multiply/divide，减除保留左右顺序；必须输出visual_answer_output：明确只用手势或不要说话=gesture_only，未指定回答方式或要求手势并说出来=gesture_and_speech。答案播报只由visual_answer_output控制；额外指定话术才另输出speech=verbatim和text。数字答案已占用身体动作，若还要求另一身体动作也必须输出body_intent/body_task，由服务端拒绝，不得静默丢弃。
-3. 其他情况选NO_CURRENT_VIEW：普通问答、画面识别/描述、能力询问、禁止动作、名称明确且不需照抄画面的动作。“挥手、点头、比个心、比数字二、做个手势”都属于此类。
+visual_route先于其他字段按以下互斥顺序判定：
+1. 仅当不看当前画面就无法确定动作目标时选COPY_CURRENT_*：“做这个动作”=COPY_CURRENT_ACTION；“做这个手势/比这个数字/照着我的手比”=COPY_CURRENT_HAND。COPY的body_task/face_task必须使用对应标准目标“这个动作/这个手势/这个表情”等。
+2. 视觉四则运算：要求对当前画面中的两个指代数字做加、减、乘、除时，选ANSWER_CURRENT_VIEW_WITH_GESTURE。未指定回答方式时默认手势加语音；明确“用手势回答/只用手势/不要说话”时仅手势。
+3. 语言已明确动作或数字时选NO_CURRENT_VIEW，与有无摄像头无关。“个/一个”是量词，不是“这个”；“比个数字三/比一个三/比个三/给我比六/挥手/点头/比个心”均不看图片，数字动作输出标准名“数字N手势”。
 
-最小对比：“做个手势”是任意手势，NO_CURRENT_VIEW+perform；“做这个手势/比这个数字”必须COPY_CURRENT_HAND。“比数字二”选NO_CURRENT_VIEW；“比个这个”必须COPY_CURRENT_HAND。“不要做这个动作”和“做这个动作是什么意思”不得COPY。“这是什么手势/这是数字几”选NO_CURRENT_VIEW；“这个加这个等于多少”依赖当前画面，必须视觉计算；“一加二等于多少”不依赖当前画面，选NO_CURRENT_VIEW。
+最小对比：“比个数字三/Show number three”=NO_CURRENT_VIEW+数字三手势；“比这个数字/Copy this hand sign”=COPY_CURRENT_HAND+这个手势。“不要做这个动作/做这个动作是什么意思”不得转COPY。有画面时“这是什么手势/这是数字几/这是几/What number or gesture is this”=COPY_CURRENT_HAND。“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”=NO_CURRENT_VIEW。
 
-COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。has_user_camera=false时必须选NO_CURRENT_VIEW，不得执行指代动作，并生成说明需要画面的回答。
+COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_intent=none，省略body_task/face_task并说明需要画面。
 
-先确定要说的正文边界，再提取正文之外的动作和表情。语言与动作独立：“说一比二”=说“一”并做数字二手势；“说二比一”=说“二”并做数字一手势；“说一比二这三个字”才朗读“一比二”。引用的动作词不执行。数字动作写“数字一手势”等标准名。generated的text保留用户问题或语言任务，不提前回答、不变换人称。只要求动作时speech=none；礼貌请求仍是perform。“能挥挥手吗”是perform；“你会挥手吗”是capability。
+一致性：模仿与说话可以同时存在，visual_route仍为COPY；纯复现speech=none。“做这个动作/手势”不得选NO_CURRENT_VIEW。视觉计算必须带visual_answer_operation：加/减/乘/除对应add/subtract/multiply/divide，禁止缺省，减除保留顺序；必须带visual_answer_output：仅手势或不播报答案=gesture_only，未指定或手势加语音播报答案=gesture_and_speech；仅语音回答则选NO_CURRENT_VIEW并省略两字段。“并说出来”只由visual_answer_output表达；额外原样话术的speech/text与答案播报独立。明确的表情、语气、语速必须保留，未指定时不得编造。
+
+其他字段：
+- speech：verbatim=明确要求朗读指定正文；generated=需要语言回应；none=不说话。text为正文或语言任务。
+- body_intent：perform=执行明确身体动作；prohibit=禁止动作；capability=询问动作能力；none=未要求。perform/prohibit时用body_task写动作目标。
+- speech_independent_of_body：仅当同时存在身体任务和语言任务时输出布尔值。即使身体动作无法执行，语言内容仍应单独说出时为true；只是对动作的应答、确认或承诺时为false。省略等同false。
+- face_task写明确表情目标；history仅在必须查阅先前对话时输出true。
+- reaction仅为respond/none；用户直接问候、道别、感谢或亲昵，且无明确或禁止动作时可respond并写reaction_task。
+- body_intent不是none时reaction必须none。未指定的动作、表情不要编造。只要求动作时speech=none；动作请求的礼貌疑问形式不会自动产生语言回答。
+
+先划分语言和动作通道。对任意数字X、Y，“说X比Y”中“说X”只进入text，“比Y”只进入body_task：text=X，body_task=数字Y手势；严禁把X同时作为动作数字。“说X比Y这几个字”才是完整朗读“X比Y”，不执行手势。引用的动作词不执行；text内否定不改变body_intent。数字动作使用“数字Y手势”标准名。generated的text保留原语言任务，不作答、不变换人称。
+
+具体立即请求通常要执行：“能挥挥手吗”“可以比个心吗”是perform；真正询问能力或范围才回答：“你会挥手吗”“你支持哪些动作”是generated且body_intent=capability。
 
 示例：
-说二比一 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"verbatim","body_intent":"perform","reaction":"none"},"text":"二","body_task":"数字一手势"}
-你会挥手吗 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"generated","body_intent":"capability","reaction":"none"},"text":"你会挥手吗"}
-你好 -> {"route":{"visual":"NO_CURRENT_VIEW","speech":"generated","body_intent":"none","reaction":"respond"},"text":"你好","reaction_task":"回应用户问候"}
-模仿这个手势并说你好 -> {"route":{"visual":"COPY_CURRENT_HAND","speech":"verbatim","body_intent":"perform","reaction":"none"},"text":"你好"}
-做这个动作并介绍自己 -> {"route":{"visual":"COPY_CURRENT_ACTION","speech":"generated","body_intent":"perform","reaction":"none"},"text":"介绍自己"}
-这个加这个等于多少，用手势回答 -> {"route":{"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"none","body_intent":"none","reaction":"none"},"visual_answer_operation":"add","visual_answer_output":"gesture_only"}
-这个除以这个等于多少 -> {"route":{"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"none","body_intent":"none","reaction":"none"},"visual_answer_operation":"divide","visual_answer_output":"gesture_and_speech"}
-用手势回答这个加这个，并说你好 -> {"route":{"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"verbatim","body_intent":"none","reaction":"none"},"text":"你好","visual_answer_operation":"add","visual_answer_output":"gesture_only"}
+说二比三 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字三手势","speech":"verbatim","reaction":"none","text":"二","speech_independent_of_body":true}
+说三比四 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字四手势","speech":"verbatim","reaction":"none","text":"三","speech_independent_of_body":true}
+比个数字三 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字三手势","speech":"none","reaction":"none"}
+比一个四 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字四手势","speech":"none","reaction":"none"}
+比个一 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字一手势","speech":"none","reaction":"none"}
+比个三 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字三手势","speech":"none","reaction":"none"}
+比个四 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字四手势","speech":"none","reaction":"none"}
+这是几 -> {"visual":"COPY_CURRENT_HAND","body_intent":"perform","body_task":"这个手势","speech":"generated","reaction":"none","text":"识别手势数字并回答"}
+这个加这个等于多少，用手势回答 -> {"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","body_intent":"none","speech":"none","reaction":"none","visual_answer_operation":"add","visual_answer_output":"gesture_only"}
 
-保留方向、范围、对象、否定和多个通道。输出最多128个token。'''
+保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才输出history=true。visual、body_intent、speech、reaction四字段必须存在，其余字段仅在非默认时输出；输出最多128个token。'''
 
 # Voice is selected by the same semantic pass, independently of face scoring.
 VOICE_TONES = {
@@ -214,8 +267,9 @@ class TurnIntent:
     elapsed_ms: float = 0
     voice_tone: str = "natural"
     voice_pace: str = "normal"
-    visual_answer_operation: str = ""
     visual_answer_output: str = ""
+    visual_answer_operation: str = ""
+    speech_independent_of_body: bool = False
     # Internal compatibility field consumed by the action pipeline. The model
     # emits ``visual_route``; GENERAL is normalized to an empty string here.
     visual_scope_gate: str = ""
@@ -225,25 +279,31 @@ class TurnIntent:
         if len(raw) > 4096:
             raise ValueError("intent too long")
         data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise ValueError("invalid intent fields")
-
         optional = {
             "voice_tone",
             "voice_pace",
             "visual_answer_operation",
             "visual_answer_output",
+            "speech_independent_of_body",
         }
+        if not isinstance(data, dict):
+            raise ValueError("invalid intent fields")
+
         body_intent = ""
+        sparse_payload_fields = {
+            "body_task",
+            "text",
+            "face_task",
+            "history",
+            "reaction_task",
+            *optional,
+        }
         if "route" in data:
+            # Compatibility with intent responses generated by the previous
+            # nested schema during rolling deploys or cached test fixtures.
             allowed = {
                 "route",
-                "text",
-                "body_task",
-                "face_task",
-                "history",
-                "reaction_task",
-                *optional,
+                *sparse_payload_fields,
             }
             if set(data) - allowed:
                 raise ValueError("invalid intent fields")
@@ -269,19 +329,63 @@ class TurnIntent:
                 "history": data.get("history", False),
                 "reaction_mode": route.get("reaction"),
                 "reaction": data.get("reaction_task", ""),
+                "speech_independent_of_body": data.get(
+                    "speech_independent_of_body", False
+                ),
             }
             normalized.update({key: data[key] for key in optional if key in data})
             data = normalized
-        else:
-            if "visual_route" not in data:
+        elif "visual" in data or "body_intent" in data:
+            # Streaming-first schema. Keeping the action fields flat lets the
+            # body channel become authoritative before speech/reaction detail
+            # has finished decoding.
+            required_route_fields = {
+                "visual",
+                "body_intent",
+                "speech",
+                "reaction",
+            }
+            allowed = required_route_fields | sparse_payload_fields
+            if (
+                not required_route_fields <= set(data)
+                or set(data) - allowed
+            ):
                 raise ValueError("invalid intent fields")
-            model_visual_route = data["visual_route"]
-            parsed_visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
-                model_visual_route, model_visual_route
+            body_intent = data.get("body_intent")
+            if body_intent not in {
+                "none",
+                "perform",
+                "prohibit",
+                "capability",
+            }:
+                raise ValueError("invalid body intent")
+            speech = data.get("speech")
+            if body_intent == "capability" and speech != "generated":
+                raise ValueError("capability intent requires generated speech")
+            normalized = {
+                "visual_route": data.get("visual"),
+                "speech": speech,
+                "text": data.get("text", ""),
+                "body_mode": (
+                    body_intent
+                    if body_intent in {"perform", "prohibit"}
+                    else "none"
+                ),
+                "body": data.get("body_task", ""),
+                "face": data.get("face_task", ""),
+                "history": data.get("history", False),
+                "reaction_mode": data.get("reaction"),
+                "reaction": data.get("reaction_task", ""),
+                "speech_independent_of_body": data.get(
+                    "speech_independent_of_body", False
+                ),
+            }
+            normalized.update(
+                {key: data[key] for key in optional if key in data}
             )
-            if parsed_visual_route not in _VISUAL_SCOPE_GATE_RESULTS:
-                raise ValueError("invalid visual route")
-            full_required = {
+            data = normalized
+        else:
+            required = {
                 "visual_route",
                 "speech",
                 "text",
@@ -292,20 +396,33 @@ class TurnIntent:
                 "reaction_mode",
                 "reaction",
             }
-            visual_required = {
-                "visual_route",
-                "visual_answer_operation",
-                "visual_answer_output",
-            }
-            allowed = full_required | optional | {"body_intent"}
-            required = (
-                visual_required
-                if parsed_visual_route == VISUAL_GESTURE_ANSWER_GATE
-                else full_required
+            model_visual_route = data.get("visual_route")
+            legacy_visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
+                model_visual_route, model_visual_route
             )
-            if not required <= set(data) or set(data) - allowed:
+            if legacy_visual_route == VISUAL_GESTURE_ANSWER_GATE:
+                visual_required = {
+                    "visual_route",
+                    "visual_answer_operation",
+                    "visual_answer_output",
+                }
+                allowed = required | optional
+                if not visual_required <= set(data) or set(data) - allowed:
+                    raise ValueError("invalid intent fields")
+                for key, default in {
+                    "speech": "none",
+                    "text": "",
+                    "body_mode": "none",
+                    "body": "",
+                    "face": "",
+                    "history": False,
+                    "reaction_mode": "none",
+                    "reaction": "",
+                }.items():
+                    data.setdefault(key, default)
+            elif not required <= set(data) or set(data) - required - optional:
                 raise ValueError("invalid intent fields")
-            body_intent = data.pop("body_intent", data.get("body_mode", "none"))
+            body_intent = data.get("body_mode", "none")
 
         model_visual_route = data.pop("visual_route")
         visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
@@ -313,24 +430,11 @@ class TurnIntent:
         )
         if visual_route not in _VISUAL_SCOPE_GATE_RESULTS:
             raise ValueError("invalid visual route")
-        if body_intent not in {"none", "perform", "prohibit", "capability"}:
-            raise ValueError("invalid body intent")
-        if body_intent == "capability" and data.get("speech") != "generated":
-            raise ValueError("capability intent requires generated speech")
-        if visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            # Visual arithmetic intentionally uses a sparse wire format. Any
-            # missing common field means that channel was not requested.
-            for key, default in {
-                "speech": "none",
-                "text": "",
-                "body_mode": "none",
-                "body": "",
-                "face": "",
-                "history": False,
-                "reaction_mode": "none",
-                "reaction": "",
-            }.items():
-                data.setdefault(key, default)
+        visual_route = _reconcile_copy_route_target(
+            visual_route,
+            body_task=data.get("body"),
+            face_task=data.get("face"),
+        )
         if visual_route != GENERAL_INTENT_GATE and not has_user_camera:
             raise ValueError("visual route requires a current user camera image")
         if (
@@ -361,6 +465,7 @@ class TurnIntent:
         if (
             data["speech"] not in {"verbatim", "generated", "none"}
             or type(data["history"]) is not bool
+            or type(data.get("speech_independent_of_body", False)) is not bool
         ):
             raise ValueError("invalid intent types")
         if data["body_mode"] not in {"perform", "prohibit", "none"}:
@@ -370,18 +475,21 @@ class TurnIntent:
         for key in ["text", "body", "face", "reaction"]:
             if not isinstance(data[key], str) or len(data[key]) > 512:
                 raise ValueError("invalid intent content")
-        if body_intent in {"perform", "prohibit"} and body_intent != data["body_mode"]:
-            raise ValueError("body intent conflicts with body mode")
-        if body_intent == "capability" and (
-            data["body_mode"] != "none" or data["body"]
-        ):
-            raise ValueError("capability intent cannot execute a body action")
 
-        visual_route = _repair_contradictory_copy_route(
-            data,
-            visual_route,
-            has_user_camera=has_user_camera,
-        )
+        # A concrete non-visual body command has no spoken channel unless the
+        # same semantic parse explicitly marks that speech as independent.
+        # This fails closed when short audio such as ``比个三`` is mistakenly
+        # copied into verbatim/generated text while its body target is already
+        # resolved. Mixed commands such as ``说二比三`` remain intact because
+        # their prompt contract sets speech_independent_of_body=true.
+        if (
+            visual_route == GENERAL_INTENT_GATE
+            and data["body_mode"] == "perform"
+            and data["speech"] != "none"
+            and not data.get("speech_independent_of_body", False)
+        ):
+            data["speech"] = "none"
+            data["text"] = ""
 
         visual_targets = {target for _, target in _VISUAL_SCOPE_GATE_CHOICES.values()}
         if visual_route == GENERAL_INTENT_GATE and (
@@ -412,9 +520,6 @@ class TurnIntent:
             else:
                 data["face"] = target
         elif visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            # The numeric gesture already owns the single body-action slot.
-            # Reject a second body directive instead of silently overwriting
-            # user intent. Face, voice and explicit speech remain independent.
             if data["body_mode"] != "none" or data["body"]:
                 raise ValueError(
                     "visual answer cannot combine with another body action"
@@ -423,7 +528,6 @@ class TurnIntent:
                 raise ValueError(
                     "visual answer cannot combine with an implicit reaction"
                 )
-            body_intent = "none"
 
         if (data["body_mode"] == "none") != (not bool(data["body"])):
             raise ValueError("inconsistent body mode")
@@ -502,6 +606,7 @@ class TurnIntent:
                     else self.text
                 ),
                 "speech_kind": self.speech,
+                "speech_independent_of_body": self.speech_independent_of_body,
                 "reaction_mode": self.reaction_mode,
                 "reaction_task": self.reaction,
             },
@@ -533,6 +638,7 @@ async def infer_turn_intent(
     images=None,
     image_roles=None,
     visual_scope_future: asyncio.Future[str] | None = None,
+    body_intent_future: asyncio.Future[EarlyBodyIntent] | None = None,
 ):
     """Infer all turn semantics with one model request.
 
@@ -608,12 +714,13 @@ async def infer_turn_intent(
                     async for chunk in stream:
                         if chunk.modality == "text" and chunk.text:
                             text_parts.append(chunk.text)
+                            partial_output = "".join(text_parts)
                             if (
                                 visual_scope_future is not None
                                 and not visual_scope_future.done()
                             ):
                                 early_route = _visual_route_from_partial_output(
-                                    "".join(text_parts),
+                                    partial_output,
                                     has_user_camera=has_user_camera,
                                 )
                                 if early_route is not None:
@@ -630,6 +737,26 @@ async def infer_turn_intent(
                                             time.perf_counter() - started
                                         )
                                         * 1000,
+                                    )
+                            if (
+                                body_intent_future is not None
+                                and not body_intent_future.done()
+                            ):
+                                early_body = _body_intent_from_partial_output(
+                                    partial_output
+                                )
+                                if early_body is not None:
+                                    body_intent_future.set_result(early_body)
+                                    emit_structured_log(
+                                        "performance",
+                                        "turn_intent_body_ready",
+                                        session_id=session.session_id,
+                                        turn_id=getattr(turn, "turn_id", None),
+                                        body_intent=early_body.body_intent,
+                                        body_task=early_body.body_task,
+                                        elapsed_ms=(
+                                            time.perf_counter() - started
+                                        ) * 1000,
                                     )
                         if chunk.finish_reason is not None:
                             finish_reason = chunk.finish_reason
@@ -669,6 +796,25 @@ async def infer_turn_intent(
             (time.perf_counter() - started) * 1000,
             has_user_camera=has_user_camera,
         )
+        parsed_body = EarlyBodyIntent(intent.body_intent, intent.body)
+        if body_intent_future is not None:
+            if body_intent_future.done():
+                with suppress(asyncio.CancelledError):
+                    early_body = body_intent_future.result()
+                    if early_body != parsed_body:
+                        emit_structured_log(
+                            "error",
+                            "turn_intent_body_mismatch",
+                            level="warning",
+                            session_id=session.session_id,
+                            turn_id=getattr(turn, "turn_id", None),
+                            early_body_intent=early_body.body_intent,
+                            early_body_task=early_body.body_task,
+                            parsed_body_intent=parsed_body.body_intent,
+                            parsed_body_task=parsed_body.body_task,
+                        )
+            else:
+                body_intent_future.set_result(parsed_body)
         parsed_route_code = intent.visual_scope_gate
         if (
             visual_scope_future is not None
@@ -762,3 +908,5 @@ async def infer_turn_intent(
         session._unregister_turn_request(turn, request_id)
         if visual_scope_future is not None and not visual_scope_future.done():
             visual_scope_future.set_result(route_code)
+        if body_intent_future is not None and not body_intent_future.done():
+            body_intent_future.set_result(EarlyBodyIntent("none"))

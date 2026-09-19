@@ -397,8 +397,11 @@ class ReplyRoutingComponent:
         R0-R3 are short, symmetric score suffixes. Any operational failure
         fails closed to CURRENT_ONLY + LANGUAGE_REQUIRED so stale history
         cannot contaminate an otherwise independent turn and a legitimate
-        reply is never suppressed. A shared ``speech=none`` result is also
-        checked by the independent S0/S1 route before it may suppress speech.
+        reply is never suppressed. A shared ``speech=none`` result with no
+        concrete action is also checked by the independent S0/S1 route before
+        it may suppress speech. Once unified intent has resolved a concrete
+        silent action, that structured result is authoritative for both action
+        and reply routing and must not be overturned by a second classifier.
         """
         if turn.intent is not None:
             decision = (
@@ -433,6 +436,7 @@ class ReplyRoutingComponent:
                 )
             if (
                 turn.intent.speech == "generated"
+                and turn.intent.body_intent != "capability"
                 and turn.intent.body_mode == "none"
                 and not turn.intent.body
                 and not turn.intent.face
@@ -495,12 +499,33 @@ class ReplyRoutingComponent:
                     stats={"source": "shared_turn_intent"},
                 )
 
+            if self._pure_action_reply_uses_structured_intent(turn):
+                emit_structured_log(
+                    "reply",
+                    "structured_action_reply_route_applied",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    decision=decision,
+                    body_task=turn.intent.body,
+                    face_task=turn.intent.face,
+                    reaction_task=turn.intent.reaction,
+                )
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    elapsed_ms=turn.intent.elapsed_ms,
+                    stats={"source": "structured_silent_action"},
+                )
+
             # A valid shared-intent JSON result is not necessarily a correct
-            # semantic decision. In particular, a false ``speech=none`` would
-            # otherwise suppress the user's entire reply without consulting
-            # the bounded S0/S1 route. Recheck every silent decision and fail
-            # open to language on timeout/error so an ordinary question is
-            # never converted into an empty pure-action response.
+            # semantic decision when it does not contain a concrete action. In
+            # particular, a false ``speech=none`` would otherwise suppress the
+            # user's entire reply without consulting the bounded S0/S1 route.
+            # Fail open to language on timeout/error so an ordinary question
+            # is never converted into an empty pure-action response.
             speech_mode = await self._disambiguate_reply_speech_mode(
                 turn,
                 audios,

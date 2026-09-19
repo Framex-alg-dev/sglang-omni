@@ -1076,6 +1076,34 @@ class ReplyGenerationComponent:
             **timing,
         )
         return "", timing
+
+    @staticmethod
+    def _pure_action_reply_uses_structured_intent(turn: TurnBuffer) -> bool:
+        """Whether the resolved intent fully grounds a silent action request.
+
+        Once unified intent parsing has produced a concrete action while also
+        proving that the user did not request an independent spoken response,
+        replaying the original audio into reply generation creates a second,
+        conflicting interpretation path.  The structured task is the shared
+        source of truth for both the selected action and its social response.
+        """
+
+        intent = turn.intent
+        if (
+            intent is None
+            or intent.speech != "none"
+            or intent.speech_independent_of_body
+        ):
+            return False
+        return bool(
+            (intent.body_mode == "perform" and intent.body.strip())
+            or intent.face.strip()
+            or (
+                intent.reaction_mode != "none"
+                and intent.reaction.strip()
+            )
+        )
+
     @staticmethod
     def _validate_pure_action_short_reply(text: str) -> tuple[str, str | None]:
         """Return a safe short social response or an empty fallback.
@@ -1198,6 +1226,20 @@ class ReplyGenerationComponent:
         request_id = f"{turn.request_base}-pure-action-reply-validation"
         system_prompt = self._pure_action_reply_validation_system_prompt()
         current_text_parts: list[str] = []
+        if turn.intent is not None:
+            current_text_parts.append(
+                self._prompt(
+                    zh=(
+                        "[统一意图解析结果；这是动作与回复共同使用的当前请求语义]\n"
+                        + turn.intent.action_context(turn.text)
+                    ),
+                    en=(
+                        "[Unified intent result; this is the current request "
+                        "meaning shared by action and reply]\n"
+                        + turn.intent.action_context(turn.text)
+                    ),
+                )
+            )
         if isinstance(turn.text, str) and turn.text.strip():
             current_text_parts.append(
                 self._prompt(
@@ -1364,9 +1406,17 @@ class ReplyGenerationComponent:
             fallback_reason=(history_route.fallback_reason if history_route else None),
             stats=(dict(history_route.stats) if history_route else {}),
         )
+        structured_intent_grounded = (
+            self._pure_action_reply_uses_structured_intent(turn)
+        )
+        # The unified intent has already consumed the source audio and exposed
+        # a concrete action task.  Do not ask the reply model to transcribe and
+        # reinterpret the same audio independently; that can make a correct
+        # action receive an unrelated spoken acknowledgement.
+        reply_audios = [] if structured_intent_grounded else audios
         request, _ = self._build_reply_request(
             turn,
-            audios,
+            reply_audios,
             [],
             [],
             None,
@@ -1411,7 +1461,7 @@ class ReplyGenerationComponent:
                     semantic_validation,
                 ) = await self._validate_pure_action_short_reply_semantics(
                     turn,
-                    audios,
+                    reply_audios,
                     safe_text,
                 )
                 if not semantically_valid:
@@ -1455,6 +1505,8 @@ class ReplyGenerationComponent:
             raw_output_text="".join(text_parts),
             validation_fallback_reason=validation_reason,
             semantic_validation=semantic_validation,
+            structured_intent_grounded=structured_intent_grounded,
+            source_audio_replayed=bool(reply_audios),
             generation_ms=round((time.perf_counter() - started) * 1000.0, 3),
             finish_reason=finish_reason,
             usage=usage,

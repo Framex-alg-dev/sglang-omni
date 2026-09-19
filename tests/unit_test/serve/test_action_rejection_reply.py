@@ -79,7 +79,12 @@ async def test_rejection_reuses_current_audio_and_latest_avatar_not_user_camera(
     assert timing["fallback_reason"] is None
     prompt = request.messages[0].content
     assert session.instructions in prompt
-    assert "[Action rejection reply]" in prompt
+    assert "[Action Rejection Response]" in prompt
+    assert 'The stance is always "I don\'t feel like it", never "I can\'t"' in prompt
+    assert "capability limitations" in prompt
+    assert "Never bring up being an AI" in prompt
+    assert "The reason must always be a human-like one" in prompt
+    assert "neither use it as the excuse nor claim to be human" in prompt
     assert "Do not refuse a physical action" not in prompt
     parts = request.messages[-1].content
     assert {"type": "text", "text": "请站起来"} in parts

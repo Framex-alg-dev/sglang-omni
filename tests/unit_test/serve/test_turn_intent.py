@@ -6,8 +6,10 @@ import pytest
 
 from sglang_omni.client.types import CompletionStreamChunk
 from sglang_omni.serve.realtime.turn_intent import (
+    EarlyBodyIntent,
     SYSTEM,
     TurnIntent,
+    _body_intent_from_partial_output,
     infer_turn_intent,
 )
 from sglang_omni.serve.realtime.turn_pipeline import (
@@ -55,7 +57,12 @@ def test_invalid_parse_is_rejected(raw):
 
 
 def test_strict_schema_and_no_instruction_promotion():
-    intent = TurnIntent.parse(json.dumps(payload(), ensure_ascii=False))
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(speech_independent_of_body=True),
+            ensure_ascii=False,
+        )
+    )
     assert intent.text == "一" and intent.body == "数字二手势"
     assert intent.visual_scope_gate == ""
     data = json.loads(intent.action_context("说一比二"))
@@ -88,6 +95,149 @@ def test_sparse_route_schema_fills_runtime_defaults():
     assert intent.face == "" and intent.history is False
 
 
+def test_streaming_first_flat_schema_fills_runtime_defaults():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "visual": "NO_CURRENT_VIEW",
+                "body_intent": "perform",
+                "body_task": "数字二手势",
+                "speech": "none",
+                "reaction": "none",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.body_intent == "perform"
+    assert intent.body_mode == "perform" and intent.body == "数字二手势"
+    assert intent.speech == "none" and intent.text == ""
+    assert intent.face == "" and intent.history is False
+
+
+def test_partial_body_channel_requires_complete_task_json():
+    prefix = (
+        '{"route":{"visual":"NO_CURRENT_VIEW","speech":"verbatim",'
+        '"body_intent":"perform","reaction":"none"},"body_task":"数字'
+    )
+    assert _body_intent_from_partial_output(prefix) is None
+    assert _body_intent_from_partial_output(prefix + '二手势"') == EarlyBodyIntent(
+        "perform", "数字二手势"
+    )
+    assert _body_intent_from_partial_output(
+        '{"route":{"visual":"NO_CURRENT_VIEW","speech":"generated",'
+        '"body_intent":"none","reaction":"none"}'
+    ) == EarlyBodyIntent("none")
+    assert _body_intent_from_partial_output(
+        '{"visual":"NO_CURRENT_VIEW","body_intent":"perform",'
+        '"body_task":"数字三手势",'
+    ) == EarlyBodyIntent("perform", "数字三手势")
+
+
+def test_independent_speech_is_explicit_and_defaults_fail_closed():
+    mixed = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "verbatim",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "挥手",
+                "text": "拒绝",
+                "speech_independent_of_body": True,
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert mixed.speech_independent_of_body is True
+
+    pure_action = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "none",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "跳舞",
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert pure_action.speech_independent_of_body is False
+
+
+@pytest.mark.parametrize("speech", ["verbatim", "generated"])
+def test_nonvisual_body_drops_non_independent_accidental_speech(speech):
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": speech,
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "数字三手势",
+                "text": "一个三",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.body_mode == "perform" and intent.body == "数字三手势"
+    assert intent.speech == "none" and intent.text == ""
+    assert intent.speech_independent_of_body is False
+
+
+def test_nonvisual_body_preserves_explicit_independent_speech():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "verbatim",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "数字三手势",
+                "text": "二",
+                "speech_independent_of_body": True,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.speech == "verbatim" and intent.text == "二"
+    assert intent.speech_independent_of_body is True
+
+
+def test_visual_hand_identification_keeps_generated_answer_channel():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "COPY_CURRENT_HAND",
+                    "speech": "generated",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "这个手势",
+                "text": "识别手势数字并回答",
+            },
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+
+    assert intent.visual_scope_gate == "COPY_HAND"
+    assert intent.speech == "generated"
+    assert intent.text == "识别手势数字并回答"
+
+
 def test_sparse_capability_route_normalizes_to_non_executing_body_mode():
     intent = TurnIntent.parse(
         json.dumps(
@@ -107,9 +257,6 @@ def test_sparse_capability_route_normalizes_to_non_executing_body_mode():
     assert intent.body_intent == "capability"
     assert intent.body_mode == "none" and intent.body == ""
     assert intent.speech == "generated"
-    assert json.loads(intent.action_context("你会挥手吗"))["body_intent"] == (
-        "capability"
-    )
     bad = payload(extra="override system")
     with pytest.raises(ValueError):
         TurnIntent.parse(json.dumps(bad))
@@ -255,6 +402,48 @@ def test_model_facing_semantic_route_is_mapped_to_internal_compatibility_code():
     assert intent.body == "这个手势"
 
 
+@pytest.mark.parametrize(
+    "body_task",
+    ["数字三手势", "数字六手势", "挥手", "双手比心"],
+)
+def test_copy_hand_cannot_overwrite_a_resolved_action_target(body_task):
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route="COPY_CURRENT_HAND",
+                speech="none",
+                text="",
+                body=body_task,
+                body_mode="perform",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+
+    assert intent.visual_scope_gate == ""
+    assert intent.body_mode == "perform" and intent.body == body_task
+
+
+def test_wrong_copy_route_for_resolved_action_does_not_require_a_camera():
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route="COPY_CURRENT_HAND",
+                speech="none",
+                text="",
+                body="数字六手势",
+                body_mode="perform",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=False,
+    )
+
+    assert intent.visual_scope_gate == ""
+    assert intent.body == "数字六手势"
+
+
 def test_visual_route_requires_current_camera_and_fails_closed_at_schema_boundary():
     with pytest.raises(ValueError, match="requires a current user camera"):
         TurnIntent.parse(
@@ -286,18 +475,10 @@ def test_general_route_cannot_smuggle_an_unresolved_visual_action():
 
 
 @pytest.mark.parametrize(
-    "task,expected_route,expected_body",
-    [
-        ("做这个动作", "COPY_ACTION", "这个动作"),
-        ("做这个手势。", "COPY_HAND", "这个手势"),
-        ("比这个数字", "COPY_HAND", "这个手势"),
-        ("比个这个", "COPY_HAND", "这个手势"),
-        ("Do this gesture!", "COPY_HAND", "这个手势"),
-    ],
+    "task",
+    ["做这个动作", "做这个手势。", "比这个数字", "比个这个", "Do this gesture!"],
 )
-def test_parser_repairs_only_exact_contradictory_copy_routes(
-    task, expected_route, expected_body
-):
+def test_parser_does_not_reclassify_user_semantics_with_phrase_matching(task):
     intent = TurnIntent.parse(
         json.dumps(
             payload(
@@ -312,10 +493,9 @@ def test_parser_repairs_only_exact_contradictory_copy_routes(
         has_user_camera=True,
     )
 
-    assert intent.visual_scope_gate == expected_route
-    assert intent.body_mode == "perform" and intent.body == expected_body
-    assert intent.body_intent == "perform"
-    assert intent.speech == "none" and intent.text == ""
+    assert intent.visual_scope_gate == ""
+    assert intent.body_mode == "none" and intent.body == ""
+    assert intent.speech == "generated" and intent.text == task
 
 
 @pytest.mark.parametrize(
@@ -423,56 +603,6 @@ def test_visual_answer_sparse_schema_is_normalized_without_overwriting_channels(
                 {
                     "visual_route": "VISUAL_ANSWER",
                     "visual_answer_operation": "add",
-                },
-                ensure_ascii=False,
-            ),
-            has_user_camera=True,
-        )
-
-
-def test_nested_visual_answer_preserves_independent_answer_and_speech_channels():
-    intent = TurnIntent.parse(
-        json.dumps(
-            {
-                "route": {
-                    "visual": "ANSWER_CURRENT_VIEW_WITH_GESTURE",
-                    "speech": "verbatim",
-                    "body_intent": "none",
-                    "reaction": "none",
-                },
-                "text": "你好",
-                "face_task": "微笑",
-                "voice_tone": "cheerful",
-                "visual_answer_operation": "divide",
-                "visual_answer_output": "gesture_and_speech",
-            },
-            ensure_ascii=False,
-        ),
-        has_user_camera=True,
-    )
-
-    assert intent.visual_scope_gate == "VISUAL_ANSWER"
-    assert intent.visual_answer_operation == "divide"
-    assert intent.speaks_visual_answer() is True
-    assert intent.visual_additional_speech() == "你好"
-    assert intent.face == "微笑" and intent.voice_tone == "cheerful"
-    assert intent.body_intent == "none" and intent.body_mode == "none"
-
-
-def test_nested_visual_answer_rejects_a_second_body_action():
-    with pytest.raises(ValueError, match="another body action"):
-        TurnIntent.parse(
-            json.dumps(
-                {
-                    "route": {
-                        "visual": "ANSWER_CURRENT_VIEW_WITH_GESTURE",
-                        "speech": "none",
-                        "body_intent": "perform",
-                        "reaction": "none",
-                    },
-                    "body_task": "挥手",
-                    "visual_answer_operation": "add",
-                    "visual_answer_output": "gesture_and_speech",
                 },
                 ensure_ascii=False,
             ),
@@ -603,7 +733,7 @@ async def test_camera_copy_and_speech_use_one_unified_request():
                         visual_route="COPY_HAND",
                         speech="verbatim",
                         text="你好",
-                        body="模型自由措辞",
+                        body="这个手势",
                     ),
                     ensure_ascii=False,
                 )
@@ -666,16 +796,15 @@ async def test_streaming_unified_intent_releases_visual_route_before_full_json()
             yield CompletionStreamChunk(
                 request_id=request_id,
                 text=(
-                    '{"route":{"visual":'
-                    '"ANSWER_CURRENT_VIEW_WITH_GESTURE",'
+                    '{"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE",'
+                    '"body_intent":"none",'
                 ),
             )
             await release_remainder.wait()
             yield CompletionStreamChunk(
                 request_id=request_id,
                 text=(
-                    '"speech":"none","body_intent":"none",'
-                    '"reaction":"none"},'
+                    '"speech":"none","reaction":"none",'
                     '"visual_answer_operation":"add",'
                     '"visual_answer_output":"gesture_only"}'
                 ),
@@ -715,6 +844,178 @@ async def test_streaming_unified_intent_releases_visual_route_before_full_json()
 
 
 @pytest.mark.asyncio
+async def test_streaming_first_schema_releases_body_before_speech_detail():
+    release_remainder = asyncio.Event()
+
+    class Client:
+        async def generate(self, request, request_id):
+            raise AssertionError("streaming intent must not use generate directly")
+
+        async def completion_stream(self, request, *, request_id):
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=(
+                    '{"visual":"NO_CURRENT_VIEW",'
+                    '"body_intent":"perform",'
+                    '"body_task":"数字三手势",'
+                ),
+            )
+            await release_remainder.wait()
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text='"speech":"none","reaction":"none"}',
+                finish_reason="stop",
+            )
+
+        async def abort(self, request_id):
+            raise AssertionError("completed request must not be aborted")
+
+    session = session_for(Client())
+    turn = SimpleNamespace(
+        text="比个三",
+        request_base="streaming-early-body",
+        turn_id="streaming-early-body",
+    )
+    scope = asyncio.get_running_loop().create_future()
+    body = asyncio.get_running_loop().create_future()
+    intent_task = asyncio.create_task(
+        infer_turn_intent(
+            session,
+            turn,
+            ["audio"],
+            visual_scope_future=scope,
+            body_intent_future=body,
+        )
+    )
+
+    assert await asyncio.wait_for(scope, timeout=1.0) == ""
+    assert await asyncio.wait_for(body, timeout=1.0) == EarlyBodyIntent(
+        "perform", "数字三手势"
+    )
+    assert not intent_task.done()
+    release_remainder.set()
+    intent = await asyncio.wait_for(intent_task, timeout=1.0)
+
+    assert intent.body == "数字三手势"
+    assert intent.speech == "none"
+
+
+@pytest.mark.asyncio
+async def test_streaming_copy_waits_for_target_and_reconciles_resolved_action():
+    waiting_for_remainder = asyncio.Event()
+    release_remainder = asyncio.Event()
+
+    class Client:
+        async def generate(self, request, request_id):
+            raise AssertionError("streaming intent must not use generate directly")
+
+        async def completion_stream(self, request, *, request_id):
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=(
+                    '{"visual":"COPY_CURRENT_HAND",'
+                    '"body_intent":"perform",'
+                ),
+            )
+            waiting_for_remainder.set()
+            await release_remainder.wait()
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=(
+                    '"body_task":"数字六手势",'
+                    '"speech":"none","reaction":"none"}'
+                ),
+                finish_reason="stop",
+            )
+
+        async def abort(self, request_id):
+            raise AssertionError("completed request must not be aborted")
+
+    session = session_for(Client())
+    turn = SimpleNamespace(
+        text="比个数字六",
+        request_base="streaming-resolved-action",
+        turn_id="streaming-resolved-action",
+    )
+    scope = asyncio.get_running_loop().create_future()
+    intent_task = asyncio.create_task(
+        infer_turn_intent(
+            session,
+            turn,
+            ["audio"],
+            ["camera"],
+            ["user_camera"],
+            visual_scope_future=scope,
+        )
+    )
+
+    await asyncio.wait_for(waiting_for_remainder.wait(), timeout=1.0)
+    assert not scope.done()
+    release_remainder.set()
+    assert await asyncio.wait_for(scope, timeout=1.0) == ""
+    intent = await asyncio.wait_for(intent_task, timeout=1.0)
+
+    assert intent.visual_scope_gate == ""
+    assert intent.body == "数字六手势"
+
+
+@pytest.mark.asyncio
+async def test_streaming_copy_releases_after_canonical_target_not_route_alone():
+    release_remainder = asyncio.Event()
+
+    class Client:
+        async def generate(self, request, request_id):
+            raise AssertionError("streaming intent must not use generate directly")
+
+        async def completion_stream(self, request, *, request_id):
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=(
+                    '{"visual":"COPY_CURRENT_HAND",'
+                    '"body_intent":"perform","body_task":"这个手势",'
+                ),
+            )
+            await release_remainder.wait()
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                text=(
+                    '"speech":"none","reaction":"none",'
+                    '"voice_tone":"warm"}'
+                ),
+                finish_reason="stop",
+            )
+
+        async def abort(self, request_id):
+            raise AssertionError("completed request must not be aborted")
+
+    session = session_for(Client())
+    turn = SimpleNamespace(
+        text="比这个数字",
+        request_base="streaming-copy-hand",
+        turn_id="streaming-copy-hand",
+    )
+    scope = asyncio.get_running_loop().create_future()
+    intent_task = asyncio.create_task(
+        infer_turn_intent(
+            session,
+            turn,
+            [],
+            ["camera"],
+            ["user_camera"],
+            visual_scope_future=scope,
+        )
+    )
+
+    assert await asyncio.wait_for(scope, timeout=1.0) == "COPY_HAND"
+    assert not intent_task.done()
+    release_remainder.set()
+    intent = await asyncio.wait_for(intent_task, timeout=1.0)
+
+    assert intent.visual_scope_gate == "COPY_HAND"
+    assert intent.body == "这个手势"
+
+
+@pytest.mark.asyncio
 async def test_generic_visual_action_uses_copy_action_scope():
     class Client:
         async def completion(self, request, request_id):
@@ -744,7 +1045,7 @@ async def test_generic_visual_action_uses_copy_action_scope():
 
 
 @pytest.mark.asyncio
-async def test_visual_question_remains_general_in_the_same_request():
+async def test_visual_hand_number_question_uses_copy_hand_in_the_same_request():
     requests = []
 
     class Client:
@@ -753,10 +1054,11 @@ async def test_visual_question_remains_general_in_the_same_request():
             return SimpleNamespace(
                 text=json.dumps(
                     payload(
+                        visual_route="COPY_CURRENT_HAND",
                         speech="generated",
-                        text="这是数字几",
-                        body="",
-                        body_mode="none",
+                        text="识别当前手势代表的数字并回答",
+                        body="这个手势",
+                        body_mode="perform",
                     ),
                     ensure_ascii=False,
                 )
@@ -775,8 +1077,9 @@ async def test_visual_question_remains_general_in_the_same_request():
         ["user_camera"],
         visual_scope_future=scope,
     )
-    assert intent.speech == "generated" and intent.body_mode == "none"
-    assert intent.visual_scope_gate == "" and scope.result() == ""
+    assert intent.speech == "generated" and intent.body_mode == "perform"
+    assert intent.visual_scope_gate == "COPY_HAND" and scope.result() == "COPY_HAND"
+    assert intent.body == "这个手势"
     assert len(requests) == 1
 
 
@@ -903,16 +1206,31 @@ def test_generated_reply_context_preserves_original_question_not_predicted_answe
 
 
 def test_unified_prompt_has_consistent_visual_and_action_boundaries():
-    assert "首字段必须是route" in SYSTEM
-    assert '"body_intent":"perform"' in SYSTEM
-    assert "复现和说话可以同时存在" in SYSTEM
-    assert "挥手、点头、比个心、比数字二、做个手势" in SYSTEM
-    assert "“这是什么手势/这是数字几”选NO_CURRENT_VIEW" in SYSTEM
-    assert "“这个加这个等于多少”依赖当前画面" in SYSTEM
-    assert "未指定回答方式或要求手势并说出来=gesture_and_speech" in SYSTEM
-    assert "add/subtract/multiply/divide" in SYSTEM
-    assert "“能挥挥手吗”是perform" in SYSTEM
-    assert "“你会挥手吗”是capability" in SYSTEM
+    assert "首字段visual，第二字段body_intent" in SYSTEM
+    assert "body_task只能在perform/prohibit时输出，且必须早于speech" in SYSTEM
+    assert "模仿与说话可以同时存在" in SYSTEM
+    assert "“个/一个”是量词，不是“这个”" in SYSTEM
+    assert "比个数字三/Show number three" in SYSTEM
+    assert "比这个数字/Copy this hand sign" in SYSTEM
+    assert "COPY的body_task/face_task必须使用对应标准目标" in SYSTEM
+    assert "比个一 ->" in SYSTEM and '"body_task":"数字一手势"' in SYSTEM
+    assert "比个三 ->" in SYSTEM and '"body_task":"数字三手势"' in SYSTEM
+    assert "比个四 ->" in SYSTEM and '"body_task":"数字四手势"' in SYSTEM
+    assert "这是什么手势/这是数字几/这是几/What number or gesture is this" in SYSTEM
+    assert "这是几 ->" in SYSTEM and '"visual":"COPY_CURRENT_HAND"' in SYSTEM
+    assert "“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE" in SYSTEM
+    assert "未指定或手势加语音播报答案=gesture_and_speech" in SYSTEM
+    assert "加/减/乘/除对应add/subtract/multiply/divide" in SYSTEM
+    assert "能挥挥手吗”" in SYSTEM and "是perform" in SYSTEM
+    assert "你会挥手吗”" in SYSTEM and "body_intent=capability" in SYSTEM
     assert "gesture_only" in SYSTEM and "gesture_and_speech" in SYSTEM
     assert "模仿同时说话则输出 GENERAL" not in SYSTEM
+    assert "text=X，body_task=数字Y手势" in SYSTEM
+    assert "严禁把X同时作为动作数字" in SYSTEM
+    assert "说二比三 ->" in SYSTEM and '"body_task":"数字三手势"' in SYSTEM
+    assert "说三比四 ->" in SYSTEM and '"body_task":"数字四手势"' in SYSTEM
+    assert (
+        '"visual":"NO_CURRENT_VIEW","body_intent":"perform",'
+        '"body_task":"数字三手势","speech":"none"'
+    ) in SYSTEM
     assert len(SYSTEM) < 5000
