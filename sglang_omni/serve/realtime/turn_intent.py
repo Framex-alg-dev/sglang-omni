@@ -148,19 +148,20 @@ SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文�
 
 has_user_camera=true/false是服务端事实。只有true才允许需要当前画面的visual_route；有图片不等于要求模仿。
 
-字段依次为visual_route、speech、text、body_mode、body、face、history、reaction_mode、reaction。仅voice_tone、voice_pace和visual_answer_output可省略。
+首字段必须是visual_route。非视觉计算输出speech、text、body_mode、body、face、history、reaction_mode、reaction全部字段。
+视觉计算只输出visual_route、visual_answer_operation、visual_answer_output；额外原样话术才追加speech=verbatim和text，明确表情/语气/语速才追加face/voice_tone/voice_pace，其余空字段省略。数字手势占用身体动作位；若另有身体动作，必须追加body_mode/body而不得丢弃。
 visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
 visual_route先于其他字段按以下互斥顺序判定：
 1. 复现当前画面：执行词（做、比、模仿、复刻、重复、照着做；do/copy/imitate）和当前指代（这个、这样、照着我、和我一样；this/like me）同时出现，必须选COPY_CURRENT_*，不能把命令塞进speech/text后选NO_CURRENT_VIEW。“做这个动作/Do this”=COPY_CURRENT_ACTION；“做这个手势/比这个数字/比个这个/Do this gesture”=COPY_CURRENT_HAND。
-2. 视觉推导回答：要求根据当前画面中的指代对象（如“这个加这个”“这两个比较”）计算/比较/推理时，选ANSWER_CURRENT_VIEW_WITH_GESTURE。未指定回答方式时默认手势加语音；明确“用手势回答/只用手势/不要说话”时仅手势。
+2. 视觉四则运算：要求对当前画面中的两个指代数字做加、减、乘、除时，选ANSWER_CURRENT_VIEW_WITH_GESTURE。未指定回答方式时默认手势加语音；明确“用手势回答/只用手势/不要说话”时仅手势。
 3. 其他情况选NO_CURRENT_VIEW：普通问答、画面识别或描述、能力询问、禁止动作、名称明确且不需照抄画面的动作。“挥手、点头、比个心、比数字二、做个手势”均属于此类。
 
 最小对比：“做个手势”是任意手势，选NO_CURRENT_VIEW并提取动作；“做这个手势/比这个数字”指向画面，必须COPY_CURRENT_HAND。“比数字二”选NO_CURRENT_VIEW；“比个这个”必须COPY_CURRENT_HAND。“不要做这个动作”和“做这个动作是什么意思”不得转COPY。“这是什么手势/这是数字几”选NO_CURRENT_VIEW；“这个加这个等于多少”依赖当前画面，必须选ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”不依赖当前画面，选NO_CURRENT_VIEW。
 
 COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_mode=none，body/face为空并说明需要画面。
 
-一致性：模仿与说话可以同时存在，visual_route仍为COPY，speech/text独立；纯复现必须speech=none。若speech/text是“做这个动作/手势”，visual_route不得是NO_CURRENT_VIEW。ANSWER_CURRENT_VIEW_WITH_GESTURE必须带visual_answer_output：明确“用手势回答/只用手势/不要说话”=gesture_only；未指定回答方式或明确“用手势回答并说出来/手势加语音”=gesture_and_speech；明确仅语音则NO_CURRENT_VIEW并省略。
+一致性：模仿与说话可以同时存在，visual_route仍为COPY；纯复现speech=none。“做这个动作/手势”不得选NO_CURRENT_VIEW。视觉计算必须带visual_answer_operation：加/减/乘/除对应add/subtract/multiply/divide，禁止缺省，减除保留顺序；必须带visual_answer_output：仅手势或不播报答案=gesture_only，未指定或手势加语音播报答案=gesture_and_speech；仅语音回答则选NO_CURRENT_VIEW并省略两字段。“并说出来”只由visual_answer_output表达；额外原样话术的speech/text与答案播报独立。明确的表情、语气、语速必须保留，未指定时不得编造。
 
 其他字段：
 - speech：verbatim=明确要求朗读指定正文；generated=需要语言回应；none=不说话。text为正文或语言任务。
@@ -181,12 +182,13 @@ COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手
 你会挥手吗 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你会挥手吗","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":""}
 模仿这个手势并说你好 -> {"visual_route":"COPY_CURRENT_HAND","speech":"verbatim","text":"你好","body_mode":"perform","body":"这个手势","face":"","history":false,"reaction_mode":"none","reaction":""}
 做这个动作并介绍自己 -> {"visual_route":"COPY_CURRENT_ACTION","speech":"generated","text":"介绍自己","body_mode":"perform","body":"这个动作","face":"","history":false,"reaction_mode":"none","reaction":""}
-这个加这个等于多少，用手势回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_only"}
-这个加这个等于多少 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_and_speech"}
-这个加这个等于多少，用手势并语音回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","speech":"generated","text":"根据当前画面计算答案","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"none","reaction":"","visual_answer_output":"gesture_and_speech"}
+这个加这个等于多少，用手势回答 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"add","visual_answer_output":"gesture_only"}
+这个除以这个等于多少 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"divide","visual_answer_output":"gesture_and_speech"}
+微笑着用手势回答这个加这个并说出来 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"add","visual_answer_output":"gesture_and_speech","face":"微笑"}
+用手势回答这个加这个，并说你好 -> {"visual_route":"ANSWER_CURRENT_VIEW_WITH_GESTURE","visual_answer_operation":"add","visual_answer_output":"gesture_only","speech":"verbatim","text":"你好"}
 你好 -> {"visual_route":"NO_CURRENT_VIEW","speech":"generated","text":"你好","body_mode":"none","body":"","face":"","history":false,"reaction_mode":"respond","reaction":"回应用户问候"}
 
-保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才令history=true。所有固定字段必须存在，空字符串不能省略；输出最多256个token。'''
+保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才令history=true。非视觉计算的固定字段必须存在；视觉计算必须是以上稀疏格式，不得输出未激活的空字段；输出最多256个token。'''
 
 # Voice is selected by the same semantic pass, independently of face scoring.
 VOICE_TONES = {
@@ -227,6 +229,7 @@ class TurnIntent:
     elapsed_ms: float = 0
     voice_tone: str = "natural"
     voice_pace: str = "normal"
+    visual_answer_operation: str = ""
     visual_answer_output: str = ""
     # Internal compatibility field consumed by the action pipeline. The model
     # emits ``visual_route``; GENERAL is normalized to an empty string here.
@@ -237,7 +240,17 @@ class TurnIntent:
         if len(raw) > 4096:
             raise ValueError("intent too long")
         data = json.loads(raw)
-        required = {
+        if not isinstance(data, dict) or "visual_route" not in data:
+            raise ValueError("invalid intent fields")
+
+        model_visual_route = data["visual_route"]
+        visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
+            model_visual_route, model_visual_route
+        )
+        if visual_route not in _VISUAL_SCOPE_GATE_RESULTS:
+            raise ValueError("invalid visual route")
+
+        full_required = {
             "visual_route",
             "speech",
             "text",
@@ -248,20 +261,41 @@ class TurnIntent:
             "reaction_mode",
             "reaction",
         }
-        optional = {"voice_tone", "voice_pace", "visual_answer_output"}
-        if (
-            not isinstance(data, dict)
-            or not required <= set(data)
-            or set(data) - required - optional
-        ):
+        visual_required = {
+            "visual_route",
+            "visual_answer_operation",
+            "visual_answer_output",
+        }
+        allowed = full_required | {
+            "voice_tone",
+            "voice_pace",
+            "visual_answer_operation",
+            "visual_answer_output",
+        }
+        required = (
+            visual_required
+            if visual_route == VISUAL_GESTURE_ANSWER_GATE
+            else full_required
+        )
+        if not required <= set(data) or set(data) - allowed:
             raise ValueError("invalid intent fields")
 
-        model_visual_route = data.pop("visual_route")
-        visual_route = _MODEL_VISUAL_ROUTE_TO_INTERNAL.get(
-            model_visual_route, model_visual_route
-        )
-        if visual_route not in _VISUAL_SCOPE_GATE_RESULTS:
-            raise ValueError("invalid visual route")
+        data.pop("visual_route")
+        if visual_route == VISUAL_GESTURE_ANSWER_GATE:
+            # The visual-arithmetic wire format is sparse. Missing common
+            # fields mean that the user did not activate those channels; an
+            # explicitly emitted value is preserved and validated below.
+            for key, default in {
+                "speech": "none",
+                "text": "",
+                "body_mode": "none",
+                "body": "",
+                "face": "",
+                "history": False,
+                "reaction_mode": "none",
+                "reaction": "",
+            }.items():
+                data.setdefault(key, default)
         if visual_route != GENERAL_INTENT_GATE and not has_user_camera:
             raise ValueError("visual route requires a current user camera image")
         if (
@@ -269,21 +303,25 @@ class TurnIntent:
             or data.get("voice_pace", "normal") not in VOICE_PACES
         ):
             raise ValueError("invalid voice plan")
+        visual_answer_operation = data.get("visual_answer_operation", "")
         visual_answer_output = data.get("visual_answer_output", "")
         if visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            # A deictic visual calculation defaults to both output channels.
-            # Explicit gesture-only requests still arrive with gesture_only.
-            if not visual_answer_output:
-                visual_answer_output = "gesture_and_speech"
-                data["visual_answer_output"] = visual_answer_output
-            elif visual_answer_output not in {
+            if visual_answer_operation not in {
+                "add",
+                "subtract",
+                "multiply",
+                "divide",
+            }:
+                raise ValueError("visual answer requires an explicit operation")
+            if visual_answer_output not in {
                 "gesture_only",
                 "gesture_and_speech",
             }:
                 raise ValueError("invalid visual answer output")
-        elif visual_answer_output:
-            raise ValueError("visual answer output requires visual answer route")
+        elif visual_answer_output or visual_answer_operation:
+            raise ValueError("visual answer fields require visual answer route")
         else:
+            data["visual_answer_operation"] = ""
             data["visual_answer_output"] = ""
         if (
             data["speech"] not in {"verbatim", "generated", "none"}
@@ -332,13 +370,17 @@ class TurnIntent:
             else:
                 data["face"] = target
         elif visual_route == VISUAL_GESTURE_ANSWER_GATE:
-            data["speech"] = "generated"
-            data["text"] = data["text"].strip() or "根据当前画面完成计算或推理"
-            data["body_mode"] = "none"
-            data["body"] = ""
-            data["face"] = ""
-            data["reaction_mode"] = "none"
-            data["reaction"] = ""
+            # The numeric gesture already owns the single body-action slot.
+            # Reject a second body directive instead of silently overwriting
+            # user intent. Face, voice and explicit speech remain independent.
+            if data["body_mode"] != "none" or data["body"]:
+                raise ValueError(
+                    "visual answer cannot combine with another body action"
+                )
+            if data["reaction_mode"] != "none" or data["reaction"]:
+                raise ValueError(
+                    "visual answer cannot combine with an implicit reaction"
+                )
 
         if (data["body_mode"] == "none") != (not bool(data["body"])):
             raise ValueError("inconsistent body mode")
@@ -350,6 +392,13 @@ class TurnIntent:
             raise ValueError("empty verbatim content")
         if data["speech"] == "none" and data["text"]:
             raise ValueError("silent intent contains speech")
+        if (
+            visual_route == VISUAL_GESTURE_ANSWER_GATE
+            and data["speech"] == "generated"
+        ):
+            raise ValueError(
+                "visual answer additional speech must be explicit verbatim text"
+            )
 
         return cls(
             **data,
@@ -370,6 +419,25 @@ class TurnIntent:
             self.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
             and self.visual_answer_output == "gesture_and_speech"
         )
+
+    def has_visual_public_speech(self) -> bool:
+        """Return whether visual arithmetic must publish any spoken text."""
+
+        return self.speaks_visual_answer() or (
+            self.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+            and self.speech == "verbatim"
+            and bool(self.text.strip())
+        )
+
+    def visual_additional_speech(self) -> str:
+        """Return an explicit extra utterance, never an internal task string."""
+
+        if (
+            self.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+            and self.speech == "verbatim"
+        ):
+            return self.text.strip()
+        return ""
 
     def action_context(self, original):
         # Data remains in user context. Catalog/state rules stay system authority.

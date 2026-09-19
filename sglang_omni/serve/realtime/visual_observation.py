@@ -18,6 +18,7 @@ VISUAL_OBSERVATION_MIN_TOKEN_MARGIN_ENV = (
 
 
 _VISUAL_EQUIVALENCE_KEYS = {
+    "数字二": "V_SIGN",
     "数字二手势": "V_SIGN",
     "单手比耶": "V_SIGN",
 }

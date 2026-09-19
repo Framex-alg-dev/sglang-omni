@@ -1009,6 +1009,7 @@ class TurnPipeline:
             visual_arithmetic_probe_task: (
                 asyncio.Task[tuple[str, dict[str, Any]] | None] | None
             ) = None
+            visual_arithmetic_image_prefetch_task: asyncio.Task[bool] | None = None
             visual_gesture_probe_task: asyncio.Task[Any] | None = None
 
             def track_branch(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
@@ -1340,9 +1341,16 @@ class TurnPipeline:
                 if decision is not None and intent is not None:
                     legacy_reaction_active = intent.reaction_mode == "respond"
                     decision_reaction_active = decision.reaction_type != "none"
+                    reaction_perform_is_compatible = bool(
+                        decision.body_mode == "perform"
+                        and intent.body_mode == "none"
+                        and decision_reaction_active
+                        and legacy_reaction_active
+                    )
                     disagreements = {
                         "body": (
                             decision.body_mode != intent.body_mode
+                            and not reaction_perform_is_compatible
                             and not (
                                 decision.body_mode == "capability_query"
                                 and intent.body_mode == "none"
@@ -1398,6 +1406,9 @@ class TurnPipeline:
                         legacy_has_face=bool(intent.face),
                         decision_reaction_type=decision.reaction_type,
                         legacy_reaction_mode=intent.reaction_mode,
+                        reaction_perform_is_compatible=(
+                            reaction_perform_is_compatible
+                        ),
                         decision_visual_scope=decision.visual_scope,
                         legacy_visual_scope=intent.visual_scope_gate,
                         confidence_margin=decision.body_gate_margin,
@@ -1648,6 +1659,25 @@ class TurnPipeline:
                     name=f"session-intent-{self.session_id}-{turn.turn_id}",
                 )
                 if (
+                    getattr(self, "image_encoder_prefetch_enabled", False)
+                    and fusion_reply
+                    and provisional_state is not None
+                    and "action" in self.modalities
+                    and IMAGE_ROLE_USER_CAMERA in current_image_roles
+                ):
+                    visual_arithmetic_image_prefetch_task = track_branch(
+                        self._run_visual_arithmetic_image_prefetch(
+                            turn,
+                            prepared_current_images,
+                            current_image_roles,
+                            visual_scope_future,
+                        ),
+                        name=(
+                            f"session-visual-arithmetic-image-prefetch-"
+                            f"{self.session_id}-{turn.turn_id}"
+                        ),
+                    )
+                if (
                     fusion_reply
                     and provisional_state is not None
                     and "action" in self.modalities
@@ -1665,6 +1695,7 @@ class TurnPipeline:
                             prepared_current_images,
                             current_image_roles,
                             visual_scope_future,
+                            visual_arithmetic_image_prefetch_task,
                         ),
                         name=(
                             f"session-visual-arithmetic-probe-"
@@ -2001,6 +2032,9 @@ class TurnPipeline:
                             current_audio_list,
                             prepared_current_images,
                             current_image_roles,
+                            image_encoder_prefetch_task=(
+                                visual_arithmetic_image_prefetch_task
+                            ),
                         ),
                         name=(
                             f"session-visual-arithmetic-probe-fallback-"
@@ -2197,6 +2231,51 @@ class TurnPipeline:
                             voice_tone=turn.intent.voice_tone, voice_pace=turn.intent.voice_pace,
                         )
                 if (
+                    visual_gesture_answer
+                    and turn.intent is not None
+                    and bool(turn.intent.face)
+                ):
+                    # Unified intent has already normalized an explicitly
+                    # requested face. Resolve the small fixed expression set
+                    # deterministically so the visual-arithmetic fast path does
+                    # not add a performance-model request or delay its action.
+                    performance = self._explicit_face_performance_decision(
+                        turn.intent.face
+                    )
+                    performance = replace(
+                        performance,
+                        # The numeric answer already owns the body channel;
+                        # the explicit face is an independent second channel,
+                        # not an expression-only turn that may suppress it.
+                        request_scope="both",
+                        tts_instruction=turn.intent.tts_instruction(),
+                    )
+                    expression = performance.expression
+                    emit_structured_log(
+                        "performance",
+                        "visual_answer_explicit_face_resolved",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        face_task=turn.intent.face,
+                        expression_candidate_id=(
+                            expression.get("candidate_id")
+                            if expression is not None
+                            else None
+                        ),
+                        expression_unsupported=(
+                            performance.expression_unsupported
+                        ),
+                        model_request_added=False,
+                        after_commit_ms=self._after_commit_ms(turn),
+                    )
+                    if (
+                        "expression" in self.modalities
+                        and expression is not None
+                        and not performance.expression_unsupported
+                    ):
+                        await send_expression_ready(expression)
+                elif (
                     not visual_gesture_answer
                     and ("expression" in self.modalities or turn.intent is None)
                 ):
@@ -2273,7 +2352,7 @@ class TurnPipeline:
             preserve_visual_answer_speech = bool(
                 visual_gesture_answer
                 and turn.intent is not None
-                and turn.intent.speaks_visual_answer()
+                and turn.intent.has_visual_public_speech()
             )
             pure_action_reply = bool(
                 visual_gesture_answer
@@ -2723,7 +2802,7 @@ class TurnPipeline:
                     if (
                         visual_gesture_answer
                         and turn.intent is not None
-                        and turn.intent.speaks_visual_answer()
+                        and turn.intent.has_visual_public_speech()
                     ):
                         # The generated VISUAL_ARITHMETIC contract is private
                         # model evidence, not user-facing prose. Publish a
@@ -2745,17 +2824,25 @@ class TurnPipeline:
                         selected_number = numeric_resolution.route_context.get(
                             "selected_number"
                         )
-                        public_answer = (
-                            self._prompt(
-                                zh=f"答案是数字{selected_number}。",
-                                en=f"The answer is {selected_number}.",
+                        public_parts: list[str] = []
+                        if turn.intent.speaks_visual_answer():
+                            public_parts.append(
+                                self._prompt(
+                                    zh=f"答案是数字{selected_number}。",
+                                    en=f"The answer is {selected_number}.",
+                                )
+                                if isinstance(selected_number, int)
+                                else self._prompt(
+                                    zh="我没能识别出答案。",
+                                    en="I couldn't determine the answer.",
+                                )
                             )
-                            if isinstance(selected_number, int)
-                            else self._prompt(
-                                zh="我没能识别出答案。",
-                                en="I couldn't determine the answer.",
-                            )
+                        additional_speech = (
+                            turn.intent.visual_additional_speech()
                         )
+                        if additional_speech:
+                            public_parts.append(additional_speech)
+                        public_answer = " ".join(public_parts)
                         visual_answer_public_reply_task = track_branch(
                             self._run_provided_reply(
                                 turn,

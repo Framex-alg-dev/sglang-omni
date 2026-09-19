@@ -271,6 +271,13 @@ def route_numeric_reply_action(
         return NumericReplyActionRoute(False, "required_modality_missing")
     if speech_kind != "generated" and not (
         speech_kind == "none" and has_user_camera
+    ) and not (
+        # VISUAL_ANSWER sets allow_empty_candidates and may carry an
+        # independent exact utterance. The private A,B evidence still owns the
+        # numeric gesture; explicit speech must not disable that route.
+        allow_empty_candidates
+        and speech_kind == "verbatim"
+        and has_user_camera
     ):
         return NumericReplyActionRoute(False, "not_generated_reply")
     if body_mode != "none":

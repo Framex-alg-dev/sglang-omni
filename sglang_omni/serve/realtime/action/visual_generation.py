@@ -157,17 +157,29 @@ def normalize_visual_gesture_output(
 ) -> str | None:
     """Return a catalog label for harmless variants; reject semantic extras."""
 
+    candidate_list = tuple(candidates)
     label = _HARMLESS_TERMINAL_PUNCTUATION_RE.sub("", text.strip()).strip()
     if label == _UNSUPPORTED_OUTPUT:
         return label
     allowed_labels = {
-        visual_gesture_output_label(candidate) for candidate in candidates
+        visual_gesture_output_label(candidate) for candidate in candidate_list
     }
     if label in allowed_labels:
         return label
     numeric_match = _NUMERIC_GESTURE_OUTPUT_RE.fullmatch(label)
     if numeric_match is not None and numeric_match.group(1) in allowed_labels:
         return numeric_match.group(1)
+    # The copy gesture catalog intentionally exposes one executor for each
+    # visual hand shape.  Accept a model-emitted catalog alias and resolve it
+    # to that executor (for example, 单手比耶 -> 数字二).
+    visual_key = visual_equivalence_key(label)
+    equivalent_labels = {
+        visual_gesture_output_label(candidate)
+        for candidate in candidate_list
+        if visual_equivalence_key(candidate.source_label) == visual_key
+    }
+    if visual_key != label and len(equivalent_labels) == 1:
+        return next(iter(equivalent_labels))
     return None
 
 

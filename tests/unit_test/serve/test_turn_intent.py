@@ -330,50 +330,134 @@ def test_copy_route_cannot_override_a_prohibition_into_execution():
         )
 
 
-def test_visual_answer_is_normalized_for_downstream_reasoning():
+def test_visual_answer_sparse_schema_is_normalized_without_overwriting_channels():
     intent = TurnIntent.parse(
         json.dumps(
-            payload(
-                visual_route="VISUAL_ANSWER",
-                speech="none",
-                text="",
-                body="错误动作",
-            ),
+            {
+                "visual_route": "VISUAL_ANSWER",
+                "visual_answer_operation": "add",
+                "visual_answer_output": "gesture_only",
+                "face": "微笑",
+                "voice_tone": "cheerful",
+            },
             ensure_ascii=False,
         ),
         has_user_camera=True,
     )
     assert intent.visual_scope_gate == "VISUAL_ANSWER"
-    assert intent.speech == "generated"
-    assert intent.text == "根据当前画面完成计算或推理"
+    assert intent.speech == "none" and intent.text == ""
     assert intent.body_mode == "none" and intent.body == ""
-    assert intent.visual_answer_output == "gesture_and_speech"
-    assert intent.speaks_visual_answer() is True
+    assert intent.face == "微笑" and intent.voice_tone == "cheerful"
+    assert intent.history is False and intent.reaction_mode == "none"
+    assert intent.visual_answer_output == "gesture_only"
+    assert intent.speaks_visual_answer() is False
 
     spoken = TurnIntent.parse(
         json.dumps(
-            payload(
-                visual_route="VISUAL_ANSWER",
-                speech="generated",
-                text="根据当前画面计算答案",
-                body="",
-                body_mode="none",
-                visual_answer_output="gesture_and_speech",
-            ),
+            {
+                "visual_route": "VISUAL_ANSWER",
+                "visual_answer_operation": "multiply",
+                "visual_answer_output": "gesture_and_speech",
+                "speech": "verbatim",
+                "text": "你好",
+            },
             ensure_ascii=False,
         ),
         has_user_camera=True,
     )
     assert spoken.speaks_visual_answer() is True
+    assert spoken.has_visual_public_speech() is True
+    assert spoken.visual_additional_speech() == "你好"
+    assert spoken.visual_answer_operation == "multiply"
+
+    with pytest.raises(ValueError, match="invalid intent fields"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "visual_route": "VISUAL_ANSWER",
+                    "visual_answer_operation": "add",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_visual_answer_rejects_a_second_body_action_instead_of_dropping_it():
+    with pytest.raises(ValueError, match="another body action"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "visual_route": "VISUAL_ANSWER",
+                    "visual_answer_operation": "add",
+                    "visual_answer_output": "gesture_and_speech",
+                    "body_mode": "perform",
+                    "body": "挥手",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_visual_answer_rejects_generated_additional_speech():
+    with pytest.raises(ValueError, match="must be explicit verbatim"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "visual_route": "VISUAL_ANSWER",
+                    "visual_answer_operation": "add",
+                    "visual_answer_output": "gesture_and_speech",
+                    "speech": "generated",
+                    "text": "解释计算过程",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
 
 
 def test_visual_answer_output_is_rejected_on_non_visual_answer_route():
-    with pytest.raises(ValueError, match="requires visual answer route"):
+    with pytest.raises(ValueError, match="require visual answer route"):
         TurnIntent.parse(
             json.dumps(
                 payload(visual_answer_output="gesture_and_speech"),
                 ensure_ascii=False,
             )
+        )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["add", "subtract", "multiply", "divide"],
+)
+def test_visual_answer_accepts_all_explicit_arithmetic_operations(operation):
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "visual_route": "VISUAL_ANSWER",
+                "visual_answer_operation": operation,
+                "visual_answer_output": "gesture_only",
+            },
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+    assert intent.visual_answer_operation == operation
+
+
+def test_visual_answer_rejects_unknown_arithmetic_operation():
+    with pytest.raises(ValueError, match="explicit operation"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "visual_route": "VISUAL_ANSWER",
+                    "visual_answer_operation": "plus",
+                    "visual_answer_output": "gesture_only",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
         )
 
 
@@ -493,11 +577,7 @@ async def test_streaming_unified_intent_releases_visual_route_before_full_json()
             yield CompletionStreamChunk(
                 request_id=request_id,
                 text=(
-                    '"speech":"generated",'
-                    '"text":"根据当前画面计算答案",'
-                    '"body_mode":"none","body":"","face":"",'
-                    '"history":false,"reaction_mode":"none",'
-                    '"reaction":"",'
+                    '"visual_answer_operation":"add",'
                     '"visual_answer_output":"gesture_only"}'
                 ),
                 finish_reason="stop",
@@ -607,13 +687,11 @@ async def test_visual_gesture_answer_uses_unified_route():
         async def completion(self, request, request_id):
             return SimpleNamespace(
                 text=json.dumps(
-                    payload(
-                        visual_route="VISUAL_ANSWER",
-                        speech="generated",
-                        text="根据当前画面计算答案",
-                        body="",
-                        body_mode="none",
-                    ),
+                    {
+                        "visual_route": "VISUAL_ANSWER",
+                        "visual_answer_operation": "add",
+                        "visual_answer_output": "gesture_only",
+                    },
                     ensure_ascii=False,
                 )
             )
@@ -628,7 +706,7 @@ async def test_visual_gesture_answer_uses_unified_route():
         session, turn, ["audio"], ["camera"], ["user_camera"]
     )
     assert intent.visual_scope_gate == "VISUAL_ANSWER"
-    assert intent.speech == "generated" and intent.body_mode == "none"
+    assert intent.speech == "none" and intent.body_mode == "none"
 
 
 @pytest.mark.asyncio
@@ -730,7 +808,8 @@ def test_unified_prompt_has_consistent_visual_and_action_boundaries():
     assert "挥手、点头、比个心、比数字二、做个手势" in SYSTEM
     assert "“这是什么手势/这是数字几”选NO_CURRENT_VIEW" in SYSTEM
     assert "“这个加这个等于多少”依赖当前画面" in SYSTEM
-    assert "未指定回答方式或明确“用手势回答并说出来/手势加语音”=gesture_and_speech" in SYSTEM
+    assert "未指定或手势加语音播报答案=gesture_and_speech" in SYSTEM
+    assert "加/减/乘/除对应add/subtract/multiply/divide" in SYSTEM
     assert "能挥挥手吗”" in SYSTEM and "是perform" in SYSTEM
     assert "你会挥手吗”" in SYSTEM and "body_mode=none" in SYSTEM
     assert "gesture_only" in SYSTEM and "gesture_and_speech" in SYSTEM

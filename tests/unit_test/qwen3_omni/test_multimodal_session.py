@@ -3867,6 +3867,96 @@ async def test_enforced_grouped_decision_scores_in_parallel_but_waits_to_publish
 
 
 @pytest.mark.asyncio
+async def test_enforced_greeting_reaction_allows_wave_with_no_explicit_body(
+    monkeypatch,
+):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
+
+    async def greeting_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        full_intent_start_event=None,
+    ):
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        assert full_intent_start_event is not None
+        await full_intent_start_event.wait()
+        return TurnIntent(
+            speech="generated",
+            text="你好",
+            body="",
+            body_mode="none",
+            face="",
+            history=False,
+            reaction_mode="respond",
+            reaction="回应用户问候",
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", greeting_intent)
+
+    class GreetingDecisionClient(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            self.score_requests.append(request)
+            candidate_ids = [item.candidate_id for item in request.candidates]
+            winners = {"288", "IB1", "IF0", "IR1"}
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=candidate_id,
+                        token_count=1,
+                        mean_logprob=(
+                            -0.01 if candidate_id in winners else -10.0
+                        ),
+                        mean_nll=(
+                            0.01 if candidate_id in winners else 10.0
+                        ),
+                        ppl=(
+                            1.01 if candidate_id in winners else 22026.0
+                        ),
+                        token_scores=[],
+                    )
+                    for candidate_id in candidate_ids
+                ],
+            )
+
+    catalog = load_runtime_action_catalog()
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        GreetingDecisionClient("P201", body_id="288"),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "grouped-greeting-reaction",
+            outputs=["action"],
+            action={},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("greeting"))
+    await session.handle_turn_commit(
+        user_turn_commit("greeting", text="你好")
+    )
+
+    action_ready = next(
+        event for event in ws.events
+        if event["type"] == "turn.action.ready"
+    )
+    assert action_ready["action"]["candidate_id"] == "288"
+    assert action_ready["action"]["execute"] is True
+
+
+@pytest.mark.asyncio
 async def test_parallel_action_target_mismatch_falls_back_without_rescoring(
     monkeypatch,
 ):
@@ -4526,12 +4616,16 @@ async def test_complete_reply_does_not_trigger_disabled_numeric_gesture(
 @pytest.mark.parametrize(
     "visual_answer_output", ["gesture_only", "gesture_and_speech"]
 )
+@pytest.mark.parametrize("additional_speech", [None, "你好"])
+@pytest.mark.parametrize("explicit_face", [None, "微笑"])
 async def test_visual_reasoning_gesture_answer_output_mode_and_number(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
     outputs: list[str],
     direct_catalog: bool,
     visual_answer_output: str,
+    additional_speech: str | None,
+    explicit_face: str | None,
 ) -> None:
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
 
@@ -4539,12 +4633,13 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
 
     async def infer_visual_gesture_answer(*args):
         return TurnIntent(
-            speech='generated',
-            text='根据当前用户语音和摄像头画面完成计算或推理',
+            speech=('verbatim' if additional_speech else 'none'),
+            text=additional_speech or '',
             body='',
             body_mode='none',
-            face='',
+            face=explicit_face or '',
             history=False,
+            visual_answer_operation='add',
             visual_answer_output=visual_answer_output,
             visual_scope_gate='VISUAL_ANSWER',
         )
@@ -4574,7 +4669,7 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
     client = PureActionNumericReplyFusionClient(
         category_id=reply_category.category_id,
         numeric_candidate_id=numeric[4].candidate_id,
-        reply_chunks=['VISUAL_ARITHMETIC=add,2,2'],
+        reply_chunks=['2,2'],
     )
     ws = FakeWebSocket()
     session = make_session(ws, client, global_action_catalog=catalog)
@@ -4623,6 +4718,15 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
         request.stage in {"single", "category", "child", "performance"}
         for request in client.score_requests
     )
+    expression_events = [
+        event for event in ws.events if event["type"] == "turn.expression.ready"
+    ]
+    face_supported = "154" in catalog.candidate_by_id
+    if explicit_face and "expression" in outputs and face_supported:
+        assert len(expression_events) == 1
+        assert expression_events[0]["expression"]["candidate_id"] == "154"
+    else:
+        assert expression_events == []
     reply_request = client.reply_requests[0]
     assert len(reply_request.metadata['images']) == 2
     assert sum(
@@ -4631,7 +4735,7 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
         if isinstance(message.content, list)
         for part in message.content
     ) == 2
-    assert 'VISUAL_ARITHMETIC=add,A,B' in json.dumps(
+    assert '只输出且必须严格输出 A,B' in json.dumps(
         [message.to_dict() for message in reply_request.messages],
         ensure_ascii=False,
     )
@@ -4644,18 +4748,22 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
         for event in ws.events
         if event['type'] == 'response.text.delta'
     ]
-    if visual_answer_output == "gesture_only":
+    expected_reply_parts = []
+    if visual_answer_output == "gesture_and_speech":
+        expected_reply_parts.append("答案是数字4。")
+    if additional_speech:
+        expected_reply_parts.append(additional_speech)
+    expected_reply = " ".join(expected_reply_parts)
+    if not expected_reply:
         assert official_deltas == []
         assert tts_calls == []
     else:
-        assert "".join(event["delta"] for event in official_deltas) == (
-            "答案是数字4。"
-        )
+        assert "".join(event["delta"] for event in official_deltas) == expected_reply
         assert bool(tts_calls) is ("audio" in outputs)
     assert not any(event['type'] in {
         'response.provisional.text.delta', 'response.provisional.text.done',
     } for event in ws.events)
-    if visual_answer_output == "gesture_only" or "audio" not in outputs:
+    if not expected_reply or "audio" not in outputs:
         assert not any(
             event['type'] == 'response.audio.delta' for event in ws.events
         )
@@ -4664,11 +4772,7 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
     assert len(ready) == 1
     assert ready[0]['action']['candidate_id'] == numeric[4].candidate_id
     result = next(event for event in ws.events if event['type'] == 'turn.result')
-    assert result['reply']['text'] == (
-        ''
-        if visual_answer_output == "gesture_only"
-        else "答案是数字4。"
-    )
+    assert result['reply']['text'] == expected_reply
     assert result['action']['candidate_id'] == numeric[4].candidate_id
     assert result['media_summary']['action_context']['selection_basis'] == (
         'complete_reply_numeric'
@@ -4678,7 +4782,7 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
     ] == 4
     assert result['media_summary']['action_context']['numeric_reply_action'][
         'selection_method'
-    ] == 'structured_operand_sum'
+    ] == 'structured_operands_add'
     assert result['media_summary']['action_context']['numeric_reply_action'][
         'operand_values'
     ] == [2, 2]
@@ -4690,13 +4794,22 @@ async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
 ) -> None:
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
 
+    class ImagePrefetchClient(PureActionNumericReplyFusionClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.image_prefetch_requests = []
+
+        async def prefetch_completion_images(self, request, *, request_id):
+            self.image_prefetch_requests.append((request_id, request))
+            return True
+
     catalog = load_global_action_catalog()
     numeric = numeric_gesture_candidates_by_value(catalog)
     reply_category = system_accompaniment_categories(catalog)[0]
-    client = PureActionNumericReplyFusionClient(
+    client = ImagePrefetchClient(
         category_id=reply_category.category_id,
         numeric_candidate_id=numeric[4].candidate_id,
-        reply_chunks=['VISUAL_ARITHMETIC=add,2,2'],
+        reply_chunks=['2,2'],
     )
 
     async def blocked_until_probe_starts(
@@ -4719,6 +4832,7 @@ async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
             body_mode='none',
             face='',
             history=False,
+            visual_answer_operation='add',
             visual_answer_output='gesture_only',
             visual_scope_gate='VISUAL_ANSWER',
         )
@@ -4728,6 +4842,7 @@ async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
         'infer_turn_intent',
         blocked_until_probe_starts,
     )
+    monkeypatch.setenv("SGLANG_OMNI_IMAGE_ENCODER_PREFETCH", "1")
     ws = FakeWebSocket()
     session = make_session(ws, client, global_action_catalog=catalog)
     await start_numeric_reply_session(
@@ -4760,6 +4875,14 @@ async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
     assert client.reply_requests[0].metadata['task'] == (
         'session_visual_arithmetic_probe'
     )
+    assert len(client.image_prefetch_requests) == 1
+    _, image_prefetch_request = client.image_prefetch_requests[0]
+    assert image_prefetch_request.metadata['task'] == 'image_encoder_prefetch'
+    assert image_prefetch_request.metadata['audios'] == []
+    assert image_prefetch_request.metadata['images'] == (
+        client.reply_requests[0].metadata['images']
+    )
+    assert client.reply_requests[0].metadata['audios'] == []
     assert client.reply_requests[0].extra_params == {
         "return_logprob": True,
         "top_logprobs_num": 2,
@@ -5007,7 +5130,7 @@ async def test_nonvisual_camera_turn_does_not_submit_visual_arithmetic_probe(
             None,
         ),
         (
-            ["VISUAL_ARITHMETIC=add,6,6"],
+            ["6,6"],
             None,
             "答案是数字12。",
             "unsupported",
@@ -5044,6 +5167,7 @@ async def test_visual_answer_speech_survives_probe_or_gesture_failure_without_re
             body_mode='none',
             face='',
             history=False,
+            visual_answer_operation='add',
             visual_answer_output='gesture_and_speech',
             visual_scope_gate='VISUAL_ANSWER',
         )
@@ -11831,6 +11955,42 @@ async def test_session_start_prewarms_static_turn_intent_prefix() -> None:
     assert request.messages[0].role == "system"
     assert request.messages[1].role == "user"
     assert session.turn_intent_prefix_prefilled is True
+
+
+@pytest.mark.asyncio
+async def test_visual_arithmetic_prewarm_uses_runtime_static_prefix() -> None:
+    class ArithmeticPrefillClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requests = []
+
+        async def prefill_completion_prefix(self, request, *, request_id):
+            self.requests.append((request_id, request))
+            return True
+
+    client = ArithmeticPrefillClient()
+    session = make_session(FakeWebSocket(), client)
+    session.session_id = "session-arithmetic-prefill"
+    session.modalities = ["text", "action"]
+
+    ready = await session._prewarm_visual_arithmetic_prefix(
+        client.prefill_completion_prefix
+    )
+
+    assert ready is True
+    assert len(client.requests) == 1
+    request_id, request = client.requests[0]
+    assert request_id.endswith("-visual-arithmetic-prefill")
+    assert request.metadata["task"] == "session_visual_arithmetic_prewarm"
+    assert request.metadata["audios"] == []
+    assert request.metadata["images"] == []
+    assert request.sampling.max_new_tokens == 1
+    assert request.messages[0].role == "system"
+    assert (
+        request.messages[0].content
+        == session._visual_arithmetic_operand_output_part()["text"]
+    )
+    assert request.messages[1].role == "user"
 
 
 @pytest.mark.asyncio

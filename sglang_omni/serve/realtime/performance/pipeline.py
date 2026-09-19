@@ -66,6 +66,31 @@ _TTS_BY_EXPRESSION_EN = {
     "164": "soft vulnerable tone, slightly higher pitch, slower pace, and gentle vocal force",
 }
 
+_EXPLICIT_FACE_IDS = {
+    "微笑": "154",
+    "smile": "154",
+    "大笑": "155",
+    "laugh": "155",
+    "严肃": "156",
+    "serious": "156",
+    "惊讶": "157",
+    "surprised": "157",
+    "鬼脸": "158",
+    "funny face": "158",
+    "害怕": "159",
+    "frightened": "159",
+    "委屈": "160",
+    "aggrieved": "160",
+    "悲伤": "161",
+    "sad": "161",
+    "困惑": "162",
+    "puzzled": "162",
+    "生气": "163",
+    "angry": "163",
+    "可怜": "164",
+    "pleading": "164",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class _Choice:
@@ -218,6 +243,73 @@ class PerformancePipeline:
             expression=None,
             expression_unsupported=False,
             tts_instruction=self._tts_instruction(None),
+            elapsed_ms=0.0,
+        )
+
+    def _explicit_face_performance_decision(
+        self,
+        face_task: str,
+    ) -> PerformanceDecision:
+        """Resolve a normalized explicit face without another model request."""
+
+        normalized = face_task.strip().casefold()
+        expressions = self._expression_candidates()
+        global_catalog = getattr(self, "global_action_catalog", None)
+        if global_catalog is not None:
+            global_face_category = next(
+                (
+                    category
+                    for category in global_catalog.categories
+                    if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID
+                ),
+                None,
+            )
+            if global_face_category is not None:
+                expressions = list(
+                    {
+                        item.candidate_id: item
+                        for item in (*expressions, *global_face_category.children)
+                        if item.candidate_id in _FACE_ONLY_DESCRIPTIONS
+                    }.values()
+                )
+        candidate = next(
+            (
+                item
+                for item in expressions
+                if item.source_label.strip().casefold() == normalized
+            ),
+            None,
+        )
+        if candidate is None:
+            candidate_id = _EXPLICIT_FACE_IDS.get(normalized)
+            candidate = next(
+                (
+                    item
+                    for item in expressions
+                    if item.candidate_id == candidate_id
+                ),
+                None,
+            )
+        if candidate is None:
+            return PerformanceDecision(
+                request_scope="expression_only",
+                expression=None,
+                expression_unsupported=True,
+                tts_instruction=self._tts_instruction(None),
+                elapsed_ms=0.0,
+            )
+        return PerformanceDecision(
+            request_scope="expression_only",
+            expression={
+                "category_id": FACIAL_EXPRESSION_CATEGORY_ID,
+                "candidate_id": candidate.candidate_id,
+                "expression_id": candidate.action_id,
+                "label": candidate.source_label,
+                "description": _FACE_ONLY_DESCRIPTIONS[candidate.candidate_id],
+                "apply": True,
+            },
+            expression_unsupported=False,
+            tts_instruction=self._tts_instruction(candidate.candidate_id),
             elapsed_ms=0.0,
         )
 

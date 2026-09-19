@@ -47,6 +47,99 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 class ReplyGenerationComponent:
     """Model reply generation and terminal response events."""
 
+    async def _run_visual_arithmetic_image_prefetch(
+        self,
+        turn: TurnBuffer,
+        images: list[Any],
+        image_roles: list[str],
+        visual_scope_future: asyncio.Future[str],
+    ) -> bool:
+        """Warm exact image embeddings while the unified route is decoding."""
+
+        prefetch = getattr(self.client, "prefetch_completion_images", None)
+        if not callable(prefetch):
+            return False
+        request, forwarded_roles = (
+            self._build_visual_arithmetic_image_prefetch_request(
+                turn, images, image_roles
+            )
+        )
+        if not forwarded_roles:
+            return False
+        request_id = f"{turn.request_base}-image-encoder-prefetch"
+        started = time.perf_counter()
+        self._register_turn_request(turn, request_id)
+        call = asyncio.create_task(
+            prefetch(request, request_id=request_id),
+            name=f"image-encoder-prefetch-request-{turn.turn_id}",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {call, visual_scope_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if call not in done:
+                route_code = visual_scope_future.result()
+                if route_code != VISUAL_GESTURE_ANSWER_GATE:
+                    abort = getattr(self.client, "abort", None)
+                    if callable(abort):
+                        await asyncio.gather(
+                            abort(request_id), return_exceptions=True
+                        )
+                    call.cancel()
+                    await asyncio.gather(call, return_exceptions=True)
+                    emit_structured_log(
+                        "performance",
+                        "visual_arithmetic_image_prefetch_cancelled",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        logical_request_id=turn.request_base,
+                        reason="route_not_visual_answer",
+                        after_commit_ms=self._after_commit_ms(turn),
+                    )
+                    return False
+            ready = bool(await call)
+            emit_structured_log(
+                "performance",
+                "visual_arithmetic_image_prefetch_completed",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                forwarded_image_count=len(forwarded_roles),
+                ready=ready,
+                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                after_commit_ms=self._after_commit_ms(turn),
+            )
+            return ready
+        except asyncio.CancelledError:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(abort(request_id), return_exceptions=True)
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+            raise
+        except Exception as exc:
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+            emit_structured_log(
+                "error",
+                "visual_arithmetic_image_prefetch_failed",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        finally:
+            self._unregister_turn_request(turn, request_id)
+
     async def _run_visual_arithmetic_probe_after_route(
         self,
         turn: TurnBuffer,
@@ -54,6 +147,7 @@ class ReplyGenerationComponent:
         images: list[Any],
         image_roles: list[str],
         visual_scope_future: asyncio.Future[str],
+        image_encoder_prefetch_task: asyncio.Task[bool] | None = None,
     ) -> tuple[str, dict[str, Any]] | None:
         """Start operand extraction only after unified intent emits its route."""
 
@@ -72,7 +166,11 @@ class ReplyGenerationComponent:
             )
             return None
         return await self._run_visual_arithmetic_probe(
-            turn, audios, images, image_roles
+            turn,
+            audios,
+            images,
+            image_roles,
+            image_encoder_prefetch_task=image_encoder_prefetch_task,
         )
 
     async def _run_visual_arithmetic_probe(
@@ -81,6 +179,8 @@ class ReplyGenerationComponent:
         audios: list[str],
         images: list[Any],
         image_roles: list[str],
+        *,
+        image_encoder_prefetch_task: asyncio.Task[bool] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Run private operand extraction concurrently with turn intent.
 
@@ -89,6 +189,12 @@ class ReplyGenerationComponent:
         """
 
         self._ensure_turn_processing(turn)
+        if image_encoder_prefetch_task is not None:
+            await asyncio.gather(
+                image_encoder_prefetch_task,
+                return_exceptions=True,
+            )
+            self._ensure_turn_processing(turn)
         request_id = f"{turn.request_base}-visual-arithmetic"
         request, forwarded_image_roles = (
             self._build_visual_arithmetic_probe_request(

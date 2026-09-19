@@ -85,6 +85,80 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prewarm_visual_arithmetic_prefix(self, prefill: Any) -> bool:
+        """Warm the static operand-extraction prefix before the first Turn."""
+
+        if (
+            not callable(prefill)
+            or "text" not in self.modalities
+            or "action" not in self.modalities
+        ):
+            return False
+        request_id = (
+            f"session-{self.session_instance_id}-visual-arithmetic-prefill"
+        )
+        started = time.perf_counter()
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(
+                    role="system",
+                    content=self._visual_arithmetic_operand_output_part()["text"],
+                ),
+                # Preserve the user-role header shared by the runtime request;
+                # current-turn audio/images begin only after this boundary.
+                Message(
+                    role="user",
+                    content=[{"type": "text", "text": " "}],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_visual_arithmetic_prewarm",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+            },
+        )
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            emit_structured_log(
+                "error",
+                "session_visual_arithmetic_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_visual_arithmetic_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
     async def _prewarm_visual_gesture_prefix(self, prefill: Any) -> bool:
         """Warm the semantic gesture classifier prefix for the experiment."""
 
@@ -862,6 +936,13 @@ class SessionStartComponent:
             self._prewarm_visual_gesture_prefix(intent_prefill),
             name=f"session-visual-gesture-prefill-{self.session_instance_id}",
         )
+        visual_arithmetic_prefill_task = asyncio.create_task(
+            self._prewarm_visual_arithmetic_prefix(intent_prefill),
+            name=(
+                f"session-visual-arithmetic-prefill-"
+                f"{self.session_instance_id}"
+            ),
+        )
         if self.direct_action_selection and candidates:
             # Warm every direct-action prefix that an ordinary Session can use
             # before session.started is emitted.  User camera Turns carry an
@@ -1177,6 +1258,9 @@ class SessionStartComponent:
             await self._prewarm_user_child_sessions(prefill)
         self.turn_intent_prefix_prefilled = await intent_prefill_task
         self.visual_gesture_prefix_prefilled = await visual_gesture_prefill_task
+        self.visual_arithmetic_prefix_prefilled = (
+            await visual_arithmetic_prefill_task
+        )
         self.started = True
         emit_structured_log(
             "lifecycle",
@@ -1188,6 +1272,9 @@ class SessionStartComponent:
             turn_intent_prefix_prefilled=self.turn_intent_prefix_prefilled,
             visual_gesture_prefix_prefilled=(
                 self.visual_gesture_prefix_prefilled
+            ),
+            visual_arithmetic_prefix_prefilled=(
+                self.visual_arithmetic_prefix_prefilled
             ),
         )
 
@@ -1295,6 +1382,9 @@ class SessionStartComponent:
             route_action_parallel=self.route_action_parallel,
             visual_gesture_generation_enabled=(
                 self.visual_gesture_generation_enabled
+            ),
+            image_encoder_prefetch_enabled=(
+                self.image_encoder_prefetch_enabled
             ),
             action_catalog_hash=self.action_catalog_hash,
             session_action_catalog_hash=self.action_catalog_hash,

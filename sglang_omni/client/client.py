@@ -1369,6 +1369,17 @@ class Client:
         await self.completion(request, request_id=request_id)
         return True
 
+    async def prefetch_completion_images(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+    ) -> bool:
+        """Populate the image-encoder cache without running the Thinker."""
+
+        await self.completion(request, request_id=request_id)
+        return True
+
     # ------------------------------------------------------------------
     # High-level: streaming completion
     # ------------------------------------------------------------------

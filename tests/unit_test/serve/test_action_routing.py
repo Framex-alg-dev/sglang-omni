@@ -321,7 +321,13 @@ def test_visual_gesture_generation_collapses_v_shape_but_keeps_heart() -> None:
 
     assert [candidate.candidate_id for candidate in eligible] == ["259", "285"]
     assert parse_visual_gesture_output("数字二", eligible) is digit_two
+    assert normalize_visual_gesture_output("单手比耶", eligible) == "数字二"
+    assert parse_visual_gesture_output("单手比耶", eligible) is digit_two
     assert parse_visual_gesture_output("双手比心", eligible) is heart
+
+    victory_only = visual_gesture_candidates((symbolic,), (victory,))
+    assert normalize_visual_gesture_output("数字二", victory_only) == "单手比耶"
+    assert parse_visual_gesture_output("数字二", victory_only) is victory
 
 
 def test_visual_expression_requires_named_scope_and_current_camera() -> None:
@@ -453,6 +459,20 @@ def test_numeric_reply_route_requires_generated_body_neutral_user_reply() -> Non
     assert visual_answer_without_gesture.candidates == ()
     assert visual_answer_without_gesture.reason == "numeric_candidates_missing"
 
+    visual_answer_with_additional_verbatim = route_numeric_reply_action(
+        turn_origin="user",
+        reply_provided=False,
+        speech_kind="verbatim",
+        body_mode="none",
+        has_user_camera=True,
+        has_text_output=True,
+        has_action_output=True,
+        candidates=candidates,
+        allow_empty_candidates=True,
+    )
+    assert visual_answer_with_additional_verbatim.enabled is True
+    assert visual_answer_with_additional_verbatim.candidates[0].value == 3
+
 
 def test_complete_reply_numeric_gate_is_broad_but_bounded() -> None:
     for text in ("等于三", "1+2=3", "一共有 3 个", "the answer is ten"):
@@ -487,15 +507,13 @@ def test_explicit_primary_answer_number_is_strict(text: str, expected: int | Non
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("VISUAL_ARITHMETIC=add,2,2", (2, 2)),
-        (" visual_arithmetic = ADD, 10, 0 ", (10, 0)),
-        ("VISUAL_ARITHMETIC=add,11,2", None),
-        ("答案：VISUAL_ARITHMETIC=add,1,2", (1, 2)),
-        ("VISUAL_ARITHMETIC=add,1,2。", (1, 2)),
-        (
-            "VISUAL_ARITHMETIC=add,1,2 / VISUAL_ARITHMETIC=add,2,3",
-            None,
-        ),
+        ("2,2", (2, 2)),
+        (" 10, 0 ", (10, 0)),
+        ("11,2", None),
+        ("答案：1,2", None),
+        ("1,2。", None),
+        ("1,2 / 2,3", None),
+        ("INVALID", None),
     ],
 )
 def test_explicit_visual_arithmetic_operands_is_strict(
@@ -507,3 +525,28 @@ def test_explicit_visual_arithmetic_operands_is_strict(
     )
 
     assert _explicit_visual_arithmetic_operands(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("operation", "operands", "expected"),
+    [
+        ("add", (7, 2), 9),
+        ("subtract", (7, 2), 5),
+        ("multiply", (3, 2), 6),
+        ("divide", (8, 2), 4),
+        ("divide", (7, 2), None),
+        ("divide", (7, 0), None),
+        ("", (1, 2), None),
+        ("add", None, None),
+    ],
+)
+def test_visual_arithmetic_uses_explicit_intent_operation(
+    operation: str,
+    operands: tuple[int, int] | None,
+    expected: int | None,
+) -> None:
+    from sglang_omni.serve.realtime.action.numeric_reply import (
+        _calculate_visual_arithmetic,
+    )
+
+    assert _calculate_visual_arithmetic(operation, operands) == expected

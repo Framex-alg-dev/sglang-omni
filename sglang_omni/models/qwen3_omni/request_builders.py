@@ -48,6 +48,8 @@ CODE2WAV_STAGE = "code2wav"
 MM_AGGREGATE_STAGE = "mm_aggregate"
 ACTION_SCORE_STAGE = "action_score"
 ACTION_SCORE_TASK = "action_suffix_scoring"
+ENCODER_PREFETCH_STAGE = "encoder_prefetch_done"
+IMAGE_ENCODER_PREFETCH_TASK = "image_encoder_prefetch"
 
 # Note(Chenchen Hong): PyTorch sampling_seed must fit a positive int32.
 MAX_INT32_POSITIVE = 0x7FFFFFFF
@@ -72,6 +74,21 @@ def is_action_scoring_request(request_or_payload: OmniRequest | StagePayload | N
         request is not None
         and isinstance(request.metadata, dict)
         and request.metadata.get("task") == ACTION_SCORE_TASK
+    )
+
+
+def is_image_encoder_prefetch_request(
+    request_or_payload: OmniRequest | StagePayload | None,
+) -> bool:
+    request = (
+        request_or_payload.request
+        if isinstance(request_or_payload, StagePayload)
+        else request_or_payload
+    )
+    return bool(
+        request is not None
+        and isinstance(request.metadata, dict)
+        and request.metadata.get("task") == IMAGE_ENCODER_PREFETCH_TASK
     )
 
 
@@ -118,6 +135,8 @@ def resolve_mm_aggregate_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
     del request_id
+    if is_image_encoder_prefetch_request(output):
+        return ENCODER_PREFETCH_STAGE
     if is_action_scoring_request(output):
         return THINKER_STAGE
     if should_generate_audio_output(output):
@@ -137,6 +156,8 @@ def resolve_thinker_stream_done_targets(
 
 
 def resolve_terminal_stages(request: OmniRequest) -> list[str]:
+    if is_image_encoder_prefetch_request(request):
+        return [ENCODER_PREFETCH_STAGE]
     if is_action_scoring_request(request):
         return [ACTION_SCORE_STAGE]
     if should_generate_audio_output(request):
@@ -681,6 +702,13 @@ def build_sglang_thinker_request(
         vocab_size=vocab_size,
     )
     req.tokenizer = tokenizer
+    if return_logprob:
+        # GenerateRequest exposes output-token logprobs only.  Req defaults
+        # logprob_start_len to zero, which asks SGLang for prompt logprobs and
+        # consequently caps radix-prefix matching at zero tokens.  Start at
+        # the end of the prompt so output confidence remains available while
+        # static text before dynamic audio/images can reuse its cached KV.
+        req.logprob_start_len = len(input_ids_list)
     if prompt.get("cache_owner"):
         req.extra_key = "qwen3-omni-private:owner:" + str(prompt["cache_owner"])
 

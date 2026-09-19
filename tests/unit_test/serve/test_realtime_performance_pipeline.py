@@ -205,6 +205,27 @@ def test_tts_instruction_is_derived_from_turn_expression() -> None:
     assert "自然笑意" in instruction
 
 
+def test_explicit_face_is_resolved_without_model_scoring() -> None:
+    pipeline = _Pipeline()
+
+    decision = pipeline._explicit_face_performance_decision("微笑")
+
+    assert decision.request_scope == "expression_only"
+    assert decision.expression_unsupported is False
+    assert decision.expression is not None
+    assert decision.expression["candidate_id"] == "154"
+    assert decision.elapsed_ms == 0.0
+
+
+def test_unknown_explicit_face_fails_closed_without_model_scoring() -> None:
+    decision = _Pipeline()._explicit_face_performance_decision("不存在的表情")
+
+    assert decision.request_scope == "expression_only"
+    assert decision.expression is None
+    assert decision.expression_unsupported is True
+    assert decision.elapsed_ms == 0.0
+
+
 @pytest.mark.asyncio
 async def test_visual_deictic_expression_scores_the_current_user_camera() -> None:
     from sglang_omni.serve.realtime.turn_intent import TurnIntent

@@ -62,9 +62,7 @@ _AMBIGUOUS_ANSWER_RE = re.compile(
     re.IGNORECASE,
 )
 _VISUAL_ARITHMETIC_OPERANDS_RE = re.compile(
-    r"VISUAL_ARITHMETIC\s*=\s*add\s*,\s*(?P<first>10|[0-9])"
-    r"\s*,\s*(?P<last>10|[0-9])",
-    re.IGNORECASE,
+    r"\s*(?P<first>10|[0-9])\s*,\s*(?P<last>10|[0-9])\s*"
 )
 _NUMBER_VALUE = {
     "0": 0, "零": 0, "〇": 0, "zero": 0,
@@ -103,14 +101,35 @@ def _explicit_primary_answer_number(text: str) -> int | None:
 
 
 def _explicit_visual_arithmetic_operands(text: str) -> tuple[int, int] | None:
-    """Parse the server-owned visual-addition contract without accepting prose."""
+    """Parse the server-owned ordered-operand contract without accepting prose."""
 
     normalized = unicodedata.normalize("NFKC", text)
-    matches = list(_VISUAL_ARITHMETIC_OPERANDS_RE.finditer(normalized))
-    if len(matches) != 1:
+    match = _VISUAL_ARITHMETIC_OPERANDS_RE.fullmatch(normalized)
+    if match is None:
         return None
-    match = matches[0]
     return int(match.group("first")), int(match.group("last"))
+
+
+def _calculate_visual_arithmetic(
+    operation: str,
+    operands: tuple[int, int] | None,
+) -> int | None:
+    """Apply the intent-owned operation without guessing or rounding."""
+
+    if operands is None:
+        return None
+    first, last = operands
+    if operation == "add":
+        return first + last
+    if operation == "subtract":
+        return first - last
+    if operation == "multiply":
+        return first * last
+    if operation == "divide":
+        if last == 0 or first % last:
+            return None
+        return first // last
+    return None
 
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
@@ -207,14 +226,15 @@ class NumericReplyActionComponent:
             if visual_gesture_answer
             else None
         )
+        visual_operation = (
+            turn.intent.visual_answer_operation
+            if visual_gesture_answer and turn.intent is not None
+            else ""
+        )
         direct_number = (
-            sum(operand_values)
-            if operand_values is not None
-            else (
-                _explicit_primary_answer_number(complete_reply)
-                if visual_gesture_answer
-                else None
-            )
+            _calculate_visual_arithmetic(visual_operation, operand_values)
+            if visual_gesture_answer
+            else None
         )
         direct_candidate = next(
             (item for item in route.candidates if item.value == direct_number),
@@ -319,7 +339,7 @@ class NumericReplyActionComponent:
             "scoring_ms": decision.elapsed_ms,
             "selected_number": decision.selected_number,
             "selection_method": (
-                "structured_operand_sum"
+                f"structured_operands_{visual_operation}"
                 if operand_values is not None
                 else (
                     "explicit_reply_answer"
@@ -330,6 +350,7 @@ class NumericReplyActionComponent:
             "operand_values": (
                 list(operand_values) if operand_values is not None else None
             ),
+            "operation": visual_operation or None,
             "fallback_reason": decision.fallback_reason,
         }
         selection_context: dict[str, Any] = {}

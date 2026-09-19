@@ -76,6 +76,49 @@ from sglang_omni.serve.realtime.visual_observation import (
     ReplyHistoryComponent,
 )
 class ReplyPipeline:
+    def _build_visual_arithmetic_image_prefetch_request(
+        self,
+        turn: TurnBuffer,
+        images: list[Any],
+        image_roles: list[str],
+    ) -> tuple[GenerateRequest, list[str]]:
+        """Build an encoder-only request for the exact arithmetic image set."""
+
+        selected_images, selected_roles = self._select_reply_user_camera_images(
+            images, image_roles
+        )
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(
+                    role="system",
+                    content="Encode the current images for a later private request.",
+                ),
+                Message(
+                    role="user",
+                    content=[
+                        *({"type": "image"} for _ in selected_images),
+                        {"type": "text", "text": "Encode only."},
+                    ],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "audios": [],
+                "images": list(selected_images),
+                "image_roles": list(selected_roles),
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "turn_id": turn.turn_id,
+                "logical_request_id": turn.request_base,
+                "task": "image_encoder_prefetch",
+                "private_output": True,
+            },
+        )
+        return request, selected_roles
+
     def _build_visual_arithmetic_probe_request(
         self,
         turn: TurnBuffer,
@@ -98,9 +141,10 @@ class ReplyPipeline:
         if reply_image_roles:
             parts.append(self._reply_user_camera_context_part())
             parts.extend({"type": "image"} for _ in reply_image_roles)
-        parts.extend({"type": "audio"} for _ in audios)
-        if isinstance(turn.text, str) and turn.text.strip():
-            parts.append({"type": "text", "text": turn.text.strip()})
+        # Intent owns language understanding, including the exact operation.
+        # This private request sees pixels only and returns ordered operands.
+        # Keeping audio/text out avoids duplicate semantic work and makes the
+        # static visual contract independently cacheable.
 
         contract = self._visual_arithmetic_operand_output_part()["text"]
         request = GenerateRequest(
@@ -112,7 +156,8 @@ class ReplyPipeline:
             sampling=SamplingParams(
                 temperature=0,
                 top_p=1.0,
-                max_new_tokens=32,
+                max_new_tokens=8,
+                stop=["\n"],
             ),
             stream=True,
             extra_params={
@@ -121,7 +166,7 @@ class ReplyPipeline:
             },
             output_modalities=["text"],
             metadata={
-                "audios": list(audios),
+                "audios": [],
                 "images": list(reply_images),
                 "image_roles": list(reply_image_roles),
                 "session_id": self.session_id,

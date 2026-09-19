@@ -233,6 +233,14 @@ class MultimodalSession:
             VISUAL_GESTURE_GENERATION_ENV,
             default=DEFAULT_VISUAL_GESTURE_GENERATION_ENABLED,
         )
+        # Experimental latency optimization: warm exact current-turn camera
+        # embeddings while unified intent is still decoding. Disabled by
+        # default until production measurements prove it does not contend with
+        # intent inference on colocated single-GPU deployments.
+        self.image_encoder_prefetch_enabled = _env_flag(
+            IMAGE_ENCODER_PREFETCH_ENV,
+            default=False,
+        )
         action_decision_mode = os.environ.get(
             ACTION_DECISION_BATCH_MODE_ENV, "shadow"
         ).strip().lower()
@@ -344,6 +352,9 @@ class MultimodalSession:
         )
         self.action_prefix_cache_namespace = ""
         self.action_prefix_prefilled = False
+        self.turn_intent_prefix_prefilled = False
+        self.visual_gesture_prefix_prefilled = False
+        self.visual_arithmetic_prefix_prefilled = False
         self._prefilled_action_prefix_namespaces: set[str] = set()
         self.prewarm_child_category_ids: tuple[str, ...] = ()
         self.prewarmed_child_category_ids: list[str] = []
