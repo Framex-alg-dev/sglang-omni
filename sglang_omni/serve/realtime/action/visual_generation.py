@@ -42,6 +42,10 @@ _UNSUPPORTED_OUTPUT = "UNSUPPORTED"
 _NUMERIC_GESTURE_LABEL_RE = re.compile(
     r"\A(数字(?:零|一|二|三|四|五|六|七|八|九|十))手势\Z"
 )
+_NUMERIC_GESTURE_OUTPUT_RE = re.compile(
+    r"\A(数字(?:零|一|二|三|四|五|六|七|八|九|十))(?:手势)?\Z"
+)
+_HARMLESS_TERMINAL_PUNCTUATION_RE = re.compile(r"[。.!！？?]+\Z")
 VISUAL_GESTURE_COPY_ROUTES = frozenset({"COPY_ACTION", "COPY_HAND"})
 
 
@@ -110,16 +114,23 @@ def build_visual_gesture_system_prompt(
         for candidate in candidates
     ]
     return (
-        "你是当前摄像头画面的手势识别器。只判断用户正在清晰、刻意展示的手势，"
-        "不要理解语音、不要回答问题、不要计算，也不要根据历史猜测。忽略空白、遮挡、"
-        "手已放下和动作过渡帧；多个画面是同一次展示的连续采样，不是多个答案。\n"
-        "只能从以下目录选择一个语义标签：\n"
+        "你执行当前摄像头画面的封闭集视觉分类，不进行自然语言回答。\n"
+        "【输出协议（最高优先级）】\n"
+        "输出必须逐字等于下方目录中某一行冒号左侧的完整标签，或 UNSUPPORTED。"
+        "第一个字符直接是标签；标签结束后立即停止。不得添加‘手势’等后缀，"
+        "不得输出项目符号、引号、标点、解释、前缀、代码块或多个标签。\n"
+        "【视觉判定规则】\n"
+        "只判断用户正在清晰、刻意展示的动作，不要理解语音、不要回答问题、不要计算，"
+        "也不要根据历史猜测。静态手势依据最清晰的稳定画面；挥手、招手、飞吻等动态动作"
+        "依据多张画面的连续变化。忽略空白、遮挡、手已放下和无关过渡画面；"
+        "多张画面属于同一次展示，只能产生一个标签。\n"
+        "【候选目录】\n"
         + "\n".join(catalog_lines)
         + f"\n- {_UNSUPPORTED_OUTPUT}: 没有清晰手势，或手势不在目录中。\n"
         "数字手势必须按目录中每项的伸指形态和区分要点严格判断。"
         "视觉形态等价的数字二与单手比耶只保留一个目录标签。\n"
-        "只输出目录中的一个标签；无法识别时只输出 UNSUPPORTED。"
-        "不得输出解释、前缀、标点或其他文字。"
+        "【提交前检查】全部输出必须只是一个目录标签；无法得到唯一匹配时只输出 "
+        "UNSUPPORTED。不要复述说明，不要添加任何其他字符。"
     )
 
 
@@ -127,16 +138,37 @@ def parse_visual_gesture_output(
     text: str,
     candidates: Iterable[SessionActionCandidate],
 ) -> SessionActionCandidate | None:
-    """Strictly resolve one generated semantic label; malformed output fails closed."""
+    """Resolve one semantic label after safe formatting normalization."""
 
-    label = text.strip()
+    candidate_list = tuple(candidates)
+    label = normalize_visual_gesture_output(text, candidate_list)
     if label == _UNSUPPORTED_OUTPUT:
         return None
     by_label = {
         visual_gesture_output_label(candidate): candidate
-        for candidate in candidates
+        for candidate in candidate_list
     }
     return by_label.get(label)
+
+
+def normalize_visual_gesture_output(
+    text: str,
+    candidates: Iterable[SessionActionCandidate],
+) -> str | None:
+    """Return a catalog label for harmless variants; reject semantic extras."""
+
+    label = _HARMLESS_TERMINAL_PUNCTUATION_RE.sub("", text.strip()).strip()
+    if label == _UNSUPPORTED_OUTPUT:
+        return label
+    allowed_labels = {
+        visual_gesture_output_label(candidate) for candidate in candidates
+    }
+    if label in allowed_labels:
+        return label
+    numeric_match = _NUMERIC_GESTURE_OUTPUT_RE.fullmatch(label)
+    if numeric_match is not None and numeric_match.group(1) in allowed_labels:
+        return numeric_match.group(1)
+    return None
 
 
 class VisualGestureGenerationComponent:
@@ -184,6 +216,7 @@ class VisualGestureGenerationComponent:
                 temperature=0,
                 top_p=1.0,
                 max_new_tokens=24,
+                stop=["\n", "。", ".", "！", "!", "？", "?"],
             ),
             stream=True,
             extra_params={
@@ -320,6 +353,13 @@ class VisualGestureGenerationComponent:
             logical_request_id=turn.request_base,
             request_id=request_id,
             candidate_count=len(candidates),
+            # Catalog labels are static, non-user data.  Persist the exact
+            # closed set locally so an invalid classifier output can be
+            # diagnosed against the choices that were actually available.
+            candidate_labels=[
+                visual_gesture_output_label(candidate)
+                for candidate in candidates
+            ],
             forwarded_image_count=len(forwarded_roles),
             after_commit_ms=self._after_commit_ms(turn),
         )
@@ -384,10 +424,9 @@ class VisualGestureGenerationComponent:
             self._unregister_turn_request(turn, request_id)
 
         text = "".join(text_parts)
+        normalized_output = normalize_visual_gesture_output(text, candidates)
         selected = parse_visual_gesture_output(text, candidates)
-        output_valid = bool(
-            text.strip() == _UNSUPPORTED_OUTPUT or selected is not None
-        )
+        output_valid = normalized_output is not None
         confidence = summarize_visual_observation_confidence(
             output_token_logprobs,
             output_top_logprobs,
@@ -405,6 +444,15 @@ class VisualGestureGenerationComponent:
             request_id=request_id,
             candidate_count=len(candidates),
             selected_candidate_id=(selected.candidate_id if selected else None),
+            selected_candidate_label=(
+                visual_gesture_output_label(selected) if selected else None
+            ),
+            # This probe is capped at 24 generated tokens and is instructed to
+            # emit only a catalog label.  Keeping its bounded output in the
+            # local action log makes format and out-of-scope failures
+            # observable without logging user audio, transcripts, or images.
+            model_output=text,
+            normalized_output=normalized_output,
             output_valid=output_valid,
             output_chars=len(text),
             visual_observation_confidence=confidence.as_dict(),

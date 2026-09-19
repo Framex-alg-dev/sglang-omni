@@ -110,6 +110,10 @@ ACTION_READY_TTS_DECOUPLED_ENV = (
 )
 ROUTE_ACTION_PARALLEL_ENV = "SGLANG_OMNI_REALTIME_ROUTE_ACTION_PARALLEL"
 VISUAL_GESTURE_GENERATION_ENV = "SGLANG_OMNI_VISUAL_GESTURE_GENERATION"
+# Semantic visual-gesture generation is the canonical production path.  Keep
+# the environment variable as an emergency kill switch instead of requiring
+# every launcher to remember to opt in.
+DEFAULT_VISUAL_GESTURE_GENERATION_ENABLED = True
 ACTION_SELECTION_MODE_ENV = "SGLANG_OMNI_ACTION_SELECTION_MODE"
 ACTION_SELECTION_MODE_HIERARCHICAL = "hierarchical"
 ACTION_SELECTION_MODE_FLAT_CHILDREN = "flat_children"

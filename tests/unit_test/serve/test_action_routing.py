@@ -12,6 +12,7 @@ from sglang_omni.serve.realtime.action.routing import (
 )
 from sglang_omni.serve.realtime.action.visual_generation import (
     build_visual_gesture_system_prompt,
+    normalize_visual_gesture_output,
     parse_visual_gesture_output,
     visual_gesture_candidates,
 )
@@ -271,12 +272,21 @@ def test_visual_gesture_generation_uses_catalog_semantic_labels() -> None:
 
     assert "- 数字四:" in prompt and "- 数字五:" in prompt
     assert "四指伸直且拇指内扣" in prompt
+    assert "封闭集视觉分类" in prompt
+    assert "逐字等于" in prompt
+    assert "标签结束后立即停止" in prompt
+    assert "动态动作依据多张画面的连续变化" in prompt
+    assert "不要添加任何其他字符" in prompt
     selected = parse_visual_gesture_output("数字五", eligible)
     assert selected is digit_five
-    assert parse_visual_gesture_output("数字五手势", eligible) is None
+    assert parse_visual_gesture_output("数字五手势", eligible) is digit_five
+    assert parse_visual_gesture_output("数字五。", eligible) is digit_five
+    assert parse_visual_gesture_output("数字五手势！", eligible) is digit_five
     assert parse_visual_gesture_output("目录外动作", eligible) is None
     assert parse_visual_gesture_output("UNSUPPORTED", eligible) is None
-    assert parse_visual_gesture_output("数字五。", eligible) is None
+    assert normalize_visual_gesture_output("UNSUPPORTED。", eligible) == "UNSUPPORTED"
+    assert normalize_visual_gesture_output("答案是数字五", eligible) is None
+    assert normalize_visual_gesture_output("数字五、数字四", eligible) is None
 
 
 def test_visual_gesture_generation_drops_ambiguous_catalog_labels() -> None:

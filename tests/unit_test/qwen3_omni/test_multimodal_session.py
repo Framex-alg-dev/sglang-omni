@@ -3983,6 +3983,11 @@ async def test_visual_scope_intent_is_ready_before_direct_action_scoring(
 
     monkeypatch.setattr(pipeline, "infer_turn_intent", visual_intent)
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "off")
+    # This test covers the retained legacy/PPL rollback path explicitly.
+    monkeypatch.setenv(
+        multimodal_module.VISUAL_GESTURE_GENERATION_ENV,
+        "0",
+    )
     catalog = load_runtime_action_catalog()
     session = make_session(
         FakeWebSocket(),
@@ -4059,6 +4064,11 @@ async def test_completed_copy_intent_restores_camera_after_early_general_hint(
 
     monkeypatch.setattr(pipeline, "infer_turn_intent", repaired_visual_intent)
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "off")
+    # This test covers the retained legacy/PPL rollback path explicitly.
+    monkeypatch.setenv(
+        multimodal_module.VISUAL_GESTURE_GENERATION_ENV,
+        "0",
+    )
     catalog = load_runtime_action_catalog()
     session = make_session(
         FakeWebSocket(),
@@ -4864,6 +4874,15 @@ async def test_visual_gesture_generation_replaces_ppl_and_starts_with_intent(
         "return_logprob": True,
         "top_logprobs_num": 2,
     }
+    assert client.reply_requests[0].sampling.stop == [
+        "\n",
+        "。",
+        ".",
+        "！",
+        "!",
+        "？",
+        "?",
+    ]
     assert client.score_requests == []
     ready = next(
         event for event in ws.events if event["type"] == "turn.action.ready"
@@ -11291,6 +11310,24 @@ def test_action_micro_batch_size_reads_environment_and_is_fixed_on_manager(monke
     assert manager.action_micro_batch_size == 128
     session = manager.create(FakeWebSocket())
     assert session.action_micro_batch_size == 128
+
+
+def test_visual_gesture_generation_is_enabled_by_default_and_can_be_disabled(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv(
+        multimodal_module.VISUAL_GESTURE_GENERATION_ENV,
+        raising=False,
+    )
+    default_session = make_session(FakeWebSocket(), FakeClient())
+    assert default_session.visual_gesture_generation_enabled is True
+
+    monkeypatch.setenv(
+        multimodal_module.VISUAL_GESTURE_GENERATION_ENV,
+        "0",
+    )
+    disabled_session = make_session(FakeWebSocket(), FakeClient())
+    assert disabled_session.visual_gesture_generation_enabled is False
 
 
 def test_session_memory_feature_flag_and_load_snapshot(monkeypatch) -> None:

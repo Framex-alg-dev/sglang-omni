@@ -231,7 +231,7 @@ class MultimodalSession:
         )
         self.visual_gesture_generation_enabled = _env_flag(
             VISUAL_GESTURE_GENERATION_ENV,
-            default=False,
+            default=DEFAULT_VISUAL_GESTURE_GENERATION_ENABLED,
         )
         action_decision_mode = os.environ.get(
             ACTION_DECISION_BATCH_MODE_ENV, "shadow"

@@ -1293,6 +1293,9 @@ class SessionStartComponent:
             action_selection_mode=self.action_selection_mode,
             action_ready_tts_decoupled=self.action_ready_tts_decoupled,
             route_action_parallel=self.route_action_parallel,
+            visual_gesture_generation_enabled=(
+                self.visual_gesture_generation_enabled
+            ),
             action_catalog_hash=self.action_catalog_hash,
             session_action_catalog_hash=self.action_catalog_hash,
             global_action_catalog_hash=self.global_action_catalog_hash,
