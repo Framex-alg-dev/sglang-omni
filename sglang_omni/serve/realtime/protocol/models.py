@@ -443,6 +443,10 @@ class TurnBuffer:
     # Fixed-label safety decision produced in the same suffix batch as the
     # concrete actions. Reply semantics continue to use ``intent``.
     action_decision: Any | None = None
+    # Independent category result from that same physical suffix batch. The
+    # turn pipeline uses only its confidence margin to decide whether the
+    # already-running structured intent branch must reconcile publication.
+    action_category_decision: Any | None = None
     reply_provided: bool = False
     reply_context: str | None = None
     scene_context: str | None = None

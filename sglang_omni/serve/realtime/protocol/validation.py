@@ -425,12 +425,21 @@ class ProtocolValidationComponent:
             bindings[candidate_id] = dict(binding)
 
         if direct:
-            # The limited server catalog owns the complete scoring set. Older
-            # clients may still send bindings for actions outside that set.
-            bindings = {
-                candidate_id: bindings.get(candidate_id, {})
-                for candidate_id in self.global_action_catalog.candidate_by_id
-            }
+            # Explicit role capabilities constrain the server's limited catalog.
+            # Omitted capabilities retain the standalone full-catalog default.
+            if "allowed_candidates" in action_config:
+                bindings = {
+                    candidate_id: binding
+                    for candidate_id, binding in bindings.items()
+                    if candidate_id in self.global_action_catalog.candidate_by_id
+                }
+                if not bindings:
+                    raise ValueError("action.allowed_candidates has no actions in the limited catalog")
+            else:
+                bindings = {
+                    candidate_id: {}
+                    for candidate_id in self.global_action_catalog.candidate_by_id
+                }
 
         fallback_only_category_ids: set[str] | None = None
         if not raw_allowed and self.global_action_catalog is None:
@@ -1624,9 +1633,11 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
                 session_children.append(child)
@@ -1696,9 +1707,11 @@ class ProtocolValidationComponent:
                     short_definition=global_child.short_definition,
                     execution_binding=dict(parsed.execution_binding),
                     category_id=global_child.category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
             )

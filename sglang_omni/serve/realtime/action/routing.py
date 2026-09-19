@@ -347,6 +347,34 @@ def resolve_unique_explicit_action(
     return next(iter(matches.values()))
 
 
+def resolve_unique_source_label_action(
+    body_task: str,
+    candidates: Iterable[tuple[SessionActionCategory, SessionActionCandidate]],
+) -> ExplicitActionRoute | None:
+    """Resolve a structured body task by exact catalog source-label equality.
+
+    This deliberately excludes candidate IDs, action IDs, aliases, substrings,
+    regular expressions, and raw user text. It is only a reconciliation step
+    for the model-produced ``body_task`` when the parallel category gate was
+    ambiguous.
+    """
+
+    normalized_task = _normalized_label(body_task)
+    if not normalized_task:
+        return None
+    matches: dict[str, ExplicitActionRoute] = {}
+    for category, candidate in candidates:
+        if _normalized_label(candidate.source_label) != normalized_task:
+            continue
+        matches.setdefault(
+            candidate.candidate_id,
+            ExplicitActionRoute(category, candidate, candidate.source_label),
+        )
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.values()))
+
+
 def scope_visual_deictic_categories(
     categories: Iterable[SessionActionCategory],
     *,

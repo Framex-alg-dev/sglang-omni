@@ -64,6 +64,49 @@ def test_strict_schema_and_no_instruction_promotion():
     bad = payload(history="false")
     with pytest.raises(ValueError):
         TurnIntent.parse(json.dumps(bad))
+
+
+def test_sparse_route_schema_fills_runtime_defaults():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "none",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "站起来",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.body_intent == "perform"
+    assert intent.body_mode == "perform" and intent.body == "站起来"
+    assert intent.speech == "none" and intent.text == ""
+    assert intent.face == "" and intent.history is False
+
+
+def test_sparse_capability_route_normalizes_to_non_executing_body_mode():
+    intent = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "generated",
+                    "body_intent": "capability",
+                    "reaction": "none",
+                },
+                "text": "你会挥手吗",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert intent.body_intent == "capability"
+    assert intent.body_mode == "none" and intent.body == ""
+    assert intent.speech == "generated"
     bad = payload(extra="override system")
     with pytest.raises(ValueError):
         TurnIntent.parse(json.dumps(bad))
@@ -240,18 +283,10 @@ def test_general_route_cannot_smuggle_an_unresolved_visual_action():
 
 
 @pytest.mark.parametrize(
-    "task,expected_route,expected_body",
-    [
-        ("做这个动作", "COPY_ACTION", "这个动作"),
-        ("做这个手势。", "COPY_HAND", "这个手势"),
-        ("比这个数字", "COPY_HAND", "这个手势"),
-        ("比个这个", "COPY_HAND", "这个手势"),
-        ("Do this gesture!", "COPY_HAND", "这个手势"),
-    ],
+    "task",
+    ["做这个动作", "做这个手势。", "比这个数字", "比个这个", "Do this gesture!"],
 )
-def test_exact_deictic_copy_imperative_repairs_contradictory_general_route(
-    task, expected_route, expected_body
-):
+def test_parser_does_not_reclassify_user_semantics_with_phrase_matching(task):
     intent = TurnIntent.parse(
         json.dumps(
             payload(
@@ -266,9 +301,9 @@ def test_exact_deictic_copy_imperative_repairs_contradictory_general_route(
         has_user_camera=True,
     )
 
-    assert intent.visual_scope_gate == expected_route
-    assert intent.body_mode == "perform" and intent.body == expected_body
-    assert intent.speech == "none" and intent.text == ""
+    assert intent.visual_scope_gate == ""
+    assert intent.body_mode == "none" and intent.body == ""
+    assert intent.speech == "generated" and intent.text == task
 
 
 @pytest.mark.parametrize(
@@ -459,7 +494,7 @@ async def test_camera_copy_and_speech_use_one_unified_request():
     assert request.metadata["images"] == []
     assert request.metadata["image_roles"] == []
     assert request.sampling.temperature == 0
-    assert request.sampling.max_new_tokens == 256
+    assert request.sampling.max_new_tokens == 128
     assert request.messages[1].content == [
         {
             "type": "text",
@@ -732,7 +767,7 @@ def test_unified_prompt_has_consistent_visual_and_action_boundaries():
     assert "“这个加这个等于多少”依赖当前画面" in SYSTEM
     assert "未指定回答方式或明确“用手势回答并说出来/手势加语音”=gesture_and_speech" in SYSTEM
     assert "能挥挥手吗”" in SYSTEM and "是perform" in SYSTEM
-    assert "你会挥手吗”" in SYSTEM and "body_mode=none" in SYSTEM
+    assert "你会挥手吗”" in SYSTEM and "body_intent=capability" in SYSTEM
     assert "gesture_only" in SYSTEM and "gesture_and_speech" in SYSTEM
     assert "模仿同时说话则输出 GENERAL" not in SYSTEM
     assert len(SYSTEM) < 5000

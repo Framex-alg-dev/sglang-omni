@@ -26,6 +26,10 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
 )
+from sglang_omni.models.qwen3_omni.action_token_mapping import (
+    configured_action_single_token_mode,
+    load_selection_token_mapping,
+)
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
     CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
@@ -127,6 +131,9 @@ from sglang_omni.serve.realtime.protocol.models import (
 
 
 from sglang_omni.serve.realtime.action import ActionPipeline
+from sglang_omni.serve.realtime.action.background_calibration import (
+    load_action_background_calibration,
+)
 
 
 from sglang_omni.serve.realtime.reply import ReplyPipeline
@@ -211,6 +218,42 @@ class MultimodalSession:
             global_action_catalog and global_action_catalog.direct_action_selection
         )
         self.global_action_catalog = global_action_catalog
+        self.action_background_calibration = None
+        if self.direct_action_selection:
+            try:
+                self.action_background_calibration = (
+                    load_action_background_calibration()
+                )
+            except (OSError, ValueError, json.JSONDecodeError):
+                # Shadow diagnostics must never make the authoritative action
+                # path unavailable when an artifact is missing or stale.
+                logger.exception("failed to load action background calibration")
+        self.action_single_token_mode = configured_action_single_token_mode()
+        self.action_selection_token_mapping = None
+        if self.action_single_token_mode != "off":
+            if not self.direct_action_selection or global_action_catalog is None:
+                raise ValueError(
+                    "single-token action scoring requires the direct action catalog"
+                )
+            from sglang_omni.serve.realtime.action.decision import (
+                ACTION_DECISION_LABELS,
+            )
+
+            mapping = load_selection_token_mapping()
+            if mapping.catalog_hash != global_action_catalog.catalog_hash:
+                raise ValueError(
+                    "single-token action map catalog hash mismatch: "
+                    f"expected={global_action_catalog.catalog_hash} "
+                    f"actual={mapping.catalog_hash}"
+                )
+            mapping.validate_expected_ids(
+                (
+                    *global_action_catalog.candidate_by_id,
+                    UNSUPPORTED_CHILD_SCORE_ID,
+                    *ACTION_DECISION_LABELS,
+                )
+            )
+            self.action_selection_token_mapping = mapping
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
         self.embedded_tts_connector = embedded_tts_connector

@@ -431,6 +431,62 @@ class ReplyRoutingComponent:
                     elapsed_ms=turn.intent.elapsed_ms,
                     stats={"source": "visual_scope_gate"},
                 )
+            if (
+                turn.intent.speech == "generated"
+                and turn.intent.body_mode == "none"
+                and not turn.intent.body
+                and not turn.intent.face
+                and turn.intent.reaction_mode == "none"
+            ):
+                # The shared parser can occasionally copy a short physical
+                # imperative (for example, "stand up") into the speech task and
+                # leave every action field empty.  Trusting that contradiction
+                # would preserve an acknowledgement such as "I'm standing up"
+                # even when the independent action pipeline rejects execution.
+                # Reuse the bounded S0/S1 semantic route here: it classifies the
+                # user's task structure, not whether the eventual response has
+                # conversational accompaniment.  Mixed body+speech requests do
+                # not enter this branch and therefore keep their language task.
+                speech_mode = await self._disambiguate_reply_speech_mode(
+                    turn,
+                    audios,
+                    current_text=current_text,
+                    fallback_reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+                )
+                stats = {
+                    "source": "shared_turn_intent",
+                    "shared_intent_speech": turn.intent.speech,
+                    "generated_without_action_rechecked": True,
+                    "speech_mode_disambiguation": {
+                        "reply_mode": speech_mode.reply_mode,
+                        "elapsed_ms": speech_mode.elapsed_ms,
+                        "confidence_margin": speech_mode.confidence_margin,
+                        "scores": dict(speech_mode.scores),
+                        "fallback_reason": speech_mode.fallback_reason,
+                    },
+                }
+                emit_structured_log(
+                    "reply",
+                    "shared_generated_intent_speech_mode_reconciled",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    reply_mode=speech_mode.reply_mode,
+                    classification_ms=speech_mode.elapsed_ms,
+                    confidence_margin=speech_mode.confidence_margin,
+                    fallback_reason=speech_mode.fallback_reason,
+                )
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=speech_mode.reply_mode,
+                    elapsed_ms=turn.intent.elapsed_ms + speech_mode.elapsed_ms,
+                    confidence_margin=speech_mode.confidence_margin,
+                    scores=dict(speech_mode.scores),
+                    fallback_reason=speech_mode.fallback_reason,
+                    stats=stats,
+                )
+
             if turn.intent.speech != "none":
                 return ReplyHistoryRouteResult(
                     decision=decision,
