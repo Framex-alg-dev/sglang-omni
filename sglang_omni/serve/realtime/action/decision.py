@@ -59,6 +59,12 @@ ACTION_DECISION_LABELS = frozenset(
 CATEGORY_GATE_LABEL_PREFIX = "IC"
 CATEGORY_GATE_UNSUPPORTED_LABEL = "IC00"
 CATEGORY_GATE_NONE_LABEL = "ICN0"
+# A hard top-1 category scope is brittle for raw audio: the concrete-action
+# scores can already identify the correct action while two nearby semantic
+# categories are reversed.  Keep the runner-up concrete category when its IC
+# score is within this margin, then let the already-computed concrete scores
+# decide.  This changes aggregation only; it does not add model work.
+CATEGORY_GATE_TOP2_MARGIN = 1.0
 ACTION_SUPPORT_LABELS = {
     "IS0": "supported",
     "IS1": "unsupported",
@@ -288,6 +294,46 @@ def category_gate_as_dict(
         "support_margin": decision.support_margin,
         "scores": dict(decision.scores),
     }
+
+
+def category_gate_selected_category_ids(
+    decision: CategoryGateDecision,
+    categories: Iterable[Any],
+    *,
+    top2_margin: float = CATEGORY_GATE_TOP2_MARGIN,
+) -> tuple[str, ...]:
+    """Return one or two concrete category scopes for action ranking.
+
+    Unsupported and no-action winners remain authoritative and therefore do
+    not produce a concrete scope.  A concrete winner keeps the runner-up only
+    when the runner-up is another concrete category and the score gap is small
+    enough.  The order is deterministic and follows the IC score ranking.
+    """
+
+    if decision.category_id is None:
+        return ()
+    category_by_label = {
+        category_gate_label(category.category_id): str(category.category_id)
+        for category in categories
+    }
+    ranked = sorted(
+        (
+            (label, decision.scores[label])
+            for label in category_by_label
+            if label in decision.scores
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if not ranked:
+        return (str(decision.category_id),)
+    selected = [category_by_label[ranked[0][0]]]
+    if (
+        len(ranked) > 1
+        and ranked[0][1] - ranked[1][1] <= max(float(top2_margin), 0.0)
+    ):
+        selected.append(category_by_label[ranked[1][0]])
+    return tuple(selected)
 
 
 def aggregate_action_support(

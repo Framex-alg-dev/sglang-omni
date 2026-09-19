@@ -43,6 +43,7 @@ from sglang_omni.serve.realtime.action.decision import (
     category_gate_as_dict,
     category_gate_candidates,
     category_gate_score_ids,
+    category_gate_selected_category_ids,
     decision_as_dict,
     fuse_category_gate_into_action_decision,
 )
@@ -532,6 +533,16 @@ class ActionCandidateComponent:
                 support_decision_payload
             )
             action_context["category_gate_mode"] = "same_batch_enforce"
+            selected_category_ids = category_gate_selected_category_ids(
+                category_decision,
+                category_gate_categories,
+            )
+            category_decision_payload["selected_category_ids"] = list(
+                selected_category_ids
+            )
+            category_decision_payload["scope_mode"] = (
+                "top2_close" if len(selected_category_ids) == 2 else "top1"
+            )
             if action_decision is not None:
                 fused_decision = fuse_category_gate_into_action_decision(
                     action_decision,
@@ -569,7 +580,7 @@ class ActionCandidateComponent:
                     score
                     for score in raw_action_scores
                     if candidate_by_id[score.candidate_id].category_id
-                    == category_decision.category_id
+                    in selected_category_ids
                 ]
             if not action_scores:
                 raise ValueError(

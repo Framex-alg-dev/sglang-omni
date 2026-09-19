@@ -6,8 +6,10 @@ import pytest
 
 from sglang_omni.client.types import CompletionStreamChunk
 from sglang_omni.serve.realtime.turn_intent import (
+    EarlyBodyIntent,
     SYSTEM,
     TurnIntent,
+    _body_intent_from_partial_output,
     infer_turn_intent,
 )
 from sglang_omni.serve.realtime.turn_pipeline import (
@@ -86,6 +88,57 @@ def test_sparse_route_schema_fills_runtime_defaults():
     assert intent.body_mode == "perform" and intent.body == "站起来"
     assert intent.speech == "none" and intent.text == ""
     assert intent.face == "" and intent.history is False
+
+
+def test_partial_body_channel_requires_complete_task_json():
+    prefix = (
+        '{"route":{"visual":"NO_CURRENT_VIEW","speech":"verbatim",'
+        '"body_intent":"perform","reaction":"none"},"body_task":"数字'
+    )
+    assert _body_intent_from_partial_output(prefix) is None
+    assert _body_intent_from_partial_output(prefix + '二手势"') == EarlyBodyIntent(
+        "perform", "数字二手势"
+    )
+    assert _body_intent_from_partial_output(
+        '{"route":{"visual":"NO_CURRENT_VIEW","speech":"generated",'
+        '"body_intent":"none","reaction":"none"}'
+    ) == EarlyBodyIntent("none")
+
+
+def test_independent_speech_is_explicit_and_defaults_fail_closed():
+    mixed = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "verbatim",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "挥手",
+                "text": "拒绝",
+                "speech_independent_of_body": True,
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert mixed.speech_independent_of_body is True
+
+    pure_action = TurnIntent.parse(
+        json.dumps(
+            {
+                "route": {
+                    "visual": "NO_CURRENT_VIEW",
+                    "speech": "none",
+                    "body_intent": "perform",
+                    "reaction": "none",
+                },
+                "body_task": "跳舞",
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert pure_action.speech_independent_of_body is False
 
 
 def test_sparse_capability_route_normalizes_to_non_executing_body_mode():
@@ -849,4 +902,8 @@ def test_unified_prompt_has_consistent_visual_and_action_boundaries():
     assert "你会挥手吗”" in SYSTEM and "body_intent=capability" in SYSTEM
     assert "gesture_only" in SYSTEM and "gesture_and_speech" in SYSTEM
     assert "模仿同时说话则输出 GENERAL" not in SYSTEM
+    assert "text=X，body_task=数字Y手势" in SYSTEM
+    assert "严禁把X同时作为动作数字" in SYSTEM
+    assert "说二比三 ->" in SYSTEM and '"body_task":"数字三手势"' in SYSTEM
+    assert "说三比四 ->" in SYSTEM and '"body_task":"数字四手势"' in SYSTEM
     assert len(SYSTEM) < 5000
