@@ -62,6 +62,9 @@ from sglang_omni.serve.realtime.reply.prompts import ReplyPromptComponent
 from sglang_omni.serve.realtime.reply.history import ReplyHistoryComponent
 from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
 from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
+from sglang_omni.serve.realtime.visual_observation import (
+    VISUAL_OBSERVATION_TOP_LOGPROBS,
+)
 
 
 @compose_components(
@@ -112,6 +115,10 @@ class ReplyPipeline:
                 max_new_tokens=32,
             ),
             stream=True,
+            extra_params={
+                "return_logprob": True,
+                "top_logprobs_num": VISUAL_OBSERVATION_TOP_LOGPROBS,
+            },
             output_modalities=["text"],
             metadata={
                 "audios": list(audios),

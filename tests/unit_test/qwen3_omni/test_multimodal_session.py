@@ -4750,6 +4750,10 @@ async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
     assert client.reply_requests[0].metadata['task'] == (
         'session_visual_arithmetic_probe'
     )
+    assert client.reply_requests[0].extra_params == {
+        "return_logprob": True,
+        "top_logprobs_num": 2,
+    }
     ready = next(
         event for event in ws.events if event['type'] == 'turn.action.ready'
     )
@@ -4794,6 +4798,8 @@ async def test_visual_gesture_generation_replaces_ppl_and_starts_with_intent(
                 modality="text",
                 text="数字五",
                 finish_reason="stop",
+                output_token_logprobs=[[-0.1, 11]],
+                output_top_logprobs=[[[-0.1, 11], [-0.8, 12]]],
             )
 
     client = VisualGestureClient()
@@ -4854,6 +4860,10 @@ async def test_visual_gesture_generation_replaces_ppl_and_starts_with_intent(
     assert [
         request.metadata.get("task") for request in client.reply_requests
     ] == ["session_visual_gesture_probe"]
+    assert client.reply_requests[0].extra_params == {
+        "return_logprob": True,
+        "top_logprobs_num": 2,
+    }
     assert client.score_requests == []
     ready = next(
         event for event in ws.events if event["type"] == "turn.action.ready"
@@ -4868,6 +4878,16 @@ async def test_visual_gesture_generation_replaces_ppl_and_starts_with_intent(
     assert result["media_summary"]["action_context"]["selection_mode"] == (
         "visual_gesture_generation"
     )
+    assert result["media_summary"]["action_context"][
+        "visual_observation_confidence"
+    ] == {
+        "available": True,
+        "accepted": True,
+        "token_count": 1,
+        "mean_logprob": -0.1,
+        "min_token_margin": 0.7,
+        "rejection_reason": None,
+    }
 
 
 @pytest.mark.asyncio

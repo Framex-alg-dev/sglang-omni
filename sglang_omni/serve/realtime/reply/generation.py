@@ -29,6 +29,9 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
+from sglang_omni.serve.realtime.visual_observation import (
+    summarize_visual_observation_confidence,
+)
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -95,6 +98,8 @@ class ReplyGenerationComponent:
         started = time.perf_counter()
         first_token_ms: float | None = None
         text_parts: list[str] = []
+        output_token_logprobs: list[Any] = []
+        output_top_logprobs: list[Any] = []
         finish_reason = "stop"
         usage: dict[str, Any] | None = None
         self._register_turn_request(turn, request_id)
@@ -122,6 +127,12 @@ class ReplyGenerationComponent:
                                     time.perf_counter() - started
                                 ) * 1000.0
                             text_parts.append(chunk.text)
+                        if chunk.output_token_logprobs is not None:
+                            output_token_logprobs.extend(
+                                chunk.output_token_logprobs
+                            )
+                        if chunk.output_top_logprobs is not None:
+                            output_top_logprobs.extend(chunk.output_top_logprobs)
                         if chunk.finish_reason is not None:
                             finish_reason = chunk.finish_reason
                             if chunk.usage is not None:
@@ -135,6 +146,10 @@ class ReplyGenerationComponent:
                         time.perf_counter() - started
                     ) * 1000.0
                     text_parts.append(result.text)
+                if result.output_token_logprobs is not None:
+                    output_token_logprobs.extend(result.output_token_logprobs)
+                if result.output_top_logprobs is not None:
+                    output_top_logprobs.extend(result.output_top_logprobs)
                 finish_reason = result.finish_reason
                 if result.usage is not None:
                     usage = result.usage.to_dict()
@@ -171,6 +186,11 @@ class ReplyGenerationComponent:
             self._unregister_turn_request(turn, request_id)
 
         text = "".join(text_parts)
+        confidence = summarize_visual_observation_confidence(
+            output_token_logprobs,
+            output_top_logprobs,
+        )
+        accepted_text = text if confidence.accepted else ""
         total_ms = (time.perf_counter() - started) * 1000.0
         timing = {
             "source": "generated",
@@ -183,6 +203,7 @@ class ReplyGenerationComponent:
             "finish_reason": finish_reason,
             "usage": usage,
             "private_visual_arithmetic_probe": True,
+            "visual_observation_confidence": confidence.as_dict(),
         }
         emit_structured_log(
             "reply",
@@ -193,10 +214,12 @@ class ReplyGenerationComponent:
             logical_request_id=turn.request_base,
             request_id=request_id,
             output_chars=len(text),
+            accepted_output_chars=len(accepted_text),
+            visual_observation_confidence=confidence.as_dict(),
             ttft_ms=timing["ttft_ms"],
             total_ms=timing["total_ms"],
         )
-        return text, timing
+        return accepted_text, timing
 
     async def _adopt_visual_arithmetic_probe(
         self,

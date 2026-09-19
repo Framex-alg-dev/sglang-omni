@@ -42,6 +42,9 @@ from sglang_omni.serve.realtime.user_image_policy import (
     USER_IMAGE_REPLY_RULES_EN,
     USER_IMAGE_REPLY_RULES_ZH,
 )
+from sglang_omni.serve.realtime.visual_observation import (
+    numeric_visual_observation_rules_zh,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,7 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     return hook(log_type, event, **fields)
 class ReplyPromptComponent:
     def _visual_arithmetic_operand_output_part(self) -> dict[str, str]:
+        numeric_rules_zh = numeric_visual_observation_rules_zh()
         return {
             "type": "text",
             "text": self._prompt(
@@ -66,7 +70,9 @@ class ReplyPromptComponent:
                     "只有清晰、刻意做出的数字手势才是操作数。将过滤后最先和最后的清晰数字手势"
                     "填入两个操作数槽位，不把同一持续手势的重复采样算成额外展示。若过滤后只出现"
                     "一个稳定清晰数字，且用户说‘这个加这个’，该数字同时填入两个槽位，例如只清晰"
-                    "看到数字 2 时输出 2,2。你只负责识别操作数，不要计算。只输出且必须严格输出："
+                    "看到数字 2 时输出 2,2。数字手型统一按以下规则识别：\n"
+                    f"{numeric_rules_zh}\n"
+                    "你只负责识别操作数，不要计算。只输出且必须严格输出："
                     "VISUAL_ARITHMETIC=add,A,B，其中 A 和 B 均为 0 到 10 的整数；不得输出其他内容。"
                 ),
                 en=(

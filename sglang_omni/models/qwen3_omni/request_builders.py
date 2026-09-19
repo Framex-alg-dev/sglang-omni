@@ -658,6 +658,17 @@ def build_sglang_thinker_request(
     sampling_params.normalize(tokenizer)
     sampling_params.verify(vocab_size)
 
+    top_logprobs_num = params.get("top_logprobs_num", 0)
+    if isinstance(top_logprobs_num, bool) or not isinstance(top_logprobs_num, int):
+        raise ValueError("top_logprobs_num must be an integer")
+    if not 0 <= top_logprobs_num <= 20:
+        raise ValueError("top_logprobs_num must be between 0 and 20")
+    return_logprob = bool(
+        params.get("return_logprob")
+        or top_logprobs_num > 0
+        or isinstance(params.get("action_scoring"), dict)
+    )
+
     # Build SGLang Req
     rid = request_id or "req-0"
     req = Req(
@@ -665,9 +676,8 @@ def build_sglang_thinker_request(
         origin_input_text="",
         origin_input_ids=input_ids_list,
         sampling_params=sampling_params,
-        return_logprob=bool(
-            params.get("return_logprob") or isinstance(params.get("action_scoring"), dict)
-        ),
+        return_logprob=return_logprob,
+        top_logprobs_num=top_logprobs_num,
         vocab_size=vocab_size,
     )
     req.tokenizer = tokenizer
@@ -703,7 +713,8 @@ def build_sglang_thinker_request(
         output_ids=req.output_ids,
         req=req,
     )
-    data.return_logprob = bool(params.get("return_logprob"))
+    data.return_logprob = bool(params.get("return_logprob") or top_logprobs_num > 0)
+    data.top_logprobs_num = top_logprobs_num
     action_spec = params.get("action_scoring")
     if isinstance(action_spec, dict):
         return _prepare_action_scoring_request(
@@ -1380,6 +1391,10 @@ def apply_thinker_result(
     output_token_logprobs = getattr(result, "output_token_logprobs", None)
     if output_token_logprobs is not None:
         thinker_out["output_token_logprobs"] = output_token_logprobs
+
+    output_top_logprobs = getattr(result, "output_top_logprobs", None)
+    if output_top_logprobs is not None:
+        thinker_out["output_top_logprobs"] = output_top_logprobs
 
     state.thinker_out = thinker_out
     state.engine_outputs[stage_name] = thinker_out

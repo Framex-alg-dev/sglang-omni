@@ -28,6 +28,14 @@ from sglang_omni.serve.realtime.protocol.models import (
 from sglang_omni.utils.structured_logs import (
     emit_structured_log as _base_emit_structured_log,
 )
+from sglang_omni.serve.realtime.visual_observation import (
+    VISUAL_OBSERVATION_TOP_LOGPROBS,
+    VisualObservationConfidence,
+    choose_visual_equivalent,
+    summarize_visual_observation_confidence,
+    visual_candidate_definition,
+    visual_equivalence_key,
+)
 
 
 _UNSUPPORTED_OUTPUT = "UNSUPPORTED"
@@ -73,10 +81,21 @@ def visual_gesture_candidates(
             candidate
         )
     # A semantic label must resolve to exactly one executable catalog entry.
-    return tuple(
+    unambiguous = tuple(
         matches[0]
         for label, matches in by_label.items()
         if label and len(matches) == 1
+    )
+    by_visual_class: dict[str, list[SessionActionCandidate]] = {}
+    for candidate in unambiguous:
+        by_visual_class.setdefault(
+            visual_equivalence_key(candidate.source_label), []
+        ).append(candidate)
+    # Keep explicit catalog aliases for text routing, but expose only one
+    # executor for visually equivalent hand shapes such as digit two and V.
+    return tuple(
+        choose_visual_equivalent(matches)
+        for matches in by_visual_class.values()
     )
 
 
@@ -87,7 +106,7 @@ def build_visual_gesture_system_prompt(
 
     catalog_lines = [
         f"- {visual_gesture_output_label(candidate)}: "
-        f"{candidate.short_definition.strip()}"
+        f"{visual_candidate_definition(candidate.source_label, candidate.short_definition)}"
         for candidate in candidates
     ]
     return (
@@ -97,9 +116,8 @@ def build_visual_gesture_system_prompt(
         "只能从以下目录选择一个语义标签：\n"
         + "\n".join(catalog_lines)
         + f"\n- {_UNSUPPORTED_OUTPUT}: 没有清晰手势，或手势不在目录中。\n"
-        "数字手势必须按伸出的手指形态严格区分；点赞是拇指单独竖起，不是数字一；"
-        "数字四是四指伸直且拇指内扣，数字五是五指全部伸直张开。"
-        "数字二与单手比耶在动作效果上等价，画面是单手V形时优先输出数字二。\n"
+        "数字手势必须按目录中每项的伸指形态和区分要点严格判断。"
+        "视觉形态等价的数字二与单手比耶只保留一个目录标签。\n"
         "只输出目录中的一个标签；无法识别时只输出 UNSUPPORTED。"
         "不得输出解释、前缀、标点或其他文字。"
     )
@@ -168,6 +186,10 @@ class VisualGestureGenerationComponent:
                 max_new_tokens=24,
             ),
             stream=True,
+            extra_params={
+                "return_logprob": True,
+                "top_logprobs_num": VISUAL_OBSERVATION_TOP_LOGPROBS,
+            },
             output_modalities=["text"],
             metadata={
                 "audios": [],
@@ -192,6 +214,7 @@ class VisualGestureGenerationComponent:
         output_chars: int,
         ttft_ms: float | None,
         candidate_count: int,
+        confidence: VisualObservationConfidence | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
         if candidate is None:
             action = {
@@ -202,9 +225,13 @@ class VisualGestureGenerationComponent:
                 "support_status": "unsupported",
                 "fallback_applied": False,
                 "reason_code": (
-                    "visual_gesture_unsupported"
-                    if output_valid
-                    else "visual_gesture_invalid_output"
+                    confidence.rejection_reason
+                    if confidence is not None and not confidence.accepted
+                    else (
+                        "visual_gesture_unsupported"
+                        if output_valid
+                        else "visual_gesture_invalid_output"
+                    )
                 ),
             }
         else:
@@ -232,6 +259,9 @@ class VisualGestureGenerationComponent:
             "output_chars": output_chars,
             "compute_ms": round(compute_ms, 3),
             "generic_action_scoring_bypassed": True,
+            "visual_observation_confidence": (
+                confidence.as_dict() if confidence is not None else None
+            ),
             "action_timing_breakdown": {
                 "selection_mode": "visual_gesture_generation",
                 "ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else None,
@@ -266,6 +296,8 @@ class VisualGestureGenerationComponent:
         started = time.perf_counter()
         first_token_ms: float | None = None
         text_parts: list[str] = []
+        output_token_logprobs: list[Any] = []
+        output_top_logprobs: list[Any] = []
         if not candidates or IMAGE_ROLE_USER_CAMERA not in image_roles:
             return self._visual_gesture_action_result(
                 None,
@@ -304,6 +336,12 @@ class VisualGestureGenerationComponent:
                                     time.perf_counter() - started
                                 ) * 1000.0
                             text_parts.append(chunk.text)
+                        if chunk.output_token_logprobs is not None:
+                            output_token_logprobs.extend(
+                                chunk.output_token_logprobs
+                            )
+                        if chunk.output_top_logprobs is not None:
+                            output_top_logprobs.extend(chunk.output_top_logprobs)
             else:
                 result = await self.client.completion(
                     request, request_id=request_id
@@ -311,6 +349,10 @@ class VisualGestureGenerationComponent:
                 if result.text:
                     first_token_ms = (time.perf_counter() - started) * 1000.0
                     text_parts.append(result.text)
+                if result.output_token_logprobs is not None:
+                    output_token_logprobs.extend(result.output_token_logprobs)
+                if result.output_top_logprobs is not None:
+                    output_top_logprobs.extend(result.output_top_logprobs)
         except asyncio.CancelledError:
             abort = getattr(self.client, "abort", None)
             if callable(abort):
@@ -346,6 +388,12 @@ class VisualGestureGenerationComponent:
         output_valid = bool(
             text.strip() == _UNSUPPORTED_OUTPUT or selected is not None
         )
+        confidence = summarize_visual_observation_confidence(
+            output_token_logprobs,
+            output_top_logprobs,
+        )
+        if selected is not None and not confidence.accepted:
+            selected = None
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         emit_structured_log(
             "action",
@@ -359,6 +407,7 @@ class VisualGestureGenerationComponent:
             selected_candidate_id=(selected.candidate_id if selected else None),
             output_valid=output_valid,
             output_chars=len(text),
+            visual_observation_confidence=confidence.as_dict(),
             ttft_ms=round(first_token_ms or elapsed_ms, 3),
             total_ms=round(elapsed_ms, 3),
         )
@@ -369,4 +418,5 @@ class VisualGestureGenerationComponent:
             output_chars=len(text),
             ttft_ms=first_token_ms,
             candidate_count=len(candidates),
+            confidence=confidence,
         )

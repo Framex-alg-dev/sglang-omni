@@ -792,7 +792,14 @@ class ModelRunner:
         self._install_sampling_seeds(forward_batch, requests)
         wants_rollout_logprob = any(sr.data.return_logprob for sr in requests)
         if wants_rollout_logprob:
-            self._enable_sampler_logprobs(forward_batch, len(requests))
+            self._enable_sampler_logprobs(
+                forward_batch,
+                len(requests),
+                top_logprobs_nums=[
+                    int(getattr(sr.data, "top_logprobs_num", 0) or 0)
+                    for sr in requests
+                ],
+            )
         next_token_ids = self.tp_worker.model_runner.sample(
             logits_output, forward_batch
         )
@@ -813,6 +820,12 @@ class ModelRunner:
                 next_token_logprobs,
                 next_token_ids,
                 requests,
+                top_logprobs_values=getattr(
+                    logits_output, "next_token_top_logprobs_val", None
+                ),
+                top_logprobs_indices=getattr(
+                    logits_output, "next_token_top_logprobs_idx", None
+                ),
             )
         return next_token_ids
 
@@ -867,15 +880,30 @@ class ModelRunner:
             )
 
     @staticmethod
-    def _enable_sampler_logprobs(forward_batch: Any, batch_size: int) -> None:
+    def _enable_sampler_logprobs(
+        forward_batch: Any,
+        batch_size: int,
+        *,
+        top_logprobs_nums: list[int] | None = None,
+    ) -> None:
         forward_batch.return_logprob = True
-        if forward_batch.top_logprobs_nums is None:
+        if top_logprobs_nums is not None:
+            if len(top_logprobs_nums) != batch_size:
+                raise ValueError("top_logprobs_nums must match the batch size")
+            forward_batch.top_logprobs_nums = list(top_logprobs_nums)
+        elif forward_batch.top_logprobs_nums is None:
             forward_batch.top_logprobs_nums = [0] * batch_size
         if forward_batch.token_ids_logprobs is None:
             forward_batch.token_ids_logprobs = [None] * batch_size
 
     def _record_rollout_logprobs(
-        self, next_token_logprobs, next_token_ids, requests
+        self,
+        next_token_logprobs,
+        next_token_ids,
+        requests,
+        *,
+        top_logprobs_values=None,
+        top_logprobs_indices=None,
     ) -> None:
         """Append each rollout request's sampled-token logprob (one per step)."""
         logprobs = sampled_logprobs_to_list(next_token_logprobs)
@@ -901,12 +929,67 @@ class ModelRunner:
                 f"logprobs={len(logprobs)} token_ids={len(token_ids)} "
                 f"requests={len(requests)}"
             )
+
+        def _to_rows(value):
+            if value is None:
+                return None
+            if hasattr(value, "detach"):
+                value = value.detach().float().cpu().tolist()
+            elif hasattr(value, "tolist"):
+                value = value.tolist()
+            elif isinstance(value, tuple):
+                value = list(value)
+            if not isinstance(value, list):
+                raise RuntimeError("top-logprob output is not list-like")
+            rows = []
+            for row in value:
+                if hasattr(row, "detach"):
+                    row = row.detach().float().cpu().tolist()
+                elif hasattr(row, "tolist"):
+                    row = row.tolist()
+                elif isinstance(row, tuple):
+                    row = list(row)
+                rows.append(row)
+            return rows
+
+        top_values = _to_rows(top_logprobs_values)
+        top_indices = _to_rows(top_logprobs_indices)
+        if (top_values is None) != (top_indices is None):
+            raise RuntimeError("top-logprob values and indices must be returned together")
+        if top_values is not None and (
+            len(top_values) != len(requests) or len(top_indices) != len(requests)
+        ):
+            raise RuntimeError("top-logprob batch-size mismatch")
         for row_idx, sched_req in enumerate(requests):
             data = sched_req.data
             if data.return_logprob:
                 data.output_token_logprobs.append(
                     [logprobs[row_idx], token_ids[row_idx]]
                 )
+                requested_top_k = int(getattr(data, "top_logprobs_num", 0) or 0)
+                if requested_top_k > 0:
+                    if top_values is None or top_indices is None:
+                        raise RuntimeError(
+                            "Sampler did not populate top logprobs when requested"
+                        )
+                    values_row = top_values[row_idx]
+                    indices_row = top_indices[row_idx]
+                    if not isinstance(values_row, list) or not isinstance(
+                        indices_row, list
+                    ):
+                        raise RuntimeError("top-logprob row is not list-like")
+                    if len(values_row) != len(indices_row):
+                        raise RuntimeError("top-logprob row length mismatch")
+                    data.output_top_logprobs.append(
+                        [
+                            [float(value), int(token_id)]
+                            for value, token_id in zip(
+                                values_row[:requested_top_k],
+                                indices_row[:requested_top_k],
+                                strict=True,
+                            )
+                        ]
+                    )
 
     @staticmethod
     def _req_is_retracted(req: Any) -> bool:

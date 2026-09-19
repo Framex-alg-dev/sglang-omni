@@ -78,7 +78,9 @@ class ARRequestData:
     finish_reason: str | None = None
     weight_version: str | None = None
     return_logprob: bool = False
+    top_logprobs_num: int = 0
     output_token_logprobs: list[Any] = field(default_factory=list)
+    output_top_logprobs: list[Any] = field(default_factory=list)
     capture_model_output_keys: tuple[str, ...] = ()
     max_new_tokens: int | None = None
     enforce_request_limits: bool = False

@@ -293,6 +293,27 @@ def test_visual_gesture_generation_drops_ambiguous_catalog_labels() -> None:
     assert visual_gesture_candidates((symbolic,), (first, second)) == ()
 
 
+def test_visual_gesture_generation_collapses_v_shape_but_keeps_heart() -> None:
+    digit_two = _candidate("259", "数字二手势")
+    victory = _candidate("274", "单手比耶")
+    heart = _candidate("285", "双手比心")
+    symbolic = SessionActionCategory(
+        category_id="31",
+        source_label="符号化手势",
+        short_definition="数字和约定手型",
+        category_path=("手部与手势动作", "符号化手势"),
+        children=(digit_two, victory, heart),
+    )
+
+    eligible = visual_gesture_candidates(
+        (symbolic,), (digit_two, victory, heart)
+    )
+
+    assert [candidate.candidate_id for candidate in eligible] == ["259", "285"]
+    assert parse_visual_gesture_output("数字二", eligible) is digit_two
+    assert parse_visual_gesture_output("双手比心", eligible) is heart
+
+
 def test_visual_expression_requires_named_scope_and_current_camera() -> None:
     assert is_visual_deictic_expression_request(
         face_task="请做出表情",
