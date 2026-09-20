@@ -435,13 +435,15 @@ class ReplyGenerationComponent:
         support_status: str = "supported",
         provisional: ProvisionalReplyState | None = None,
         history_route: ReplyHistoryRouteResult | None = None,
+        request_suffix: str = "reply",
+        enable_tts: bool = True,
     ) -> tuple[str, dict[str, Any]]:
         if turn.intent is not None and turn.intent.speech == "verbatim" and not turn.intent.history:
             return await self._run_provided_reply(
                 turn, turn.intent.text, provisional=provisional, source="generated",
             )
         self._ensure_turn_processing(turn)
-        request_id = f"{turn.request_base}-reply"
+        request_id = f"{turn.request_base}-{request_suffix}"
         response_id = (
             provisional.response_id
             if provisional is not None
@@ -594,7 +596,7 @@ class ReplyGenerationComponent:
             created_after_commit_ms = provisional.created_after_commit_ms
         # VISUAL_ANSWER output is private evidence for gesture selection, not speech.
         # Do not synthesize it speculatively and rely on a later abort.
-        if not (
+        if enable_tts and not (
             turn.intent is not None
             and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
         ):
@@ -604,7 +606,11 @@ class ReplyGenerationComponent:
         self._register_turn_request(turn, request_id)
         emit_structured_log(
             "reply",
-            "reply_submitted",
+            (
+                "speculative_reply_submitted"
+                if provisional is not None and provisional.speculative
+                else "reply_submitted"
+            ),
             session_id=self.session_id,
             turn_id=turn.turn_id,
             trace_id=turn.trace_id,
@@ -698,7 +704,10 @@ class ReplyGenerationComponent:
                                 await self._send_provisional_reply_delta(
                                     turn, provisional, chunk.text
                                 )
-                                if is_first_delta:
+                                if (
+                                    is_first_delta
+                                    and not provisional.private_until_promoted
+                                ):
                                     emit_structured_log(
                                         "performance",
                                         "response_first_text_delta_sent",
@@ -727,7 +736,12 @@ class ReplyGenerationComponent:
                                     )
                                 emit_structured_log(
                                     "reply",
-                                    "reply_first_token",
+                                    (
+                                        "speculative_reply_first_token"
+                                        if provisional is not None
+                                        and provisional.speculative
+                                        else "reply_first_token"
+                                    ),
                                     session_id=self.session_id,
                                     turn_id=turn.turn_id,
                                     trace_id=turn.trace_id,
@@ -783,7 +797,12 @@ class ReplyGenerationComponent:
                         )
                     emit_structured_log(
                         "reply",
-                        "reply_first_token",
+                        (
+                            "speculative_reply_first_token"
+                            if provisional is not None
+                            and provisional.speculative
+                            else "reply_first_token"
+                        ),
                         session_id=self.session_id,
                         turn_id=turn.turn_id,
                         trace_id=turn.trace_id,
@@ -864,14 +883,30 @@ class ReplyGenerationComponent:
                 }
             emit_structured_log(
                 "reply",
-                "reply_completed",
+                (
+                    "speculative_reply_completed"
+                    if provisional is not None and provisional.speculative
+                    else "reply_completed"
+                ),
                 session_id=self.session_id,
                 turn_id=turn.turn_id,
                 trace_id=turn.trace_id,
                 request_id=request_id,
                 response_id=response_id,
                 logical_request_id=turn.request_base,
-                output_text=reply_text,
+                output_text=(
+                    None
+                    if provisional is not None and provisional.speculative
+                    else reply_text
+                ),
+                output_text_sha256=(
+                    hashlib.sha256(reply_text.encode("utf-8")).hexdigest()
+                    if provisional is not None and provisional.speculative
+                    else None
+                ),
+                private_speculative=bool(
+                    provisional is not None and provisional.speculative
+                ),
                 finish_reason=finish_reason,
                 usage=usage,
                 **timing,

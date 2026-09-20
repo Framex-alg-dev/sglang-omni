@@ -268,6 +268,14 @@ class MultimodalSession:
             ACTION_READY_TTS_DECOUPLED_ENV,
             default=True,
         )
+        speculative_reply_mode = os.environ.get(
+            SPECULATIVE_REPLY_MODE_ENV, "off"
+        ).strip().lower()
+        if speculative_reply_mode not in {"off", "shadow", "enforce"}:
+            raise ValueError(
+                f"{SPECULATIVE_REPLY_MODE_ENV} must be off, shadow, or enforce"
+            )
+        self.speculative_reply_mode = speculative_reply_mode
         self.route_action_parallel = _env_flag(
             ROUTE_ACTION_PARALLEL_ENV,
             default=True,

@@ -6733,6 +6733,209 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
 
 
 @pytest.mark.asyncio
+async def test_speculative_reply_shadow_is_private_and_non_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict] = []
+
+    def capture(log_type, event, **fields):
+        records.append({"log_type": log_type, "event": event, **fields})
+        return True
+
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "shadow")
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    ws = FakeWebSocket()
+    client = FusionFakeClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-speculative-shadow",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "fallback_category_ids": ["00"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-speculative-shadow"))
+    await session.handle_turn_commit(
+        user_turn_commit("turn-speculative-shadow", text="你好呀")
+    )
+
+    assert len(client.reply_requests) == 2
+    event_types = [event["type"] for event in ws.events]
+    assert event_types.count("response.provisional.created") == 1
+    public_response_id = next(
+        event["provisional_id"]
+        for event in ws.events
+        if event["type"] == "response.provisional.created"
+    )
+    assert all(
+        event.get("response_id", public_response_id) == public_response_id
+        for event in ws.events
+        if event["type"].startswith("response.")
+    )
+    streamed_text = "".join(
+        event.get("delta", "")
+        for event in ws.events
+        if event["type"]
+        in {"response.provisional.text.delta", "response.text.delta"}
+    )
+    assert streamed_text == "你好呀，今天过得怎么样？"
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == "你好呀，今天过得怎么样？"
+    assert result["action"]["action_id"] == "wave"
+    assert [
+        request.stage
+        for request in client.score_requests
+        if request.stage in {"category", "child"}
+    ] == ["category", "child"]
+    comparison = next(
+        record
+        for record in records
+        if record["event"] == "speculative_reply_shadow_comparison"
+    )
+    assert comparison["adopted"] is False
+    assert comparison["exact_match"] is True
+    assert comparison["normalized_similarity"] == 1.0
+    assert "output_text" not in comparison
+    private_completion = next(
+        record
+        for record in records
+        if record["event"] == "speculative_reply_completed"
+        and record.get("private_speculative") is True
+    )
+    assert private_completion["output_text"] is None
+    assert private_completion["output_text_sha256"] == hashlib.sha256(
+        "你好呀，今天过得怎么样？".encode("utf-8")
+    ).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_speculative_reply_enforce_adopts_only_strict_current_only_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    records: list[dict] = []
+
+    async def neutral_intent(*args, **kwargs):
+        del args, kwargs
+        return generated_body_neutral_intent("你好呀")
+
+    async def current_only_route(*args, **kwargs):
+        del args, kwargs
+        return multimodal_module.ReplyHistoryRouteResult(
+            decision="CURRENT_ONLY",
+            reply_mode="LANGUAGE_REQUIRED",
+        )
+
+    def capture(log_type, event, **fields):
+        records.append({"log_type": log_type, "event": event, **fields})
+        return True
+
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "enforce")
+    monkeypatch.setattr(pipeline, "infer_turn_intent", neutral_intent)
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    ws = FakeWebSocket()
+    client = FusionFakeClient()
+    session = make_session(ws, client)
+    session._classify_reply_history_requirement = current_only_route
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-speculative-enforce-adopt",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "fallback_category_ids": ["00"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-speculative-adopt"))
+    await session.handle_turn_commit(
+        user_turn_commit("turn-speculative-adopt", text="你好呀")
+    )
+
+    assert len(client.reply_requests) == 1
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == "你好呀，今天过得怎么样？"
+    resolution = next(
+        record
+        for record in records
+        if record["event"] == "speculative_reply_resolved"
+    )
+    assert resolution["adopted"] is True
+    assert resolution["reason"] == "strict_current_only_language"
+
+
+@pytest.mark.asyncio
+async def test_speculative_reply_enforce_discards_for_history_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    records: list[dict] = []
+
+    async def history_intent(*args, **kwargs):
+        del args, kwargs
+        return TurnIntent(
+            speech="generated",
+            text="继续说",
+            body="",
+            body_mode="none",
+            face="",
+            history=True,
+        )
+
+    async def history_route(*args, **kwargs):
+        del args, kwargs
+        return multimodal_module.ReplyHistoryRouteResult(
+            decision="HISTORY_REQUIRED",
+            reply_mode="LANGUAGE_REQUIRED",
+        )
+
+    def capture(log_type, event, **fields):
+        records.append({"log_type": log_type, "event": event, **fields})
+        return True
+
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "enforce")
+    monkeypatch.setattr(pipeline, "infer_turn_intent", history_intent)
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    ws = FakeWebSocket()
+    client = FusionFakeClient()
+    session = make_session(ws, client)
+    session._classify_reply_history_requirement = history_route
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-speculative-enforce-history",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "fallback_category_ids": ["00"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-speculative-history"))
+    await session.handle_turn_commit(
+        user_turn_commit("turn-speculative-history", text="继续说")
+    )
+
+    assert len(client.reply_requests) == 2
+    assert sum(
+        event["type"] == "response.provisional.created" for event in ws.events
+    ) == 1
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == "你好呀，今天过得怎么样？"
+    resolution = next(
+        record
+        for record in records
+        if record["event"] == "speculative_reply_resolved"
+    )
+    assert resolution["adopted"] is False
+    assert resolution["reason"] == "history_required"
+
+
+@pytest.mark.asyncio
 async def test_history_route_and_action_category_start_concurrently() -> None:
     ws = FakeWebSocket()
     client = ParallelRouteActionClient()
@@ -10862,6 +11065,47 @@ async def test_fusion_cancel_aborts_reply_and_child_requests() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shadow_speculative_reply_is_aborted_without_output_on_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "shadow")
+    ws = FakeWebSocket()
+    client = BlockingFusionClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-shadow-cancel",
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-shadow-cancel"))
+    await session._dispatch_turn_commit(
+        user_turn_commit("turn-shadow-cancel", text="向我打招呼")
+    )
+    await asyncio.wait_for(client.reply_started.wait(), timeout=1)
+    await asyncio.wait_for(client.child_started.wait(), timeout=1)
+
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": "turn-shadow-cancel"}
+    )
+
+    assert any(
+        request_id.endswith("-speculative-reply")
+        for request_id in client.aborted
+    )
+    assert not any(
+        event["type"] in {
+            "response.provisional.text.delta",
+            "response.text.delta",
+            "response.audio.delta",
+        }
+        for event in ws.events
+    )
+    assert session.reply_history_turns == []
+
+
+@pytest.mark.asyncio
 async def test_child_failure_keeps_reply_and_returns_partial_no_action() -> None:
     resource_requests: list[tuple[str, dict]] = []
 
@@ -12555,6 +12799,23 @@ def test_visual_gesture_generation_is_enabled_by_default_and_can_be_disabled(
     )
     disabled_session = make_session(FakeWebSocket(), FakeClient())
     assert disabled_session.visual_gesture_generation_enabled is False
+
+
+def test_speculative_reply_mode_defaults_off_and_validates_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, raising=False)
+    assert make_session(FakeWebSocket(), FakeClient()).speculative_reply_mode == "off"
+
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "shadow")
+    assert (
+        make_session(FakeWebSocket(), FakeClient()).speculative_reply_mode
+        == "shadow"
+    )
+
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "unsafe")
+    with pytest.raises(ValueError, match=multimodal_module.SPECULATIVE_REPLY_MODE_ENV):
+        make_session(FakeWebSocket(), FakeClient())
 
 
 def test_session_memory_feature_flag_and_load_snapshot(monkeypatch) -> None:

@@ -27,6 +27,25 @@ class ProvisionalHarness(ProvisionalReplyComponent):
     def _ensure_turn_processing(turn) -> None:
         return None
 
+    async def _send_reply_done(
+        self,
+        turn,
+        *,
+        response_id,
+        text,
+        source,
+        finish_reason,
+        usage,
+        provisional_id=None,
+        tts_state=None,
+    ):
+        await self.send({"type": "response.text.done", "text": text})
+        await self.send({"type": "response.done", "response_id": response_id})
+        return {
+            "text_done_after_commit_ms": 1.0,
+            "response_done_after_commit_ms": 1.0,
+        }
+
 
 def _turn():
     return SimpleNamespace(
@@ -112,3 +131,61 @@ async def test_failed_or_cancelled_reply_releases_complete_text_waiter(
 
     assert text is None
     assert status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_private_provisional_reply_emits_nothing_until_promoted() -> None:
+    harness = ProvisionalHarness()
+    turn = _turn()
+    state = await harness._create_provisional_reply(
+        turn,
+        source="generated",
+        private_until_promoted=True,
+        publish_created=False,
+        speculative=True,
+    )
+
+    await harness._send_provisional_reply_delta(turn, state, "你好")
+    await harness._finish_provisional_reply(
+        turn,
+        state,
+        finish_reason="stop",
+        usage=None,
+    )
+
+    assert harness.events == []
+    assert state.complete_text == "你好"
+
+    await harness._promote_provisional_reply(turn, state)
+
+    assert [event["type"] for event in harness.events] == [
+        "response.created",
+        "response.text.delta",
+        "response.text.done",
+        "response.done",
+    ]
+    assert harness.events[1]["delta"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_private_shadow_discard_emits_no_lifecycle_event() -> None:
+    harness = ProvisionalHarness()
+    turn = _turn()
+    state = await harness._create_provisional_reply(
+        turn,
+        source="generated",
+        private_until_promoted=True,
+        publish_created=False,
+        attach_to_turn=False,
+        speculative=True,
+    )
+
+    await harness._send_provisional_reply_delta(turn, state, "不会公开")
+    await harness._discard_provisional_reply(
+        turn,
+        state,
+        reason="shadow_complete",
+    )
+
+    assert harness.events == []
+    assert state.status == "discarded"

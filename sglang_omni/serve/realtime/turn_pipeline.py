@@ -12,6 +12,7 @@ from sglang_omni.serve.realtime.turn_intent import (
 )
 
 import asyncio
+import difflib
 import hashlib
 import inspect
 import json
@@ -95,6 +96,68 @@ def _is_direct_greeting_intent(turn: TurnBuffer) -> bool:
         and intent.reaction_mode == "respond"
         and intent.reaction.strip() == DIRECT_GREETING_REACTION
     )
+
+
+def _speculative_reply_adoption_decision(
+    turn: TurnBuffer,
+    *,
+    history_route: ReplyHistoryRouteResult | None,
+    body_action_not_requested: bool,
+    provided_reply: bool,
+    pure_action_reply: bool,
+    current_image_roles: list[str],
+) -> tuple[bool, str]:
+    """Fail closed unless the early current-only request is authoritative.
+
+    This gate deliberately duplicates no classifier.  It consumes only the
+    already-authoritative intent, history and knowledge results, so enabling
+    speculative replies cannot change their accuracy or recall.
+    """
+
+    intent = turn.intent
+    if turn.turn_origin != TURN_ORIGIN_USER:
+        return False, "non_user_turn"
+    if provided_reply:
+        return False, "provided_reply"
+    if IMAGE_ROLE_USER_CAMERA in current_image_roles:
+        return False, "user_camera"
+    if turn.reply_context or turn.scene_context or turn.scene_reply_guidance:
+        return False, "dynamic_reply_context"
+    if history_route is None:
+        return False, "history_route_missing"
+    if history_route.decision != REPLY_HISTORY_CURRENT_ONLY:
+        return False, "history_required"
+    if history_route.reply_mode != REPLY_MODE_LANGUAGE_REQUIRED:
+        return False, "pure_action_route"
+    if pure_action_reply:
+        return False, "pure_action_reply"
+    if intent is None:
+        return False, "intent_missing"
+    if intent.speech != "generated":
+        return False, f"speech_{intent.speech}"
+    if intent.history:
+        return False, "intent_history"
+    if intent.body_intent not in {"", "none"}:
+        return False, f"body_intent_{intent.body_intent}"
+    if intent.body_mode != "none" or intent.body:
+        return False, "body_action"
+    if not body_action_not_requested:
+        return False, "batched_body_action"
+    if intent.face:
+        return False, "face_action"
+    if intent.reaction_mode != "none" or intent.reaction:
+        return False, "reaction"
+    if intent.visual_scope_gate:
+        return False, "visual_route"
+    knowledge = turn.knowledge_context
+    if knowledge is not None and knowledge.should_inject:
+        return False, f"knowledge_{knowledge.decision.lower()}"
+    return True, "strict_current_only_language"
+
+
+def _normalized_reply_similarity(left: str, right: str) -> float:
+    normalize = lambda value: "".join(value.split()).casefold()
+    return difflib.SequenceMatcher(None, normalize(left), normalize(right)).ratio()
 
 
 def _replace_speculative_action_with_greeting(
@@ -1046,6 +1109,11 @@ class TurnPipeline:
                 asyncio.Task[tuple[str, dict[str, Any]]] | None
             ) = None
             provisional_state: ProvisionalReplyState | None = None
+            speculative_reply_state: ProvisionalReplyState | None = None
+            speculative_reply_task: (
+                asyncio.Task[tuple[str, dict[str, Any]]] | None
+            ) = None
+            speculative_reply_adopted = False
             provisional_discard_task: asyncio.Task[Any] | None = None
             rejection_task: asyncio.Task[Any] | None = None
             reply_history_route: ReplyHistoryRouteResult | None = None
@@ -1873,6 +1941,7 @@ class TurnPipeline:
                     and not preserve_language_reply_on_unsupported_action
                     and not visual_general_answer
                     and provisional_state is not None
+                    and not provisional_state.speculative
                     and provisional_state.status == "pending"
                     and provisional_discard_task is None
                 ):
@@ -1974,10 +2043,79 @@ class TurnPipeline:
                 and not silent_action_finished
             )
             if fusion_reply:
+                speculative_eligible = bool(
+                    getattr(self, "speculative_reply_mode", "off")
+                    in {"shadow", "enforce"}
+                    and turn.turn_origin == TURN_ORIGIN_USER
+                    and not provided_reply
+                    and (turn.text or current_audio_list)
+                    and IMAGE_ROLE_USER_CAMERA not in current_image_roles
+                )
+                enforce_speculative = bool(
+                    speculative_eligible
+                    and self.speculative_reply_mode == "enforce"
+                )
                 provisional_state = await self._create_provisional_reply(
                     turn,
                     source="provided" if provided_reply else "generated",
+                    private_until_promoted=enforce_speculative,
+                    speculative=enforce_speculative,
                 )
+                if speculative_eligible:
+                    if enforce_speculative:
+                        speculative_reply_state = provisional_state
+                        if (
+                            "audio" in self.modalities
+                            and turn.tts_instruction_future is None
+                        ):
+                            turn.tts_instruction_future = (
+                                asyncio.get_running_loop().create_future()
+                            )
+                    else:
+                        speculative_reply_state = (
+                            await self._create_provisional_reply(
+                                turn,
+                                source="generated",
+                                private_until_promoted=True,
+                                publish_created=False,
+                                attach_to_turn=False,
+                                speculative=True,
+                            )
+                        )
+                    speculative_route = ReplyHistoryRouteResult(
+                        decision=REPLY_HISTORY_CURRENT_ONLY,
+                        reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+                        fallback_reason="speculative_current_only",
+                    )
+                    speculative_reply_task = track_branch(
+                        self._run_generated_reply(
+                            turn,
+                            current_audio_list,
+                            prepared_current_images,
+                            current_image_roles,
+                            None,
+                            provisional=speculative_reply_state,
+                            history_route=speculative_route,
+                            request_suffix="speculative-reply",
+                            enable_tts=enforce_speculative,
+                        ),
+                        name=(
+                            f"session-speculative-reply-{self.session_id}-"
+                            f"{turn.turn_id}"
+                        ),
+                    )
+                    speculative_reply_state.task = speculative_reply_task
+                    emit_structured_log(
+                        "reply",
+                        "speculative_reply_started",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        logical_request_id=turn.request_base,
+                        mode=self.speculative_reply_mode,
+                        response_id=speculative_reply_state.response_id,
+                        after_commit_ms=self._after_commit_ms(turn),
+                    )
 
             action_current_images = prepared_current_images
             action_current_image_roles = current_image_roles
@@ -2543,7 +2681,10 @@ class TurnPipeline:
                         status="not_required",
                     )
                     await send_action_ready()
-                    if provisional_state is not None:
+                    if (
+                        provisional_state is not None
+                        and not provisional_state.speculative
+                    ):
                         await self._promote_provisional_reply(
                             turn, provisional_state, reason="expression_supported",
                             wait_for_tts=False,
@@ -2623,9 +2764,10 @@ class TurnPipeline:
 
             if "expression" in self.modalities or "audio" in self.modalities:
                 if "audio" in self.modalities:
-                    turn.tts_instruction_future = (
-                        asyncio.get_running_loop().create_future()
-                    )
+                    if turn.tts_instruction_future is None:
+                        turn.tts_instruction_future = (
+                            asyncio.get_running_loop().create_future()
+                        )
                     if turn.intent is not None:
                         turn.tts_instruction_future.set_result(turn.intent.tts_instruction())
                         emit_structured_log(
@@ -2900,11 +3042,66 @@ class TurnPipeline:
                 )
 
             if (
+                getattr(self, "speculative_reply_mode", "off") == "enforce"
+                and speculative_reply_state is not None
+                and speculative_reply_task is not None
+            ):
+                speculative_reply_adopted, speculative_reason = (
+                    _speculative_reply_adoption_decision(
+                        turn,
+                        history_route=reply_history_route,
+                        body_action_not_requested=body_action_not_requested,
+                        provided_reply=provided_reply,
+                        pure_action_reply=pure_action_reply,
+                        current_image_roles=current_image_roles,
+                    )
+                )
+                if speculative_reply_adopted:
+                    speculative_reply_state.speculative = False
+                    provisional_state = speculative_reply_state
+                    turn.provisional_reply = provisional_state
+                    reply_task = speculative_reply_task
+                else:
+                    response_id = speculative_reply_state.response_id
+                    await self._discard_provisional_reply(
+                        turn,
+                        speculative_reply_state,
+                        reason=f"speculative_gate:{speculative_reason}",
+                        send_event=False,
+                        wait_for_cleanup=True,
+                    )
+                    # Keep the already-published provisional lifecycle shell
+                    # and fill it with the unchanged authoritative request.
+                    provisional_state = await self._create_provisional_reply(
+                        turn,
+                        source="generated",
+                        publish_created=False,
+                        response_id=response_id,
+                    )
+                    provisional_state.provisional_events_published = True
+                emit_structured_log(
+                    "reply",
+                    "speculative_reply_resolved",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    mode="enforce",
+                    adopted=speculative_reply_adopted,
+                    reason=speculative_reason,
+                    response_id=speculative_reply_state.response_id,
+                    after_commit_ms=self._after_commit_ms(turn),
+                )
+
+            if (
                 fusion_reply
                 and provisional_state is not None
                 and provisional_state.status != "discarded"
             ):
-                if visual_hand_identification:
+                if speculative_reply_adopted:
+                    assert speculative_reply_task is not None
+                    reply_task = speculative_reply_task
+                elif visual_hand_identification:
                     assert turn.intent is not None
                     assert visual_gesture_probe_task is not None
 
@@ -3546,6 +3743,85 @@ class TurnPipeline:
                     session_id=self.session_id, turn_id=turn_id,
                     trace_id=turn.trace_id, request_id=f"{turn.request_base}-action-rejection",
                     output_text=reply_text, **reply_timing,
+                )
+
+            if (
+                getattr(self, "speculative_reply_mode", "off") == "shadow"
+                and speculative_reply_state is not None
+                and speculative_reply_task is not None
+            ):
+                shadow_text: str | None = None
+                shadow_status = "completed"
+                if speculative_reply_task.done():
+                    if speculative_reply_task.cancelled():
+                        shadow_status = "cancelled"
+                    else:
+                        shadow_error = speculative_reply_task.exception()
+                        if shadow_error is None:
+                            shadow_text = speculative_reply_task.result()[0]
+                        else:
+                            shadow_status = f"failed:{type(shadow_error).__name__}"
+                else:
+                    shadow_status = "not_ready_at_authoritative_done"
+                authoritative_text = reply_text or ""
+                comparison_available = shadow_text is not None
+                emit_structured_log(
+                    "reply",
+                    "speculative_reply_shadow_comparison",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    mode="shadow",
+                    adopted=False,
+                    reason=shadow_status,
+                    comparison_available=comparison_available,
+                    exact_match=(
+                        shadow_text == authoritative_text
+                        if comparison_available
+                        else None
+                    ),
+                    normalized_similarity=(
+                        round(
+                            _normalized_reply_similarity(
+                                shadow_text or "", authoritative_text
+                            ),
+                            6,
+                        )
+                        if comparison_available
+                        else None
+                    ),
+                    speculative_chars=(
+                        len(shadow_text) if shadow_text is not None else None
+                    ),
+                    authoritative_chars=len(authoritative_text),
+                    speculative_sha256=(
+                        hashlib.sha256(shadow_text.encode("utf-8")).hexdigest()
+                        if shadow_text is not None
+                        else None
+                    ),
+                    authoritative_sha256=hashlib.sha256(
+                        authoritative_text.encode("utf-8")
+                    ).hexdigest(),
+                    route_decision=(
+                        reply_history_route.decision
+                        if reply_history_route is not None
+                        else None
+                    ),
+                    reply_mode=(
+                        reply_history_route.reply_mode
+                        if reply_history_route is not None
+                        else None
+                    ),
+                    after_commit_ms=self._after_commit_ms(turn),
+                )
+                await self._discard_provisional_reply(
+                    turn,
+                    speculative_reply_state,
+                    reason="shadow_observation_complete",
+                    send_event=False,
+                    abort_request=not speculative_reply_task.done(),
+                    wait_for_cleanup=True,
                 )
 
             if knowledge_script_started and not suppress_reply_for_unsupported_action:

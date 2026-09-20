@@ -429,6 +429,13 @@ class ProvisionalReplyState:
     cleanup_task: asyncio.Task[Any] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     tts_state: ReplyTTSState | None = None
+    # A private provisional reply is retained entirely server-side until it is
+    # promoted.  Shadow replies set ``provisional_events_published`` to false;
+    # enforce-mode replies may publish only the lifecycle shell while keeping
+    # text and audio private behind the authoritative route gate.
+    private_until_promoted: bool = False
+    provisional_events_published: bool = True
+    speculative: bool = False
 
 
 @dataclass(slots=True)

@@ -36,6 +36,9 @@ Environment=SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH=1
 # failure before streamed output automatically falls back to this GPU0 model.
 Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_URL=http://127.0.0.1:18005
 Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_TASKS=session_reply,session_pure_action_reply,session_action_rejection
+# Start early GPU1 replies privately, but keep the existing authoritative reply
+# path until shadow comparisons have passed the deployment acceptance gate.
+Environment=SGLANG_OMNI_SPECULATIVE_REPLY_MODE=shadow
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/data/fanshide/sglang-omni/deploy/realtime-knowledge.env

@@ -38,38 +38,55 @@ class ProvisionalReplyComponent:
         turn: TurnBuffer,
         *,
         source: Literal["generated", "provided"],
+        private_until_promoted: bool = False,
+        publish_created: bool = True,
+        attach_to_turn: bool = True,
+        response_id: str | None = None,
+        speculative: bool = False,
     ) -> ProvisionalReplyState:
         state = ProvisionalReplyState(
-            response_id=f"resp-{uuid.uuid4().hex}",
+            response_id=response_id or f"resp-{uuid.uuid4().hex}",
             source=source,
             started_at=time.perf_counter(),
             created_after_commit_ms=None,
+            private_until_promoted=private_until_promoted,
+            provisional_events_published=publish_created,
+            speculative=speculative,
         )
-        turn.provisional_reply = state
-        await self.send(
-            {
-                "type": "response.provisional.created",
-                "session_id": self.session_id,
-                "turn_id": turn.turn_id,
-                "provisional_id": state.response_id,
-                "response": {
-                    "id": state.response_id,
-                    "status": "in_progress",
-                    "source": source,
-                    "provisional": True,
-                },
-            }
-        )
+        if attach_to_turn:
+            turn.provisional_reply = state
+        if publish_created:
+            await self.send(
+                {
+                    "type": "response.provisional.created",
+                    "session_id": self.session_id,
+                    "turn_id": turn.turn_id,
+                    "provisional_id": state.response_id,
+                    "response": {
+                        "id": state.response_id,
+                        "status": "in_progress",
+                        "source": source,
+                        "provisional": True,
+                    },
+                }
+            )
         state.created_after_commit_ms = self._after_commit_ms(turn)
         emit_structured_log(
             "reply",
-            "provisional_reply_created",
+            (
+                "speculative_reply_buffer_created"
+                if speculative
+                else "provisional_reply_created"
+            ),
             session_id=self.session_id,
             turn_id=turn.turn_id,
             trace_id=turn.trace_id,
             logical_request_id=turn.request_base,
             response_id=state.response_id,
             reply_source=source,
+            private_until_promoted=private_until_promoted,
+            provisional_events_published=publish_created,
+            speculative=speculative,
             created_after_commit_ms=state.created_after_commit_ms,
         )
         return state
@@ -114,7 +131,7 @@ class ProvisionalReplyComponent:
                 "delta": delta,
             }
             # Keep VISUAL_ANSWER evidence in the local buffer for numeric selection only.
-            if not (
+            if not state.private_until_promoted and not (
                 turn.intent is not None
                 and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
             ):
@@ -125,7 +142,11 @@ class ProvisionalReplyComponent:
                 state.first_delta_after_commit_ms = self._after_commit_ms(turn)
                 emit_structured_log(
                     "reply",
-                    "provisional_reply_first_token",
+                    (
+                        "speculative_reply_buffer_first_token"
+                        if state.speculative
+                        else "provisional_reply_first_token"
+                    ),
                     session_id=self.session_id,
                     turn_id=turn.turn_id,
                     trace_id=turn.trace_id,
@@ -164,7 +185,7 @@ class ProvisionalReplyComponent:
             state.provisional_done_after_commit_ms = self._after_commit_ms(turn)
             if state.status == "pending":
                 was_pending = True
-                if not (
+                if not state.private_until_promoted and not (
                     turn.intent is not None
                     and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
                 ):
@@ -439,18 +460,19 @@ class ProvisionalReplyComponent:
             state.promoted_after_commit_ms = self._after_commit_ms(turn)
             state.resolution_reason = reason
             buffered_text = "".join(state.text_parts)
-            await self.send(
-                {
-                    "type": "response.provisional.resolved",
-                    "session_id": self.session_id,
-                    "turn_id": turn.turn_id,
-                    "provisional_id": state.response_id,
-                    "status": "promoted",
-                    "reason": state.resolution_reason,
-                    "promoted_prefix_chars": len(buffered_text),
-                    "promoted_prefix_delta_count": state.delta_count,
-                }
-            )
+            if state.provisional_events_published:
+                await self.send(
+                    {
+                        "type": "response.provisional.resolved",
+                        "session_id": self.session_id,
+                        "turn_id": turn.turn_id,
+                        "provisional_id": state.response_id,
+                        "status": "promoted",
+                        "reason": state.resolution_reason,
+                        "promoted_prefix_chars": len(buffered_text),
+                        "promoted_prefix_delta_count": state.delta_count,
+                    }
+                )
             await self.send(
                 {
                     "type": "response.created",
@@ -465,6 +487,7 @@ class ProvisionalReplyComponent:
                 }
             )
             state.official_created = True
+            state.private_until_promoted = False
             if buffered_text:
                 await self.send(
                     {
@@ -489,7 +512,11 @@ class ProvisionalReplyComponent:
                 should_send_done = True
             emit_structured_log(
                 "reply",
-                "provisional_reply_resolved",
+                (
+                    "speculative_reply_buffer_resolved"
+                    if state.speculative
+                    else "provisional_reply_resolved"
+                ),
                 session_id=self.session_id,
                 turn_id=turn.turn_id,
                 trace_id=turn.trace_id,
@@ -576,7 +603,7 @@ class ProvisionalReplyComponent:
             if tts_state is not None:
                 tts_state.buffered_audio.clear()
                 tts_state.buffered_audio_bytes = 0
-            if send_event:
+            if send_event and state.provisional_events_published:
                 await self.send(
                     {
                         "type": "response.provisional.resolved",
@@ -591,7 +618,11 @@ class ProvisionalReplyComponent:
                 )
             emit_structured_log(
                 "reply",
-                "provisional_reply_resolved",
+                (
+                    "speculative_reply_buffer_resolved"
+                    if state.speculative
+                    else "provisional_reply_resolved"
+                ),
                 session_id=self.session_id,
                 turn_id=turn.turn_id,
                 trace_id=turn.trace_id,

@@ -39,6 +39,16 @@ GPU1 的 `18005` 只绑定 `127.0.0.1`，接收 GPU0 已经完整构造好的模
 
 `session.start` 现在并行预热普通用户回复的静态 system prefix。路由客户端根据 `task=session_reply` 将该预热送到 GPU1；intent、视觉和动作前缀继续预热 GPU0。GPU1 不可用时预热可降级到 GPU0，Session 仍能启动。
 
+## 推测回复与等价性门控
+
+GPU0 支持 `SGLANG_OMNI_SPECULATIVE_REPLY_MODE=off|shadow|enforce`：
+
+- `off`：完全使用原权威回复时序；
+- `shadow`：从 `turn.commit` 立即在 GPU1 启动 current-only 回复，但文本只保存在服务端，不发送 provisional/text/audio 事件，不进入 TTS 或会话历史；原 intent、history、knowledge、action 和权威回复链路不变；
+- `enforce`：仍先运行原权威判定，只在严格的 current-only 普通语言轮采用已生成结果。任何历史需求、知识注入、相机输入、动作/表情/反应、纯动作、provided/proactive 或动态上下文都会丢弃推测结果并重新运行原权威回复。
+
+部署文件默认使用 `shadow`。结构化日志 `speculative_reply_shadow_comparison` 只记录长度、SHA-256、exact match 和归一化相似度，不记录额外明文。观察准确率达标后才可将 GPU0 unit 改为 `enforce`；动作评分、intent 和路由模型始终在 GPU0 上运行，推测分支不参与这些决策。
+
 ## 部署
 
 1. 创建不入库的共享 token 文件：
@@ -85,12 +95,12 @@ Realtime 结构化日志应出现：
 - intent/控制请求：`executor=control`（显式 completion 路由时）；
 - GPU1 故障降级：`executor=control_fallback`；
 - session.start：`reply_prefix_prefilled=true`。
+- shadow 轮次：`speculative_reply_started` 和 `speculative_reply_shadow_comparison`，且 `adopted=false`。
 
 功能回归至少覆盖：普通文本/音频回复、动作-only、动作加短回复、不支持动作、相机手势、视觉算术、provided reply、主动事件、知识回复、历史追问、会话记忆、cancel、断线和 GPU1 故障回退。
 
-## 后续优化（不在本次兼容迁移中启用）
+## 后续优化
 
-- 更早启动 speculative reply，并在 GPU0 控制结果返回前保持私有 buffer；
 - 将 history/knowledge route 合并为低成本控制输出；
 - GPU1 回复 prompt blueprint 与更细粒度的静态 KV 预热；
 - 在验证准确率前不启用当前未校准的 single-token 动作映射。

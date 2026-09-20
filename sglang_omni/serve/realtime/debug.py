@@ -292,6 +292,9 @@ def load_realtime_session_debug(
                     or record.get("outputs")
                     or [],
                     "selection_mode": record.get("action_selection_mode"),
+                    "speculative_reply_mode": record.get(
+                        "speculative_reply_mode"
+                    ),
                     "action_candidate_count": record.get("action_candidate_count"),
                     "action_category_count": record.get("action_category_count"),
                 }

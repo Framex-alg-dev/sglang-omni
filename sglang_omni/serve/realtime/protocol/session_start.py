@@ -1534,6 +1534,9 @@ class SessionStartComponent:
                 if selection_mapping is not None else None
             ),
             action_ready_tts_decoupled=self.action_ready_tts_decoupled,
+            speculative_reply_mode=getattr(
+                self, "speculative_reply_mode", "off"
+            ),
             route_action_parallel=self.route_action_parallel,
             visual_gesture_generation_enabled=(
                 self.visual_gesture_generation_enabled
