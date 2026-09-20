@@ -1,0 +1,37 @@
+# Qwen3-Omni secondary executor for realtime language replies.
+#
+# The public realtime session stays on GPU0.  This pipeline accepts only
+# fully materialized internal completion requests from the GPU0 gateway.
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-reply-gpu
+model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
+
+runtime_overrides:
+  thinker:
+    server_args_overrides:
+      chunked_prefill_size: 8192
+      # Reply generation does not create the 169-way action batch.  Keep enough
+      # concurrency for two sessions plus private reply validation requests.
+      max_running_requests: 32
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 60000
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 60000
+      resources:
+        total_gpu_memory_fraction: 0.78

@@ -13117,8 +13117,12 @@ async def test_session_start_prewarms_static_turn_intent_prefix() -> None:
         "language": "zh",
     })
 
-    assert len(client.intent_prefill_requests) == 1
-    request_id, request = client.intent_prefill_requests[0]
+    assert len(client.intent_prefill_requests) == 2
+    by_task = {
+        request.metadata["task"]: (request_id, request)
+        for request_id, request in client.intent_prefill_requests
+    }
+    request_id, request = by_task["session_turn_intent_prewarm"]
     assert request_id.endswith("-intent-prefill")
     assert request.metadata["task"] == "session_turn_intent_prewarm"
     assert request.metadata["audios"] == []
@@ -13127,6 +13131,10 @@ async def test_session_start_prewarms_static_turn_intent_prefix() -> None:
     assert request.messages[0].role == "system"
     assert request.messages[1].role == "user"
     assert session.turn_intent_prefix_prefilled is True
+    reply_request_id, reply_request = by_task["session_reply"]
+    assert reply_request_id.endswith("-reply-prefill")
+    assert reply_request.metadata["prefill_only"] is True
+    assert session.reply_prefix_prefilled is True
 
 
 @pytest.mark.asyncio

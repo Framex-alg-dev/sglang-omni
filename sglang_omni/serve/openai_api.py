@@ -155,6 +155,9 @@ from sglang_omni.utils.structured_logs import (
     emit_structured_log,
     get_structured_log_writer,
 )
+from sglang_omni.serve.internal_realtime_model_api import (
+    register_internal_realtime_model_api,
+)
 
 logger = logging.getLogger(__name__)
 STREAM_DONE_SENTINEL = "[DONE]"
@@ -344,6 +347,7 @@ def create_app(
 
     # Register all routes
     register_favicon(app)
+    register_internal_realtime_model_api(app)
     _register_health(app)
     _register_models(app)
     _register_admin(app, resolved_key)
@@ -1414,7 +1418,10 @@ def _register_multimodal_realtime(
     """Mount the manual-turn multimodal session WebSocket."""
     from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
 
-    client: Client = app.state.client
+    from sglang_omni.client.realtime_executor import build_realtime_model_client
+
+    client: Client = build_realtime_model_client(app.state.client)
+    app.state.multimodal_realtime_client = client
     model_name: str = app.state.model_name
     manager = MultimodalSessionManager(
         client=client,
@@ -1427,6 +1434,9 @@ def _register_multimodal_realtime(
     )
     app.state.multimodal_realtime_manager = manager
     app.router.add_event_handler("shutdown", manager.close)
+    close_client = getattr(client, "aclose", None)
+    if client is not app.state.client and callable(close_client):
+        app.router.add_event_handler("shutdown", close_client)
 
     @app.websocket("/v1/session/realtime")
     async def multimodal_realtime(websocket: WebSocket) -> None:

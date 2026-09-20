@@ -405,6 +405,7 @@ class MultimodalSession:
         self.action_prefix_cache_namespace = ""
         self.action_prefix_prefilled = False
         self.turn_intent_prefix_prefilled = False
+        self.reply_prefix_prefilled = False
         self.visual_gesture_prefix_prefilled = False
         self.visual_arithmetic_prefix_prefilled = False
         self._prefilled_action_prefix_namespaces: set[str] = set()

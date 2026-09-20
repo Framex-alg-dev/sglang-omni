@@ -89,6 +89,79 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prewarm_reply_prefix(self, prefill: Any) -> bool:
+        """Warm the ordinary user-reply system prefix on its routed executor."""
+
+        if not callable(prefill) or "text" not in self.modalities:
+            return False
+        request_id = f"session-{self.session_instance_id}-reply-prefill"
+        reply_system_parts: list[str] = []
+        if self.instructions.strip():
+            reply_system_parts.append(self.instructions.strip())
+        reply_system_parts.append(self._reply_role_and_agency_system_prompt())
+        # Dynamic intent, knowledge, history, media, and user text are omitted.
+        # The immutable system contract is still the dominant shared prefix.
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(role="system", content="\n\n".join(reply_system_parts)),
+                Message(
+                    role="user",
+                    content=[
+                        self._reply_current_turn_priority_part(),
+                        {"type": "text", "text": " "},
+                    ],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_reply",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+                "prefill_only": True,
+            },
+        )
+        started = time.perf_counter()
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            emit_structured_log(
+                "error",
+                "session_reply_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_reply_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
     async def _prewarm_visual_arithmetic_prefix(self, prefill: Any) -> bool:
         """Warm the static operand-extraction prefix before the first Turn."""
 
@@ -936,6 +1009,10 @@ class SessionStartComponent:
             self._prewarm_turn_intent_prefix(intent_prefill),
             name=f"session-intent-prefill-{self.session_instance_id}",
         )
+        reply_prefill_task = asyncio.create_task(
+            self._prewarm_reply_prefix(intent_prefill),
+            name=f"session-reply-prefill-{self.session_instance_id}",
+        )
         visual_gesture_prefill_task = asyncio.create_task(
             self._prewarm_visual_gesture_prefix(intent_prefill),
             name=f"session-visual-gesture-prefill-{self.session_instance_id}",
@@ -1303,6 +1380,7 @@ class SessionStartComponent:
         if not self.direct_action_selection and self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
             await self._prewarm_user_child_sessions(prefill)
         self.turn_intent_prefix_prefilled = await intent_prefill_task
+        self.reply_prefix_prefilled = await reply_prefill_task
         self.visual_gesture_prefix_prefilled = await visual_gesture_prefill_task
         self.visual_arithmetic_prefix_prefilled = (
             await visual_arithmetic_prefill_task
@@ -1316,6 +1394,7 @@ class SessionStartComponent:
             tts_manager_created=self.embedded_tts is not None,
             action_prefix_prefilled=self.action_prefix_prefilled,
             turn_intent_prefix_prefilled=self.turn_intent_prefix_prefilled,
+            reply_prefix_prefilled=self.reply_prefix_prefilled,
             visual_gesture_prefix_prefilled=(
                 self.visual_gesture_prefix_prefilled
             ),
@@ -1350,6 +1429,7 @@ class SessionStartComponent:
                 else 1
             ),
             "action_prefix_prefilled": self.action_prefix_prefilled,
+            "reply_prefix_prefilled": self.reply_prefix_prefilled,
             "avatar_image_encoder_prefetch_enabled": (
                 self.avatar_image_encoder_prefetch_enabled
             ),
