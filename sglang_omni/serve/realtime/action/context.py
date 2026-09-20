@@ -855,7 +855,7 @@ class ActionPipeline:
         has_user_camera: bool = False,
     ) -> str:
         entity_snapshot = getattr(self, "provided_entity_snapshot", None)
-        runtime_action_rules = read_runtime_prompt("action_rules")
+        runtime_action_rules = read_runtime_prompt("action_rules", language=self.action_language)
         user_image_action_rules = (
             effective_runtime_prompt(
                 "user_image_action_rules",
@@ -863,6 +863,7 @@ class ActionPipeline:
                     zh=USER_IMAGE_ACTION_RULES_ZH,
                     en=USER_IMAGE_ACTION_RULES_EN,
                 ),
+                language=self.action_language,
             )
             if turn_origin == TURN_ORIGIN_USER and has_user_camera
             else None

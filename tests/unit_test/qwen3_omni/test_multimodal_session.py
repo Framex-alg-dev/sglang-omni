@@ -447,6 +447,28 @@ class FailingOnceClient(FakeClient):
         return await super().score_action_suffixes(request)
 
 
+class AvatarImagePrefetchClient(FakeClient):
+    def __init__(self, *, block: bool = False) -> None:
+        super().__init__()
+        self.image_prefetch_requests = []
+        self.prefetch_started = asyncio.Event()
+        self.prefetch_release = asyncio.Event()
+        self.aborted: list[str] = []
+        if not block:
+            self.prefetch_release.set()
+
+    async def prefetch_completion_images(self, request, *, request_id):
+        self.image_prefetch_requests.append((request_id, request))
+        self.prefetch_started.set()
+        await self.prefetch_release.wait()
+        return True
+
+    async def abort(self, request_id: str):
+        self.aborted.append(request_id)
+        self.prefetch_release.set()
+        return None
+
+
 def make_session(
     ws: FakeWebSocket,
     client: FakeClient,
@@ -4819,6 +4841,122 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
 
 
 @pytest.mark.asyncio
+async def test_avatar_image_encoder_prefetch_starts_during_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH", "1")
+    catalog = load_runtime_action_catalog()
+    client = AvatarImagePrefetchClient()
+    session = make_session(
+        FakeWebSocket(), client, global_action_catalog=catalog
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "avatar-image-prefetch",
+            outputs=["action"],
+            action={},
+        )
+    )
+    started = next(
+        event for event in session.websocket.events
+        if event["type"] == "session.started"
+    )
+    assert started["avatar_image_encoder_prefetch_enabled"] is True
+    turn_id = "avatar-image-prefetch-turn"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    payload = base64.b64encode(encoded.getvalue()).decode()
+
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "avatar_state",
+            "mime_type": "image/png",
+            "image": payload,
+        }
+    )
+    turn = session.active_turn
+    assert turn is not None
+    assert turn.avatar_image_prefetch_task is not None
+    assert await asyncio.wait_for(turn.avatar_image_prefetch_task, timeout=1.0)
+    assert turn.phase == "collecting"
+    assert turn.avatar_image_prefetch_status == "ready"
+    assert turn.avatar_image_prefetch_completed_at is not None
+    assert len(client.image_prefetch_requests) == 1
+    request_id, request = client.image_prefetch_requests[0]
+    assert request_id.endswith("-1")
+    assert request.metadata["task"] == "image_encoder_prefetch"
+    assert request.metadata["prefetch_kind"] == "avatar_state"
+    assert request.metadata["image_roles"] == ["avatar_state"]
+    assert len(request.metadata["images"]) == 1
+    assert is_prepared_image_wire(request.metadata["images"][0])
+
+    # User-camera frames must not schedule additional avatar prefetches.
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 2,
+            "timestamp_ms": 2,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": payload,
+        }
+    )
+    await asyncio.sleep(0)
+    assert len(client.image_prefetch_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_avatar_image_encoder_prefetch_is_aborted_with_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH", "1")
+    catalog = load_runtime_action_catalog()
+    client = AvatarImagePrefetchClient(block=True)
+    session = make_session(
+        FakeWebSocket(), client, global_action_catalog=catalog
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "avatar-image-prefetch-cancel",
+            outputs=["action"],
+            action={},
+        )
+    )
+    turn_id = "avatar-image-prefetch-cancel-turn"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "avatar_state",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+    await asyncio.wait_for(client.prefetch_started.wait(), timeout=1.0)
+    request_id = client.image_prefetch_requests[0][0]
+
+    await session.handle_turn_cancel(
+        {"type": "turn.cancel", "turn_id": turn_id}
+    )
+
+    assert request_id in client.aborted
+    assert session.active_turn is None
+
+
+@pytest.mark.asyncio
 async def test_visual_arithmetic_probe_starts_before_unified_intent_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5060,6 +5198,127 @@ async def test_visual_gesture_generation_replaces_ppl_and_starts_with_intent(
         "min_token_margin": 0.7,
         "rejection_reason": None,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "model_output",
+        "expected_reply",
+        "expected_number",
+        "expected_execution_available",
+        "exclude_observed_action",
+    ),
+    [
+        ("数字零", "这是数字0。", 0, True, False),
+        ("数字五", "这是数字5。", 5, True, False),
+        ("数字十", "这是数字10。", 10, True, False),
+        ("数字五", "这是数字5。", 5, False, True),
+        ("双手比心", "我没看清这个数字手势。", None, False, False),
+    ],
+)
+async def test_visual_number_identification_reuses_action_observation_for_reply(
+    monkeypatch: pytest.MonkeyPatch,
+    model_output: str,
+    expected_reply: str,
+    expected_number: int | None,
+    expected_execution_available: bool,
+    exclude_observed_action: bool,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    catalog = load_global_action_catalog()
+    numeric = numeric_gesture_candidates_by_value(catalog)
+
+    class VisualNumberClient(SystemRouteFusionClient):
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            if request.metadata.get("task") != "session_visual_gesture_probe":
+                raise AssertionError(
+                    f"unexpected generation task: {request.metadata.get('task')}"
+                )
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text=model_output,
+                finish_reason="stop",
+                output_token_logprobs=[[-0.1, 11]],
+                output_top_logprobs=[[[-0.1, 11], [-0.8, 12]]],
+            )
+
+    async def identify_number_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result("COPY_HAND")
+        return TurnIntent(
+            speech="none",
+            text="",
+            body="这个手势",
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate="COPY_HAND",
+            visual_hand_mode="identify_number",
+            visual_answer_output="gesture_and_speech",
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", identify_number_intent)
+    client = VisualNumberClient(category_id="31", reply_chunks=["错误回复"])
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.visual_gesture_generation_enabled = True
+    await start_numeric_reply_session(
+        session, catalog, outputs=["text", "action"]
+    )
+    turn_id = "visual-number-identification"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    commit_fields: dict[str, object] = {"text": "这是几"}
+    if exclude_observed_action:
+        commit_fields["action_excluded_candidate_ids"] = [
+            numeric[5].candidate_id
+        ]
+    await session.handle_turn_commit(user_turn_commit(turn_id, **commit_fields))
+
+    assert [
+        request.metadata.get("task") for request in client.reply_requests
+    ] == ["session_visual_gesture_probe"]
+    assert client.score_requests == []
+    ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert ready["action"]["candidate_id"] == (
+        numeric[expected_number].candidate_id
+        if expected_execution_available and expected_number is not None
+        else "UNSUPPORTED"
+    )
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == expected_reply
+    context = result["media_summary"]["action_context"]
+    assert context["visual_observation_label"] == model_output
+    assert context["visual_observation_number"] == expected_number
+    assert context["visual_execution_available"] is expected_execution_available
+    assert "错误回复" not in json.dumps(ws.events, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -7575,8 +7834,8 @@ def test_user_image_runtime_rules_replace_their_repository_defaults(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setenv("SGLANG_OMNI_RUNTIME_PROMPT_DIR", str(tmp_path))
-    write_runtime_prompt("user_image_reply_rules", "custom image reply")
-    write_runtime_prompt("user_image_action_rules", "custom image action")
+    write_runtime_prompt("user_image_reply_rules", "custom image reply", language="en")
+    write_runtime_prompt("user_image_action_rules", "custom image action", language="en")
     session = make_session(FakeWebSocket(), FakeClient())
 
     assert session._reply_user_camera_response_guard_part()["text"] == (

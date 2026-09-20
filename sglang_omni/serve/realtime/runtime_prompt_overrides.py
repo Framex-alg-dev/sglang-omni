@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from sglang_omni.models.qwen3_omni.prompt_localization import normalize_prompt_language
+
 
 _RUNTIME_DIR_ENV = "SGLANG_OMNI_RUNTIME_PROMPT_DIR"
 _MAX_PROMPT_CHARS = 100_000
@@ -38,8 +40,8 @@ def runtime_prompt_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "runtime"
 
 
-def read_runtime_prompt(key: str) -> str | None:
-    path = _prompt_path(key)
+def read_runtime_prompt(key: str, *, language: str = "zh") -> str | None:
+    path = _prompt_path(key, language=language)
     try:
         content = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -48,12 +50,14 @@ def read_runtime_prompt(key: str) -> str | None:
     return content or None
 
 
-def effective_runtime_prompt(key: str, default: str) -> str:
-    return read_runtime_prompt(key) or default
+def effective_runtime_prompt(key: str, default: str, *, language: str = "zh") -> str:
+    return read_runtime_prompt(key, language=language) or default
 
 
-def read_runtime_prompt_section(key: str, section: str) -> str | None:
-    content = read_runtime_prompt(key)
+def read_runtime_prompt_section(
+    key: str, section: str, *, language: str = "zh"
+) -> str | None:
+    content = read_runtime_prompt(key, language=language)
     if content is None:
         return None
     sections = _parse_sections(content, _SECTION_NAMES.get(key, frozenset()))
@@ -62,21 +66,24 @@ def read_runtime_prompt_section(key: str, section: str) -> str | None:
     return sections.get(section)
 
 
-def write_runtime_prompt(key: str, content: str) -> None:
+def write_runtime_prompt(key: str, content: str, *, language: str = "zh") -> None:
     if not isinstance(content, str):
         raise ValueError("runtime prompt content must be a string")
     if len(content) > _MAX_PROMPT_CHARS:
         raise ValueError(
             f"runtime prompt content cannot exceed {_MAX_PROMPT_CHARS} characters"
         )
-    path = _prompt_path(key)
+    path = _prompt_path(key, language=language)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(path)
 
 
-def prompt_slot_payloads(defaults: dict[str, str]) -> list[dict[str, object]]:
+def prompt_slot_payloads(
+    defaults: dict[str, str], *, language: str = "zh"
+) -> list[dict[str, object]]:
+    locale = "en-US" if normalize_prompt_language(language) == "en" else "zh-CN"
     if set(defaults) != set(_FILENAMES):
         raise ValueError("runtime prompt defaults must contain every supported key")
     descriptions = {
@@ -102,14 +109,15 @@ def prompt_slot_payloads(defaults: dict[str, str]) -> list[dict[str, object]]:
         "user_image_action_rules": "用户图片理解与动作规则",
     }
     payloads: list[dict[str, object]] = []
-    for key, filename in _FILENAMES.items():
-        override = read_runtime_prompt(key)
+    for key in _FILENAMES:
+        override = read_runtime_prompt(key, language=language)
         default = defaults[key]
         payloads.append(
             {
                 "owner": "sglang_omni",
                 "key": key,
-                "filename": filename,
+                "filename": _prompt_path(key, language=language).name,
+                "locale": locale,
                 "display_name": display_names[key],
                 "description": descriptions[key],
                 "source": "runtime" if override is not None else "repository_default",
@@ -122,11 +130,14 @@ def prompt_slot_payloads(defaults: dict[str, str]) -> list[dict[str, object]]:
     return payloads
 
 
-def _prompt_path(key: str) -> Path:
+def _prompt_path(key: str, *, language: str = "zh") -> Path:
     try:
         filename = _FILENAMES[key]
     except KeyError as exc:
         raise ValueError(f"unknown runtime prompt key: {key}") from exc
+    # Legacy authoring was Chinese-only. Never apply a legacy file to English.
+    if normalize_prompt_language(language) == "en":
+        filename = filename.removesuffix(".txt") + ".en-US.txt"
     return runtime_prompt_dir() / filename
 
 

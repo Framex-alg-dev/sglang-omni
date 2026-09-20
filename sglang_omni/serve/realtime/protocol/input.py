@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any, Literal
 
+from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.preprocessing.image import prepare_image_bytes_for_wire
 from sglang_omni.serve.realtime.audio_buffer import RealtimeAudioBuffer
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
@@ -240,6 +241,229 @@ class TurnInputComponent:
                 "elapsed_ms": (time.perf_counter() - started) * 1000.0,
                 "prepared_bytes": 0,
             }
+
+    async def _run_avatar_image_encoder_prefetch(
+        self,
+        turn: TurnBuffer,
+        frame: ImageFrame,
+    ) -> bool:
+        """Warm the exact avatar embedding before ``turn.commit``."""
+
+        started = time.perf_counter()
+        request_id = (
+            f"avatar-prefetch-{self.session_instance_id[:16]}-"
+            f"{hashlib.sha256(turn.turn_id.encode()).hexdigest()[:12]}-{frame.seq}"
+        )
+        call: asyncio.Task[bool] | None = None
+        registered = False
+
+        def set_status(status: str, *, completed: bool = False) -> None:
+            if turn.avatar_image_prefetch_seq != frame.seq:
+                return
+            turn.avatar_image_prefetch_status = status
+            if completed:
+                turn.avatar_image_prefetch_completed_at = time.perf_counter()
+
+        try:
+            preprocess_task = frame.preprocess_task
+            if preprocess_task is None:
+                set_status("skipped_no_preprocess")
+                return False
+            # Superseding a prefetch must not cancel image preparation: the
+            # committed Turn may still need this frame for normal inference.
+            prepared = await asyncio.shield(preprocess_task)
+            if turn.avatar_image_prefetch_seq != frame.seq:
+                return False
+            if turn.phase not in {TURN_PHASE_COLLECTING, TURN_PHASE_PROCESSING}:
+                set_status("skipped_stale_turn")
+                return False
+            payload = prepared.get("payload") if isinstance(prepared, dict) else None
+            if not isinstance(payload, dict):
+                set_status("skipped_unprepared")
+                emit_structured_log(
+                    "performance",
+                    "avatar_image_encoder_prefetch_skipped",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    seq=frame.seq,
+                    reason="image_preprocess_not_prepared",
+                    preprocess_status=(
+                        prepared.get("status")
+                        if isinstance(prepared, dict)
+                        else None
+                    ),
+                )
+                return False
+            prefetch = getattr(self.client, "prefetch_completion_images", None)
+            if not callable(prefetch):
+                set_status("skipped_client_unsupported")
+                return False
+
+            request = GenerateRequest(
+                model=self.model_name,
+                messages=[
+                    Message(
+                        role="system",
+                        content=(
+                            "Encode the current avatar image for a later "
+                            "private request."
+                        ),
+                    ),
+                    Message(
+                        role="user",
+                        content=[
+                            {"type": "image"},
+                            {"type": "text", "text": "Encode only."},
+                        ],
+                    ),
+                ],
+                sampling=SamplingParams(temperature=0, max_new_tokens=1),
+                stream=False,
+                output_modalities=["text"],
+                metadata={
+                    "audios": [],
+                    "images": [payload],
+                    "image_roles": [IMAGE_ROLE_AVATAR_STATE],
+                    "session_id": self.session_id,
+                    "session_instance_id": self.session_instance_id,
+                    "turn_id": turn.turn_id,
+                    "logical_request_id": (
+                        turn.request_base
+                        or f"avatar-prefetch:{self.session_instance_id}:{turn.turn_id}"
+                    ),
+                    "task": "image_encoder_prefetch",
+                    "prefetch_kind": "avatar_state",
+                    "private_output": True,
+                },
+            )
+            set_status("submitted")
+            self._register_turn_request(turn, request_id)
+            registered = True
+            emit_structured_log(
+                "performance",
+                "avatar_image_encoder_prefetch_submitted",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                request_id=request_id,
+                seq=frame.seq,
+                preprocess_elapsed_ms=round(
+                    float(prepared.get("elapsed_ms", 0.0)), 3
+                ),
+                after_turn_start_ms=round(
+                    max(0.0, time.perf_counter() - turn.started_at) * 1000.0,
+                    3,
+                ),
+                commit_started=turn.commit_started_at is not None,
+            )
+            call = asyncio.create_task(
+                prefetch(request, request_id=request_id),
+                name=f"avatar-image-prefetch-request-{turn.turn_id}-{frame.seq}",
+            )
+            ready = bool(await call)
+            set_status("ready" if ready else "not_ready", completed=ready)
+            emit_structured_log(
+                "performance",
+                "avatar_image_encoder_prefetch_completed",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                request_id=request_id,
+                seq=frame.seq,
+                ready=ready,
+                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                completed_before_commit=turn.commit_started_at is None,
+                after_commit_ms=(
+                    round(
+                        max(0.0, time.perf_counter() - turn.commit_started_at)
+                        * 1000.0,
+                        3,
+                    )
+                    if turn.commit_started_at is not None
+                    else None
+                ),
+            )
+            return ready
+        except asyncio.CancelledError:
+            set_status("cancelled")
+            abort = getattr(self.client, "abort", None)
+            if registered and callable(abort):
+                await asyncio.gather(abort(request_id), return_exceptions=True)
+            if call is not None and not call.done():
+                call.cancel()
+                await asyncio.gather(call, return_exceptions=True)
+            emit_structured_log(
+                "performance",
+                "avatar_image_encoder_prefetch_cancelled",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                request_id=request_id,
+                seq=frame.seq,
+                superseded=(turn.avatar_image_prefetch_seq != frame.seq),
+            )
+            raise
+        except Exception as exc:
+            set_status("failed")
+            emit_structured_log(
+                "error",
+                "avatar_image_encoder_prefetch_failed",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                request_id=request_id,
+                seq=frame.seq,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+            )
+            return False
+        finally:
+            if registered:
+                self._unregister_turn_request(turn, request_id)
+
+    def _schedule_avatar_image_encoder_prefetch(
+        self,
+        turn: TurnBuffer,
+        frame: ImageFrame,
+    ) -> None:
+        if not getattr(self, "avatar_image_encoder_prefetch_enabled", False):
+            return
+        if "action" not in self.modalities:
+            return
+        if not callable(getattr(self.client, "prefetch_completion_images", None)):
+            return
+
+        previous = turn.avatar_image_prefetch_task
+        replaced_pending = previous is not None and not previous.done()
+        if replaced_pending:
+            previous.cancel()
+        turn.avatar_image_prefetch_seq = frame.seq
+        turn.avatar_image_prefetch_status = "scheduled"
+        turn.avatar_image_prefetch_completed_at = None
+        task = asyncio.create_task(
+            self._run_avatar_image_encoder_prefetch(turn, frame),
+            name=f"avatar-image-prefetch-{turn.turn_id}-{frame.seq}",
+        )
+        turn.avatar_image_prefetch_task = task
+        turn.branch_tasks.add(task)
+        task.add_done_callback(turn.branch_tasks.discard)
+        emit_structured_log(
+            "performance",
+            "avatar_image_encoder_prefetch_scheduled",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            seq=frame.seq,
+            replaced_pending=replaced_pending,
+            after_turn_start_ms=round(
+                max(0.0, time.perf_counter() - turn.started_at) * 1000.0,
+                3,
+            ),
+        )
+
     @staticmethod
     def _discard_image_preprocess(turn: TurnBuffer, frame: ImageFrame) -> None:
         task = frame.preprocess_task
@@ -316,6 +540,42 @@ class TurnInputComponent:
             trace_id=turn.trace_id,
             **stats,
         )
+        if turn.avatar_image_prefetch_seq is not None:
+            completed_at = turn.avatar_image_prefetch_completed_at
+            commit_started_at = turn.commit_started_at
+            ready_before_commit_ms = None
+            if (
+                completed_at is not None
+                and commit_started_at is not None
+                and completed_at <= commit_started_at
+            ):
+                ready_before_commit_ms = round(
+                    (commit_started_at - completed_at) * 1000.0,
+                    3,
+                )
+            emit_structured_log(
+                "performance",
+                "avatar_image_encoder_prefetch_at_commit",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                seq=turn.avatar_image_prefetch_seq,
+                status=turn.avatar_image_prefetch_status,
+                task_done=(
+                    turn.avatar_image_prefetch_task is not None
+                    and turn.avatar_image_prefetch_task.done()
+                ),
+                ready_before_commit_ms=ready_before_commit_ms,
+                after_commit_ms=(
+                    round(
+                        max(0.0, time.perf_counter() - commit_started_at)
+                        * 1000.0,
+                        3,
+                    )
+                    if commit_started_at is not None
+                    else None
+                ),
+            )
         return images, stats
     async def handle_image_append(self, event: dict[str, Any]) -> None:
         turn = self._require_collecting_turn(event)
@@ -391,6 +651,8 @@ class TurnInputComponent:
             self._discard_image_preprocess(turn, scheduled_frames.pop(0))
         turn.image_seqs.add(seq)
         turn.image_frame_signatures[seq] = frame_signature
+        if image_role == IMAGE_ROLE_AVATAR_STATE:
+            self._schedule_avatar_image_encoder_prefetch(turn, frame)
         if turn.first_image_received_at is None:
             turn.first_image_received_at = time.perf_counter()
             emit_structured_log(
@@ -700,13 +962,14 @@ class TurnInputComponent:
             return
 
         cancel_started = time.perf_counter()
-        if turn.phase == TURN_PHASE_PROCESSING:
+        was_processing = turn.phase == TURN_PHASE_PROCESSING
+        if turn.phase in {TURN_PHASE_COLLECTING, TURN_PHASE_PROCESSING}:
             request_ids = list(turn.active_request_ids)
             turn.phase = TURN_PHASE_CANCELLING
             # Stop externally visible audio before waiting for model aborts.
             # Abort RPCs may take long enough for the provider to emit more
             # audio, which can otherwise arrive after the client cancelled.
-            if self.embedded_tts is not None:
+            if was_processing and self.embedded_tts is not None:
                 tts_cancel_started = time.perf_counter()
                 await self.embedded_tts.cancel_active_turn()
                 emit_structured_log(
@@ -720,7 +983,8 @@ class TurnInputComponent:
                     ),
                 )
             if (
-                turn.provisional_reply is not None
+                was_processing
+                and turn.provisional_reply is not None
                 and turn.provisional_reply.status == "pending"
             ):
                 await self._discard_provisional_reply(

@@ -1631,6 +1631,8 @@ class ProtocolValidationComponent:
                     action_id=global_child.action_id,
                     source_label=global_child.source_label,
                     short_definition=global_child.short_definition,
+                    prompt_label=global_child.label_for(self.action_locale),
+                    prompt_definition=global_child.definition_for(self.action_locale),
                     execution_binding=dict(parsed.execution_binding),
                     category_id=category_id,
                     proactive_expression=global_child.expression_for(
@@ -1647,6 +1649,8 @@ class ProtocolValidationComponent:
                     category_id=global_category.category_id,
                     source_label=global_category.source_label,
                     short_definition=global_category.short_definition,
+                    prompt_label=global_category.label_for(self.action_locale),
+                    prompt_definition=global_category.definition_for(self.action_locale),
                     category_path=global_category.category_path,
                     children=tuple(session_children),
                 )
@@ -1705,6 +1709,8 @@ class ProtocolValidationComponent:
                     action_id=global_child.action_id,
                     source_label=global_child.source_label,
                     short_definition=global_child.short_definition,
+                    prompt_label=global_child.label_for(self.action_locale),
+                    prompt_definition=global_child.definition_for(self.action_locale),
                     execution_binding=dict(parsed.execution_binding),
                     category_id=global_child.category_id,
                     proactive_expression=global_child.expression_for(

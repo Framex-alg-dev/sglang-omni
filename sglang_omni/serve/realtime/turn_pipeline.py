@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from sglang_omni.serve.realtime.turn_intent import (
     EarlyBodyIntent,
+    VISUAL_HAND_MODE_IDENTIFY_GESTURE,
+    VISUAL_HAND_MODE_IDENTIFY_NUMBER,
     VISUAL_GESTURE_ANSWER_GATE,
     infer_turn_intent,
 )
@@ -1045,6 +1047,7 @@ class TurnPipeline:
             reply_history_route: ReplyHistoryRouteResult | None = None
             preserve_language_reply_on_unsupported_action = False
             visual_copy_without_speech = False
+            visual_hand_identification = False
             reply_route_decision_ready = False
             knowledge_task: asyncio.Task[Any] | None = None
             knowledge_prepare_task: asyncio.Task[PreparedKnowledgeTurn] | None = None
@@ -1084,6 +1087,53 @@ class TurnPipeline:
                     )
                 task.add_done_callback(finished)
                 return task
+
+            def visual_hand_public_reply_text(
+                observation_context: dict[str, Any],
+            ) -> str:
+                assert turn.intent is not None
+                if not turn.intent.speaks_visual_hand_answer():
+                    return ""
+                observed_label = observation_context.get(
+                    "visual_observation_label"
+                )
+                observed_number = observation_context.get(
+                    "visual_observation_number"
+                )
+                if (
+                    turn.intent.visual_hand_mode
+                    == VISUAL_HAND_MODE_IDENTIFY_NUMBER
+                ):
+                    return (
+                        self._prompt(
+                            zh=f"这是数字{observed_number}。",
+                            en=f"This is number {observed_number}.",
+                        )
+                        if observed_number in range(0, 11)
+                        else self._prompt(
+                            zh="我没看清这个数字手势。",
+                            en="I couldn't clearly recognize the number gesture.",
+                        )
+                    )
+                if (
+                    turn.intent.visual_hand_mode
+                    == VISUAL_HAND_MODE_IDENTIFY_GESTURE
+                ):
+                    return (
+                        self._prompt(
+                            zh=f"这是{observed_label}。",
+                            en=(
+                                "The recognized catalog gesture is "
+                                f"{observed_label}."
+                            ),
+                        )
+                        if isinstance(observed_label, str) and observed_label
+                        else self._prompt(
+                            zh="我没看清这个手势。",
+                            en="I couldn't clearly recognize the gesture.",
+                        )
+                    )
+                return ""
 
             async def send_expression_ready(value: dict[str, Any]) -> None:
                 nonlocal expression_ready_sent
@@ -1180,6 +1230,33 @@ class TurnPipeline:
                     # with the latency-critical suffix batch on the same GPU.
                     if intent_detail_release is not None:
                         intent_detail_release.set()
+                if (
+                    turn.intent is not None
+                    and turn.intent.visual_hand_mode
+                    == VISUAL_HAND_MODE_IDENTIFY_NUMBER
+                    and result[3].get("visual_observation_number") not in range(0, 11)
+                ):
+                    # A number question must never execute or announce a
+                    # non-numeric hand-shape match. Keep the private observation
+                    # context for the deterministic fail-closed reply.
+                    result = (
+                        {
+                            "candidate_id": UNSUPPORTED_DECISION_ID,
+                            "action_id": UNSUPPORTED_DECISION_ID,
+                            "execution_binding": {},
+                            "execute": False,
+                            "support_status": "unsupported",
+                            "fallback_applied": False,
+                            "reason_code": "visual_number_not_recognized",
+                        },
+                        [],
+                        result[2],
+                        {
+                            **result[3],
+                            "visual_number_validation": "rejected",
+                            "visual_execution_available": False,
+                        },
+                    )
                 scored_action = result[0]
                 early_body_intent: EarlyBodyIntent | None = None
                 if (
@@ -1862,7 +1939,9 @@ class TurnPipeline:
                     )
                 if (
                     getattr(self, "visual_gesture_generation_enabled", False)
-                    and "action" in self.modalities
+                    and (
+                        "action" in self.modalities or "text" in self.modalities
+                    )
                     and IMAGE_ROLE_USER_CAMERA in current_image_roles
                 ):
                     # This task waits on the first field of the same unified
@@ -2133,6 +2212,10 @@ class TurnPipeline:
                     and visual_copy_gesture
                     and turn.intent is not None
                     and turn.intent.speech == "none"
+                )
+                visual_hand_identification = bool(
+                    turn.intent is not None
+                    and turn.intent.identifies_visual_hand()
                 )
                 if visual_copy_without_speech:
                     # Intent itself proves that neither conversation history
@@ -2521,9 +2604,17 @@ class TurnPipeline:
                 and not visual_gesture_answer
             )
             preserve_visual_answer_speech = bool(
-                visual_gesture_answer
-                and turn.intent is not None
-                and turn.intent.has_visual_public_speech()
+                turn.intent is not None
+                and (
+                    (
+                        visual_gesture_answer
+                        and turn.intent.has_visual_public_speech()
+                    )
+                    # Identification owns its response policy even when the
+                    # observation is unsupported or the action is unavailable.
+                    # This also preserves intentional silence for gesture_only.
+                    or visual_hand_identification
+                )
             )
             pure_action_reply = bool(
                 visual_gesture_answer
@@ -2656,7 +2747,58 @@ class TurnPipeline:
                 and provisional_state is not None
                 and provisional_state.status != "discarded"
             ):
-                if provided_reply:
+                if visual_hand_identification:
+                    assert turn.intent is not None
+                    assert visual_gesture_probe_task is not None
+
+                    async def run_visual_hand_reply() -> tuple[str, dict[str, Any]]:
+                        visual_result = await visual_gesture_probe_task
+                        if visual_result is None:
+                            observation_context: dict[str, Any] = {}
+                        else:
+                            observation_context = visual_result[3]
+                        answer = visual_hand_public_reply_text(
+                            observation_context
+                        )
+                        emit_structured_log(
+                            "reply",
+                            "visual_hand_public_reply_resolved",
+                            session_id=self.session_id,
+                            turn_id=turn.turn_id,
+                            trace_id=turn.trace_id,
+                            visual_hand_mode=turn.intent.visual_hand_mode,
+                            visual_answer_output=(
+                                turn.intent.visual_answer_output
+                            ),
+                            visual_observation_label=(
+                                observation_context.get(
+                                    "visual_observation_label"
+                                )
+                            ),
+                            visual_observation_number=(
+                                observation_context.get(
+                                    "visual_observation_number"
+                                )
+                            ),
+                            output_text=answer,
+                            model_request_added=False,
+                            after_commit_ms=self._after_commit_ms(turn),
+                        )
+                        return await self._run_provided_reply(
+                            turn,
+                            answer,
+                            provisional=provisional_state,
+                            source="generated",
+                        )
+
+                    reply_task = track_branch(
+                        run_visual_hand_reply(),
+                        name=(
+                            f"session-visual-hand-public-reply-"
+                            f"{self.session_id}-{turn.turn_id}"
+                        ),
+                    )
+                elif provided_reply:
                     reply_task = track_branch(
                         self._run_provided_reply(
                             turn,
@@ -2742,17 +2884,43 @@ class TurnPipeline:
                     name=f"session-provided-reply-{self.session_id}-{turn.turn_id}",
                 )
             elif "text" in self.modalities and "action" not in self.modalities:
-                reply_task = track_branch(
-                    self._run_generated_reply(
-                        turn,
-                        current_audio_list,
-                        prepared_current_images,
-                        current_image_roles,
-                        None,
-                        history_route=reply_history_route,
-                    ),
-                    name=f"session-reply-{self.session_id}-{turn.turn_id}",
-                )
+                if visual_hand_identification:
+                    assert turn.intent is not None
+                    assert visual_gesture_probe_task is not None
+
+                    async def run_text_only_visual_hand_reply() -> tuple[
+                        str, dict[str, Any]
+                    ]:
+                        visual_result = await visual_gesture_probe_task
+                        observation_context = (
+                            visual_result[3] if visual_result is not None else {}
+                        )
+                        answer = visual_hand_public_reply_text(
+                            observation_context
+                        )
+                        return await self._run_provided_reply(
+                            turn, answer, source="generated"
+                        )
+
+                    reply_task = track_branch(
+                        run_text_only_visual_hand_reply(),
+                        name=(
+                            f"session-text-only-visual-hand-reply-"
+                            f"{self.session_id}-{turn.turn_id}"
+                        ),
+                    )
+                else:
+                    reply_task = track_branch(
+                        self._run_generated_reply(
+                            turn,
+                            current_audio_list,
+                            prepared_current_images,
+                            current_image_roles,
+                            None,
+                            history_route=reply_history_route,
+                        ),
+                        name=f"session-reply-{self.session_id}-{turn.turn_id}",
+                    )
 
             # Independent language must not wait for body candidate scoring.
             # The route also prevents unsupported body results from discarding

@@ -127,14 +127,14 @@ class PerformancePipeline:
     ) -> str:
         choice_lines: list[str] = []
         labels = {
-            item.candidate_id: item.source_label
+            item.candidate_id: item.prompt_label or item.source_label
             for item in self._expression_candidates()
         }
         for decision_id, choice in choices.items():
             expression = (
-                "不改变脸部表情"
+                self._action_prompt(zh="不改变脸部表情", en="no change in facial expression")
                 if choice.expression_id is None
-                else labels.get(choice.expression_id, "不支持的脸部表情")
+                else labels.get(choice.expression_id, self._action_prompt(zh="不支持的脸部表情", en="unsupported facial expression"))
             )
             choice_lines.append(
                 f"{decision_id}: request_scope={choice.scope}; expression={expression}"

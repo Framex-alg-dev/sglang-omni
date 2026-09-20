@@ -111,6 +111,9 @@ ACTION_READY_TTS_DECOUPLED_ENV = (
 ROUTE_ACTION_PARALLEL_ENV = "SGLANG_OMNI_REALTIME_ROUTE_ACTION_PARALLEL"
 VISUAL_GESTURE_GENERATION_ENV = "SGLANG_OMNI_VISUAL_GESTURE_GENERATION"
 IMAGE_ENCODER_PREFETCH_ENV = "SGLANG_OMNI_IMAGE_ENCODER_PREFETCH"
+AVATAR_IMAGE_ENCODER_PREFETCH_ENV = (
+    "SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH"
+)
 # Semantic visual-gesture generation is the canonical production path.  Keep
 # the environment variable as an emergency kill switch instead of requiring
 # every launcher to remember to opt in.

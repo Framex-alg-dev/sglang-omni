@@ -30,6 +30,7 @@ htmlcov/
 # Logs
 *.log
 *.txt
+!examples/runtime_prompts/*.txt
 output.wav
 
 # OS

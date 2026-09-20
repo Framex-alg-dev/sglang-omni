@@ -77,7 +77,7 @@ def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
     assert sum(
         "en-US" in candidate.expressions_by_locale
         for candidate in catalog.candidate_by_id.values()
-    ) == 80
+    ) == 117
 
 
 def test_action_prompts_do_not_include_cross_turn_action_history() -> None:

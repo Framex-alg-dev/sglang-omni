@@ -164,22 +164,18 @@ def proactive_scene_policy(trigger: str | None) -> ProactiveScenePolicy | None:
         default_action_guidance_zh=(proactive_selection_instruction("zh") + policy.default_action_guidance_zh),
         default_action_guidance_en=(proactive_selection_instruction("en") + policy.default_action_guidance_en),
     )
-    reply_override = read_runtime_prompt_section(
-        "proactive_reply_rules", policy.trigger
-    )
-    action_override = read_runtime_prompt_section(
-        "proactive_action_rules", policy.trigger
-    )
-    if reply_override is None and action_override is None:
-        return policy
     return replace(
         policy,
-        reply_policy_zh=reply_override or policy.reply_policy_zh,
-        reply_policy_en=reply_override or policy.reply_policy_en,
-        default_action_guidance_zh=(
-            action_override or policy.default_action_guidance_zh
-        ),
-        default_action_guidance_en=(
-            action_override or policy.default_action_guidance_en
-        ),
+        reply_policy_zh=(read_runtime_prompt_section(
+            "proactive_reply_rules", policy.trigger, language="zh"
+        ) or policy.reply_policy_zh),
+        reply_policy_en=(read_runtime_prompt_section(
+            "proactive_reply_rules", policy.trigger, language="en"
+        ) or policy.reply_policy_en),
+        default_action_guidance_zh=(read_runtime_prompt_section(
+            "proactive_action_rules", policy.trigger, language="zh"
+        ) or policy.default_action_guidance_zh),
+        default_action_guidance_en=(read_runtime_prompt_section(
+            "proactive_action_rules", policy.trigger, language="en"
+        ) or policy.default_action_guidance_en),
     )

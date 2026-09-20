@@ -353,7 +353,7 @@ class ActionPromptComponent:
         definition_mode: Literal["contextual", "visual"] = "contextual",
     ) -> str:
         definition = (
-            candidate.short_definition
+            (candidate.prompt_definition or candidate.short_definition)
             if definition_mode == "visual"
             else candidate.effective_definition(turn_origin)
         )
@@ -373,12 +373,12 @@ class ActionPromptComponent:
         )
         return self._action_prompt(
             zh=(
-                f"candidate_id={candidate.candidate_id}｜动作={candidate.source_label}｜"
+                f"candidate_id={candidate.candidate_id}｜动作={candidate.prompt_label or candidate.source_label}｜"
                 f"{definition_label}={definition}"
                 + (f"｜区分要点={zh_disambiguation}" if zh_disambiguation else "")
             ),
             en=(
-                f"candidate_id={candidate.candidate_id} | action={candidate.source_label} | "
+                f"candidate_id={candidate.candidate_id} | action={candidate.prompt_label or candidate.source_label} | "
                 f"{definition_label_en}={definition}"
                 + (
                     f" | distinguishing constraints={en_disambiguation}"
@@ -432,7 +432,7 @@ class ActionPromptComponent:
                 )
             lines.append("Fixed category set:")
             lines.extend(
-                f"category_id={item.category_id} | category={item.source_label} | description={item.short_definition}"
+                f"category_id={item.category_id} | category={item.prompt_label or item.source_label} | description={item.prompt_definition or item.short_definition}"
                 for item in self.categories
             )
             lines.append(
@@ -462,8 +462,8 @@ class ActionPromptComponent:
         # the catalog hash/prefix-cache identity.
         for item in self.categories:
             lines.append(
-                f"category_id={item.category_id}｜类别={item.source_label}｜"
-                f"说明={item.short_definition}"
+                f"category_id={item.category_id}｜类别={item.prompt_label or item.source_label}｜"
+                f"说明={item.prompt_definition or item.short_definition}"
             )
         lines.append(
             "请根据当前输入选择最匹配的 category_id；只输出一个 category_id，"
@@ -495,13 +495,13 @@ class ActionPromptComponent:
             turn_origin,
             definition_mode,
             persona_first,
-            tuple((c.category_id, c.source_label, c.short_definition) for c in categories),
+            tuple((c.category_id, c.prompt_label or c.source_label, c.prompt_definition or c.short_definition) for c in categories),
             tuple(
                 (
                     c.candidate_id,
-                    c.source_label,
+                    c.prompt_label or c.source_label,
                     (
-                        c.short_definition
+                        c.prompt_definition or c.short_definition
                         if definition_mode == "visual"
                         else c.effective_definition(turn_origin)
                     ),
@@ -560,11 +560,11 @@ class ActionPromptComponent:
                     self._action_prompt(
                         zh=(
                             f"候选类别：category_id={selected.category_id}｜"
-                            f"类别={selected.source_label}｜说明={selected.short_definition}"
+                            f"类别={selected.prompt_label or selected.source_label}｜说明={selected.prompt_definition or selected.short_definition}"
                         ),
                         en=(
                             f"Candidate category: category_id={selected.category_id} | "
-                            f"category={selected.source_label} | description={selected.short_definition}"
+                            f"category={selected.prompt_label or selected.source_label} | description={selected.prompt_definition or selected.short_definition}"
                         ),
                     )
                 )
@@ -598,7 +598,7 @@ class ActionPromptComponent:
                 "You are a digital-character action classifier. Select one candidate_id from the following set.",
             ]
             lines.extend(
-                f"Selected category: category_id={selected.category_id} | category={selected.source_label} | description={selected.short_definition}"
+                f"Selected category: category_id={selected.category_id} | category={selected.prompt_label or selected.source_label} | description={selected.prompt_definition or selected.short_definition}"
                 for selected in categories
             )
             lines.extend(
@@ -620,8 +620,8 @@ class ActionPromptComponent:
         ]
         for selected in categories:
             lines.append(
-                f"已选类别：category_id={selected.category_id}｜类别={selected.source_label}｜"
-                f"说明={selected.short_definition}"
+                f"已选类别：category_id={selected.category_id}｜类别={selected.prompt_label or selected.source_label}｜"
+                f"说明={selected.prompt_definition or selected.short_definition}"
             )
         lines.extend(
             self._format_candidate_for_prompt(
@@ -647,8 +647,8 @@ class ActionPromptComponent:
         )
         fallback_items = separator.join(
             self._action_prompt(
-                zh=f"{category.category_id}（{category.source_label}）",
-                en=f"{category.category_id} ({category.source_label})",
+                zh=f"{category.category_id}（{category.prompt_label or category.source_label}）",
+                en=f"{category.category_id} ({category.prompt_label or category.source_label})",
             )
             for category in self._fallback_categories()
         )
@@ -661,15 +661,15 @@ class ActionPromptComponent:
         system_route = self._action_prompt(
             zh=(
                 "[本次会话系统伴随类别]\n"
-                f"有非空实际回复时：{reply_category.category_id}（{reply_category.source_label}）\n"
-                f"无回复、空回复或回复失败时：{silent_category.category_id}（{silent_category.source_label}）\n"
+                f"有非空实际回复时：{reply_category.category_id}（{reply_category.prompt_label or reply_category.source_label}）\n"
+                f"无回复、空回复或回复失败时：{silent_category.category_id}（{silent_category.prompt_label or silent_category.source_label}）\n"
             ),
             en=(
                 "[System accompaniment categories for this conversation]\n"
                 f"Non-empty actual reply: {reply_category.category_id} "
-                f"({reply_category.source_label})\n"
+                f"({reply_category.prompt_label or reply_category.source_label})\n"
                 f"No reply, empty reply, or reply failure: {silent_category.category_id} "
-                f"({silent_category.source_label})\n"
+                f"({silent_category.prompt_label or silent_category.source_label})\n"
             ),
         ) if reply_category is not None and silent_category is not None else ""
         if self.action_language == "en":

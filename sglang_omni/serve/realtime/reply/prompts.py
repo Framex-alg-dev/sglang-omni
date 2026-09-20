@@ -158,6 +158,7 @@ class ReplyPromptComponent:
         return effective_runtime_prompt(
             "reply_rules",
             self._repository_reply_role_and_agency_system_prompt(),
+            language=self.language,
         ) + mixed_instruction_policy(
             self.language, "reply"
         ) + self._client_language_lock_precedence_system_prompt()
@@ -573,6 +574,7 @@ class ReplyPromptComponent:
                     zh=USER_IMAGE_REPLY_RULES_ZH,
                     en=USER_IMAGE_REPLY_RULES_EN,
                 ),
+                language=self.language,
             ),
         }
 
@@ -630,13 +632,17 @@ class ReplyPromptComponent:
 MultimodalReplyPromptMixin = ReplyPromptComponent
 
 
-def repository_reply_rules_zh() -> str:
-    """Render the checked-in Chinese reply rules for the authoring API."""
+def repository_reply_rules(language: str) -> str:
+    """Render checked-in reply rules for the selected authoring language."""
 
-    class _ChineseReplyRenderer(ReplyPromptComponent):
+    class _ReplyRenderer(ReplyPromptComponent):
         @staticmethod
         def _prompt(*, zh: str, en: str) -> str:
-            del en
-            return zh
+            from sglang_omni.models.qwen3_omni.prompt_localization import localized_prompt
+            return localized_prompt(language, zh=zh, en=en)
 
-    return _ChineseReplyRenderer()._repository_reply_role_and_agency_system_prompt()
+    return _ReplyRenderer()._repository_reply_role_and_agency_system_prompt()
+
+
+def repository_reply_rules_zh() -> str:
+    return repository_reply_rules("zh")

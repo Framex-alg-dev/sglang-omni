@@ -35,6 +35,9 @@ class SessionActionCandidate:
     category_id: str | None = None
     proactive_expression: str = ""
     user_reaction_expression: str = ""
+    # Prompt display text only; canonical fields remain unchanged for matching.
+    prompt_label: str = ""
+    prompt_definition: str = ""
 
     @classmethod
     def from_payload(cls, value: Any) -> "SessionActionCandidate":
@@ -91,7 +94,7 @@ class SessionActionCandidate:
             if turn_origin == "proactive"
             else self.user_reaction_expression
         )
-        return contextual.strip() or self.short_definition
+        return contextual.strip() or self.prompt_definition or self.short_definition
 
     def definition_source(self, turn_origin: str) -> str:
         if turn_origin == "proactive" and self.proactive_expression.strip():
@@ -255,6 +258,9 @@ class SessionActionCategory:
     short_definition: str
     category_path: tuple[str, ...]
     children: tuple[SessionActionCandidate, ...]
+    # Prompt display text only; canonical fields remain unchanged for matching.
+    prompt_label: str = ""
+    prompt_definition: str = ""
 
     @classmethod
     def from_payload(cls, value: Any) -> "SessionActionCategory":
@@ -471,6 +477,10 @@ class TurnBuffer:
     current_request_id: str | None = None
     active_request_ids: set[str] = field(default_factory=set)
     branch_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    avatar_image_prefetch_task: asyncio.Task[bool] | None = None
+    avatar_image_prefetch_seq: int | None = None
+    avatar_image_prefetch_status: str = "not_scheduled"
+    avatar_image_prefetch_completed_at: float | None = None
     tts_instruction_future: asyncio.Future[str] | None = None
     inference_task: asyncio.Task[None] | None = None
     trace_id: str = ""

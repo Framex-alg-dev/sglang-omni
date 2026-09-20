@@ -16,6 +16,7 @@ from sglang_omni.serve.realtime.action.visual_generation import (
     normalize_visual_gesture_output,
     parse_visual_gesture_output,
     visual_gesture_candidates,
+    visual_gesture_number,
 )
 from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCandidate,
@@ -308,6 +309,17 @@ def test_visual_gesture_generation_uses_catalog_semantic_labels() -> None:
     assert normalize_visual_gesture_output("UNSUPPORTED。", eligible) == "UNSUPPORTED"
     assert normalize_visual_gesture_output("答案是数字五", eligible) is None
     assert normalize_visual_gesture_output("数字五、数字四", eligible) is None
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [("数字零", 0), ("数字一手势", 1), ("数字十", 10), ("双手比心", None)],
+)
+def test_visual_gesture_number_supports_the_full_zero_to_ten_range(
+    label: str,
+    expected: int | None,
+) -> None:
+    assert visual_gesture_number(label) == expected
 
 
 def test_visual_gesture_generation_drops_ambiguous_catalog_labels() -> None:

@@ -30,10 +30,10 @@ class _Client:
 
 
 class _Session(ReplyPipeline):
-    def __init__(self, client):
+    def __init__(self, client, language="zh"):
         self.client = client
         self.model_name = "test-model"
-        self.language = "Chinese"
+        self.language = language
         self.instructions = "你是一个说话温柔的角色。"
         self.session_id = "session-test"
         self.session_instance_id = "instance-test"
@@ -51,7 +51,7 @@ class _Session(ReplyPipeline):
         self.requests.discard(request_id)
 
     def _prompt(self, *, zh, en):
-        return zh
+        return zh if self.language == "zh" else en
 
 
 def _turn():
@@ -62,9 +62,10 @@ def _turn():
 
 
 @pytest.mark.asyncio
-async def test_rejection_reuses_current_audio_and_latest_avatar_not_user_camera():
+@pytest.mark.parametrize("language", ["zh", "en"])
+async def test_rejection_reuses_current_audio_and_latest_avatar_not_user_camera(language):
     client = _Client()
-    session = _Session(client)
+    session = _Session(client, language=language)
     text, timing = await session._run_action_rejection_reply(
         _turn(), ["current-audio"], ["old-avatar", "user-camera", "latest-avatar"],
         ["avatar_state", "user_camera", "avatar_state"],
@@ -79,13 +80,20 @@ async def test_rejection_reuses_current_audio_and_latest_avatar_not_user_camera(
     assert timing["fallback_reason"] is None
     prompt = request.messages[0].content
     assert session.instructions in prompt
-    assert "[Action Rejection Response]" in prompt
-    assert 'The stance is always "I don\'t feel like it", never "I can\'t"' in prompt
-    assert "capability limitations" in prompt
-    assert "Never bring up being an AI" in prompt
-    assert "The reason must always be a human-like one" in prompt
-    assert "neither use it as the excuse nor claim to be human" in prompt
-    assert "Do not refuse a physical action" not in prompt
+    if language == "en":
+        assert "[Action Rejection Response]" in prompt
+        assert 'The stance is always "I don\'t feel like it", never "I can\'t"' in prompt
+        assert "capability limitations" in prompt
+        assert "Never bring up being an AI" in prompt
+        assert "The reason must always be a human-like one" in prompt
+        assert "neither use it as the excuse nor claim to be human" in prompt
+        assert "Do not refuse a physical action" not in prompt
+        assert "[动作拒绝回复]" not in prompt
+    else:
+        assert "[动作拒绝回复]" in prompt
+        assert "不是做不到" in prompt or "我做不到" in prompt
+        assert "[Action Rejection Response]" not in prompt
+        assert "不能把动作预期结束状态当成当前事实" in prompt
     parts = request.messages[-1].content
     assert {"type": "text", "text": "请站起来"} in parts
     assert sum(p["type"] == "image" for p in parts) == 1
@@ -147,3 +155,28 @@ async def test_stream_is_buffered_and_closed_on_interrupt():
     assert closed.is_set()
     assert client.aborted == ["request-test-action-rejection"]
     assert not session.requests
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_independent_speech_and_image_labels_follow_reply_language(language):
+    session = _Session(_Client(), language=language)
+    turn = _turn()
+    turn.intent = SimpleNamespace(
+        speech_independent_of_body=True, speech="verbatim", text="Cheese~!"
+    )
+    request, roles = session._build_action_rejection_request(
+        turn, [], ["avatar", "camera"], ["avatar_state", "user_camera"]
+    )
+    prompt = request.messages[0].content
+    parts = request.messages[-1].content
+    if language == "en":
+        assert "Say the requested verbatim text exactly once" in prompt
+        assert parts[0]["text"] == "Character image (not the user's camera):"
+        assert any("[Parsed independent language task" in p.get("text", "") for p in parts)
+    else:
+        assert "将用户要求原样说出的文字准确说一次" in prompt
+        assert parts[0]["text"] == "角色图片（不是用户摄像头）："
+        assert any("[解析出的独立语言任务" in p.get("text", "") for p in parts)
+    assert any("Cheese~!" in p.get("text", "") for p in parts)
+    assert request.metadata["images"] == ["avatar"]
+    assert roles == ["avatar_state"]

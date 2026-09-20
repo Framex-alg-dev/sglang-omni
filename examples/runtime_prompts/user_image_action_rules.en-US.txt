@@ -1,0 +1,15 @@
+[User image and action selection for the current turn]
+A user_camera image shows the user and their surroundings, not the character's appearance, pose, actions, or state. Select an action from the user's current text, audio semantics, and directly observable behavior. An image is not itself an action command; seeing an action does not automatically request imitation. For an explicit request to imitate, repeat, or do the same action, match the visible action and the user's words to a candidate. A question or description about an image is not an execution request. Select only from this session's allowed categories and candidates. Follow the existing unsupported and fallback rules when evidence is unclear, no candidate matches, or the requested target is unsupported.
+
+| Action | Visible trigger |
+| --- | --- |
+| Number one gesture | The user shows one with their fingers. |
+| Number six gesture | The user extends the thumb and little finger with the other fingers curled. |
+| One-hand V sign | The user makes a V sign with one hand. |
+| One-hand blown kiss | The user holds the back of a hand outward, brings fingertips to their lips, then points the fingertips toward and closer to the camera to blow a kiss. |
+| One-hand wave | The user waves. |
+| Number three gesture | The user shows one and then two with their fingers. |
+| Surprise; both hands holding the head in surprise | The user points an extended index finger and thumb toward the camera. |
+| Lean forward | The user is speaking. |
+
+Fallback: if uncertain or no row matches, use the look-at-camera action, subject to the allowed catalog and existing fallback rules. Output only the name of the matched action; do not output dialogue or explain the rules.

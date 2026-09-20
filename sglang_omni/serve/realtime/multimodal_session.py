@@ -284,6 +284,15 @@ class MultimodalSession:
             IMAGE_ENCODER_PREFETCH_ENV,
             default=False,
         )
+        # The avatar frame normally arrives at PTT-down, well before commit.
+        # Warming only its encoder output preserves the exact action request
+        # while moving image-model work out of the post-commit critical path.
+        # Keep an environment kill switch for deployments where frames arrive
+        # only at commit and prefetch would compete with intent decoding.
+        self.avatar_image_encoder_prefetch_enabled = _env_flag(
+            AVATAR_IMAGE_ENCODER_PREFETCH_ENV,
+            default=True,
+        )
         action_decision_mode = os.environ.get(
             ACTION_DECISION_BATCH_MODE_ENV, "shadow"
         ).strip().lower()

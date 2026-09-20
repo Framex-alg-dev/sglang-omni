@@ -157,7 +157,7 @@ def category_gate_prompt(
             "Choose a concrete IC category or IC00 only for a present execution request, not merely because an action is mentioned. Third-person or past-tense statements, capability-only questions, quotations, and explicit prohibitions do not request execution and therefore use ICN0. A polite question that pragmatically asks the avatar to act now is an execution request.",
         ]
         lines.extend(
-            f"{category_gate_label(category.category_id)}=category_id {category.category_id} | category={category.source_label} | description={category.short_definition}"
+            f"{category_gate_label(category.category_id)}=category_id {category.category_id} | category={getattr(category, 'prompt_label', '') or category.source_label} | description={getattr(category, 'prompt_definition', '') or category.short_definition}"
             for category in values
         )
         lines.append(
@@ -177,7 +177,7 @@ def category_gate_prompt(
         "只有要求当前执行时才选择具体 IC 类别或 IC00，不能因为文本或音频提到某个动作就选择动作类别。第三人称或过去动作陈述、只询问能力、引用动作说法以及明确禁止执行都不要求当前执行，应选 ICN0；采用疑问句形式但交际目的确实是礼貌要求角色现在行动时，仍属于执行请求。",
     ]
     lines.extend(
-        f"{category_gate_label(category.category_id)}=category_id {category.category_id}｜类别={category.source_label}｜说明={category.short_definition}"
+        f"{category_gate_label(category.category_id)}=category_id {category.category_id}｜类别={getattr(category, 'prompt_label', '') or category.source_label}｜说明={getattr(category, 'prompt_definition', '') or category.short_definition}"
         for category in values
     )
     lines.append(

@@ -1350,6 +1350,9 @@ class SessionStartComponent:
                 else 1
             ),
             "action_prefix_prefilled": self.action_prefix_prefilled,
+            "avatar_image_encoder_prefetch_enabled": (
+                self.avatar_image_encoder_prefetch_enabled
+            ),
             "action_profile_applied": self.action_profile is not None,
             "action_profile_sha256": action_profile_audit["action_profile_sha256"],
             "prewarmed_child_category_ids": list(self.prewarmed_child_category_ids),
@@ -1457,6 +1460,9 @@ class SessionStartComponent:
             ),
             image_encoder_prefetch_enabled=(
                 self.image_encoder_prefetch_enabled
+            ),
+            avatar_image_encoder_prefetch_enabled=(
+                self.avatar_image_encoder_prefetch_enabled
             ),
             action_catalog_hash=self.action_catalog_hash,
             session_action_catalog_hash=self.action_catalog_hash,

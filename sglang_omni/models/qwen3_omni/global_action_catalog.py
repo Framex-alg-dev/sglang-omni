@@ -404,6 +404,23 @@ def _required_string(value: Any, field: str) -> str:
     return value.strip()
 
 
+def _parse_prompt_text_by_locale(
+    value: Any, field_name: str
+) -> Mapping[str, Mapping[str, str]]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    result: dict[str, Mapping[str, str]] = {}
+    for locale, fields in value.items():
+        _normalize_prompt_locale(locale)
+        if not isinstance(fields, dict) or set(fields) != {"label", "short_definition"}:
+            raise ValueError(f"{field_name}[{locale!r}] requires label and short_definition")
+        result[locale] = MappingProxyType({
+            key: _required_string(text, f"{field_name}[{locale!r}].{key}")
+            for key, text in fields.items()
+        })
+    return MappingProxyType(result)
+
+
 @dataclass(frozen=True, slots=True)
 class GlobalActionCandidate:
     candidate_id: str
@@ -419,6 +436,18 @@ class GlobalActionCandidate:
     )
     aliases: tuple[str, ...] = ()
     reaction_sources: frozenset[str] = frozenset()
+
+    prompt_text_by_locale: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    def label_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("label", self.source_label)
+
+    def definition_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("short_definition", self.short_definition)
 
     def expression_for(
         self,
@@ -450,7 +479,9 @@ class GlobalActionCandidate:
         locale: str | None = None,
     ) -> str:
         contextual = self.expression_for(turn_origin, locale)
-        return contextual.strip() or self.short_definition
+        return contextual.strip() or (
+            self.definition_for(locale) if locale is not None else self.short_definition
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +492,17 @@ class GlobalActionCategory:
     category_path: tuple[str, ...]
     semantic_tags: frozenset[str]
     children: tuple[GlobalActionCandidate, ...]
+    prompt_text_by_locale: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    def label_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("label", self.source_label)
+
+    def definition_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("short_definition", self.short_definition)
 
 
 def is_system_accompaniment_category(category: GlobalActionCategory) -> bool:
@@ -539,9 +581,9 @@ class GlobalActionCatalog:
                 if selection_tokens else ""
             )
             lines.append(
-                f"{selection_prefix}candidate_id={item.candidate_id} | action={item.source_label} | description={definition}"
+                f"{selection_prefix}candidate_id={item.candidate_id} | action={item.label_for(locale)} | description={definition}"
                 if english else
-                f"{selection_prefix}candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={definition}"
+                f"{selection_prefix}candidate_id={item.candidate_id}｜动作={item.label_for(locale)}｜说明={definition}"
             )
         return mixed_instruction_policy(locale, "body") + "\n\n" + "\n".join(lines)
 
@@ -1063,7 +1105,7 @@ def build_category_system_prompt(
             "Fixed category set:",
         ]
         lines.extend(
-            f"category_id={item.category_id} | category={item.source_label} | description={item.short_definition}"
+            f"category_id={item.category_id} | category={item.label_for(locale)} | description={item.definition_for(locale)}"
             for item in categories
         )
         lines.append(
@@ -1088,7 +1130,7 @@ def build_category_system_prompt(
         "固定类别集合如下：",
     ]
     lines.extend(
-        f"category_id={item.category_id}｜类别={item.source_label}｜说明={item.short_definition}"
+        f"category_id={item.category_id}｜类别={item.label_for(locale)}｜说明={item.definition_for(locale)}"
         for item in categories
     )
     lines.append(
@@ -1110,7 +1152,7 @@ def build_child_system_prompt(
             DIRECTION_REFERENCE_POLICY_EN,
             (
                 f"Selected category: category_id={category.category_id} | "
-                f"category={category.source_label} | description={category.short_definition}"
+                f"category={category.label_for(locale)} | description={category.definition_for(locale)}"
             ),
         ]
         if category_allows_unsupported_child(category):
@@ -1120,7 +1162,7 @@ def build_child_system_prompt(
         else:
             lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY_EN)
         lines.extend(
-            f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.effective_definition(turn_origin, locale)}"
+            f"candidate_id={item.candidate_id} | action={item.label_for(locale)} | description={item.effective_definition(turn_origin, locale)}"
             for item in category.children
         )
         lines.append(
@@ -1132,8 +1174,8 @@ def build_child_system_prompt(
         "你是数字人动作识别器。请从以下集合中选择一个 candidate_id。",
         DIRECTION_REFERENCE_POLICY,
         (
-            f"已选类别：category_id={category.category_id}｜类别={category.source_label}｜"
-            f"说明={category.short_definition}"
+            f"已选类别：category_id={category.category_id}｜类别={category.label_for(locale)}｜"
+            f"说明={category.definition_for(locale)}"
         ),
     ]
     if category_allows_unsupported_child(category):
@@ -1143,7 +1185,7 @@ def build_child_system_prompt(
     else:
         lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY)
     lines.extend(
-        f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.effective_definition(turn_origin, locale)}"
+        f"candidate_id={item.candidate_id}｜动作={item.label_for(locale)}｜说明={item.effective_definition(turn_origin, locale)}"
         for item in category.children
     )
     lines.append(
@@ -1387,6 +1429,10 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 source_label=child_label,
                 short_definition=prompt_definition,
                 source_short_definition=source_definition,
+                prompt_text_by_locale=_parse_prompt_text_by_locale(
+                    raw_child.get("prompt_text_by_locale", {}),
+                    f"{child_prefix}.prompt_text_by_locale",
+                ),
                 category_id=category_id,
                 proactive_expression=proactive_expression.strip(),
                 user_reaction_expression=user_reaction_expression.strip(),
@@ -1408,6 +1454,10 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 category_path=category_path,
                 semantic_tags=frozenset(semantic_tags),
                 children=tuple(children),
+                prompt_text_by_locale=_parse_prompt_text_by_locale(
+                    raw_category.get("prompt_text_by_locale", {}),
+                    f"{prefix}.prompt_text_by_locale",
+                ),
             )
         )
 

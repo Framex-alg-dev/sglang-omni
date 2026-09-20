@@ -215,18 +215,19 @@ def test_nonvisual_body_preserves_explicit_independent_speech():
     assert intent.speech_independent_of_body is True
 
 
-def test_visual_hand_identification_keeps_generated_answer_channel():
+def test_visual_hand_identification_uses_authoritative_answer_channel():
     intent = TurnIntent.parse(
         json.dumps(
             {
                 "route": {
                     "visual": "COPY_CURRENT_HAND",
-                    "speech": "generated",
+                    "speech": "none",
                     "body_intent": "perform",
                     "reaction": "none",
                 },
                 "body_task": "这个手势",
-                "text": "识别手势数字并回答",
+                "visual_hand_mode": "identify_number",
+                "visual_answer_output": "gesture_and_speech",
             },
             ensure_ascii=False,
         ),
@@ -234,8 +235,50 @@ def test_visual_hand_identification_keeps_generated_answer_channel():
     )
 
     assert intent.visual_scope_gate == "COPY_HAND"
-    assert intent.speech == "generated"
-    assert intent.text == "识别手势数字并回答"
+    assert intent.speech == "none" and intent.text == ""
+    assert intent.visual_hand_mode == "identify_number"
+    assert intent.visual_answer_output == "gesture_and_speech"
+    assert intent.identifies_visual_hand() is True
+    assert intent.speaks_visual_hand_answer() is True
+
+
+def test_visual_hand_identification_rejects_a_second_generated_answer():
+    with pytest.raises(ValueError, match="owns the answer channel"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "visual": "COPY_CURRENT_HAND",
+                    "body_intent": "perform",
+                    "body_task": "这个手势",
+                    "speech": "generated",
+                    "reaction": "none",
+                    "text": "识别手势数字并回答",
+                    "visual_hand_mode": "identify_number",
+                    "visual_answer_output": "gesture_and_speech",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_visual_hand_imitation_cannot_claim_an_answer_channel():
+    with pytest.raises(ValueError, match="imitation cannot use"):
+        TurnIntent.parse(
+            json.dumps(
+                {
+                    "visual": "COPY_CURRENT_HAND",
+                    "body_intent": "perform",
+                    "body_task": "这个手势",
+                    "speech": "none",
+                    "reaction": "none",
+                    "visual_hand_mode": "imitate",
+                    "visual_answer_output": "gesture_and_speech",
+                },
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
 
 
 def test_sparse_capability_route_normalizes_to_non_executing_body_mode():
@@ -1216,8 +1259,10 @@ def test_unified_prompt_has_consistent_visual_and_action_boundaries():
     assert "比个一 ->" in SYSTEM and '"body_task":"数字一手势"' in SYSTEM
     assert "比个三 ->" in SYSTEM and '"body_task":"数字三手势"' in SYSTEM
     assert "比个四 ->" in SYSTEM and '"body_task":"数字四手势"' in SYSTEM
-    assert "这是什么手势/这是数字几/这是几/What number or gesture is this" in SYSTEM
+    assert "这是什么手势/What gesture is this" in SYSTEM
+    assert "这是数字几/这是几/What number is this" in SYSTEM
     assert "这是几 ->" in SYSTEM and '"visual":"COPY_CURRENT_HAND"' in SYSTEM
+    assert '"visual_hand_mode":"identify_number"' in SYSTEM
     assert "“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE" in SYSTEM
     assert "未指定或手势加语音播报答案=gesture_and_speech" in SYSTEM
     assert "加/减/乘/除对应add/subtract/multiply/divide" in SYSTEM

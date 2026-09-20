@@ -45,6 +45,19 @@ _NUMERIC_GESTURE_LABEL_RE = re.compile(
 _NUMERIC_GESTURE_OUTPUT_RE = re.compile(
     r"\A(数字(?:零|一|二|三|四|五|六|七|八|九|十))(?:手势)?\Z"
 )
+_NUMERIC_GESTURE_VALUES = {
+    "数字零": 0,
+    "数字一": 1,
+    "数字二": 2,
+    "数字三": 3,
+    "数字四": 4,
+    "数字五": 5,
+    "数字六": 6,
+    "数字七": 7,
+    "数字八": 8,
+    "数字九": 9,
+    "数字十": 10,
+}
 _HARMLESS_TERMINAL_PUNCTUATION_RE = re.compile(r"[。.!！？?]+\Z")
 VISUAL_GESTURE_COPY_ROUTES = frozenset({"COPY_ACTION", "COPY_HAND"})
 
@@ -64,11 +77,24 @@ def visual_gesture_output_label(candidate: SessionActionCandidate) -> str:
     return numeric_match.group(1) if numeric_match is not None else source_label
 
 
+def visual_gesture_number(label: str | None) -> int | None:
+    """Return the exact catalog number encoded by a normalized label."""
+
+    if not label:
+        return None
+    normalized = _NUMERIC_GESTURE_OUTPUT_RE.fullmatch(label.strip())
+    return (
+        _NUMERIC_GESTURE_VALUES.get(normalized.group(1))
+        if normalized is not None
+        else None
+    )
+
+
 def visual_gesture_candidates(
     categories: Iterable[SessionActionCategory],
     candidates: Iterable[SessionActionCandidate],
 ) -> tuple[SessionActionCandidate, ...]:
-    """Return unambiguous catalog-owned gesture labels eligible this session."""
+    """Return unambiguous catalog-owned gesture labels in the supplied scope."""
 
     scope = visual_deictic_category_scope(tuple(categories), "gesture")
     if scope is None:
@@ -186,11 +212,36 @@ def normalize_visual_gesture_output(
 class VisualGestureGenerationComponent:
     def _visual_gesture_generation_candidates(
         self, turn: TurnBuffer | None = None
-    ) -> tuple[SessionActionCandidate, ...]:
-        candidates: Iterable[SessionActionCandidate] = self.candidates
-        if turn is not None:
-            candidates = self._filter_turn_action_candidates(turn, list(candidates))
-        return visual_gesture_candidates(self.categories, candidates)
+    ) -> tuple[Any, ...]:
+        """Return observation labels independently of per-turn executability.
+
+        A user can ask what hand sign is visible even when the matching action
+        is excluded for this turn.  Prefer the immutable full catalog for the
+        visual vocabulary, then separately map the observation to an allowed
+        session executor after classification.
+        """
+
+        catalog = getattr(self, "global_action_catalog", None)
+        if catalog is not None:
+            return visual_gesture_candidates(
+                catalog.categories,
+                catalog.candidate_by_id.values(),
+            )
+        return visual_gesture_candidates(self.categories, self.candidates)
+
+    def _visual_gesture_executable_candidate(
+        self,
+        turn: TurnBuffer,
+        observed_candidate: Any | None,
+    ) -> SessionActionCandidate | None:
+        if observed_candidate is None:
+            return None
+        candidate = self.candidate_by_id.get(observed_candidate.candidate_id)
+        if candidate is None or not self._turn_candidate_is_allowed(
+            turn, candidate
+        ):
+            return None
+        return candidate
 
     def _build_visual_gesture_request(
         self,
@@ -254,6 +305,7 @@ class VisualGestureGenerationComponent:
     def _visual_gesture_action_result(
         candidate: SessionActionCandidate | None,
         *,
+        observed_candidate: Any | None = None,
         compute_ms: float,
         output_valid: bool,
         output_chars: int,
@@ -261,6 +313,11 @@ class VisualGestureGenerationComponent:
         candidate_count: int,
         confidence: VisualObservationConfidence | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], float, dict[str, Any]]:
+        observed_label = (
+            visual_gesture_output_label(observed_candidate)
+            if observed_candidate is not None
+            else None
+        )
         if candidate is None:
             action = {
                 "candidate_id": UNSUPPORTED_DECISION_ID,
@@ -270,7 +327,9 @@ class VisualGestureGenerationComponent:
                 "support_status": "unsupported",
                 "fallback_applied": False,
                 "reason_code": (
-                    confidence.rejection_reason
+                    "visual_gesture_action_unavailable"
+                    if observed_candidate is not None
+                    else confidence.rejection_reason
                     if confidence is not None and not confidence.accepted
                     else (
                         "visual_gesture_unsupported"
@@ -307,6 +366,10 @@ class VisualGestureGenerationComponent:
             "visual_observation_confidence": (
                 confidence.as_dict() if confidence is not None else None
             ),
+            "visual_observation_label": observed_label,
+            "visual_observation_number": visual_gesture_number(observed_label),
+            "visual_observation_accepted": observed_candidate is not None,
+            "visual_execution_available": candidate is not None,
             "action_timing_breakdown": {
                 "selection_mode": "visual_gesture_generation",
                 "ttft_ms": round(ttft_ms, 3) if ttft_ms is not None else None,
@@ -437,14 +500,17 @@ class VisualGestureGenerationComponent:
 
         text = "".join(text_parts)
         normalized_output = normalize_visual_gesture_output(text, candidates)
-        selected = parse_visual_gesture_output(text, candidates)
+        observed_candidate = parse_visual_gesture_output(text, candidates)
         output_valid = normalized_output is not None
         confidence = summarize_visual_observation_confidence(
             output_token_logprobs,
             output_top_logprobs,
         )
-        if selected is not None and not confidence.accepted:
-            selected = None
+        if observed_candidate is not None and not confidence.accepted:
+            observed_candidate = None
+        selected = self._visual_gesture_executable_candidate(
+            turn, observed_candidate
+        )
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         emit_structured_log(
             "action",
@@ -455,10 +521,16 @@ class VisualGestureGenerationComponent:
             logical_request_id=turn.request_base,
             request_id=request_id,
             candidate_count=len(candidates),
-            selected_candidate_id=(selected.candidate_id if selected else None),
-            selected_candidate_label=(
-                visual_gesture_output_label(selected) if selected else None
+            observed_candidate_id=(
+                observed_candidate.candidate_id if observed_candidate else None
             ),
+            observed_candidate_label=(
+                visual_gesture_output_label(observed_candidate)
+                if observed_candidate
+                else None
+            ),
+            selected_candidate_id=(selected.candidate_id if selected else None),
+            visual_execution_available=selected is not None,
             # This probe is capped at 24 generated tokens and is instructed to
             # emit only a catalog label.  Keeping its bounded output in the
             # local action log makes format and out-of-scope failures
@@ -473,6 +545,7 @@ class VisualGestureGenerationComponent:
         )
         return self._visual_gesture_action_result(
             selected,
+            observed_candidate=observed_candidate,
             compute_ms=elapsed_ms,
             output_valid=output_valid,
             output_chars=len(text),

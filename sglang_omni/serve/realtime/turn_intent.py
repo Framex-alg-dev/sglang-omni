@@ -16,6 +16,12 @@ from sglang_omni.utils.structured_logs import emit_structured_log
 TURN_INTENT_TIMEOUT_SECONDS = 4.0
 GENERAL_INTENT_GATE = "GENERAL"
 VISUAL_GESTURE_ANSWER_GATE = "VISUAL_ANSWER"
+VISUAL_HAND_MODE_IMITATE = "imitate"
+VISUAL_HAND_MODE_IDENTIFY_NUMBER = "identify_number"
+VISUAL_HAND_MODE_IDENTIFY_GESTURE = "identify_gesture"
+VISUAL_HAND_IDENTIFICATION_MODES = frozenset(
+    {VISUAL_HAND_MODE_IDENTIFY_NUMBER, VISUAL_HAND_MODE_IDENTIFY_GESTURE}
+)
 
 _VISUAL_SCOPE_GATE_CHOICES = {
     "COPY_ACTION": ("body", "这个动作"),
@@ -187,7 +193,7 @@ has_user_camera=true/false是服务端事实。只有true才允许需要当前�
 存在face_task时紧随动作字段输出；然后依次输出speech、reaction，再输出其他非默认载荷。visual使用下文枚举；speech只能是verbatim/generated/none；
 body_intent只能是perform/prohibit/capability/none；reaction只能是respond/none。
 其他非默认载荷依次为：text、speech_independent_of_body、history、reaction_task、voice_tone、
-voice_pace、visual_answer_operation、visual_answer_output。空字符串、history=false、natural和normal不得输出。
+voice_pace、visual_hand_mode、visual_answer_operation、visual_answer_output。空字符串、history=false、natural和normal不得输出。
 body_task只能在perform/prohibit时输出，且必须早于speech，以便身体通道独立就绪。
 visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
@@ -196,11 +202,11 @@ visual_route先于其他字段按以下互斥顺序判定：
 2. 视觉四则运算：要求对当前画面中的两个指代数字做加、减、乘、除时，选ANSWER_CURRENT_VIEW_WITH_GESTURE。未指定回答方式时默认手势加语音；明确“用手势回答/只用手势/不要说话”时仅手势。
 3. 语言已明确动作或数字时选NO_CURRENT_VIEW，与有无摄像头无关。“个/一个”是量词，不是“这个”；“比个数字三/比一个三/比个三/给我比六/挥手/点头/比个心”均不看图片，数字动作输出标准名“数字N手势”。
 
-最小对比：“比个数字三/Show number three”=NO_CURRENT_VIEW+数字三手势；“比这个数字/Copy this hand sign”=COPY_CURRENT_HAND+这个手势。“不要做这个动作/做这个动作是什么意思”不得转COPY。有画面时“这是什么手势/这是数字几/这是几/What number or gesture is this”=COPY_CURRENT_HAND。“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”=NO_CURRENT_VIEW。
+最小对比：“比个数字三/Show number three”=NO_CURRENT_VIEW+数字三手势；“比这个数字/Copy this hand sign”=COPY_CURRENT_HAND+这个手势。“不要做这个动作/做这个动作是什么意思”不得转COPY。有画面时“这是什么手势/What gesture is this”用identify_gesture；“这是数字几/这是几/What number is this”用identify_number。“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”=NO_CURRENT_VIEW。
 
 COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_intent=none，省略body_task/face_task并说明需要画面。
 
-一致性：模仿与说话可以同时存在，visual_route仍为COPY；纯复现speech=none。“做这个动作/手势”不得选NO_CURRENT_VIEW。视觉计算必须带visual_answer_operation：加/减/乘/除对应add/subtract/multiply/divide，禁止缺省，减除保留顺序；必须带visual_answer_output：仅手势或不播报答案=gesture_only，未指定或手势加语音播报答案=gesture_and_speech；仅语音回答则选NO_CURRENT_VIEW并省略两字段。“并说出来”只由visual_answer_output表达；额外原样话术的speech/text与答案播报独立。明确的表情、语气、语速必须保留，未指定时不得编造。
+一致性：COPY_CURRENT_HAND必须带visual_hand_mode：模仿=imitate，问数字=identify_number，问手势=identify_gesture。identify_*必须speech=none、无text，并以visual_answer_output控制答案：明确只用手势/不要说话=gesture_only，未指定或手势加语音播报答案=gesture_and_speech。模仿与说话可以同时存在，仍为COPY；纯模仿speech=none。“做这个动作/手势”不得选NO_CURRENT_VIEW。视觉计算必须带visual_answer_operation：加/减/乘/除对应add/subtract/multiply/divide，减除保留顺序；visual_answer_output同上。仅语音回答选NO_CURRENT_VIEW并省略两字段；额外原样话术与答案播报独立。明确的表情、语气、语速必须保留，未指定时不得编造。
 
 其他字段：
 - speech：verbatim=明确要求朗读指定正文；generated=需要语言回应；none=不说话。text为正文或语言任务。
@@ -222,7 +228,8 @@ COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手
 比个一 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字一手势","speech":"none","reaction":"none"}
 比个三 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字三手势","speech":"none","reaction":"none"}
 比个四 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字四手势","speech":"none","reaction":"none"}
-这是几 -> {"visual":"COPY_CURRENT_HAND","body_intent":"perform","body_task":"这个手势","speech":"generated","reaction":"none","text":"识别手势数字并回答"}
+这是几 -> {"visual":"COPY_CURRENT_HAND","body_intent":"perform","body_task":"这个手势","speech":"none","reaction":"none","visual_hand_mode":"identify_number","visual_answer_output":"gesture_and_speech"}
+这是什么手势 -> {"visual":"COPY_CURRENT_HAND","body_intent":"perform","body_task":"这个手势","speech":"none","reaction":"none","visual_hand_mode":"identify_gesture","visual_answer_output":"gesture_and_speech"}
 这个加这个等于多少，用手势回答 -> {"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","body_intent":"none","speech":"none","reaction":"none","visual_answer_operation":"add","visual_answer_output":"gesture_only"}
 
 保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才输出history=true。visual、body_intent、speech、reaction四字段必须存在，其余字段仅在非默认时输出；输出最多128个token。'''
@@ -269,6 +276,7 @@ class TurnIntent:
     voice_pace: str = "normal"
     visual_answer_output: str = ""
     visual_answer_operation: str = ""
+    visual_hand_mode: str = ""
     speech_independent_of_body: bool = False
     # Internal compatibility field consumed by the action pipeline. The model
     # emits ``visual_route``; GENERAL is normalized to an empty string here.
@@ -284,6 +292,7 @@ class TurnIntent:
             "voice_pace",
             "visual_answer_operation",
             "visual_answer_output",
+            "visual_hand_mode",
             "speech_independent_of_body",
         }
         if not isinstance(data, dict):
@@ -444,7 +453,12 @@ class TurnIntent:
             raise ValueError("invalid voice plan")
         visual_answer_operation = data.get("visual_answer_operation", "")
         visual_answer_output = data.get("visual_answer_output", "")
+        visual_hand_mode = data.get("visual_hand_mode", "")
+        if not isinstance(visual_hand_mode, str):
+            raise ValueError("invalid visual hand mode")
         if visual_route == VISUAL_GESTURE_ANSWER_GATE:
+            if visual_hand_mode:
+                raise ValueError("visual hand mode requires COPY_HAND")
             if visual_answer_operation not in {
                 "add",
                 "subtract",
@@ -457,11 +471,40 @@ class TurnIntent:
                 "gesture_and_speech",
             }:
                 raise ValueError("invalid visual answer output")
-        elif visual_answer_output or visual_answer_operation:
+        elif visual_route == "COPY_HAND":
+            if visual_hand_mode not in {
+                "",
+                VISUAL_HAND_MODE_IMITATE,
+                *VISUAL_HAND_IDENTIFICATION_MODES,
+            }:
+                raise ValueError("invalid visual hand mode")
+            if visual_hand_mode in VISUAL_HAND_IDENTIFICATION_MODES:
+                if visual_answer_operation:
+                    raise ValueError("visual hand identification cannot calculate")
+                if visual_answer_output not in {
+                    "gesture_only",
+                    "gesture_and_speech",
+                }:
+                    raise ValueError(
+                        "visual hand identification requires an answer output"
+                    )
+                if data["speech"] != "none" or data["text"]:
+                    raise ValueError(
+                        "visual hand identification owns the answer channel"
+                    )
+            elif visual_answer_output or visual_answer_operation:
+                raise ValueError(
+                    "visual hand imitation cannot use visual answer fields"
+                )
+            data["visual_hand_mode"] = (
+                visual_hand_mode or VISUAL_HAND_MODE_IMITATE
+            )
+        elif visual_answer_output or visual_answer_operation or visual_hand_mode:
             raise ValueError("visual answer fields require visual answer route")
         else:
             data["visual_answer_operation"] = ""
             data["visual_answer_output"] = ""
+            data["visual_hand_mode"] = ""
         if (
             data["speech"] not in {"verbatim", "generated", "none"}
             or type(data["history"]) is not bool
@@ -568,6 +611,18 @@ class TurnIntent:
             and self.visual_answer_output == "gesture_and_speech"
         )
 
+    def identifies_visual_hand(self) -> bool:
+        return (
+            self.visual_scope_gate == "COPY_HAND"
+            and self.visual_hand_mode in VISUAL_HAND_IDENTIFICATION_MODES
+        )
+
+    def speaks_visual_hand_answer(self) -> bool:
+        return (
+            self.identifies_visual_hand()
+            and self.visual_answer_output == "gesture_and_speech"
+        )
+
     def has_visual_public_speech(self) -> bool:
         """Return whether visual arithmetic must publish any spoken text."""
 
@@ -607,6 +662,8 @@ class TurnIntent:
                 ),
                 "speech_kind": self.speech,
                 "speech_independent_of_body": self.speech_independent_of_body,
+                "visual_hand_mode": self.visual_hand_mode,
+                "visual_answer_output": self.visual_answer_output,
                 "reaction_mode": self.reaction_mode,
                 "reaction_task": self.reaction,
             },
