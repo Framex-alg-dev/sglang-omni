@@ -25,7 +25,9 @@ Environment=SGLANG_OMNI_STRICT_PORT=1
 Environment=SGLANG_OMNI_SCOPED_RADIX_CACHE=1
 Environment=SGLANG_OMNI_INTERNAL_MODEL_API=1
 Environment=SGLANG_OMNI_ACTION_WARMUP=0
-Environment=SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S=0
+# The launcher requires a positive budget.  A 1 ms budget makes the
+# action-catalog prewarm best-effort/no-op on this reply-only executor.
+Environment=SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S=0.001
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/data/fanshide/sglang-omni/deploy/realtime-executors.env
