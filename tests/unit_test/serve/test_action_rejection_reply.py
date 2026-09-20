@@ -39,6 +39,7 @@ class _Session(ReplyPipeline):
         self.session_instance_id = "instance-test"
         self.unsupported_action_text = "这个动作暂时做不了。"
         self.requests = set()
+        self.published_replies = []
 
     def _ensure_turn_processing(self, turn):
         if turn.closed:
@@ -52,6 +53,11 @@ class _Session(ReplyPipeline):
 
     def _prompt(self, *, zh, en):
         return zh if self.language == "zh" else en
+
+    async def _run_provided_reply(self, turn, text, *, source="provided", **kwargs):
+        del turn, kwargs
+        self.published_replies.append((text, source))
+        return text, {"source": source, "total_ms": 1.0}
 
 
 def _turn():
@@ -78,6 +84,9 @@ async def test_rejection_reuses_current_audio_and_latest_avatar_not_user_camera(
     assert text == client.text
     assert timing["forwarded_image_roles"] == ["avatar_state"]
     assert timing["fallback_reason"] is None
+    assert timing["source"] == "generated"
+    assert timing["native_audio"] is False
+    assert session.published_replies == [(client.text, "generated")]
     prompt = request.messages[0].content
     assert session.instructions in prompt
     if language == "en":
@@ -115,6 +124,10 @@ async def test_generation_failure_returns_exact_configured_fallback_and_cleans_u
     text, timing = await session._run_action_rejection_reply(turn, ["audio"], [], [])
     assert text == session.unsupported_action_text
     assert timing["fallback_reason"]
+    assert timing["source"] == "generated"
+    assert session.published_replies == [
+        (session.unsupported_action_text, "generated")
+    ]
     assert client.aborted == ["request-test-action-rejection"]
     assert not session.requests
 

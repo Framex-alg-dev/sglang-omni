@@ -211,9 +211,31 @@ These rejection rules have higher priority than regular action response instruct
                 zh="这个动作暂时做不了，我们聊聊天吧。",
                 en="I can't do that action right now, but we can chat.",
             )
+        generation_ms = round((time.perf_counter() - started) * 1000, 3)
+        # The rejection model output is authoritative spoken content. Publish
+        # that exact text through the normal response/TTS path instead of
+        # asking the downstream client to replace it with a prerecorded line.
+        # Generation stays private until complete, so failures and timeouts can
+        # safely fall back without leaking a partial sentence or duplicate audio.
+        text, delivery_timing = await self._run_provided_reply(
+            turn,
+            text,
+            source="generated",
+        )
+        audio_enabled = bool(
+            getattr(
+                getattr(self, "output_capabilities", None),
+                "audio_enabled",
+                False,
+            )
+        )
         return text, {
-            "source": "client_prerecorded_audio",
-            "generation_ms": round((time.perf_counter() - started) * 1000, 3),
+            **delivery_timing,
+            "source": "generated",
+            "generation_ms": generation_ms,
+            "delivery_ms": delivery_timing.get("total_ms"),
+            "total_ms": round((time.perf_counter() - started) * 1000, 3),
+            "native_audio": audio_enabled,
             "fallback_reason": fallback_reason,
             "forwarded_image_roles": forwarded_roles,
         }

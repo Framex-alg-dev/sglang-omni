@@ -685,7 +685,7 @@ def test_fusion_unsupported_action_preserves_language_reply_and_tts() -> None:
     }
 
 
-def test_fusion_unsupported_pure_action_discards_online_tts_audio() -> None:
+def test_fusion_unsupported_pure_action_replaces_speculative_audio_with_rejection_tts() -> None:
     connector = ProgrammableTTSConnector()
     app = _fusion_app(connector)
     manager = app.state.multimodal_realtime_manager
@@ -730,12 +730,15 @@ def test_fusion_unsupported_pure_action_discards_online_tts_audio() -> None:
         events = _run_turn(ws, "turn-unsupported-pure-action")
 
     types = [event["type"] for event in events]
-    assert "response.audio.delta" not in types
-    assert "response.audio.done" not in types
-    assert "response.done" not in types
+    assert "response.audio.delta" in types
+    assert "response.audio.done" in types
+    assert "response.done" in types
     assert events[-1]["type"] == "turn.result"
-    assert events[-1]["reply"]["source"] == "client_prerecorded_audio"
+    assert events[-1]["reply"]["source"] == "generated"
     assert events[-1]["reply"]["text"].strip()
     assert events[-1]["outputs"]["text"] == "completed"
-    assert events[-1]["outputs"]["audio"] == "suppressed"
-    assert connector.contexts == []
+    assert events[-1]["outputs"]["audio"] == "completed"
+    assert len(connector.contexts) == 1
+    assert connector.contexts[0].websocket.committed_texts == [
+        events[-1]["reply"]["text"]
+    ]
