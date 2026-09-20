@@ -45,9 +45,9 @@ GPU0 支持 `SGLANG_OMNI_SPECULATIVE_REPLY_MODE=off|shadow|enforce`：
 
 - `off`：完全使用原权威回复时序；
 - `shadow`：从 `turn.commit` 立即在 GPU1 启动 current-only 回复，但文本只保存在服务端，不发送 provisional/text/audio 事件，不进入 TTS 或会话历史；原 intent、history、knowledge、action 和权威回复链路不变；
-- `enforce`：仍先运行原权威判定，只在严格的 current-only 普通语言轮采用已生成结果。任何历史需求、知识注入、相机输入、动作/表情/反应、纯动作、provided/proactive 或动态上下文都会丢弃推测结果并重新运行原权威回复。
+- `enforce`：仍先运行原权威判定，只在严格的 current-only 普通语言轮采用已生成结果。相机帧本身不再阻止早启动；如果完整 intent 判定为视觉语义请求，仍会丢弃该结果。任何历史需求、知识注入、动作/表情/反应、纯动作、provided/proactive、动态上下文或视觉路由都会丢弃推测结果并重新运行原权威回复。
 
-部署文件默认使用 `shadow`。结构化日志 `speculative_reply_shadow_comparison` 只记录长度、SHA-256、exact match 和归一化相似度，不记录额外明文。观察准确率达标后才可将 GPU0 unit 改为 `enforce`；动作评分、intent 和路由模型始终在 GPU0 上运行，推测分支不参与这些决策。
+由于当前系统尚未承载生产流量，本分支部署文件直接使用目标态 `enforce`。推测输出在权威门控完成前保持私有，不进入客户端、TTS 或历史；门控拒绝后，普通、历史、知识、纯动作短回应和动作拒绝等所有生成型回复仍通过任务 allowlist 在 GPU1 执行。动作评分、intent 和路由模型始终在 GPU0 上运行，推测分支不参与这些决策。需要对照验证时可临时切回 `shadow`；结构化日志 `speculative_reply_shadow_comparison` 只记录长度、SHA-256、exact match 和归一化相似度，不记录额外明文。
 
 ## 部署
 
@@ -95,7 +95,8 @@ Realtime 结构化日志应出现：
 - intent/控制请求：`executor=control`（显式 completion 路由时）；
 - GPU1 故障降级：`executor=control_fallback`；
 - session.start：`reply_prefix_prefilled=true`。
-- shadow 轮次：`speculative_reply_started` 和 `speculative_reply_shadow_comparison`，且 `adopted=false`。
+- enforce 普通 current-only 轮次：`speculative_reply_started`、`speculative_reply_resolved adopted=true`，且只有一个 `session_reply` 模型请求；
+- enforce 历史、知识、纯动作或视觉轮次：`speculative_reply_resolved adopted=false`，随后权威生成请求仍应出现 `realtime_model_request_routed executor=reply`。
 
 功能回归至少覆盖：普通文本/音频回复、动作-only、动作加短回复、不支持动作、相机手势、视觉算术、provided reply、主动事件、知识回复、历史追问、会话记忆、cancel、断线和 GPU1 故障回退。
 

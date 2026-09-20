@@ -134,16 +134,29 @@ async def test_routed_client_moves_only_allowlisted_reply_tasks() -> None:
     reply = RecordingClient(text="reply")
     client = RoutedRealtimeModelClient(control, reply)  # type: ignore[arg-type]
 
-    reply_result = await client.completion(
-        make_request("session_reply"), request_id="reply-request"
-    )
+    reply_results = [
+        await client.completion(
+            make_request(task), request_id=f"reply-request-{index}"
+        )
+        for index, task in enumerate(
+            (
+                "session_reply",
+                "session_pure_action_reply",
+                "session_action_rejection",
+            )
+        )
+    ]
     control_result = await client.completion(
         make_request("session_turn_intent"), request_id="control-request"
     )
 
-    assert reply_result.text == "reply"
+    assert [result.text for result in reply_results] == ["reply"] * 3
     assert control_result.text == "control"
-    assert reply.completions == ["reply-request"]
+    assert reply.completions == [
+        "reply-request-0",
+        "reply-request-1",
+        "reply-request-2",
+    ]
     assert control.completions == ["control-request"]
 
 

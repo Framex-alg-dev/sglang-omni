@@ -119,8 +119,10 @@ def _speculative_reply_adoption_decision(
         return False, "non_user_turn"
     if provided_reply:
         return False, "provided_reply"
-    if IMAGE_ROLE_USER_CAMERA in current_image_roles:
-        return False, "user_camera"
+    # A camera frame is input data, not by itself a semantic route.  The
+    # completed intent below remains authoritative: visual requests are still
+    # rejected by ``intent.visual_scope_gate`` while ordinary language turns
+    # may reuse the reply job that started at commit time.
     if turn.reply_context or turn.scene_context or turn.scene_reply_guidance:
         return False, "dynamic_reply_context"
     if history_route is None:
@@ -1285,9 +1287,12 @@ class TurnPipeline:
             async def score_and_publish_action(
                 *args: Any,
                 precomputed_result_task: asyncio.Task[Any] | None = None,
+                visual_route_result_task: asyncio.Task[Any] | None = None,
                 **kwargs: Any,
             ) -> Any:
                 nonlocal action, independently_published_action
+                visual_probe_authoritative = False
+                generic_score_task: asyncio.Task[Any] | None = None
                 try:
                     if precomputed_result_task is not None:
                         result = await precomputed_result_task
@@ -1295,8 +1300,81 @@ class TurnPipeline:
                             raise RuntimeError(
                                 "visual gesture probe did not produce a result"
                             )
+                        visual_probe_authoritative = True
+                    elif (
+                        visual_route_result_task is not None
+                        and intent_task is not None
+                    ):
+                        # Camera turns start the generic suffix batch eagerly,
+                        # but it must never publish ahead of an authoritative
+                        # COPY_* route.  Run it in parallel with intent, then use
+                        # the completed and validated intent (not the streamed
+                        # scheduling hint) as the publication authority.
+                        generic_score_task = asyncio.create_task(
+                            self._score_action(*args, **kwargs),
+                            name=(
+                                f"session-generic-action-race-"
+                                f"{self.session_id}-{turn.turn_id}"
+                            ),
+                        )
+                        resolved_intent = await intent_task
+                        turn.intent = resolved_intent
+                        route_code = (
+                            resolved_intent.visual_scope_gate
+                            if resolved_intent is not None
+                            else ""
+                        )
+                        if route_code in VISUAL_GESTURE_COPY_ROUTES:
+                            if not generic_score_task.done():
+                                generic_score_task.cancel()
+                            await asyncio.gather(
+                                generic_score_task, return_exceptions=True
+                            )
+                            result = await visual_route_result_task
+                            if result is None:
+                                raise RuntimeError(
+                                    "visual COPY route did not produce a gesture result"
+                                )
+                            visual_probe_authoritative = True
+                            emit_structured_log(
+                                "action",
+                                "generic_action_replaced_by_visual_probe",
+                                session_id=self.session_id,
+                                turn_id=turn.turn_id,
+                                trace_id=turn.trace_id,
+                                logical_request_id=turn.request_base,
+                                visual_scope_gate=route_code,
+                                selected_candidate_id=(
+                                    result[0].get("candidate_id")
+                                    if result[0] is not None
+                                    else None
+                                ),
+                                after_commit_ms=self._after_commit_ms(turn),
+                            )
+                        else:
+                            result = await generic_score_task
                     else:
                         result = await self._score_action(*args, **kwargs)
+                except asyncio.CancelledError:
+                    if (
+                        generic_score_task is not None
+                        and not generic_score_task.done()
+                    ):
+                        generic_score_task.cancel()
+                        await asyncio.gather(
+                            generic_score_task, return_exceptions=True
+                        )
+                    raise
+                except Exception:
+                    if (
+                        generic_score_task is not None
+                        and not generic_score_task.done()
+                    ):
+                        generic_score_task.cancel()
+                        await asyncio.gather(
+                            generic_score_task, return_exceptions=True
+                        )
+                    raise
                 finally:
                     # Do not let the generative reply/detail parser contend
                     # with the latency-critical suffix batch on the same GPU.
@@ -1392,6 +1470,8 @@ class TurnPipeline:
                 should_wait_for_unified_intent = bool(
                     turn.turn_origin == TURN_ORIGIN_USER
                     and intent_task is not None
+                    and not action_is_terminal_without_execution
+                    and not visual_probe_authoritative
                     and (
                         visual_publication_requires_intent
                         or (
@@ -1700,7 +1780,30 @@ class TurnPipeline:
                         or intent.reaction_mode == "respond"
                     )
                 )
-                if use_batched_decision:
+                if visual_probe_authoritative:
+                    # COPY_* is an explicit request to reproduce the observed
+                    # gesture.  The bounded visual probe is therefore the body
+                    # publication authority; a cancelled generic decision batch
+                    # must not force this result to wait for the long-form JSON
+                    # intent or replace it with an unrelated category.
+                    intent_allows_body = True
+                    emit_structured_log(
+                        "action",
+                        "visual_probe_action_decision_enforced",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        selected_candidate_id=(
+                            scored_action.get("candidate_id")
+                            if scored_action is not None
+                            else None
+                        ),
+                        visual_observation_number=result[3].get(
+                            "visual_observation_number"
+                        ),
+                        waited_for_unified_intent=waited_for_unified_intent,
+                    )
+                elif use_batched_decision:
                     # A confident grouped perform/reaction gate is the
                     # authoritative publication decision.  The generated JSON
                     # remains a detail/fallback parser and must not veto an
@@ -1827,7 +1930,11 @@ class TurnPipeline:
                     )
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER
-                    and (intent is not None or use_batched_decision)
+                    and (
+                        intent is not None
+                        or use_batched_decision
+                        or visual_probe_authoritative
+                    )
                     and not intent_allows_body
                     and result[0] is not None
                     and result[0].get("execute")
@@ -2049,7 +2156,6 @@ class TurnPipeline:
                     and turn.turn_origin == TURN_ORIGIN_USER
                     and not provided_reply
                     and (turn.text or current_audio_list)
-                    and IMAGE_ROLE_USER_CAMERA not in current_image_roles
                 )
                 enforce_speculative = bool(
                     speculative_eligible
@@ -2373,6 +2479,21 @@ class TurnPipeline:
                                 and turn.intent is not None
                                 and turn.intent.visual_scope_gate
                                 in VISUAL_GESTURE_COPY_ROUTES
+                            )
+                            else None
+                        ),
+                        visual_route_result_task=(
+                            visual_gesture_probe_task
+                            if (
+                                getattr(
+                                    self,
+                                    "visual_gesture_generation_enabled",
+                                    False,
+                                )
+                                and visual_gesture_probe_task is not None
+                                and turn.intent is None
+                                and IMAGE_ROLE_USER_CAMERA
+                                in current_image_roles
                             )
                             else None
                         ),

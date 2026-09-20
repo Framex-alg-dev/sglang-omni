@@ -1447,7 +1447,7 @@ async def test_category_00_waits_for_child_before_discarding_reply(
     assert resolved["reason"] == "child_unsupported"
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["reply"]["text"] == client.completion_text
-    assert result["reply"]["source"] == "client_prerecorded_audio"
+    assert result["reply"]["source"] == "generated"
     assert result["action"]["support_status"] == "unsupported"
     assert session.reply_history_turns[-1].messages[-1]["content"] == (
         result["reply"]["text"]
@@ -1629,7 +1629,7 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["modalities"]["text"] == "completed"
     assert result["reply"] == {
-        "source": "client_prerecorded_audio",
+        "source": "generated",
         "reason": "unsupported_action",
         "text": client.completion_text,
         "recorded_in_history": True,

@@ -5538,6 +5538,117 @@ async def test_visual_number_identification_reuses_action_observation_for_reply(
 
 
 @pytest.mark.asyncio
+async def test_visual_copy_route_replaces_inflight_generic_action_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The streamed COPY route owns publication even if generic scoring ran first."""
+
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    catalog = load_runtime_action_catalog()
+    assert catalog.direct_action_selection is True
+    numeric = numeric_gesture_candidates_by_value(catalog)
+    generic_started = asyncio.Event()
+    generic_cancelled = asyncio.Event()
+    records: list[dict[str, object]] = []
+
+    class RacingVisualNumberClient(SystemRouteFusionClient):
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            assert request.metadata.get("task") == "session_visual_gesture_probe"
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text="数字五",
+                finish_reason="stop",
+                output_token_logprobs=[[-0.1, 11]],
+                output_top_logprobs=[[[-0.1, 11], [-0.8, 12]]],
+            )
+
+        async def score_action_suffixes(self, request):
+            if request.stage == "single":
+                self.score_requests.append(request)
+                generic_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    generic_cancelled.set()
+                    raise
+            return await super().score_action_suffixes(request)
+
+    async def delayed_copy_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        await generic_started.wait()
+        visual_scope_future.set_result("COPY_HAND")
+        return TurnIntent(
+            speech="none",
+            text="",
+            body="这个手势",
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate="COPY_HAND",
+            visual_hand_mode="identify_number",
+            visual_answer_output="gesture_and_speech",
+        )
+
+    def capture(log_type, event, **fields):
+        records.append({"log_type": log_type, "event": event, **fields})
+        return True
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", delayed_copy_intent)
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    client = RacingVisualNumberClient(category_id="31")
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.action_decision_batch_mode = "enforce"
+    session.action_decision_batch_visual = True
+    session.visual_gesture_generation_enabled = True
+    await start_numeric_reply_session(
+        session, catalog, outputs=["text", "action"]
+    )
+    turn_id = "visual-number-races-generic-action"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text="这是几")
+    )
+
+    assert generic_cancelled.is_set()
+    ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )
+    assert ready["action"]["candidate_id"] == numeric[5].candidate_id
+    assert any(
+        record["event"] == "generic_action_replaced_by_visual_probe"
+        for record in records
+    )
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == "这是数字5。"
+
+
+@pytest.mark.asyncio
 async def test_nonvisual_camera_turn_does_not_submit_visual_arithmetic_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6864,6 +6975,92 @@ async def test_speculative_reply_enforce_adopts_only_strict_current_only_languag
         for record in records
         if record["event"] == "speculative_reply_resolved"
     )
+    assert resolution["adopted"] is True
+    assert resolution["reason"] == "strict_current_only_language"
+
+
+@pytest.mark.asyncio
+async def test_speculative_reply_enforce_starts_at_commit_for_nonvisual_camera_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    records: list[dict] = []
+
+    async def neutral_camera_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        del session, turn, audios, images, image_roles
+        assert visual_scope_future is not None
+        visual_scope_future.set_result("")
+        return generated_body_neutral_intent("你好呀")
+
+    async def current_only_route(*args, **kwargs):
+        del args, kwargs
+        return multimodal_module.ReplyHistoryRouteResult(
+            decision="CURRENT_ONLY",
+            reply_mode="LANGUAGE_REQUIRED",
+        )
+
+    def capture(log_type, event, **fields):
+        records.append({"log_type": log_type, "event": event, **fields})
+        return True
+
+    monkeypatch.setenv(multimodal_module.SPECULATIVE_REPLY_MODE_ENV, "enforce")
+    monkeypatch.setattr(pipeline, "infer_turn_intent", neutral_camera_intent)
+    monkeypatch.setattr(multimodal_module, "emit_structured_log", capture)
+    ws = FakeWebSocket()
+    client = FusionFakeClient()
+    session = make_session(ws, client)
+    session._classify_reply_history_requirement = current_only_route
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-speculative-enforce-camera",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "fallback_category_ids": ["00"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+    turn_id = "turn-speculative-camera"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text="你好呀")
+    )
+
+    assert len(client.reply_requests) == 1
+    assert client.reply_requests[0].metadata["task"] == "session_reply"
+    started = next(
+        record
+        for record in records
+        if record["event"] == "speculative_reply_started"
+    )
+    resolution = next(
+        record
+        for record in records
+        if record["event"] == "speculative_reply_resolved"
+    )
+    assert started["after_commit_ms"] < resolution["after_commit_ms"]
     assert resolution["adopted"] is True
     assert resolution["reason"] == "strict_current_only_language"
 
