@@ -716,7 +716,7 @@ class TurnPipeline:
                 turn_origin=turn.turn_origin,
                 text_role=turn.text_role,
                 action=action,
-                # The prerecorded unsupported notice is retained for
+                # The generated unsupported notice is retained for
                 # diagnostics, but is not a model reply example. Feeding
                 # it back as an ordinary assistant message causes later
                 # supported turns to imitate the notice.
@@ -766,6 +766,9 @@ class TurnPipeline:
                             modality == "audio"
                             and suppress_reply_for_unsupported_action
                             and reply_text is not None
+                            and not bool(
+                                (reply_timing or {}).get("native_audio")
+                            )
                         )
                         else (
                             "not_changed"
@@ -778,7 +781,7 @@ class TurnPipeline:
             }
         if suppress_reply_for_unsupported_action and "text" in self.modalities:
             result["reply"] = {
-                "source": "client_prerecorded_audio",
+                "source": (reply_timing or {}).get("source", "generated"),
                 "reason": "unsupported_action",
                 **({"text": history_reply_text} if reply_text is not None else {}),
                 "recorded_in_history": bool(history_reply_text),
