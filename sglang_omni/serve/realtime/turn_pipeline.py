@@ -850,7 +850,18 @@ class TurnPipeline:
             ),
             reply_stream_duration_ms=(reply_timing or {}).get("stream_duration_ms"),
             reply_delta_count=(reply_timing or {}).get("delta_count"),
+            reply_prompt_tokens=(reply_timing or {}).get("prompt_tokens"),
             reply_completion_tokens=(reply_timing or {}).get("completion_tokens"),
+            reply_total_tokens=(reply_timing or {}).get("total_tokens"),
+            reply_post_first_token_count=(reply_timing or {}).get(
+                "post_first_token_count"
+            ),
+            reply_first_token_to_done_ms=(reply_timing or {}).get(
+                "first_token_to_done_ms"
+            ),
+            reply_decode_ms_per_output_token=(reply_timing or {}).get(
+                "decode_ms_per_output_token"
+            ),
             reply_provisional=(reply_timing or {}).get("provisional"),
             reply_provisional_status=(reply_timing or {}).get("provisional_status"),
             reply_provisional_done_after_commit_ms=(reply_timing or {}).get(

@@ -18,6 +18,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
 )
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.common import (
+    _completion_token_timing,
     _summarize_media,
     _text_audit_fields,
 )
@@ -448,8 +449,10 @@ class ReplyGenerationComponent:
                 and first_delta_after_commit_ms is not None
                 else None
             )
-            completion_tokens = (
-                usage.get("completion_tokens") if usage is not None else None
+            token_timing = _completion_token_timing(
+                usage,
+                first_token_ms=first_token_ms,
+                total_ms=total_ms,
             )
             if provisional is not None:
                 timing = self._provisional_reply_timing(provisional, total_ms=total_ms)
@@ -467,7 +470,7 @@ class ReplyGenerationComponent:
                     ],
                     "stream_duration_ms": stream_duration_ms,
                     "delta_count": delta_count,
-                    "completion_tokens": completion_tokens,
+                    **token_timing,
                     "provisional": False,
                     "provisional_status": None,
                     "provisional_done_after_commit_ms": None,

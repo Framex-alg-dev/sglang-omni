@@ -475,7 +475,7 @@ class TurnBuffer:
     avatar_state_analysis_task: asyncio.Task[Any] | None = None
     avatar_state_analysis_request_id: str | None = None
     avatar_state_analysis_result: dict[str, str] | None = None
-    avatar_state_analysis_timing: dict[str, float | None] | None = None
+    avatar_state_analysis_timing: dict[str, int | float | None] | None = None
     avatar_state_analysis_error: str | None = None
 
 

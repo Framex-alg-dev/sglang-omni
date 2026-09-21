@@ -162,6 +162,11 @@ class AvatarStateAnalysisClient(FakeClient):
                 text=text[24:],
                 modality="text",
                 finish_reason="stop",
+                usage=UsageInfo(
+                    prompt_tokens=40,
+                    completion_tokens=12,
+                    total_tokens=52,
+                ),
             )
 
         return stream()
@@ -1395,7 +1400,20 @@ async def test_protocol_v1_rejects_conflicting_media_retries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_avatar_state_analysis_returns_before_turn_commit() -> None:
+async def test_avatar_state_analysis_returns_before_turn_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    structured_records: list[dict] = []
+
+    def capture_structured_log(log_type, event, **fields):
+        structured_records.append(
+            {"log_type": log_type, "event": event, **fields}
+        )
+        return True
+
+    monkeypatch.setattr(
+        multimodal_module, "emit_structured_log", capture_structured_log
+    )
     ws = FakeWebSocket()
     client = AvatarStateAnalysisClient()
     session = make_session(ws, client)
@@ -1447,6 +1465,20 @@ async def test_avatar_state_analysis_returns_before_turn_commit() -> None:
     }
     assert ready["timing"]["image_received_to_first_token_ms"] >= 0
     assert ready["timing"]["image_received_to_ready_ms"] >= 0
+    assert ready["timing"]["prompt_tokens"] == 40
+    assert ready["timing"]["completion_tokens"] == 12
+    assert ready["timing"]["total_tokens"] == 52
+    assert ready["timing"]["post_first_token_count"] == 11
+    assert ready["timing"]["first_token_to_done_ms"] >= 0
+    assert ready["timing"]["decode_ms_per_output_token"] >= 0
+    completed = next(
+        record
+        for record in structured_records
+        if record["event"] == "avatar_state_analysis_completed"
+    )
+    assert completed["completion_tokens"] == 12
+    assert completed["post_first_token_count"] == 11
+    assert completed["text_chars"] > 0
     assert not any(event["type"] == "turn.committed" for event in ws.events)
     assert client.analysis_requests[0].metadata["task"] == "avatar_state_analysis"
 
@@ -4195,7 +4227,12 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     )
     assert completed["stream_duration_ms"] >= 0
     assert completed["delta_count"] == 2
+    assert completed["prompt_tokens"] == 20
     assert completed["completion_tokens"] == 9
+    assert completed["total_tokens"] == 29
+    assert completed["post_first_token_count"] == 8
+    assert completed["first_token_to_done_ms"] >= 0
+    assert completed["decode_ms_per_output_token"] >= 0
     turn_timing = next(
         record
         for record in structured_records
@@ -4211,7 +4248,12 @@ async def test_default_modalities_run_reply_and_action_in_parallel(
     )
     assert turn_timing["reply_response_done_after_commit_ms"] is not None
     assert turn_timing["reply_delta_count"] == 2
+    assert turn_timing["reply_prompt_tokens"] == 20
     assert turn_timing["reply_completion_tokens"] == 9
+    assert turn_timing["reply_total_tokens"] == 29
+    assert turn_timing["reply_post_first_token_count"] == 8
+    assert turn_timing["reply_first_token_to_done_ms"] >= 0
+    assert turn_timing["reply_decode_ms_per_output_token"] >= 0
 
 
 @pytest.mark.asyncio

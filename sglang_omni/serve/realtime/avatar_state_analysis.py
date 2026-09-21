@@ -12,7 +12,12 @@ from contextlib import aclosing
 from typing import Any
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
+from sglang_omni.serve.realtime.protocol.common import _completion_token_timing
 from sglang_omni.serve.realtime.protocol.models import ImageFrame, TurnBuffer
+from sglang_omni.utils.structured_logs import (
+    emit_structured_log as _base_emit_structured_log,
+)
+
 logger = logging.getLogger(__name__)
 
 AVATAR_STATE_FIELDS = ("pose", "gaze", "left_hand", "right_hand", "held_object")
@@ -21,6 +26,13 @@ _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNO
 _SYSTEM_PROMPT = """你是数字人画面状态观察器。只描述图片中数字人此刻可见的状态，不推测意图。
 只输出一个 JSON 对象，且必须只包含以下字符串字段：pose、gaze、left_hand、right_hand、held_object。
 看不清或不存在的字段使用空字符串。不要输出 Markdown、解释或其他字段。"""
+
+
+def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
+    from sglang_omni.serve.realtime import multimodal
+
+    hook = getattr(multimodal, "emit_structured_log", _base_emit_structured_log)
+    return hook(log_type, event, **fields)
 
 
 def _parse_avatar_state(text: str) -> dict[str, str]:
@@ -109,10 +121,13 @@ class AvatarStateAnalysisPipeline:
         )
         first_token_at: float | None = None
         text_parts: list[str] = []
+        delta_count = 0
+        finish_reason = "stop"
+        usage: dict[str, Any] | None = None
         self._register_turn_request(turn, request_id)
         try:
             async def collect() -> None:
-                nonlocal first_token_at
+                nonlocal delta_count, finish_reason, first_token_at, usage
                 completion_stream = getattr(self.client, "completion_stream", None)
                 if callable(completion_stream):
                     stream = completion_stream(request, request_id=request_id)
@@ -127,30 +142,63 @@ class AvatarStateAnalysisPipeline:
                                 if first_token_at is None:
                                     first_token_at = time.perf_counter()
                                 text_parts.append(chunk.text)
+                                delta_count += 1
+                            if chunk.finish_reason is not None:
+                                finish_reason = chunk.finish_reason
+                            if chunk.usage is not None:
+                                usage = chunk.usage.to_dict()
                     return
                 result = await self.client.completion(request, request_id=request_id)
                 if result.text:
                     first_token_at = time.perf_counter()
                     text_parts.append(result.text)
+                    delta_count = 1
+                finish_reason = result.finish_reason
+                if result.usage is not None:
+                    usage = result.usage.to_dict()
 
             await asyncio.wait_for(
                 collect(),
                 timeout=self.avatar_state_analysis_timeout_s,
             )
             ready_at = time.perf_counter()
-            state = _parse_avatar_state("".join(text_parts))
+            output_text = "".join(text_parts)
+            state = _parse_avatar_state(output_text)
+            first_token_ms = (
+                max(0.0, first_token_at - received_at) * 1000.0
+                if first_token_at is not None
+                else None
+            )
+            total_ms = max(0.0, ready_at - received_at) * 1000.0
             timing = {
                 "image_received_to_first_token_ms": (
-                    round(max(0.0, first_token_at - received_at) * 1000.0, 3)
-                    if first_token_at is not None
+                    round(first_token_ms, 3)
+                    if first_token_ms is not None
                     else None
                 ),
-                "image_received_to_ready_ms": round(
-                    max(0.0, ready_at - received_at) * 1000.0, 3
+                "image_received_to_ready_ms": round(total_ms, 3),
+                **_completion_token_timing(
+                    usage,
+                    first_token_ms=first_token_ms,
+                    total_ms=total_ms,
                 ),
             }
             turn.avatar_state_analysis_result = state
             turn.avatar_state_analysis_timing = timing
+            emit_structured_log(
+                "performance",
+                "avatar_state_analysis_completed",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                request_id=request_id,
+                analysis_id=analysis_id,
+                image_seq=frame.seq,
+                delta_count=delta_count,
+                text_chars=len(output_text),
+                finish_reason=finish_reason,
+                **timing,
+            )
             await self.send(
                 {
                     "type": "turn.avatar_state.ready",

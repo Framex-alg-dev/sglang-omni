@@ -429,13 +429,22 @@ A089「左臂向前抬起」分别表示数字人看向自身左侧、抬起自�
   },
   "timing": {
     "image_received_to_first_token_ms": 120.5,
-    "image_received_to_ready_ms": 245.8
+    "image_received_to_ready_ms": 245.8,
+    "prompt_tokens": 512,
+    "completion_tokens": 24,
+    "total_tokens": 536,
+    "post_first_token_count": 23,
+    "first_token_to_done_ms": 125.3,
+    "decode_ms_per_output_token": 5.448
   }
 }
 ```
 
 两个耗时都以服务端接收 `input.image.append` 为起点，分别落到模型首个非空文本块和完整
 JSON 校验完成。失败时返回 `turn.avatar_state.failed`；它是独立支路结果，不是 Turn 终态。
+Token 数来自模型引擎最终 `usage`，不使用字符数估算；每 Token 解码耗时以首 Token
+之后的 `completion_tokens - 1` 个 Token 为分母。该数值是应用端观测到的流式输出速率，包含本机调度和流传输开销，不等同于纯 GPU kernel 解码耗时。主回复分支也在 `turn.result.timing.reply`
+和结构化 `reply_completed`/`turn_timing` 日志中提供同口径的 Token 与解码指标。
 
 ## 6. 提交 Turn
 

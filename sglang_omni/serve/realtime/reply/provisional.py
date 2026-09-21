@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Literal
 
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
+from sglang_omni.serve.realtime.protocol.common import _completion_token_timing
 from sglang_omni.serve.realtime.protocol.models import (
     ProvisionalReplyState,
     ReplyTTSState,
@@ -317,6 +318,11 @@ class ProvisionalReplyComponent:
             and state.first_delta_after_commit_ms is not None
             else None
         )
+        token_timing = _completion_token_timing(
+            state.usage,
+            first_token_ms=state.first_token_ms,
+            total_ms=elapsed_ms,
+        )
         return {
             "source": state.source,
             "ttft_ms": round(state.first_token_ms or elapsed_ms, 3),
@@ -332,11 +338,7 @@ class ProvisionalReplyComponent:
             ),
             "stream_duration_ms": stream_duration_ms,
             "delta_count": state.delta_count,
-            "completion_tokens": (
-                state.usage.get("completion_tokens")
-                if state.usage is not None
-                else None
-            ),
+            **token_timing,
             "provisional": True,
             "provisional_status": state.status,
             "provisional_done_after_commit_ms": (

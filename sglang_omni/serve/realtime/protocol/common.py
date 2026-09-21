@@ -131,6 +131,46 @@ TURN_TEXT_ROLE_BY_ORIGIN = {
 }
 
 
+def _completion_token_timing(
+    usage: dict[str, Any] | None,
+    *,
+    first_token_ms: float | None,
+    total_ms: float,
+) -> dict[str, int | float | None]:
+    """Normalize exact engine usage and derive post-first-token throughput."""
+    prompt_tokens = usage.get("prompt_tokens") if usage is not None else None
+    completion_tokens = (
+        usage.get("completion_tokens") if usage is not None else None
+    )
+    total_tokens = usage.get("total_tokens") if usage is not None else None
+    first_token_to_done_ms = (
+        round(max(0.0, total_ms - first_token_ms), 3)
+        if first_token_ms is not None
+        else None
+    )
+    post_first_token_count = (
+        max(0, int(completion_tokens) - 1)
+        if isinstance(completion_tokens, int)
+        and not isinstance(completion_tokens, bool)
+        else None
+    )
+    decode_ms_per_output_token = (
+        round(first_token_to_done_ms / post_first_token_count, 3)
+        if first_token_to_done_ms is not None
+        and post_first_token_count is not None
+        and post_first_token_count > 0
+        else None
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "post_first_token_count": post_first_token_count,
+        "first_token_to_done_ms": first_token_to_done_ms,
+        "decode_ms_per_output_token": decode_ms_per_output_token,
+    }
+
+
 def _env_flag(name: str, *, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
