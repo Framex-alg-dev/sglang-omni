@@ -30,6 +30,7 @@ htmlcov/
 # Logs
 *.log
 *.txt
+!examples/runtime_prompts/*.txt
 output.wav
 
 # OS
@@ -52,6 +53,7 @@ tests/data/actions/
 
 logs/*
 !logs/.gitkeep
+.test-logs/
 
 deploy/sglang-omni-18001.service
 deploy/realtime-knowledge.env

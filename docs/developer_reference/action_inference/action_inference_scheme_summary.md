@@ -33,27 +33,27 @@ Session 白名单不会修改全局目录。评分和结果都不能越过当前
 当前 Session 实际覆盖的类别
         │
         ▼
-Category PPL 在类别与 B000（UNSUPPORTED）中评分，选 Top-1
+Category PPL 在类别与 00（UNSUPPORTED）中评分，选 Top-1
         │
         ▼
 选中类别下的 Session 白名单动作
         │
         ▼
-Child PPL 在类别动作与 A000（UNSUPPORTED）中评分
+Child PPL 在类别动作与 000（UNSUPPORTED）中评分
 ```
 
 所有 Action Session 必须通过 `action.fallback_category_ids` 配置至少一个兜底类别。当前全局
 目录以语义标签声明“语言表达伴随”和“静默低扰伴随”两个系统类别：融合 Session 必须同时
 提供两类真实候选，action-only Session 至少提供静默类；静默类必须是首个 fallback，语言
-表达伴随类不能作为 unsupported fallback。Category 的 `B000` 和普通业务 Child 的 `A000`
+表达伴随类不能作为 unsupported fallback。Category 的 `00` 和普通业务 Child 的 `000`
 都映射为
-`UNSUPPORTED`；其中 `B000` 只判断目标语义类别是否存在，不能用于判断类别内具体动作；
-`A000` 只在类别已选定、但该类别下的 Session 具体动作无法满足明确请求时使用。它们只是
+`UNSUPPORTED`；其中 `00` 只判断目标语义类别是否存在，不能用于判断类别内具体动作；
+`000` 只在类别已选定、但该类别下的 Session 具体动作无法满足明确请求时使用。它们只是
 推理判断，不是目录动作。任一阶段选择
 它时，服务端进入数组中的最高优先级类别并返回真实动作，`execute=true`，同时标记
 `support_status=unsupported`、`fallback_applied=true`。
 
-系统伴随类别不加入 `A000`。Category 初选任一系统类别后，服务端根据 provisional 回复的
+系统伴随类别不加入 `000`。Category 初选任一系统类别后，服务端根据 provisional 回复的
 实际结果做双向校正：非空回复进入语言表达伴随 Child，并把首句或最多 256 字符前缀作为主要
 动作依据；空回复、回复失败或无需回复进入静默低扰 Child。明确动作、社交反应和主动场景指定
 动作仍走普通业务类别，不等待回复前缀。
@@ -124,3 +124,7 @@ Category 和 Child 不读取跨 Turn 回复历史、上一动作 ID、动作名�
 - 当前 Turn 媒体、状态和临时 guidance 位于动态上下文；
 - 资源日志按 20 秒周期采样，并在 Turn 推理前后额外采样；
 - 客户端可以顺序发送媒体和 commit，无需逐 ACK 等待。
+
+统一意图 JSON 拆分为 Action/Language 两个独立流式 Lane 的方案尚未实施，预期收益、
+共享 Prefix 前提、风险和验收标准见
+[双流式意图 Lane 拆分 TODO](intent_two_lane_streaming_TODO_CN.md)。

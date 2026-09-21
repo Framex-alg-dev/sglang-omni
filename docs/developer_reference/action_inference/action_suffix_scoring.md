@@ -14,10 +14,12 @@ unique `candidate_id`, a suffix of at most 512 characters, and optional
 `action_id`/`execution_binding`. Suffixes ending in terminal punctuation are
 rejected because punctuation is excluded from the action score denominator.
 
-`sample_rate` must be positive. `micro_batch_size` defaults to 64 and is
+`sample_rate` must be positive. The public request's `micro_batch_size` defaults to 64 and is
 limited to 256. The realtime session route uses the startup environment
 variable `SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE` to set this value for both
-flat_children and hierarchical action stages; an omitted variable keeps 64.
+flat_children and hierarchical action stages; an omitted variable uses a maximum of 169.
+When a stage has fewer candidates, its effective micro-batch is reduced to the
+actual candidate count.
 The service serializes scoring requests with a global
 concurrency limit of one and applies a 120 second end-to-end timeout. A timeout or
 client cancellation aborts the logical request and all physical candidate
@@ -75,7 +77,7 @@ in the KV cache; otherwise the request fails with `prefix_cached=false`.
 
 ### Flat-children latency path
 
-Scheme B uses short identifier suffixes such as `A328` and sets
+Scheme B uses short identifier suffixes such as `328` and sets
 `action_scoring.suffix_tokenization_mode` to `short_id`. The service encodes each short
 suffix independently and appends it to the already authoritative prefix token IDs. This
 avoids re-tokenizing the long multimodal prompt once per candidate. Descriptive suffixes
@@ -184,6 +186,31 @@ The repository pins the SGLang dependency in `pyproject.toml`. Before a GPU smok
 Structured events include queue entry, suffix batch enqueue, first emit, and model-path end. The response `stats` object reports logical prefix count, physical prefill chunk count, cached prefix tokens, candidate prefix recomputation, suffix batch sizes, and stage timings when available. Logs and cache labels use a short digest; raw media paths, audio bytes, and image contents are not logged.
 
 The client serializes MIS calls. Timeout and cancellation first cancel the coordinator task, then abort the logical request; the scheduler recursively removes waiting, running, and candidate requests. Internal candidate IDs are never sent through the external request-finished abort callback.
+
+### Performance follow-up
+
+Production scoring still materializes one SGLang `Req` and one full prefix
+token array per candidate. The reusable prefix is stored once as an `array`
+blueprint, so each private candidate array is produced by a C-level copy rather
+than by walking the Python token tuple. The redundant full
+`SGLangARRequestData.input_ids` tensor is intentionally omitted: candidate
+scheduling consumes `Req.origin_input_ids`. Immutable model metadata and the
+multimodal fallback snapshot are shared; per-request mutable lifecycle state is
+not shared. Prefix-independent short-ID suffix tokens use a bounded process
+cache that session-start prewarm normally populates.
+
+Candidate preparation starts only after the shared prefix batch has been
+selected, so this CPU work can overlap the prefix GPU forward without delaying
+scheduler admission. `candidate_preparation` reports `prefix_copy_ms`,
+`tensorize_ms`, `req_init_ms`, `metadata_copy_ms`, `mrope_ms`, and
+`data_init_ms` in addition to total materialization, critical wait, enqueue,
+and queue wait. `tensorize_ms` should remain zero for this path.
+
+TODO(action-native-batch): replace the per-candidate representation with one
+native scoring batch containing one shared prefix and N short suffix
+descriptors. This requires coordinated changes to scheduler admission,
+radix-cache matching, model-runner inputs, cancellation, and result
+aggregation; do not emulate it by exposing partially built candidate batches.
 
 For `WS /v1/session/realtime`, `turn.commit` runs scoring in a background task
 so the socket can still receive `turn.cancel`. The adapter tracks the currently

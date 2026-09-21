@@ -29,6 +29,10 @@ from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCategory,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
+from sglang_omni.serve.realtime.visual_observation import (
+    summarize_visual_observation_confidence,
+)
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,383 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
 
 class ReplyGenerationComponent:
     """Model reply generation and terminal response events."""
+
+    async def _run_visual_arithmetic_image_prefetch(
+        self,
+        turn: TurnBuffer,
+        images: list[Any],
+        image_roles: list[str],
+        visual_scope_future: asyncio.Future[str],
+    ) -> bool:
+        """Warm exact image embeddings while the unified route is decoding."""
+
+        prefetch = getattr(self.client, "prefetch_completion_images", None)
+        if not callable(prefetch):
+            return False
+        request, forwarded_roles = (
+            self._build_visual_arithmetic_image_prefetch_request(
+                turn, images, image_roles
+            )
+        )
+        if not forwarded_roles:
+            return False
+        request_id = f"{turn.request_base}-image-encoder-prefetch"
+        started = time.perf_counter()
+        self._register_turn_request(turn, request_id)
+        call = asyncio.create_task(
+            prefetch(request, request_id=request_id),
+            name=f"image-encoder-prefetch-request-{turn.turn_id}",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {call, visual_scope_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if call not in done:
+                route_code = visual_scope_future.result()
+                if route_code != VISUAL_GESTURE_ANSWER_GATE:
+                    abort = getattr(self.client, "abort", None)
+                    if callable(abort):
+                        await asyncio.gather(
+                            abort(request_id), return_exceptions=True
+                        )
+                    call.cancel()
+                    await asyncio.gather(call, return_exceptions=True)
+                    emit_structured_log(
+                        "performance",
+                        "visual_arithmetic_image_prefetch_cancelled",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        logical_request_id=turn.request_base,
+                        reason="route_not_visual_answer",
+                        after_commit_ms=self._after_commit_ms(turn),
+                    )
+                    return False
+            ready = bool(await call)
+            emit_structured_log(
+                "performance",
+                "visual_arithmetic_image_prefetch_completed",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                forwarded_image_count=len(forwarded_roles),
+                ready=ready,
+                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                after_commit_ms=self._after_commit_ms(turn),
+            )
+            return ready
+        except asyncio.CancelledError:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(abort(request_id), return_exceptions=True)
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+            raise
+        except Exception as exc:
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+            emit_structured_log(
+                "error",
+                "visual_arithmetic_image_prefetch_failed",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        finally:
+            self._unregister_turn_request(turn, request_id)
+
+    async def _run_visual_arithmetic_probe_after_route(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+        images: list[Any],
+        image_roles: list[str],
+        visual_scope_future: asyncio.Future[str],
+        image_encoder_prefetch_task: asyncio.Task[bool] | None = None,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Start operand extraction only after unified intent emits its route."""
+
+        route_code = await visual_scope_future
+        if route_code != VISUAL_GESTURE_ANSWER_GATE:
+            emit_structured_log(
+                "reply",
+                "visual_arithmetic_probe_not_started",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                visual_scope_gate=route_code,
+                reason="unified_intent_route_not_visual_answer",
+                after_commit_ms=self._after_commit_ms(turn),
+            )
+            return None
+        return await self._run_visual_arithmetic_probe(
+            turn,
+            audios,
+            images,
+            image_roles,
+            image_encoder_prefetch_task=image_encoder_prefetch_task,
+        )
+
+    async def _run_visual_arithmetic_probe(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+        images: list[Any],
+        image_roles: list[str],
+        *,
+        image_encoder_prefetch_task: asyncio.Task[bool] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Run private operand extraction concurrently with turn intent.
+
+        The result is deliberately eventless. The authoritative intent route
+        decides whether it is adopted as VISUAL_ANSWER evidence or discarded.
+        """
+
+        self._ensure_turn_processing(turn)
+        if image_encoder_prefetch_task is not None:
+            await asyncio.gather(
+                image_encoder_prefetch_task,
+                return_exceptions=True,
+            )
+            self._ensure_turn_processing(turn)
+        request_id = f"{turn.request_base}-visual-arithmetic"
+        request, forwarded_image_roles = (
+            self._build_visual_arithmetic_probe_request(
+                turn, audios, images, image_roles
+            )
+        )
+        started = time.perf_counter()
+        first_token_ms: float | None = None
+        text_parts: list[str] = []
+        output_token_logprobs: list[Any] = []
+        output_top_logprobs: list[Any] = []
+        finish_reason = "stop"
+        usage: dict[str, Any] | None = None
+        self._register_turn_request(turn, request_id)
+        emit_structured_log(
+            "reply",
+            "visual_arithmetic_probe_submitted",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            request_id=request_id,
+            forwarded_image_count=len(forwarded_image_roles),
+            after_commit_ms=self._after_commit_ms(turn),
+        )
+        try:
+            completion_stream = getattr(self.client, "completion_stream", None)
+            if callable(completion_stream):
+                stream = completion_stream(request, request_id=request_id)
+                async with aclosing(stream):
+                    async for chunk in stream:
+                        self._ensure_turn_processing(turn)
+                        if chunk.modality == "text" and chunk.text:
+                            if first_token_ms is None:
+                                first_token_ms = (
+                                    time.perf_counter() - started
+                                ) * 1000.0
+                            text_parts.append(chunk.text)
+                        if chunk.output_token_logprobs is not None:
+                            output_token_logprobs.extend(
+                                chunk.output_token_logprobs
+                            )
+                        if chunk.output_top_logprobs is not None:
+                            output_top_logprobs.extend(chunk.output_top_logprobs)
+                        if chunk.finish_reason is not None:
+                            finish_reason = chunk.finish_reason
+                            if chunk.usage is not None:
+                                usage = chunk.usage.to_dict()
+            else:
+                result = await self.client.completion(
+                    request, request_id=request_id
+                )
+                if result.text:
+                    first_token_ms = (
+                        time.perf_counter() - started
+                    ) * 1000.0
+                    text_parts.append(result.text)
+                if result.output_token_logprobs is not None:
+                    output_token_logprobs.extend(result.output_token_logprobs)
+                if result.output_top_logprobs is not None:
+                    output_top_logprobs.extend(result.output_top_logprobs)
+                finish_reason = result.finish_reason
+                if result.usage is not None:
+                    usage = result.usage.to_dict()
+        except asyncio.CancelledError:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(
+                    abort(request_id), return_exceptions=True
+                )
+            raise
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                await asyncio.gather(
+                    abort(request_id), return_exceptions=True
+                )
+            emit_structured_log(
+                "error",
+                "visual_arithmetic_probe_failed",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                elapsed_ms=round(
+                    (time.perf_counter() - started) * 1000.0, 3
+                ),
+            )
+            raise
+        finally:
+            self._unregister_turn_request(turn, request_id)
+
+        text = "".join(text_parts)
+        confidence = summarize_visual_observation_confidence(
+            output_token_logprobs,
+            output_top_logprobs,
+        )
+        accepted_text = text if confidence.accepted else ""
+        total_ms = (time.perf_counter() - started) * 1000.0
+        timing = {
+            "source": "generated",
+            "ttft_ms": round(first_token_ms or total_ms, 3),
+            "total_ms": round(total_ms, 3),
+            "chars": len(text),
+            "completion_tokens": (
+                usage.get("completion_tokens") if usage is not None else None
+            ),
+            "finish_reason": finish_reason,
+            "usage": usage,
+            "private_visual_arithmetic_probe": True,
+            "visual_observation_confidence": confidence.as_dict(),
+        }
+        emit_structured_log(
+            "reply",
+            "visual_arithmetic_probe_completed",
+            session_id=self.session_id,
+            turn_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            logical_request_id=turn.request_base,
+            request_id=request_id,
+            # The private contract permits only a bounded ``A,B`` value or
+            # ``INVALID``. Persisting it makes operand errors diagnosable
+            # without logging user audio, transcripts, or images.
+            model_output=text,
+            output_chars=len(text),
+            accepted_output_chars=len(accepted_text),
+            visual_observation_confidence=confidence.as_dict(),
+            ttft_ms=timing["ttft_ms"],
+            total_ms=timing["total_ms"],
+        )
+        return accepted_text, timing
+
+    async def _adopt_visual_arithmetic_probe(
+        self,
+        turn: TurnBuffer,
+        provisional: ProvisionalReplyState,
+        probe_task: asyncio.Task[
+            tuple[str, dict[str, Any]] | None
+        ],
+    ) -> tuple[str, dict[str, Any]]:
+        """Adopt a private probe into the existing provisional reply state."""
+
+        try:
+            result = await probe_task
+            if result is None:
+                done_timing = await self._finish_provisional_reply(
+                    turn,
+                    provisional,
+                    finish_reason="visual_route_unavailable",
+                    usage=None,
+                )
+                return "", {
+                    "source": "visual_arithmetic_probe",
+                    "ttft_ms": None,
+                    "total_ms": 0.0,
+                    "chars": 0,
+                    "completion_tokens": None,
+                    "finish_reason": "visual_route_unavailable",
+                    "private_visual_arithmetic_probe": True,
+                    "fallback_reason": "visual_route_unavailable",
+                    **done_timing,
+                    "provisional": True,
+                }
+            text, timing = result
+            if text:
+                await self._send_provisional_reply_delta(
+                    turn, provisional, text
+                )
+                provisional.first_token_ms = timing.get("ttft_ms")
+            usage = timing.get("usage")
+            done_timing = await self._finish_provisional_reply(
+                turn,
+                provisional,
+                finish_reason=str(timing.get("finish_reason") or "stop"),
+                usage=usage if isinstance(usage, dict) else None,
+            )
+            return text, {**timing, **done_timing, "provisional": True}
+        except asyncio.CancelledError:
+            await self._mark_provisional_reply_terminal(
+                provisional, cancelled=True
+            )
+            raise
+        except Exception as exc:
+            # The private probe is an optimization. Fail closed without
+            # issuing a second model request or failing the whole turn.
+            await self._suppress_provisional_reply_content(
+                turn,
+                provisional,
+                reason="visual_arithmetic_probe_failed",
+            )
+            done_timing = await self._finish_provisional_reply(
+                turn,
+                provisional,
+                finish_reason="visual_arithmetic_probe_failed",
+                usage=None,
+            )
+            emit_structured_log(
+                "error",
+                "visual_arithmetic_probe_fallback",
+                level="warning",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                fallback="no_numeric_action_without_rescore",
+                after_commit_ms=self._after_commit_ms(turn),
+            )
+            return "", {
+                "source": "visual_arithmetic_probe",
+                "ttft_ms": None,
+                "total_ms": round(
+                    (time.perf_counter() - provisional.started_at) * 1000.0,
+                    3,
+                ),
+                "chars": 0,
+                "completion_tokens": None,
+                "finish_reason": "visual_arithmetic_probe_failed",
+                "private_visual_arithmetic_probe": True,
+                "fallback_reason": "probe_failed",
+                **done_timing,
+                "provisional": True,
+            }
 
     async def _run_generated_reply(
         self,
@@ -164,7 +545,9 @@ class ReplyGenerationComponent:
                 IMAGE_ROLE_AVATAR_STATE
             ),
             reply_filtered_stale_user_camera_image_count=max(
-                0, image_roles.count(IMAGE_ROLE_USER_CAMERA) - 1
+                0,
+                image_roles.count(IMAGE_ROLE_USER_CAMERA)
+                - MAX_REPLY_CURRENT_IMAGES,
             ),
             user_camera_present=bool(reply_forwarded_image_roles),
             reply_history_turn_count=len(self.reply_history_turns),
@@ -210,9 +593,15 @@ class ReplyGenerationComponent:
             created_after_commit_ms = self._after_commit_ms(turn)
         else:
             created_after_commit_ms = provisional.created_after_commit_ms
-        tts_state = self._start_reply_tts(
-            turn, response_id=response_id, provisional=provisional
-        )
+        # VISUAL_ANSWER output is private evidence for gesture selection, not speech.
+        # Do not synthesize it speculatively and rely on a later abort.
+        if not (
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+        ):
+            tts_state = self._start_reply_tts(
+                turn, response_id=response_id, provisional=provisional
+            )
         self._register_turn_request(turn, request_id)
         emit_structured_log(
             "reply",
@@ -690,6 +1079,34 @@ class ReplyGenerationComponent:
             **timing,
         )
         return "", timing
+
+    @staticmethod
+    def _pure_action_reply_uses_structured_intent(turn: TurnBuffer) -> bool:
+        """Whether the resolved intent fully grounds a silent action request.
+
+        Once unified intent parsing has produced a concrete action while also
+        proving that the user did not request an independent spoken response,
+        replaying the original audio into reply generation creates a second,
+        conflicting interpretation path.  The structured task is the shared
+        source of truth for both the selected action and its social response.
+        """
+
+        intent = turn.intent
+        if (
+            intent is None
+            or intent.speech != "none"
+            or intent.speech_independent_of_body
+        ):
+            return False
+        return bool(
+            (intent.body_mode == "perform" and intent.body.strip())
+            or intent.face.strip()
+            or (
+                intent.reaction_mode != "none"
+                and intent.reaction.strip()
+            )
+        )
+
     @staticmethod
     def _validate_pure_action_short_reply(text: str) -> tuple[str, str | None]:
         """Return a safe short social response or an empty fallback.
@@ -812,6 +1229,20 @@ class ReplyGenerationComponent:
         request_id = f"{turn.request_base}-pure-action-reply-validation"
         system_prompt = self._pure_action_reply_validation_system_prompt()
         current_text_parts: list[str] = []
+        if turn.intent is not None:
+            current_text_parts.append(
+                self._prompt(
+                    zh=(
+                        "[统一意图解析结果；这是动作与回复共同使用的当前请求语义]\n"
+                        + turn.intent.action_context(turn.text)
+                    ),
+                    en=(
+                        "[Unified intent result; this is the current request "
+                        "meaning shared by action and reply]\n"
+                        + turn.intent.action_context(turn.text)
+                    ),
+                )
+            )
         if isinstance(turn.text, str) and turn.text.strip():
             current_text_parts.append(
                 self._prompt(
@@ -978,9 +1409,17 @@ class ReplyGenerationComponent:
             fallback_reason=(history_route.fallback_reason if history_route else None),
             stats=(dict(history_route.stats) if history_route else {}),
         )
+        structured_intent_grounded = (
+            self._pure_action_reply_uses_structured_intent(turn)
+        )
+        # The unified intent has already consumed the source audio and exposed
+        # a concrete action task.  Do not ask the reply model to transcribe and
+        # reinterpret the same audio independently; that can make a correct
+        # action receive an unrelated spoken acknowledgement.
+        reply_audios = [] if structured_intent_grounded else audios
         request, _ = self._build_reply_request(
             turn,
-            audios,
+            reply_audios,
             [],
             [],
             None,
@@ -1025,7 +1464,7 @@ class ReplyGenerationComponent:
                     semantic_validation,
                 ) = await self._validate_pure_action_short_reply_semantics(
                     turn,
-                    audios,
+                    reply_audios,
                     safe_text,
                 )
                 if not semantically_valid:
@@ -1069,6 +1508,8 @@ class ReplyGenerationComponent:
             raw_output_text="".join(text_parts),
             validation_fallback_reason=validation_reason,
             semantic_validation=semantic_validation,
+            structured_intent_grounded=structured_intent_grounded,
+            source_audio_replayed=bool(reply_audios),
             generation_ms=round((time.perf_counter() - started) * 1000.0, 3),
             finish_reason=finish_reason,
             usage=usage,

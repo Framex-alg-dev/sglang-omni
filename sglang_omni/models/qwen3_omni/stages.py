@@ -961,6 +961,23 @@ def create_action_score_executor():
     return SimpleScheduler(_identity)
 
 
+def create_encoder_prefetch_executor():
+    """A terminal sink after image encoding, without invoking the Thinker."""
+    from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
+
+    def _ack(payload: StagePayload) -> StagePayload:
+        # The image encoder has already populated its owner-scoped cache.
+        # Never return the merged state: it contains torch.Tensor values and
+        # terminal results cross the coordinator's msgpack boundary.
+        return StagePayload(
+            request_id=payload.request_id,
+            request=payload.request,
+            data={"prefetched": True},
+        )
+
+    return SimpleScheduler(_ack)
+
+
 
 def create_image_encoder_executor(
     model_path: str,

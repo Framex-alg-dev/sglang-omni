@@ -42,8 +42,8 @@ from sglang.srt.mem_cache.common import release_kv_cache
 from sglang.srt.utils import broadcast_pyobj
 
 from sglang_omni.models.qwen3_omni.action_scoring import (
-    aggregate_candidate_score,
     score_candidate_from_runtime,
+    score_single_token_from_prefix,
 )
 from sglang_omni.models.qwen3_omni.action_timing import get_action_stage_timings
 from sglang_omni.models.qwen3_omni.request_builders import (
@@ -70,6 +70,7 @@ from sglang_omni.proto.admin import (
 )
 from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 from sglang_omni.vendor.sglang.server_args import override_server_args
+from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +402,15 @@ class OmniScheduler:
         self._pending_request_builds: dict[str, tuple[Any, bool, Future]] = {}
         self._backlogged_request_build_payloads: deque[Any] = deque()
         self._request_build_max_pending_observed = 0
+        # Candidate requests are CPU-only to materialize.  Preparing them on a
+        # separate worker lets that work overlap the shared-prefix GPU prefill;
+        # the scheduler still sees the complete batch atomically.
+        self._action_candidate_build_executor: ThreadPoolExecutor | None = (
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="omni-action-candidate-build",
+            )
+        )
 
         # --- Core scheduling state (read/written by upstream methods) -----
         self.server_args = server_args
@@ -1222,17 +1232,82 @@ class OmniScheduler:
             with self._request_admission_lock:
                 enqueue_if_live()
 
+    @staticmethod
+    def _materialize_action_candidates(
+        parent: Any,
+        candidate_ids: tuple[str, ...],
+    ) -> tuple[list[Any], float]:
+        started_at = time.perf_counter()
+        batch = [
+            build_action_scoring_candidate_data(parent, candidate_id)
+            for candidate_id in candidate_ids
+        ]
+        return batch, (time.perf_counter() - started_at) * 1000.0
+
+    def _start_action_candidate_materialization(self, parent: Any) -> None:
+        plan = parent.action_scoring_plan
+        if plan.get("scoring_mode") == "single_token_enforce":
+            return
+        if plan.get("candidate_materialize_submitted_at") is not None:
+            return
+        candidate_ids = tuple(
+            plan.get("suffix_candidate_ids")
+            or plan.get("candidate_ids", ())
+        )
+        micro_batch_size = int(plan.get("micro_batch_size", 0))
+        executor = getattr(self, "_action_candidate_build_executor", None)
+        # Multi-batch requests retain the existing just-in-time behavior to
+        # avoid increasing peak host memory.  The production 169-candidate
+        # path is one physical batch and is prepared in full.
+        if (
+            executor is None
+            or len(candidate_ids) <= 1
+            or len(candidate_ids) > micro_batch_size
+        ):
+            return
+        plan["candidate_materialize_submitted_at"] = time.perf_counter()
+        plan["candidate_materialize_trigger"] = "prefix_gpu_dispatch"
+        plan["candidate_materialize_future"] = executor.submit(
+            self._materialize_action_candidates,
+            parent,
+            candidate_ids,
+        )
+
+    def _start_action_candidate_materialization_for_batch(self, batch: Any) -> None:
+        """Start CPU preparation only after the prefix batch is schedulable.
+
+        Submitting this worker during request admission made its Python object
+        construction contend with the scheduler for the GIL. At this point the
+        prefix batch is already selected and its runner inputs are built, so the
+        worker overlaps the GPU forward without delaying prefix admission.
+        """
+        for req in batch.reqs:
+            req_data = getattr(req, "_omni_data", None)
+            if getattr(req_data, "action_scoring_role", None) == "prefix":
+                self._start_action_candidate_materialization(req_data)
+
     def _build_and_enqueue_action_candidate_batch(
         self,
         parent: Any,
         candidate_ids: list[str] | tuple[str, ...],
     ) -> None:
-        """Build only the next suffix batch after the shared prefix completes."""
+        """Make a complete suffix batch visible to the scheduler atomically."""
         plan = parent.action_scoring_plan
-        batch = [
-            build_action_scoring_candidate_data(parent, candidate_id)
-            for candidate_id in candidate_ids
-        ]
+        future = plan.pop("candidate_materialize_future", None)
+        if future is not None:
+            wait_started = time.perf_counter()
+            batch, materialize_ms = future.result()
+            plan["candidate_materialize_wait_ms"] = (
+                time.perf_counter() - wait_started
+            ) * 1000.0
+            plan["candidate_materialize_ms"] = materialize_ms
+        else:
+            batch, materialize_ms = self._materialize_action_candidates(
+                parent, tuple(candidate_ids)
+            )
+            plan["candidate_materialize_ms"] = float(
+                plan.get("candidate_materialize_ms", 0.0)
+            ) + materialize_ms
         plan["candidate_data"] = batch
         plan["current_batch_ids"] = set(candidate_ids)
         self._enqueue_action_candidate_batch(parent, batch)
@@ -1252,16 +1327,21 @@ class OmniScheduler:
             req._omni_terminal_claimed = False
             req._coalesce_enqueue_t = time.perf_counter()
             self.waiting_queue.append(req)
+        enqueue_ms = (time.perf_counter() - batch_entered_at) * 1000.0
+        plan["candidate_enqueue_ms"] = float(
+            plan.get("candidate_enqueue_ms", 0.0)
+        ) + enqueue_ms
         _emit_event(
             request_id=parent.req.rid,
             stage="thinker",
             event_name="action_suffix_batch_queued",
-            metadata={"size": len(batch)},
+            metadata={"size": len(batch), "candidate_enqueue_ms": enqueue_ms},
         )
 
     def _handle_action_prefix_terminal(self, req: Any, data: Any) -> None:
         parent = data.action_scoring_parent
         plan = data.action_scoring_plan
+        scoring_mode = str(plan.get("scoring_mode", "suffix_ppl"))
         logits = data.extra_model_outputs.get("action_prefix_token_logprobs")
         if logits is None:
             raise RuntimeError("action scoring prefix logits were not captured")
@@ -1297,10 +1377,23 @@ class OmniScheduler:
             1,
         )
         candidate_ids = list(plan["candidate_ids"])
-        plan["candidate_batches"] = [
-            tuple(candidate_ids[start : start + plan["micro_batch_size"]])
-            for start in range(0, len(candidate_ids), plan["micro_batch_size"])
-        ]
+        suffix_candidate_ids = list(
+            plan.get("suffix_candidate_ids") or candidate_ids
+        )
+        plan["candidate_batches"] = (
+            []
+            if scoring_mode == "single_token_enforce"
+            else [
+                tuple(
+                    suffix_candidate_ids[
+                        start : start + plan["micro_batch_size"]
+                    ]
+                )
+                for start in range(
+                    0, len(suffix_candidate_ids), plan["micro_batch_size"]
+                )
+            ]
+        )
         plan["candidate_data"] = []
         plan["candidate_results"] = {}
         plan["candidate_cached_tokens"] = {}
@@ -1309,7 +1402,25 @@ class OmniScheduler:
         plan["suffix_batch_ms"] = []
         plan["suffix_batch_sizes"] = []
         plan["next_batch_index"] = 0
+        if scoring_mode.startswith("single_token_"):
+            selection_token_ids = plan.get("selection_token_ids") or {}
+            plan["single_token_scores"] = [
+                score_single_token_from_prefix(
+                    candidate_id,
+                    int(selection_token_ids[candidate_id]),
+                    logits,
+                    score_bias=float(
+                        (plan.get("selection_score_bias") or {}).get(
+                            candidate_id, 0.0
+                        )
+                    ),
+                )
+                for candidate_id in candidate_ids
+            ]
         self._close_completed_request(req)
+        if scoring_mode == "single_token_enforce":
+            self._finish_action_scoring(parent, plan)
+            return
         if plan["candidate_batches"]:
             self._build_and_enqueue_action_candidate_batch(
                 parent,
@@ -1320,21 +1431,30 @@ class OmniScheduler:
         prefix_logits = plan.get("prefix_next_token_logits")
         if prefix_logits is None:
             raise RuntimeError("action scoring has no shared prefix logits")
-        scores = []
-        for candidate_id in plan["candidate_ids"]:
-            suffix_ids = plan["candidate_suffix_ids"][candidate_id]
-            raw = plan["candidate_results"].get(candidate_id)
-            if raw is None:
-                raise RuntimeError(f"missing action suffix result: {candidate_id}")
-            scores.append(
-                score_candidate_from_runtime(
-                    candidate_id,
-                    suffix_ids,
-                    prefix_logits,
-                    raw,
-                    terminal_token_id=plan.get("terminal_token_id"),
+        scoring_mode = str(plan.get("scoring_mode", "suffix_ppl"))
+        direct_scores = list(
+            plan.get("single_token_scores") or []
+        )
+        legacy_scores = []
+        enforce_without_suffix = scoring_mode == "single_token_enforce"
+        if not enforce_without_suffix:
+            for candidate_id in (
+                plan.get("suffix_candidate_ids") or plan["candidate_ids"]
+            ):
+                suffix_ids = plan["candidate_suffix_ids"][candidate_id]
+                raw = plan["candidate_results"].get(candidate_id)
+                if raw is None:
+                    raise RuntimeError(f"missing action suffix result: {candidate_id}")
+                legacy_scores.append(
+                    score_candidate_from_runtime(
+                        candidate_id,
+                        suffix_ids,
+                        prefix_logits,
+                        raw,
+                        terminal_token_id=plan.get("terminal_token_id"),
+                    )
                 )
-            )
+        scores = direct_scores if enforce_without_suffix else legacy_scores
         prefix_len = int(plan["prefix_token_count"])
         reusable_boundary_len = min(
             int(plan.get("cache_prefix_token_count", 0)),
@@ -1345,10 +1465,13 @@ class OmniScheduler:
             prefix_len,
         )
         parent_computed_len = max(prefix_len - parent_cached_len, 0)
-        prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
-            int(value) >= prefix_len
-            for value in plan["candidate_cached_tokens"].values()
-        )
+        if enforce_without_suffix:
+            prefix_cached = parent_cached_len >= reusable_boundary_len
+        else:
+            prefix_cached = bool(plan["candidate_cached_tokens"]) and all(
+                int(value) >= prefix_len
+                for value in plan["candidate_cached_tokens"].values()
+            )
         plan["prefix_cached"] = prefix_cached
         recompute_tokens = sum(plan.get("candidate_prefix_recompute_tokens", {}).values())
         aggregation_started = time.perf_counter()
@@ -1384,9 +1507,55 @@ class OmniScheduler:
         audio_encoder_ms = float(
             pipeline_stage_timing.get("audio_encoder", {}).get("wall_ms", 0.0)
         )
+        cached_values = list(plan.get("candidate_cached_tokens", {}).values())
+        cached_prefix_token_count = (
+            min(cached_values) if cached_values else parent_cached_len
+        )
+        shadow_scores = {
+            score.candidate_id: score.mean_logprob for score in direct_scores
+        }
+        legacy_by_id = {
+            score.candidate_id: score.mean_logprob for score in legacy_scores
+        }
+
+        def _winner(values: dict[str, float], prefix: str | None = None) -> str | None:
+            items = [
+                (candidate_id, value)
+                for candidate_id, value in values.items()
+                if (candidate_id.startswith(prefix) if prefix else not candidate_id.startswith("I"))
+            ]
+            return max(items, key=lambda item: item[1])[0] if items else None
+
+        def _rank(
+            values: dict[str, float], candidate_id: str | None, prefix: str | None
+        ) -> int | None:
+            if candidate_id is None:
+                return None
+            ranked = sorted(
+                (
+                    (current_id, value)
+                    for current_id, value in values.items()
+                    if (
+                        current_id.startswith(prefix)
+                        if prefix else not current_id.startswith("I")
+                    )
+                ),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            return next(
+                (
+                    index
+                    for index, (current_id, _) in enumerate(ranked, start=1)
+                    if current_id == candidate_id
+                ),
+                None,
+            )
+
         stats = {
             "queue_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
             "client_request_build_ms": float(plan.get("client_request_build_ms", 0.0)),
+            "candidate_snapshot_ms": float(plan.get("candidate_snapshot_ms", 0.0)),
             "server_request_build_ms": float(plan.get("server_request_build_ms", 0.0)),
             "scheduler_admission_ms": float(plan.get("scheduler_admission_ms", 0.0)),
             "scheduler_wait_ms": float(plan.get("scheduler_wait_ms", 0.0)),
@@ -1395,6 +1564,38 @@ class OmniScheduler:
             "suffix_unique_trie_edges": plan.get("suffix_unique_trie_edges"),
             "suffix_unique_first_tokens": plan.get("suffix_unique_first_tokens"),
             "suffix_batch_queue_wait_ms": list(plan.get("suffix_batch_queue_wait_ms", [])),
+            "candidate_materialize_ms": float(
+                plan.get("candidate_materialize_ms", 0.0)
+            ),
+            "candidate_prefix_copy_ms": float(
+                plan.get("candidate_prefix_copy_ms", 0.0)
+            ),
+            "candidate_tensorize_ms": float(
+                plan.get("candidate_tensorize_ms", 0.0)
+            ),
+            "candidate_req_init_ms": float(
+                plan.get("candidate_req_init_ms", 0.0)
+            ),
+            "candidate_metadata_copy_ms": float(
+                plan.get("candidate_metadata_copy_ms", 0.0)
+            ),
+            "candidate_mrope_ms": float(
+                plan.get("candidate_mrope_ms", 0.0)
+            ),
+            "candidate_data_init_ms": float(
+                plan.get("candidate_data_init_ms", 0.0)
+            ),
+            "candidate_short_suffix_cache_hit": bool(
+                plan.get("candidate_short_suffix_cache_hit", False)
+            ),
+            "candidate_materialize_wait_ms": float(
+                plan.get("candidate_materialize_wait_ms", 0.0)
+            ),
+            "candidate_enqueue_ms": float(plan.get("candidate_enqueue_ms", 0.0)),
+            "candidate_queue_wait_ms": sum(
+                float(value)
+                for value in plan.get("suffix_batch_queue_wait_ms", [])
+            ),
             "preprocessing_ms": preprocessing_ms,
             "image_encoder_ms": image_encoder_ms,
             "audio_encoder_ms": audio_encoder_ms,
@@ -1418,18 +1619,55 @@ class OmniScheduler:
                 else 0.0
             ),
             "prefix_chunks": list(plan.get("prefix_chunks", [])),
-            "cached_prefix_token_count": min(plan["candidate_cached_tokens"].values()),
-            "candidate_cached_prefix_token_count": min(
-                plan["candidate_cached_tokens"].values()
-            ),
+            "cached_prefix_token_count": cached_prefix_token_count,
+            "candidate_cached_prefix_token_count": cached_prefix_token_count,
             "candidate_prefix_recompute_tokens": recompute_tokens,
-            "suffix_batch_count": len(plan["candidate_batches"]),
+            "suffix_batch_count": (
+                0 if enforce_without_suffix
+                else len(plan["candidate_batches"])
+            ),
             "suffix_batch_sizes": list(plan.get("suffix_batch_sizes", [])),
             "suffix_batch_ms": suffix_batch_ms,
             "aggregation_ms": (time.perf_counter() - aggregation_started) * 1000.0,
             "total_ms": (time.perf_counter() - plan.get("started_at", aggregation_started)) * 1000.0,
             "gpu": gpu_stats,
+            "scoring_mode": scoring_mode,
+            "selection_mapping_version": plan.get("selection_mapping_version"),
+            "selection_mapping_hash": plan.get("selection_mapping_hash"),
+            "selection_calibration_version": plan.get("selection_calibration_version"),
+            "selection_calibration_hash": plan.get("selection_calibration_hash"),
         }
+        if scoring_mode == "single_token_shadow":
+            groups = (
+                ("action", None),
+                ("body", "IB"),
+                ("face", "IF"),
+                ("reaction", "IR"),
+                ("visual", "IV"),
+            )
+            direct_winners = {
+                group: _winner(shadow_scores, prefix)
+                for group, prefix in groups
+            }
+            suffix_winners = {
+                group: _winner(legacy_by_id, prefix)
+                for group, prefix in groups
+            }
+            shadow_key = "single_token_shadow"
+            stats[f"{shadow_key}_scores"] = shadow_scores
+            stats[f"{shadow_key}_winners"] = direct_winners
+            stats["suffix_ppl_winners"] = suffix_winners
+            stats[f"{shadow_key}_agreement"] = {
+                group: (
+                    direct_winners[group] == suffix_winners[group]
+                    if suffix_winners[group] is not None else None
+                )
+                for group, _ in groups
+            }
+            stats[f"suffix_winner_{shadow_key}_rank"] = {
+                group: _rank(shadow_scores, suffix_winners[group], prefix)
+                for group, prefix in groups
+            }
         result = {
             "request_id": parent.req.rid,
             "model": (
@@ -1494,7 +1732,9 @@ class OmniScheduler:
             if plan["next_batch_index"] < len(plan["candidate_batches"]):
                 next_batch = plan["candidate_batches"][plan["next_batch_index"]]
                 self._build_and_enqueue_action_candidate_batch(parent, next_batch)
-            elif len(plan["completed_candidate_ids"]) == len(plan["candidate_ids"]):
+            elif len(plan["completed_candidate_ids"]) == len(
+                plan.get("suffix_candidate_ids") or plan["candidate_ids"]
+            ):
                 self._finish_action_scoring(parent, plan)
 
 
@@ -1606,6 +1846,54 @@ class OmniScheduler:
         return plan.batch_to_run
 
     def get_new_batch_prefill(self, running_batch):
+        # A complete action-suffix cohort is published atomically immediately
+        # after its shared prefix finishes.  Holding it for the generic prefill
+        # coalescing deadline adds a fixed ~40-60 ms without collecting any
+        # additional useful requests, so admit that cohort on the next scheduler
+        # iteration.
+        if self.chunked_req is None and self.waiting_queue:
+            action_suffix, other = [], []
+            for req in self.waiting_queue:
+                data = getattr(req, "_omni_data", None)
+                target = (
+                    action_suffix
+                    if getattr(data, "action_scoring_role", None) == "candidate"
+                    else other
+                )
+                target.append(req)
+            if action_suffix:
+                if not other:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                self.waiting_queue = action_suffix
+                try:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                finally:
+                    self.waiting_queue.extend(other)
+        # Isolate latency-critical action work from new long reply prefills.
+        # Never detach an in-progress chunk: upstream owns its KV lifecycle.
+        # After 250 ms give deferred work a normal scheduling opportunity.
+        if self.chunked_req is None and self.waiting_queue:
+            now = time.perf_counter()
+            urgent, deferred = [], []
+            for req in self.waiting_queue:
+                data = getattr(req, "_omni_data", None)
+                plan = getattr(data, "action_scoring_plan", None) or {}
+                target = urgent if (
+                    plan.get("stage") in {"category", "child"}
+                    and plan.get("turn_origin", "user") == "user"
+                    and int(plan.get("admission_priority", 1)) <= 1
+                ) else deferred
+                target.append(req)
+            aged = any(
+                now - getattr(req, "_coalesce_enqueue_t", now) >= 0.25
+                for req in deferred
+            )
+            if urgent and deferred and not aged:
+                self.waiting_queue = urgent
+                try:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                finally:
+                    self.waiting_queue.extend(deferred)
         # Note: (maydomine) batch prefill admissions to amortize the fixed step
         # cost; the oldest-request deadline survives partial admission and aborts.
         #
@@ -1632,6 +1920,33 @@ class OmniScheduler:
         return NextBatchPlan(batch_to_run=None, running_batch=running_batch)
 
     def run_batch(self, batch, pp_proxy_tensors=None):
+        forward_mode = getattr(batch, "forward_mode", None)
+        if forward_mode is not None and forward_mode.is_extend() and os.environ.get("SGLANG_OMNI_LOG_GPU_BATCH_MEMBERS", "1") != "0":
+            self._action_trace_batch_seq = getattr(self, "_action_trace_batch_seq", 0) + 1
+            members = []
+            for req in batch.reqs:
+                data = getattr(req, "_omni_data", None)
+                plan = getattr(data, "action_scoring_plan", None) or {}
+                extend = getattr(req, "extend_range", None)
+                members.append({
+                    "request_id": req.rid,
+                    "stage": plan.get("stage", "generation"),
+                    "turn_origin": plan.get("turn_origin"),
+                    "admission_priority": plan.get("admission_priority"),
+                    "session_id": plan.get("session_id"),
+                    "logical_request_id": plan.get("logical_request_id"),
+                    "role": getattr(data, "action_scoring_role", None),
+                    "cached_tokens": len(getattr(req, "prefix_indices", ())),
+                    "new_tokens": getattr(req, "extend_input_len", None),
+                    "range_start": getattr(extend, "start", None),
+                    "range_end": getattr(extend, "end", None),
+                })
+            emit_structured_log(
+                "performance", "gpu_physical_batch_selected",
+                batch_id=f"{os.getpid()}-{self._action_trace_batch_seq}",
+                request_count=len(members), members=members,
+                waiting_count=len(self.waiting_queue),
+            )
         try:
             return self._run_batch(batch, pp_proxy_tensors)
         except Exception as exc:
@@ -1655,6 +1970,7 @@ class OmniScheduler:
         self.forward_ct += 1
         batch.forward_iter = self.forward_ct
         sched_output = self._build_sched_output(batch)
+        self._start_action_candidate_materialization_for_batch(batch)
         mr_output = self._model_runner.execute(sched_output)
         self._emit_stream_output(sched_output, mr_output)
         return self._make_batch_result(mr_output)
@@ -1744,6 +2060,7 @@ class OmniScheduler:
         batch.forward_iter = self.forward_ct
         sched_output = self._build_sched_output(batch)
         pending_step = self._model_runner.execute_launch(sched_output)
+        self._start_action_candidate_materialization_for_batch(batch)
         return sched_output, pending_step
 
     def _run_batch_resolve(self, batch, sched_output, pending_step, skip_rids=()):
@@ -2052,18 +2369,27 @@ class OmniScheduler:
 
     def _shutdown_request_build_executor(self) -> None:
         executor = self._request_build_executor
-        if executor is None:
-            return
-        executor.shutdown(wait=False, cancel_futures=True)
-        self._request_build_executor = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+            self._request_build_executor = None
+        action_executor = getattr(self, "_action_candidate_build_executor", None)
+        if action_executor is not None:
+            action_executor.shutdown(wait=False, cancel_futures=True)
+            self._action_candidate_build_executor = None
 
     def abort(
         self, request_id: str, *, defer_running_cleanup: bool = True, _internal: bool = False
     ) -> None:
-        action_parent = self._action_scoring_requests.get(request_id)
+        action_scoring_requests = getattr(self, "_action_scoring_requests", None)
+        if action_scoring_requests is None:
+            action_scoring_requests = {}
+        action_parent = action_scoring_requests.get(request_id)
         action_internal_ids = []
         if action_parent is not None:
             plan = action_parent.action_scoring_plan or {}
+            candidate_future = plan.pop("candidate_materialize_future", None)
+            if candidate_future is not None:
+                candidate_future.cancel()
             action_internal_ids = [
                 item.req.rid
                 for item in plan.get("candidate_data", [])
@@ -2125,7 +2451,7 @@ class OmniScheduler:
             _remove_from_batch(self.last_batch, request_id)
             _remove_from_batch(self._async_pending_batch(), request_id)
         self._drain_inbox_for_request(request_id)
-        self._action_scoring_requests.pop(request_id, None)
+        action_scoring_requests.pop(request_id, None)
         for internal_id in action_internal_ids:
             if internal_id != request_id:
                 self.abort(

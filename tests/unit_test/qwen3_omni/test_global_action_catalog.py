@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from starlette.websockets import WebSocketState
@@ -14,6 +15,8 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     TokenScore,
 )
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    CANDIDATE_REACTION_SOURCE_LANGUAGE,
+    CANDIDATE_REACTION_SOURCE_USER_CAMERA,
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
     CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
     GlobalActionCatalogPrewarmStatus,
@@ -25,6 +28,56 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     prewarm_global_action_catalog,
 )
 from sglang_omni.serve.realtime.multimodal import MultimodalSession
+
+
+def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action() -> None:
+    catalog_path = (
+        Path(__file__).parents[3]
+        / "sglang_omni/assets/character_limited_action_global_catalog.json"
+    )
+    catalog = load_global_action_catalog(catalog_path)
+
+    assert catalog.candidate_count == 117
+    assert all(
+        candidate.user_reaction_expression.strip()
+        and candidate.proactive_expression.strip()
+        for candidate in catalog.candidate_by_id.values()
+    )
+    assert all(
+        candidate.effective_definition("user")
+        == candidate.user_reaction_expression
+        and candidate.effective_definition("proactive")
+        == candidate.proactive_expression
+        for candidate in catalog.candidate_by_id.values()
+    )
+    idle = catalog.candidate_by_id["130"]
+    assert "不得替代任何明确" in idle.user_reaction_expression
+    assert "有具体表达、演示或交互目标时不得选择" in idle.proactive_expression
+
+
+def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
+    catalog_path = (
+        Path(__file__).parents[3]
+        / "sglang_omni/assets/character_limited_action_global_catalog.json"
+    )
+    catalog = load_global_action_catalog(catalog_path)
+    idle = catalog.candidate_by_id["130"]
+
+    zh_user = idle.effective_definition("user", "zh-CN")
+    en_user = idle.effective_definition("user", "en-US")
+    zh_proactive = idle.effective_definition("proactive", "zh-CN")
+    en_proactive = idle.effective_definition("proactive", "en-US")
+
+    assert zh_user.startswith("仅在用户要求自然呼吸")
+    assert en_user.startswith("Select only for natural breathing")
+    assert zh_proactive.startswith("仅在没有表意目标")
+    assert en_proactive.startswith("Select only when no expressive goal")
+    assert en_user in catalog.action_system_prompt_for("en-US", "user")
+    assert en_user not in catalog.action_system_prompt_for("zh-CN", "user")
+    assert sum(
+        "en-US" in candidate.expressions_by_locale
+        for candidate in catalog.candidate_by_id.values()
+    ) == 117
 
 
 def test_action_prompts_do_not_include_cross_turn_action_history() -> None:
@@ -85,7 +138,7 @@ def test_builtin_catalog_exposes_forward_approach_category_semantics() -> None:
     )
 
     assert "靠近镜头" in category.short_definition
-    assert "靠近镜头或远离镜头" in category.short_definition
+    assert "脚下不发生位移" in category.short_definition
     assert "向前倾斜" in action.short_definition
     assert action.category_id == category.category_id
     for locale in ("zh-CN", "en-US"):
@@ -120,6 +173,12 @@ def test_builtin_catalog_exposes_self_introduction_category_semantics() -> None:
     english_child = catalog.child_system_prompt_for(
         "en-US", greeting_category.category_id
     )
+    chinese_proactive_child = catalog.child_system_prompt_for(
+        "zh-CN", greeting_category.category_id, turn_origin="proactive"
+    )
+    english_proactive_child = catalog.child_system_prompt_for(
+        "en-US", greeting_category.category_id, turn_origin="proactive"
+    )
 
     assert "介绍自己、说明自身身份" in chinese_category
     assert "介绍产品、知识、地点、第三方人物" in chinese_category
@@ -128,8 +187,10 @@ def test_builtin_catalog_exposes_self_introduction_category_semantics() -> None:
         "introducing a product, knowledge, a place, a third party"
         in english_category
     )
-    assert single_hand.short_definition in chinese_child
-    assert both_hands.short_definition in english_child
+    assert single_hand.user_reaction_expression in chinese_child
+    assert both_hands.user_reaction_expression in english_child
+    assert single_hand.proactive_expression in chinese_proactive_child
+    assert both_hands.proactive_expression in english_proactive_child
     assert "单手问候候选" not in chinese_child
     assert "one-handed greeting" not in english_child
 
@@ -147,13 +208,12 @@ def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None
         for category in catalog.categories
         if category.source_label == "工具与日用品使用"
     )
-    cup = next(child for child in drinking.children if child.candidate_id == "A571")
-    bottle = next(child for child in drinking.children if child.candidate_id == "A572")
+    cup = next(child for child in drinking.children if child.candidate_id == "571")
+    bottle = next(child for child in drinking.children if child.candidate_id == "572")
 
     assert "耳廓与耳垂" in touch_ear.short_definition
-    assert "喝口水/喝点水" in drinking.short_definition
-    assert "未指定容器时默认杯子" in drinking.short_definition
-    assert "明确瓶装水" in drinking.short_definition
+    assert "喝口水或喝点水" in drinking.short_definition
+    assert "未指定容器的喝水默认使用杯子" in drinking.short_definition
     assert "杯子" in cup.short_definition
     assert "瓶" in bottle.short_definition
     chinese_child = catalog.child_system_prompt_for("zh-CN", touching.category_id)
@@ -163,18 +223,30 @@ def test_builtin_catalog_exposes_strict_object_and_drinking_boundaries() -> None
     assert "不是关键词匹配规则" in chinese_child
 
 
-def test_builtin_catalog_does_not_require_ordinary_category_semantic_tags() -> None:
+def test_builtin_catalog_marks_bounded_candidate_reaction_sources() -> None:
     catalog = load_global_action_catalog()
     chinese = catalog.category_system_prompt_for("zh-CN")
     english = catalog.category_system_prompt_for("en-US")
+    wave = catalog.candidate_by_id["288"]
+    assert wave.reaction_sources == {
+        CANDIDATE_REACTION_SOURCE_LANGUAGE,
+        CANDIDATE_REACTION_SOURCE_USER_CAMERA,
+    }
+    assert "挥挥手跟我打个招呼" in wave.aliases
+    assert catalog.candidate_by_id["289"].reaction_sources == {
+        CANDIDATE_REACTION_SOURCE_LANGUAGE
+    }
+    assert catalog.candidate_by_id["460"].reaction_sources == {
+        CANDIDATE_REACTION_SOURCE_USER_CAMERA
+    }
+    assert not catalog.candidate_by_id["170"].reaction_sources
     assert all(
-        not category.semantic_tags
+        "implicit_social_reaction" not in category.semantic_tags
         for category in catalog.categories
-        if category.category_id in {"B032", "B039", "B040", "B041", "B042", "B043"}
     )
     assert "本目录中要求下肢、位移或全身大幅移动的类别为：" not in chinese
     assert "the lower-body movement categories are:" not in english
-    assert "B033-B037" not in chinese
+    assert "33-37" not in chinese
 
 
 def test_builtin_catalog_exposes_system_accompaniment_semantics() -> None:
@@ -188,8 +260,8 @@ def test_builtin_catalog_exposes_system_accompaniment_semantics() -> None:
 
     assert reply_category is not None
     assert silent_category is not None
-    assert reply_category.category_id == "B001"
-    assert silent_category.category_id == "B002"
+    assert reply_category.category_id == "01"
+    assert silent_category.category_id == "02"
     for locale in ("zh-CN", "en-US"):
         category_prompt = catalog.category_system_prompt_for(locale)
         reply_child_prompt = catalog.child_system_prompt_for(
@@ -210,15 +282,27 @@ def test_builtin_catalog_exposes_system_accompaniment_semantics() -> None:
 
         assert reply_category.category_id in category_prompt
         assert silent_category.category_id in category_prompt
-        assert "A000" not in reply_child_prompt
-        assert "A000" not in silent_child_prompt
-        assert "candidate_id=A000" in ordinary_child_prompt
+        assert "000" not in reply_child_prompt
+        assert "000" not in silent_child_prompt
+        assert "candidate_id=000" in ordinary_child_prompt
     assert "本轮数字人实际回复开头" in catalog.child_system_prompt_for(
         "zh-CN", reply_category.category_id
     )
     assert "本轮没有需要说出的回复文本" in catalog.child_system_prompt_for(
         "zh-CN", silent_category.category_id
     )
+
+
+def test_builtin_catalog_uses_disjoint_fixed_width_numeric_ids() -> None:
+    catalog = load_global_action_catalog()
+    category_ids = set(catalog.category_by_id)
+    candidate_ids = set(catalog.candidate_by_id)
+
+    assert all(value.isdigit() and len(value) == 2 for value in category_ids)
+    assert all(value.isdigit() and len(value) == 3 for value in candidate_ids)
+    assert category_ids.isdisjoint(candidate_ids)
+    assert "00" not in category_ids
+    assert "000" not in candidate_ids
 
 
 def test_category_prompt_exposes_conversational_feedback_semantics() -> None:
@@ -291,48 +375,48 @@ def _catalog_payload() -> dict:
         "catalog_version": "test-v1",
         "categories": [
             {
-                "category_id": "B008",
+                "category_id": "08",
                 "source_label": "待机动作",
                 "short_definition": "自然待机",
                 "category_path": ["基础姿态与动作转场", "待机动作"],
                 "children": [
                     {
-                        "candidate_id": "A008",
-                        "action_id": "A008",
+                        "candidate_id": "008",
+                        "action_id": "008",
                         "source_label": "自然呼吸",
                         "short_definition": "自然待机呼吸",
                     }
                 ],
             },
             {
-                "category_id": "B001",
+                "category_id": "01",
                 "source_label": "问候",
                 "short_definition": "问候动作",
                 "category_path": ["社交", "问候"],
                 "children": [
                     {
-                        "candidate_id": "A001",
-                        "action_id": "A001",
+                        "candidate_id": "001",
+                        "action_id": "001",
                         "source_label": "单手挥手",
                         "short_definition": "单手自然挥动",
                     },
                     {
-                        "candidate_id": "A002",
-                        "action_id": "A002",
+                        "candidate_id": "002",
+                        "action_id": "002",
                         "source_label": "双手挥手",
                         "short_definition": "",
                     },
                 ],
             },
             {
-                "category_id": "B002",
+                "category_id": "02",
                 "source_label": "赞同",
                 "short_definition": "表达赞同",
                 "category_path": ["社交", "反馈"],
                 "children": [
                     {
-                        "candidate_id": "A003",
-                        "action_id": "A003",
+                        "candidate_id": "003",
+                        "action_id": "003",
                         "source_label": "点赞",
                         "short_definition": "竖起拇指",
                     }
@@ -357,10 +441,10 @@ def test_global_catalog_is_validated_hashed_and_immutable(tmp_path) -> None:
     assert catalog.catalog_version == "test-v1"
     assert len(catalog.categories) == 3
     assert catalog.candidate_count == 4
-    assert catalog.candidate_by_id["A002"].source_short_definition == ""
-    assert catalog.candidate_by_id["A002"].short_definition == "双手挥手"
-    assert "candidate_id=A002｜动作=双手挥手｜说明=双手挥手" in (
-        catalog.child_system_prompts["B001"]
+    assert catalog.candidate_by_id["002"].source_short_definition == ""
+    assert catalog.candidate_by_id["002"].short_definition == "双手挥手"
+    assert "candidate_id=002｜动作=双手挥手｜说明=双手挥手" in (
+        catalog.child_system_prompts["01"]
     )
     assert "先综合用户摄像头画面与用户语音判断用户状态" in (
         catalog.category_system_prompt
@@ -377,16 +461,16 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
     child["user_reaction_expression"] = "用户要求问候时挥手"
     catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
 
-    user_prompt = catalog.child_system_prompt_for("zh-CN", "B001", "user")
+    user_prompt = catalog.child_system_prompt_for("zh-CN", "01", "user")
     proactive_prompt = catalog.child_system_prompt_for(
-        "zh-CN", "B001", "proactive"
+        "zh-CN", "01", "proactive"
     )
 
     assert "说明=用户要求问候时挥手" in user_prompt
     assert "说明=数字人主动问候时挥手" in proactive_prompt
     assert "说明=单手自然挥动" not in user_prompt
-    assert catalog.child_cache_namespace("B001", turn_origin="user") != (
-        catalog.child_cache_namespace("B001", turn_origin="proactive")
+    assert catalog.child_cache_namespace("01", turn_origin="user") != (
+        catalog.child_cache_namespace("01", turn_origin="proactive")
     )
     assert "动作请求由语义目标决定，不由命令句形式决定" in (
         catalog.category_system_prompt
@@ -449,7 +533,7 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
         UNSUPPORTED_CATEGORY_SHORT_DEFINITION
         in catalog.category_system_prompt
     )
-    assert "category_id=B000｜决策=不支持的动作类别" in (
+    assert "category_id=00｜决策=不支持的动作类别" in (
         catalog.category_system_prompt
     )
     assert "action_id=UNSUPPORTED" not in catalog.category_system_prompt
@@ -461,17 +545,17 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
     )
     assert (
         UNSUPPORTED_CHILD_SHORT_DEFINITION
-        in catalog.child_system_prompts["B001"]
+        in catalog.child_system_prompts["01"]
     )
-    assert "candidate_id=A000｜决策=不支持的具体动作" in (
-        catalog.child_system_prompts["B001"]
+    assert "candidate_id=000｜决策=不支持的具体动作" in (
+        catalog.child_system_prompts["01"]
     )
-    assert "action_id=UNSUPPORTED" not in catalog.child_system_prompts["B001"]
+    assert "action_id=UNSUPPORTED" not in catalog.child_system_prompts["01"]
     assert "执行方式不同、仅表达含义相近的动作" in (
-        catalog.child_system_prompts["B001"]
+        catalog.child_system_prompts["01"]
     )
     assert "若姿态、取景或物体等硬性可执行条件" in (
-        catalog.child_system_prompts["B001"]
+        catalog.child_system_prompts["01"]
     )
     assert "普通对话且实际有非空回复时" in (
         catalog.category_system_prompt
@@ -491,15 +575,15 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
     assert "避免选择要求下肢、位移或全身大幅移动的类别" in (
         catalog.category_system_prompt
     )
-    assert "B033-B037" not in catalog.category_system_prompt
+    assert "33-37" not in catalog.category_system_prompt
     assert "物体是否出现在“数字人当前状态画面”中，不作为" in (
         catalog.category_system_prompt
     )
-    assert "选择要求与具体物体交互的 B043-B052 前" not in (
+    assert "选择要求与具体物体交互的 43-52 前" not in (
         catalog.category_system_prompt
     )
     assert "先综合用户摄像头画面与用户语音判断用户状态" not in (
-        catalog.child_system_prompts["B001"]
+        catalog.child_system_prompts["01"]
     )
     for internal_term in (
         "Session",
@@ -512,17 +596,17 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
     ):
         assert internal_term not in catalog.category_system_prompt
     assert "用户没有明确限定执行细节时" in (
-        catalog.child_system_prompts["B001"]
+        catalog.child_system_prompts["01"]
     )
     assert "单手或双手、左右方向、身体部位、次数、幅度、移动方向或交互物体" in (
-        catalog.child_system_prompts["B001"]
+        catalog.child_system_prompts["01"]
     )
     assert catalog.category_cache_namespace().endswith(catalog.category_prompt_hash)
-    assert catalog.child_cache_namespace("B001").endswith(
-        catalog.child_prompt_hashes["B001"]
+    assert catalog.child_cache_namespace("01").endswith(
+        catalog.child_prompt_hashes["01"]
     )
     english_category_prompt = catalog.category_system_prompt_for("en-US")
-    english_child_prompt = catalog.child_system_prompt_for("en-US", "B001")
+    english_child_prompt = catalog.child_system_prompt_for("en-US", "01")
     assert "You are a digital-character action category classifier" in (
         english_category_prompt
     )
@@ -534,7 +618,7 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
         "social act directed at the digital character"
         in english_category_prompt
     )
-    assert "Before selecting B043-B052" not in english_category_prompt
+    assert "Before selecting 43-52" not in english_category_prompt
     assert "is not a prerequisite for selecting an object-interaction category" in (
         english_category_prompt
     )
@@ -555,8 +639,8 @@ def test_child_prompt_selects_definition_by_turn_origin(tmp_path) -> None:
     assert catalog.category_cache_namespace("en-US") != (
         catalog.category_cache_namespace("zh-CN")
     )
-    assert catalog.child_cache_namespace("B001", "en-US") != (
-        catalog.child_cache_namespace("B001", "zh-CN")
+    assert catalog.child_cache_namespace("01", "en-US") != (
+        catalog.child_cache_namespace("01", "zh-CN")
     )
     with pytest.raises(TypeError):
         catalog.category_by_id["B999"] = catalog.categories[0]  # type: ignore[index]
@@ -567,12 +651,12 @@ def test_global_catalog_does_not_require_b008(tmp_path) -> None:
     payload["categories"] = [
         category
         for category in payload["categories"]
-        if category["category_id"] != "B008"
+        if category["category_id"] != "08"
     ]
 
     catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
 
-    assert "B008" not in catalog.category_by_id
+    assert "08" not in catalog.category_by_id
     assert catalog.candidate_count == 3
 
 
@@ -599,9 +683,9 @@ def test_global_catalog_semantic_tags_are_optional_and_preserved(
     catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
 
     assert catalog.categories[0].semantic_tags == frozenset()
-    client_category = catalog.category_by_id["B001"]
+    client_category = catalog.category_by_id["01"]
     assert client_category.semantic_tags == frozenset({"client_defined"})
-    assert "单手问候候选" not in catalog.child_system_prompt_for("zh-CN", "B001")
+    assert "单手问候候选" not in catalog.child_system_prompt_for("zh-CN", "01")
 
 
 def test_global_catalog_allows_one_action_in_multiple_categories(tmp_path) -> None:
@@ -616,14 +700,14 @@ def test_global_catalog_allows_one_action_in_multiple_categories(tmp_path) -> No
     catalog = load_global_action_catalog(_write_catalog(tmp_path, payload))
 
     assert catalog.candidate_count == 4
-    assert catalog.candidate_for_category("B001", "A001").source_label == (
+    assert catalog.candidate_for_category("01", "001").source_label == (
         "单手挥手"
     )
-    assert catalog.candidate_for_category("B002", "A001").source_label == (
+    assert catalog.candidate_for_category("02", "001").source_label == (
         "系统视图中的单手挥手"
     )
-    assert "candidate_id=A001｜动作=系统视图中的单手挥手" in (
-        catalog.child_system_prompt_for("zh-CN", "B002")
+    assert "candidate_id=001｜动作=系统视图中的单手挥手" in (
+        catalog.child_system_prompt_for("zh-CN", "02")
     )
 
 
@@ -653,13 +737,13 @@ def test_global_catalog_rejects_duplicate_system_semantic_tag_owner(
     [
         (
             lambda payload: payload["categories"][1].update(
-                category_id="B008"
+                category_id="08"
             ),
             "duplicate global category_id",
         ),
         (
             lambda payload: payload["categories"][1]["children"][0].update(
-                action_id="A008"
+                action_id="008"
             ),
             "duplicate global action_id",
         ),
@@ -670,14 +754,14 @@ def test_global_catalog_rejects_duplicate_system_semantic_tag_owner(
             "must not contain action_id=no_action",
         ),
         (
-            lambda payload: payload["categories"][1].update(category_id="B000"),
-            "category_id is reserved for unsupported scoring: B000",
+            lambda payload: payload["categories"][1].update(category_id="00"),
+            "category_id is reserved for unsupported scoring: 00",
         ),
         (
             lambda payload: payload["categories"][1]["children"][0].update(
-                candidate_id="A000"
+                candidate_id="000"
             ),
-            "candidate_id is reserved for unsupported scoring: A000",
+            "candidate_id is reserved for unsupported scoring: 000",
         ),
         (
             lambda payload: payload["categories"][1]["children"][0].update(
@@ -708,7 +792,7 @@ class _PrefillClient:
 
     async def prefill_action_catalog(self, **kwargs) -> bool:
         self.calls.append(kwargs)
-        return not kwargs["request_id"].endswith("-B002")
+        return not kwargs["request_id"].endswith("-02")
 
 
 @pytest.mark.asyncio
@@ -749,8 +833,8 @@ async def test_global_prewarm_covers_category_and_every_child(tmp_path) -> None:
         for call in child_calls
     )
     assert status.category_ready is True
-    assert status.ready_child_category_ids == frozenset({"B008", "B001"})
-    assert status.failed_child_category_ids == frozenset({"B002"})
+    assert status.ready_child_category_ids == frozenset({"08", "01"})
+    assert status.failed_child_category_ids == frozenset({"02"})
     assert set(status.by_locale) == {"zh-CN", "en-US"}
     assert all(item.category_ready for item in status.by_locale.values())
 
@@ -815,7 +899,7 @@ class _ScoreClient:
 
     async def score_action_suffixes(self, request) -> ActionSuffixScoreResult:
         self.requests.append(request)
-        selected = "B001" if request.stage == "category" else "A001"
+        selected = "01" if request.stage == "category" else "001"
         scores = []
         for index, candidate in enumerate(request.candidates):
             logprob = -0.01 if candidate.candidate_id == selected else -10.0 - index
@@ -943,31 +1027,31 @@ def _session_start_payload() -> dict:
         "selection_mode": "hierarchical",
         "language": "zh",
         "include_scores": True,
-        "fallback_category_ids": ["B008"],
+        "fallback_category_ids": ["08"],
         "action_candidates": [
             {
-                "category_id": "B008",
+                "category_id": "08",
                 "source_label": "待机动作",
                 "short_definition": "自然待机",
                 "category_path": ["基础姿态与动作转场", "待机动作"],
                 "children": [
                     {
-                        "candidate_id": "A008",
-                        "action_id": "A008",
+                        "candidate_id": "008",
+                        "action_id": "008",
                         "source_label": "自然呼吸",
                         "short_definition": "自然待机呼吸",
                     }
                 ],
             },
             {
-                "category_id": "B001",
+                "category_id": "01",
                 "source_label": "问候",
                 "short_definition": "问候动作",
                 "category_path": ["社交", "问候"],
                 "children": [
                     {
-                        "candidate_id": "A001",
-                        "action_id": "A001",
+                        "candidate_id": "001",
+                        "action_id": "001",
                         "source_label": "单手挥手",
                         "short_definition": "单手自然挥动",
                         "execution_binding": {"asset_id": "wave-1"},
@@ -992,7 +1076,7 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1024,10 +1108,10 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     assert client.prefill_calls == 0
     category_request, child_request = client.requests
     assert category_request.system_prompt == catalog.category_system_prompt
-    assert "category_id=B002" in category_request.system_prompt
+    assert "category_id=02" in category_request.system_prompt
     assert "[本次会话允许选择的动作类别]" in category_request.prefix
-    assert "可用的真实 category_id：B008、B001" in category_request.prefix
-    assert "按优先级从高到低为：B008（待机动作）" in category_request.prefix
+    assert "可用的真实 category_id：08、01" in category_request.prefix
+    assert "按优先级从高到低为：08（待机动作）" in category_request.prefix
     assert "该列表只定义不支持判定后的可执行兜底顺序" in (
         category_request.prefix
     )
@@ -1036,13 +1120,13 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     )
     assert "PPL" not in category_request.prefix
     assert "硬过滤" not in category_request.prefix
-    assert "B002" not in category_request.prefix
+    assert "02" not in category_request.prefix
     assert [item.candidate_id for item in category_request.candidates] == [
-        "B008",
-        "B001",
+        "08",
+        "01",
         UNSUPPORTED_CATEGORY_SCORE_ID,
     ]
-    assert category_request.candidates[-1].suffix == "B000"
+    assert category_request.candidates[-1].suffix == "00"
     assert category_request.candidates[-1].action_id == "UNSUPPORTED"
     assert category_request.prefix_cache_namespace.startswith(
         catalog.category_cache_namespace() + f":session:{session.session_instance_id}:"
@@ -1053,28 +1137,28 @@ async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> N
     assert category_omni_request.params["action_scoring"][
         "cache_static_system_only"
     ] is True
-    assert child_request.system_prompt == catalog.child_system_prompts["B001"]
-    assert "candidate_id=A002" in child_request.system_prompt
-    assert "只允许从以下 candidate_id 中选择：A001" in child_request.prefix
+    assert child_request.system_prompt == catalog.child_system_prompts["01"]
+    assert "candidate_id=002" in child_request.system_prompt
+    assert "只允许从以下 candidate_id 中选择：001" in child_request.prefix
     assert "即使当前类别也被列为执行兜底类别" in child_request.prefix
     assert [item.candidate_id for item in child_request.candidates] == [
-        "A001",
+        "001",
         UNSUPPORTED_CHILD_SCORE_ID,
     ]
-    assert child_request.candidates[-1].suffix == "A000"
+    assert child_request.candidates[-1].suffix == "000"
     assert child_request.candidates[-1].action_id == "UNSUPPORTED"
     assert child_request.prefix_cache_namespace.startswith(catalog.child_cache_namespace(
-        "B001"
+        "01"
     ) + f":session:{session.session_instance_id}:")
     started = next(item for item in ws.events if item["type"] == "session.started")
-    assert started["fallback_category_ids"] == ["B008"]
+    assert started["fallback_category_ids"] == ["08"]
     assert started["global_action_catalog_hash"] == catalog.catalog_hash
     assert started["session_action_catalog_hash"] != catalog.catalog_hash
     result = next(item for item in ws.events if item["type"] == "turn.result")
     assert result["action"] == {
-        "action_id": "A001",
-        "candidate_id": "A001",
-            "category_id": "B001",
+        "action_id": "001",
+        "candidate_id": "001",
+            "category_id": "01",
             "execute": True,
             "support_status": "supported",
             "fallback_applied": False,
@@ -1130,7 +1214,7 @@ async def test_english_session_uses_isolated_english_prompts_without_translating
         "en-US"
     )
     assert child_request.system_prompt == catalog.child_system_prompt_for(
-        "en-US", "B001"
+        "en-US", "01"
     )
     assert category_request.output_prompt == "Best matching category_id:"
     assert child_request.output_prompt == "Best matching candidate_id:"
@@ -1190,7 +1274,7 @@ async def test_hierarchical_action_scoring_omits_cross_turn_history(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(category="B001", child="A001")
+    client = _DecisionScoreClient(category="01", child="001")
     session = MultimodalSession(
         _WebSocket(),
         client=client,  # type: ignore[arg-type]
@@ -1236,14 +1320,14 @@ async def test_hierarchical_action_scoring_omits_cross_turn_history(
 
 
 @pytest.mark.asyncio
-async def test_category_b000_still_recalls_real_category_and_child_decides_support(
+async def test_category_00_still_recalls_real_category_and_child_decides_support(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
         category=UNSUPPORTED_CATEGORY_SCORE_ID,
-        category_runner_up="B001",
-        child="A001",
+        category_runner_up="01",
+        child="001",
     )
     ws = _WebSocket()
     session = MultimodalSession(
@@ -1253,7 +1337,7 @@ async def test_category_b000_still_recalls_real_category_and_child_decides_suppo
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1261,7 +1345,7 @@ async def test_category_b000_still_recalls_real_category_and_child_decides_suppo
         release_session=lambda session_id, value: None,
     )
     payload = _session_start_payload()
-    payload["fallback_category_ids"] = ["B001", "B008"]
+    payload["fallback_category_ids"] = ["01", "08"]
     await session.handle_session_start(payload)
     await session.handle_turn_start(
         {
@@ -1283,13 +1367,13 @@ async def test_category_b000_still_recalls_real_category_and_child_decides_suppo
 
     assert [item.stage for item in client.requests] == ["category", "child"]
     assert [item.candidate_id for item in client.requests[1].candidates] == [
-        "A001",
-        "A008",
+        "001",
+        "008",
         UNSUPPORTED_CHILD_SCORE_ID,
     ]
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "B001"
-    assert result["action"]["candidate_id"] == "A001"
+    assert result["action"]["category_id"] == "01"
+    assert result["action"]["candidate_id"] == "001"
     assert result["action"]["execute"] is True
     assert result["action"]["support_status"] == "supported"
     assert result["action"]["fallback_applied"] is False
@@ -1297,17 +1381,17 @@ async def test_category_b000_still_recalls_real_category_and_child_decides_suppo
     assert context["category_scoring_candidate_id"] == (
         UNSUPPORTED_CATEGORY_SCORE_ID
     )
-    assert context["category_decision_id"] == "B001"
+    assert context["category_decision_id"] == "01"
 
 
 @pytest.mark.asyncio
-async def test_category_b000_waits_for_child_before_discarding_reply(
+async def test_category_00_waits_for_child_before_discarding_reply(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
         category=UNSUPPORTED_CATEGORY_SCORE_ID,
-        category_runner_up="B001",
+        category_runner_up="01",
         child=UNSUPPORTED_CHILD_SCORE_ID,
         reply_route="R2",
     )
@@ -1319,7 +1403,7 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1379,7 +1463,7 @@ async def test_category_b000_waits_for_child_before_discarding_reply(
 async def test_child_unsupported_routes_to_default_idle_action(tmp_path) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category="B001",
+        category="01",
         child=UNSUPPORTED_CHILD_SCORE_ID,
         reply_route="R2",
     )
@@ -1392,7 +1476,7 @@ async def test_child_unsupported_routes_to_default_idle_action(tmp_path) -> None
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1420,12 +1504,12 @@ async def test_child_unsupported_routes_to_default_idle_action(tmp_path) -> None
 
     child_request = client.requests[1]
     assert [item.candidate_id for item in child_request.candidates] == [
-        "A001",
+        "001",
         UNSUPPORTED_CHILD_SCORE_ID,
     ]
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "B008"
-    assert result["action"]["candidate_id"] == "A008"
+    assert result["action"]["category_id"] == "08"
+    assert result["action"]["candidate_id"] == "008"
     assert result["action"]["execute"] is True
     assert result["action"]["support_status"] == "unsupported"
     assert result["action"]["fallback_applied"] is True
@@ -1437,7 +1521,7 @@ async def test_default_category_child_can_reject_explicit_action_request(
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category="B008", child=UNSUPPORTED_CHILD_SCORE_ID
+        category="08", child=UNSUPPORTED_CHILD_SCORE_ID
     )
     ws = _WebSocket()
     session = MultimodalSession(
@@ -1448,7 +1532,7 @@ async def test_default_category_child_can_reject_explicit_action_request(
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1476,13 +1560,13 @@ async def test_default_category_child_can_reject_explicit_action_request(
 
     child_request = client.requests[1]
     assert [item.candidate_id for item in child_request.candidates] == [
-        "A008",
+        "008",
         UNSUPPORTED_CHILD_SCORE_ID,
     ]
     assert "即使当前类别也被列为执行兜底类别" in child_request.prefix
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "B008"
-    assert result["action"]["candidate_id"] == "A008"
+    assert result["action"]["category_id"] == "08"
+    assert result["action"]["candidate_id"] == "008"
     assert result["action"]["support_status"] == "unsupported"
     assert result["action"]["fallback_applied"] is True
 
@@ -1493,7 +1577,7 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category="B001",
+        category="01",
         child=UNSUPPORTED_CHILD_SCORE_ID,
         reply_route="R2",
     )
@@ -1505,7 +1589,7 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1565,8 +1649,8 @@ async def test_child_unsupported_discards_provisional_reply_and_records_fallback
 
     # The notice remains auditable, but must not become an ordinary assistant
     # example that a later supported reply can imitate.
-    client.category = "B001"
-    client.child = "A001"
+    client.category = "01"
+    client.child = "001"
     await session.handle_turn_start(
         {
             "type": "turn.start",
@@ -1599,7 +1683,7 @@ async def test_language_required_reply_survives_unsupported_action(
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     client = _DecisionScoreClient(
-        category="B001",
+        category="01",
         child=UNSUPPORTED_CHILD_SCORE_ID,
         reply_route="R0",
         completion_text="会呀，你想听什么风格的歌？",
@@ -1612,7 +1696,7 @@ async def test_language_required_reply_survives_unsupported_action(
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1672,7 +1756,7 @@ async def test_proactive_hard_candidate_exclusion_filters_conflicting_category(
     tmp_path,
 ) -> None:
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(category="B008", child="A001")
+    client = _DecisionScoreClient(category="08", child="001")
     ws = _WebSocket()
     session = MultimodalSession(
         ws,
@@ -1681,7 +1765,7 @@ async def test_proactive_hard_candidate_exclusion_filters_conflicting_category(
         global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
             True,
-            frozenset({"B008", "B001", "B002"}),
+            frozenset({"08", "01", "02"}),
             frozenset(),
             1.0,
         ),
@@ -1711,21 +1795,21 @@ async def test_proactive_hard_candidate_exclusion_filters_conflicting_category(
                     "禁止：选择自然待机、自然呼吸或其他微动作。"
                 )
             },
-            "action_excluded_candidate_ids": ["A008"],
+            "action_excluded_candidate_ids": ["008"],
         }
     )
 
     category_request = client.requests[0]
-    assert "B008" not in {
+    assert "08" not in {
         candidate.candidate_id for candidate in category_request.candidates
     }
     assert "禁止：选择自然待机、自然呼吸或其他微动作" in (
         category_request.avatar_state["state_description"]
     )
-    assert "已从本轮可选集合移除：B008" not in category_request.prefix
+    assert "已从本轮可选集合移除：08" in category_request.prefix
     result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "B001"
-    assert result["action"]["candidate_id"] == "A001"
+    assert result["action"]["category_id"] == "01"
+    assert result["action"]["candidate_id"] == "001"
 
 
 @pytest.mark.asyncio
@@ -1755,7 +1839,7 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
     catalog = load_global_action_catalog(_write_catalog(tmp_path))
     status = GlobalActionCatalogPrewarmStatus(
         True,
-        frozenset({"B008", "B001", "B002"}),
+        frozenset({"08", "01", "02"}),
         frozenset(),
         1.0,
     )
@@ -1828,15 +1912,15 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
 
     first, first_client = await run_session(
         session_id="session-a",
-        category_id="B001",
-        candidate_id="A001",
+        category_id="01",
+        candidate_id="001",
         asset_id="asset-a",
         persona_role="海洋科学家",
     )
     second, second_client = await run_session(
         session_id="session-b",
-        category_id="B002",
-        candidate_id="A003",
+        category_id="02",
+        candidate_id="003",
         asset_id="asset-b",
         persona_role="卡通主持人",
     )
@@ -1859,17 +1943,17 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
         != second_client.requests[0].prefix_cache_namespace
     )
     assert [item.candidate_id for item in first_client.requests[0].candidates] == [
-        "B008",
-        "B001",
+        "08",
+        "01",
         UNSUPPORTED_CATEGORY_SCORE_ID,
     ]
     assert [item.candidate_id for item in second_client.requests[0].candidates] == [
-        "B008",
-        "B002",
+        "08",
+        "02",
         UNSUPPORTED_CATEGORY_SCORE_ID,
     ]
     assert first_client.requests[1].prefix_cache_namespace.startswith(
-        catalog.child_cache_namespace("B001") + ":session:"
+        catalog.child_cache_namespace("01") + ":session:"
     )
     assert (
         "海洋科学家动作偏好"
@@ -1877,21 +1961,21 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
     )
     assert "卡通主持人" not in first_client.requests[1].session_instruction
     assert second_client.requests[1].prefix_cache_namespace.startswith(
-        catalog.child_cache_namespace("B002") + ":session:"
+        catalog.child_cache_namespace("02") + ":session:"
     )
     assert (
         "卡通主持人动作偏好"
         in second_client.requests[1].session_instruction
     )
     assert "海洋科学家" not in second_client.requests[1].session_instruction
-    assert first.candidate_by_id["A001"].execution_binding == {
+    assert first.candidate_by_id["001"].execution_binding == {
         "asset_id": "asset-a"
     }
-    assert second.candidate_by_id["A003"].execution_binding == {
+    assert second.candidate_by_id["003"].execution_binding == {
         "asset_id": "asset-b"
     }
-    assert "A003" not in first.candidate_by_id
-    assert "A001" not in second.candidate_by_id
+    assert "003" not in first.candidate_by_id
+    assert "001" not in second.candidate_by_id
 
 
 @pytest.mark.asyncio
@@ -1899,7 +1983,7 @@ async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isola
 async def test_rejection_generation_does_not_block_fallback_action_or_emit_audio(tmp_path, cancel):
     class GatedClient(_DecisionScoreClient):
         def __init__(self):
-            super().__init__(category="B001", child=UNSUPPORTED_CHILD_SCORE_ID, reply_route="R2")
+            super().__init__(category="01", child=UNSUPPORTED_CHILD_SCORE_ID, reply_route="R2")
             self.rejection_started = asyncio.Event()
             self.release_rejection = asyncio.Event()
 
@@ -1915,7 +1999,7 @@ async def test_rejection_generation_does_not_block_fallback_action_or_emit_audio
     session = MultimodalSession(
         ws, client=client, model_name="Qwen3-Omni", global_action_catalog=catalog,
         global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True, frozenset({"B008", "B001", "B002"}), frozenset(), 1.0),
+            True, frozenset({"08", "01", "02"}), frozenset(), 1.0),
         claim_session=lambda session_id, value: None,
         release_session=lambda session_id, value: None,
     )

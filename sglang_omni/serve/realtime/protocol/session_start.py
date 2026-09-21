@@ -8,8 +8,10 @@ import hashlib
 import json
 import logging
 import time
+from contextlib import suppress
 from typing import Any, Literal
 
+from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.models.qwen3_omni.action_scoring import ActionScoreCandidate
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
@@ -36,6 +38,20 @@ from sglang_omni.serve.realtime.protocol.models import (
     TurnBuffer,
 )
 from sglang_omni.serve.realtime.output_capabilities import SessionOutputCapabilities
+from sglang_omni.serve.realtime.action.routing import (
+    visual_deictic_category_scope,
+    visual_deictic_scope_candidates,
+)
+from sglang_omni.serve.realtime.action.visual_generation import (
+    build_visual_gesture_system_prompt,
+    visual_gesture_candidates,
+)
+from sglang_omni.serve.realtime.action.decision import (
+    action_decision_candidates,
+    action_support_candidates,
+    category_gate_candidates,
+)
+from sglang_omni.serve.realtime.turn_intent import SYSTEM as TURN_INTENT_SYSTEM
 from sglang_omni.serve.realtime.knowledge import (
     KnowledgeBinding,
     KnowledgeContext,
@@ -49,6 +65,18 @@ from sglang_omni.utils.structured_logs import (
 
 logger = logging.getLogger(__name__)
 
+USER_CHILD_PREWARM_LABELS = (
+    "基础表情", "躯干前后动作", "单臂抬起", "指向类", "展示类",
+    "符号化手势", "打招呼与告别", "强调类", "鼓励与庆祝", "身体触碰",
+    "手指精细动作",
+)
+# Counts complete cached prefixes (including shared public tokens), deliberately
+# conservative. Two admitted sessions budget at most 170k tokens, leaving
+# headroom in the deployed 222k-token pool. No promise of pinned KV residency.
+USER_CHILD_PREWARM_TOKEN_BUDGET = 85_000
+USER_CHILD_PREWARM_TIMEOUT_SECONDS = 90.0
+TURN_INTENT_PREWARM_TIMEOUT_SECONDS = 10.0
+
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     from sglang_omni.serve.realtime import multimodal
@@ -61,6 +89,313 @@ from sglang_omni.serve.realtime.protocol.input import MultimodalTurnInputMixin
 
 
 class SessionStartComponent:
+    async def _prewarm_visual_arithmetic_prefix(self, prefill: Any) -> bool:
+        """Warm the static operand-extraction prefix before the first Turn."""
+
+        if (
+            not callable(prefill)
+            or "text" not in self.modalities
+            or "action" not in self.modalities
+        ):
+            return False
+        request_id = (
+            f"session-{self.session_instance_id}-visual-arithmetic-prefill"
+        )
+        started = time.perf_counter()
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(
+                    role="system",
+                    content=self._visual_arithmetic_operand_output_part()["text"],
+                ),
+                # Preserve the user-role header shared by the runtime request;
+                # current-turn audio/images begin only after this boundary.
+                Message(
+                    role="user",
+                    content=[{"type": "text", "text": " "}],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_visual_arithmetic_prewarm",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+            },
+        )
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            emit_structured_log(
+                "error",
+                "session_visual_arithmetic_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_visual_arithmetic_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
+    async def _prewarm_visual_gesture_prefix(self, prefill: Any) -> bool:
+        """Warm the semantic gesture classifier prefix for the experiment."""
+
+        if (
+            not getattr(self, "visual_gesture_generation_enabled", False)
+            or not callable(prefill)
+        ):
+            return False
+        candidates = visual_gesture_candidates(self.categories, self.candidates)
+        if not candidates:
+            return False
+        request_id = f"session-{self.session_instance_id}-visual-gesture-prefill"
+        started = time.perf_counter()
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(
+                    role="system",
+                    content=build_visual_gesture_system_prompt(candidates),
+                ),
+                Message(
+                    role="user",
+                    content=[{"type": "text", "text": " "}],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_visual_gesture_prewarm",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+            },
+        )
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            emit_structured_log(
+                "error",
+                "session_visual_gesture_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_visual_gesture_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            candidate_count=len(candidates),
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
+    async def _prewarm_turn_intent_prefix(self, prefill: Any) -> bool:
+        """Warm the static intent system/user-header prefix before first Turn."""
+
+        if not callable(prefill):
+            return False
+        request_id = f"session-{self.session_instance_id}-intent-prefill"
+        started = time.perf_counter()
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(role="system", content=TURN_INTENT_SYSTEM),
+                # A non-empty placeholder preserves the user-role header. Real
+                # Turn text/audio diverges only after the reusable static prefix.
+                Message(
+                    role="user",
+                    content=[{"type": "text", "text": " "}],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "task": "session_turn_intent_prewarm",
+                "audios": [],
+                "images": [],
+                "image_roles": [],
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "logical_request_id": request_id,
+            },
+        )
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=TURN_INTENT_PREWARM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self.client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            logger.warning(
+                "[SESSION_ACTION_REALTIME] intent prefix prewarm failed; "
+                "continuing without the cache session_id=%s",
+                self.session_id,
+                exc_info=True,
+            )
+            emit_structured_log(
+                "error",
+                "session_turn_intent_prefill_failed",
+                level="warning",
+                session_id=self.session_id,
+                session_instance_id=self.session_instance_id,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return False
+        emit_structured_log(
+            "performance",
+            "session_turn_intent_prefill_completed",
+            session_id=self.session_id,
+            session_instance_id=self.session_instance_id,
+            request_id=request_id,
+            prewarmed=ready,
+            elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+        )
+        return ready
+
+    async def _prewarm_user_child_sessions(self, prefill: Any) -> None:
+        if not callable(prefill):
+            raise ValueError("session_child_prewarm_unavailable")
+        by_label = {category.source_label: category for category in self.categories}
+        self.session_prewarmed_child_category_ids = []
+        consumed = 0
+        started = time.perf_counter()
+        # Ordinary contextual routing strips user-camera frames. Warm that
+        # actual path; explicit visual imitation uses a separate visual prompt.
+        instruction = self._build_session_action_profile_instruction(
+            "child", turn_origin=TURN_ORIGIN_USER, has_user_camera=False,
+        )
+        optional_ids = {c.category_id for tag in (
+            CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
+            CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
+        ) if (c := self.global_action_catalog.category_with_semantic_tag(tag)) is not None}
+        optional_labels = tuple(c.source_label for c in self.categories
+            if c.category_id in optional_ids and c.source_label not in USER_CHILD_PREWARM_LABELS)
+        async with asyncio.timeout(USER_CHILD_PREWARM_TIMEOUT_SECONDS):
+            for label in (*USER_CHILD_PREWARM_LABELS, *optional_labels):
+                optional = label in optional_labels
+                if optional and consumed >= USER_CHILD_PREWARM_TOKEN_BUDGET:
+                    break
+                category = by_label.get(label)
+                if category is None or not category.children:
+                    emit_structured_log(
+                        "performance", "session_child_prewarm_skipped",
+                        session_id=self.session_id, source_label=label,
+                        reason="category_not_available_in_session",
+                    )
+                    continue
+                children = list(category.children)
+                namespace = self._session_action_prefix_namespace(
+                    base_namespace=self.global_action_catalog.child_cache_namespace(
+                        category.category_id, self.action_locale, TURN_ORIGIN_USER,
+                    ),
+                    stage="child", turn_origin=TURN_ORIGIN_USER,
+                    session_instruction=instruction,
+                )
+                stats: dict[str, Any] = {}
+                item_started = time.perf_counter()
+                ready = await prefill(
+                    request_id=f"session-{self.session_instance_id}-child-prewarm-{category.category_id}",
+                    session_instance_id=self.session_instance_id,
+                    model=self.model_name,
+                    system_prompt=self._build_child_system_prompt(category, children),
+                    candidates=[ActionScoreCandidate(
+                        candidate_id=item.candidate_id, suffix=item.candidate_id,
+                        action_id=item.action_id,
+                    ) for item in children],
+                    prefix_cache_namespace=namespace, stage="child",
+                    language=self.action_language, session_instruction=instruction,
+                    admission_priority=30, stats_out=stats,
+                    max_prefix_tokens=USER_CHILD_PREWARM_TOKEN_BUDGET - consumed,
+                )
+                tokens = int(stats.get("prefix_token_count") or stats.get("reusable_boundary_token_count") or 0)
+                consumed += tokens
+                emit_structured_log(
+                    "performance", "session_child_prewarm_completed",
+                    session_id=self.session_id, session_instance_id=self.session_instance_id,
+                    category_id=category.category_id, source_label=label,
+                    candidate_count=len(children), prewarmed=bool(ready),
+                    input_variant="contextual_without_user_camera",
+                    prefix_cache_namespace=namespace, prefix_tokens=tokens,
+                    cumulative_prefix_tokens=consumed,
+                    token_budget=USER_CHILD_PREWARM_TOKEN_BUDGET,
+                    elapsed_ms=round((time.perf_counter() - item_started) * 1000, 3),
+                )
+                if not ready:
+                    if optional:
+                        emit_structured_log(
+                            "performance", "session_child_prewarm_skipped",
+                            session_id=self.session_id, source_label=label,
+                            reason="optional_prefill_unavailable_or_over_budget",
+                        )
+                        continue
+                    raise ValueError("session_child_prewarm_failed")
+                if tokens <= 0:
+                    raise ValueError("session_child_prewarm_missing_token_accounting")
+                if consumed > USER_CHILD_PREWARM_TOKEN_BUDGET:
+                    raise ValueError("session_child_prewarm_budget_exceeded")
+                self._prefilled_action_prefix_namespaces.add(namespace)
+                self.session_prewarmed_child_category_ids.append(category.category_id)
+        emit_structured_log(
+            "performance", "session_child_prewarm_ready",
+            session_id=self.session_id, category_ids=self.session_prewarmed_child_category_ids,
+            prefix_tokens=consumed, elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+        )
+
     async def _prefill_action_catalog_degraded(
         self,
         prefill: Any,
@@ -220,7 +555,7 @@ class SessionStartComponent:
                 raise ValueError(
                     f"action candidates must contain at most {MAX_ACTION_CANDIDATES} children"
                 )
-            if categories:
+            if categories and not self.direct_action_selection:
                 if (
                     not isinstance(raw_fallback_category_ids, list)
                     or not raw_fallback_category_ids
@@ -268,7 +603,7 @@ class SessionStartComponent:
                             f"{category_id}"
                         )
                     fallback_category_ids.append(category_id)
-            elif raw_fallback_category_ids is not None:
+            elif raw_fallback_category_ids is not None and not self.direct_action_selection:
                 raise ValueError(
                     "fallback_category_ids requires hierarchical action_candidates"
                 )
@@ -277,7 +612,7 @@ class SessionStartComponent:
         elif raw_fallback_category_ids is not None:
             raise ValueError("fallback_category_ids requires the action modality")
 
-        raw_prewarm_category_ids = event.get("prewarm_child_category_ids", [])
+        raw_prewarm_category_ids = [] if self.direct_action_selection else event.get("prewarm_child_category_ids", [])
         if not isinstance(raw_prewarm_category_ids, list):
             raise ValueError("prewarm_child_category_ids must be a list")
         if len(raw_prewarm_category_ids) > MAX_PREWARM_CHILD_CATEGORIES:
@@ -366,7 +701,10 @@ class SessionStartComponent:
             else:
                 self.action_selection_mode = selected_mode
 
-        if "text" in modalities and "action" in modalities:
+        if self.direct_action_selection:
+            self.action_selection_mode = ACTION_SELECTION_MODE_FLAT_CHILDREN
+
+        if "text" in modalities and "action" in modalities and not self.direct_action_selection:
             if self.action_selection_mode != ACTION_SELECTION_MODE_HIERARCHICAL:
                 raise ValueError(
                     "text and action fusion currently requires selection_mode=hierarchical"
@@ -513,6 +851,8 @@ class SessionStartComponent:
         self.protocol_version = event.get("_protocol_version")
         self.locale = event.get("_locale", "zh-CN" if language == "zh" else "en-US")
         self.language = language
+        self.action_locale = event.get("_action_locale", self.locale)
+        self.action_language = PROMPT_LANGUAGE_BY_LOCALE[self.action_locale]
         self.modalities = modalities
         self.output_capabilities = output_capabilities
         self.knowledge_binding = knowledge_binding
@@ -588,20 +928,195 @@ class SessionStartComponent:
             else "flat_children"
         )
         self.action_prefix_cache_namespace = (
-            self.global_action_catalog.category_cache_namespace(self.locale)
+            self.global_action_catalog.action_cache_namespace(self.action_locale)
+            if self.direct_action_selection
+            else self.global_action_catalog.category_cache_namespace(self.action_locale)
             if self.global_action_catalog is not None and categories
-            else f"{mode_namespace}:{self.locale}:{self.action_catalog_hash}"
+            else f"{mode_namespace}:{self.action_locale}:{self.action_catalog_hash}"
         )
         prefill = getattr(self.client, "prefill_action_catalog", None)
-        if self.global_action_catalog is not None and categories:
-            locale_prewarm = self.global_action_prewarm.for_locale(self.locale)
+        intent_prefill = getattr(self.client, "prefill_completion_prefix", None)
+        intent_prefill_task = asyncio.create_task(
+            self._prewarm_turn_intent_prefix(intent_prefill),
+            name=f"session-intent-prefill-{self.session_instance_id}",
+        )
+        visual_gesture_prefill_task = asyncio.create_task(
+            self._prewarm_visual_gesture_prefix(intent_prefill),
+            name=f"session-visual-gesture-prefill-{self.session_instance_id}",
+        )
+        visual_arithmetic_prefill_task = asyncio.create_task(
+            self._prewarm_visual_arithmetic_prefix(intent_prefill),
+            name=(
+                f"session-visual-arithmetic-prefill-"
+                f"{self.session_instance_id}"
+            ),
+        )
+        if self.direct_action_selection and candidates:
+            # Warm every direct-action prefix that an ordinary Session can use
+            # before session.started is emitted.  User camera Turns carry an
+            # additional immutable policy block and therefore have a distinct
+            # scoped namespace from ordinary user Turns.
+            gesture_scope = visual_deictic_category_scope(
+                self.categories,
+                "gesture",
+            )
+            prefill_routes = [
+                (TURN_ORIGIN_USER, False, None),
+                (TURN_ORIGIN_USER, True, None),
+                (TURN_ORIGIN_PROACTIVE, False, None),
+            ]
+            if (
+                gesture_scope is not None
+                and not getattr(
+                    self, "visual_gesture_generation_enabled", False
+                )
+            ):
+                prefill_routes.append(
+                    (TURN_ORIGIN_USER, True, gesture_scope)
+                )
+            for origin, has_user_camera, visual_scope in prefill_routes:
+                prefill_started = time.perf_counter()
+                prefill_stats: dict[str, Any] = {}
+                camera_suffix = "-camera" if has_user_camera else ""
+                visual_suffix = (
+                    f"-visual-{visual_scope.name}"
+                    if visual_scope is not None
+                    else ""
+                )
+                request_id = (
+                    f"session-{session_id}-single-prefill-{origin}"
+                    f"{camera_suffix}{visual_suffix}"
+                )
+                instruction = self._build_session_action_profile_instruction(
+                    "single",
+                    turn_origin=origin,
+                    has_user_camera=has_user_camera,
+                )
+                prefill_candidates = list(candidates)
+                if visual_scope is not None:
+                    instruction += self._visual_deictic_catalog_instruction(
+                        visual_scope,
+                        origin,
+                    )
+                    scoped_candidate_ids = {
+                        candidate.candidate_id
+                        for candidate in visual_deictic_scope_candidates(
+                            visual_scope
+                        )
+                    }
+                    prefill_candidates = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.candidate_id in scoped_candidate_ids
+                    ]
+                prefill_decision_visual = bool(
+                    getattr(self, "action_decision_batch_visual", False)
+                    and has_user_camera
+                )
+                prefill_category_ids = {
+                    candidate.category_id
+                    for candidate in prefill_candidates
+                    if candidate.category_id is not None
+                }
+                prefill_gate_categories = [
+                    category
+                    for category in self.categories
+                    if category.category_id in prefill_category_ids
+                ]
+                prefill_category_gate = bool(
+                    self._direct_category_gate_enabled(origin)
+                    and visual_scope is None
+                    and prefill_gate_categories
+                )
+                namespace = self._direct_action_prefix_namespace(
+                    origin,
+                    instruction,
+                    include_visual=prefill_decision_visual,
+                    include_category_gate=prefill_category_gate,
+                    category_gate_category_ids=tuple(
+                        category.category_id
+                        for category in prefill_gate_categories
+                    ),
+                )
+                prefill_score_candidates = [
+                    ActionScoreCandidate(
+                        candidate_id=c.candidate_id,
+                        suffix=c.candidate_id,
+                        action_id=c.action_id,
+                    )
+                    for c in prefill_candidates
+                ] + [ActionScoreCandidate(
+                    candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
+                    suffix=UNSUPPORTED_CHILD_SCORE_ID,
+                    action_id=UNSUPPORTED_DECISION_ID,
+                )] + (
+                    action_decision_candidates(
+                        include_visual=prefill_decision_visual,
+                        english=self.action_language == "en",
+                    )
+                    if getattr(self, "action_decision_batch_mode", "off")
+                    != "off"
+                    else []
+                ) + (
+                    category_gate_candidates(
+                        prefill_gate_categories,
+                        english=self.action_language == "en",
+                    )
+                    if prefill_category_gate
+                    else []
+                ) + (
+                    action_support_candidates(
+                        english=self.action_language == "en"
+                    )
+                    if prefill_category_gate
+                    else []
+                )
+                ready = callable(prefill) and await self._prefill_action_catalog_degraded(
+                    prefill, request_id=request_id,
+                    stats_out=prefill_stats,
+                    model=self.model_name,
+                    session_instance_id=self.session_instance_id,
+                    system_prompt=self._build_action_system_prompt(
+                        origin,
+                        include_visual=prefill_decision_visual,
+                        include_category_gate=prefill_category_gate,
+                        category_gate_categories=prefill_gate_categories,
+                    ),
+                    candidates=prefill_score_candidates,
+                    prefix_cache_namespace=namespace, stage="single",
+                    language=self.action_language, session_instruction=instruction,
+                )
+                if ready:
+                    self._prefilled_action_prefix_namespaces.add(namespace)
+                if origin == TURN_ORIGIN_USER and not has_user_camera:
+                    self.action_prefix_prefilled = bool(ready)
+                emit_structured_log(
+                    "performance", "session_action_single_prefill_completed",
+                    session_id=session_id, turn_origin=origin,
+                    has_user_camera=has_user_camera,
+                    prewarmed=bool(ready), stage="single",
+                    selection_mode="flat_children", locale=self.action_locale,
+                    session_instance_id=self.session_instance_id,
+                    request_id=request_id, prefix_cache_namespace=namespace,
+                    catalog_hash=self.global_action_catalog.catalog_hash,
+                    action_count=len(prefill_candidates),
+                    candidate_count=len(prefill_score_candidates),
+                    visual_scope=(
+                        visual_scope.name if visual_scope is not None else None
+                    ),
+                    probe_candidate_count=1,
+                    elapsed_ms=round((time.perf_counter() - prefill_started) * 1000, 3),
+                    stats=prefill_stats,
+                )
+        elif self.global_action_catalog is not None and categories:
+            locale_prewarm = self.global_action_prewarm.for_locale(self.action_locale)
             self.prewarmed_child_category_ids = sorted(
                 {item.category_id for item in categories}
                 & set(locale_prewarm.ready_child_category_ids)
             )
             self._prefilled_action_prefix_namespaces.update(
                 self.global_action_catalog.child_cache_namespace(
-                    category_id, self.locale
+                    category_id, self.action_locale
                 )
                 for category_id in self.prewarmed_child_category_ids
             )
@@ -658,7 +1173,7 @@ class SessionStartComponent:
                         ],
                         prefix_cache_namespace=session_category_namespace,
                         stage="category",
-                        language=self.language,
+                        language=self.action_language,
                         session_instruction=category_session_instruction,
                     )
                 )
@@ -722,7 +1237,7 @@ class SessionStartComponent:
                 candidates=prefill_candidates,
                 prefix_cache_namespace=session_prefix_namespace,
                 stage=prefill_stage,
-                language=self.language,
+                language=self.action_language,
                 session_instruction=session_instruction,
             )
             if self.action_prefix_prefilled:
@@ -769,7 +1284,7 @@ class SessionStartComponent:
                         ],
                         prefix_cache_namespace=child_namespace,
                         stage="child",
-                        language=self.language,
+                        language=self.action_language,
                         session_instruction=child_session_instruction,
                     )
                     elapsed_ms = round(
@@ -789,6 +1304,13 @@ class SessionStartComponent:
                         prewarmed=prewarmed,
                         elapsed_ms=elapsed_ms,
                     )
+        if not self.direct_action_selection and self.global_action_catalog is not None and categories and getattr(self, "session_child_prewarm_enabled", True):
+            await self._prewarm_user_child_sessions(prefill)
+        self.turn_intent_prefix_prefilled = await intent_prefill_task
+        self.visual_gesture_prefix_prefilled = await visual_gesture_prefill_task
+        self.visual_arithmetic_prefix_prefilled = (
+            await visual_arithmetic_prefill_task
+        )
         self.started = True
         emit_structured_log(
             "lifecycle",
@@ -797,6 +1319,13 @@ class SessionStartComponent:
             outputs=list(self.output_capabilities.outputs),
             tts_manager_created=self.embedded_tts is not None,
             action_prefix_prefilled=self.action_prefix_prefilled,
+            turn_intent_prefix_prefilled=self.turn_intent_prefix_prefilled,
+            visual_gesture_prefix_prefilled=(
+                self.visual_gesture_prefix_prefilled
+            ),
+            visual_arithmetic_prefix_prefilled=(
+                self.visual_arithmetic_prefix_prefilled
+            ),
         )
 
         # ``action.allowed_candidates`` is a whitelist of unique candidate IDs.
@@ -815,6 +1344,9 @@ class SessionStartComponent:
             "action_candidate_count": unique_candidate_count,
             "action_category_count": len(categories),
             "action_selection_mode": self.action_selection_mode,
+            "action_single_token_mode": getattr(
+                self, "action_single_token_mode", "off"
+            ),
             "action_selection_stages": (
                 2
                 if categories
@@ -822,6 +1354,9 @@ class SessionStartComponent:
                 else 1
             ),
             "action_prefix_prefilled": self.action_prefix_prefilled,
+            "avatar_image_encoder_prefetch_enabled": (
+                self.avatar_image_encoder_prefetch_enabled
+            ),
             "action_profile_applied": self.action_profile is not None,
             "action_profile_sha256": action_profile_audit["action_profile_sha256"],
             "prewarmed_child_category_ids": list(self.prewarmed_child_category_ids),
@@ -837,6 +1372,7 @@ class SessionStartComponent:
                     "protocol_version": self.protocol_version,
                     "outputs": list(self.modalities),
                     "locale": self.locale,
+                    "action_locale": self.action_locale,
                     "diagnostics": {
                         "avatar_state_analysis_enabled": (
                             self.avatar_state_analysis_enabled
@@ -887,6 +1423,18 @@ class SessionStartComponent:
                     ),
                 }
             )
+        selection_mapping = getattr(
+            self, "action_selection_token_mapping", None
+        )
+        if selection_mapping is not None:
+            started_payload.update(
+                {
+                    "action_selection_mapping_version": selection_mapping.mapping_version,
+                    "action_selection_mapping_hash": selection_mapping.mapping_hash,
+                    "action_selection_calibration_version": selection_mapping.calibration_version,
+                    "action_selection_calibration_hash": selection_mapping.calibration_hash,
+                }
+            )
         if await self.send(started_payload):
             emit_structured_log(
                 "lifecycle",
@@ -900,10 +1448,31 @@ class SessionStartComponent:
             session_id=self.session_id,
             protocol_version=self.protocol_version,
             locale=self.locale,
+            action_locale=self.action_locale,
             modalities=list(self.modalities),
             action_selection_mode=self.action_selection_mode,
+            action_single_token_mode=getattr(
+                self, "action_single_token_mode", "off"
+            ),
+            action_selection_mapping_hash=(
+                selection_mapping.mapping_hash
+                if selection_mapping is not None else None
+            ),
+            action_selection_calibration_hash=(
+                selection_mapping.calibration_hash
+                if selection_mapping is not None else None
+            ),
             action_ready_tts_decoupled=self.action_ready_tts_decoupled,
             route_action_parallel=self.route_action_parallel,
+            visual_gesture_generation_enabled=(
+                self.visual_gesture_generation_enabled
+            ),
+            image_encoder_prefetch_enabled=(
+                self.image_encoder_prefetch_enabled
+            ),
+            avatar_image_encoder_prefetch_enabled=(
+                self.avatar_image_encoder_prefetch_enabled
+            ),
             action_catalog_hash=self.action_catalog_hash,
             session_action_catalog_hash=self.action_catalog_hash,
             global_action_catalog_hash=self.global_action_catalog_hash,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from typing import Any
@@ -52,7 +53,7 @@ ACTION_PERSONA_FIELDS = (
 CHARACTER_PROFILE_FIELDS = ACTION_PERSONA_FIELDS + (
     "visual_behavior_preferences",
 )
-FACIAL_EXPRESSION_CATEGORY_ID = "B019"
+FACIAL_EXPRESSION_CATEGORY_ID = "19"
 DEFAULT_REPLY_MAX_NEW_TOKENS = 512
 DEFAULT_REPLY_TEMPERATURE = 0.4
 PURE_ACTION_REPLY_MAX_NEW_TOKENS = 48
@@ -71,6 +72,9 @@ MAX_PREPARED_IMAGE_BYTES_PER_TURN = 64 * 1024 * 1024
 # scoring omits general history; its one reference-only action anchor does not
 # use this limit.
 MAX_REPLY_HISTORY_TURNS = 2
+# Preserve a small ordered image set for questions that compare multiple
+# current-turn camera frames while keeping request size bounded.
+MAX_REPLY_CURRENT_IMAGES = 8
 REPLY_HISTORY_CURRENT_ONLY = "CURRENT_ONLY"
 REPLY_HISTORY_REQUIRED = "HISTORY_REQUIRED"
 REPLY_MODE_LANGUAGE_REQUIRED = "LANGUAGE_REQUIRED"
@@ -84,7 +88,13 @@ PURE_ACTION_REPLY_VALIDATION_TIMEOUT_ENV = (
     "SGLANG_OMNI_PURE_ACTION_REPLY_VALIDATION_TIMEOUT_S"
 )
 DEFAULT_PURE_ACTION_REPLY_VALIDATION_TIMEOUT_S = 0.5
-MAX_ACTION_CURRENT_IMAGES = 8
+# Ordinary action selection needs the latest evidence, not a six-frame
+# approximation of video.  A language-gated visual-imitation request is
+# different: retaining a short stable tail prevents one transitional camera
+# frame from becoming the entire visual target while keeping the action path
+# bounded.
+MAX_ACTION_CURRENT_USER_CAMERA_IMAGES = 1
+MAX_ACTION_VISUAL_SCOPE_USER_CAMERA_IMAGES = 3
 # Legacy diagnostic-only bounds used when explicitly constructing an action
 # context with history. Production action scoring keeps include_history=False.
 MAX_ACTION_HISTORY_TURNS = 2
@@ -99,14 +109,35 @@ ACTION_READY_TTS_DECOUPLED_ENV = (
     "SGLANG_OMNI_REALTIME_ACTION_READY_TTS_DECOUPLED"
 )
 ROUTE_ACTION_PARALLEL_ENV = "SGLANG_OMNI_REALTIME_ROUTE_ACTION_PARALLEL"
+VISUAL_GESTURE_GENERATION_ENV = "SGLANG_OMNI_VISUAL_GESTURE_GENERATION"
+IMAGE_ENCODER_PREFETCH_ENV = "SGLANG_OMNI_IMAGE_ENCODER_PREFETCH"
+AVATAR_IMAGE_ENCODER_PREFETCH_ENV = (
+    "SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH"
+)
+# Semantic visual-gesture generation is the canonical production path.  Keep
+# the environment variable as an emergency kill switch instead of requiring
+# every launcher to remember to opt in.
+DEFAULT_VISUAL_GESTURE_GENERATION_ENABLED = True
 ACTION_SELECTION_MODE_ENV = "SGLANG_OMNI_ACTION_SELECTION_MODE"
 ACTION_SELECTION_MODE_HIERARCHICAL = "hierarchical"
 ACTION_SELECTION_MODE_FLAT_CHILDREN = "flat_children"
 ACTION_MICRO_BATCH_SIZE_ENV = "SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE"
-DEFAULT_ACTION_MICRO_BATCH_SIZE = 64
+DEFAULT_ACTION_MICRO_BATCH_SIZE = 200
+ACTION_DECISION_BATCH_MODE_ENV = "SGLANG_OMNI_ACTION_DECISION_BATCH_MODE"
+ACTION_DECISION_BATCH_VISUAL_ENV = "SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL"
+ACTION_DECISION_MIN_MARGIN_ENV = "SGLANG_OMNI_ACTION_DECISION_MIN_MARGIN"
 ACTION_CATEGORY_TOP_K_ENV = "SGLANG_OMNI_ACTION_CATEGORY_TOP_K"
 DEFAULT_ACTION_CATEGORY_TOP_K = 2
 MAX_ACTION_CATEGORY_TOP_K = 3
+ACTION_CATEGORY_ADAPTIVE_TOP1_ENV = (
+    "SGLANG_OMNI_ACTION_CATEGORY_ADAPTIVE_TOP1"
+)
+ACTION_CATEGORY_TOP1_MIN_MARGIN_ENV = (
+    "SGLANG_OMNI_ACTION_CATEGORY_TOP1_MIN_MARGIN"
+)
+DEFAULT_ACTION_CATEGORY_TOP1_MIN_MARGIN = 0.8
+ACTION_CATEGORY_TOP1_MAX_PPL_ENV = "SGLANG_OMNI_ACTION_CATEGORY_TOP1_MAX_PPL"
+DEFAULT_ACTION_CATEGORY_TOP1_MAX_PPL = 8.0
 TURN_ORIGIN_USER = "user"
 TURN_ORIGIN_PROACTIVE = "proactive"
 ACTION_FINISHED_TRIGGER = "action_finished"
@@ -258,6 +289,44 @@ def normalize_action_category_top_k(value: int | str | None = None) -> int:
     return top_k
 
 
+def _normalize_positive_finite_float(
+    value: float | str | None,
+    *,
+    env_name: str,
+    default: float,
+) -> float:
+    raw = value if value is not None else os.environ.get(env_name)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    try:
+        normalized = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{env_name} must be a positive finite number; got {raw!r}") from exc
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError(f"{env_name} must be a positive finite number; got {raw!r}")
+    return normalized
+
+
+def normalize_action_category_top1_min_margin(
+    value: float | str | None = None,
+) -> float:
+    return _normalize_positive_finite_float(
+        value,
+        env_name=ACTION_CATEGORY_TOP1_MIN_MARGIN_ENV,
+        default=DEFAULT_ACTION_CATEGORY_TOP1_MIN_MARGIN,
+    )
+
+
+def normalize_action_category_top1_max_ppl(
+    value: float | str | None = None,
+) -> float:
+    return _normalize_positive_finite_float(
+        value,
+        env_name=ACTION_CATEGORY_TOP1_MAX_PPL_ENV,
+        default=DEFAULT_ACTION_CATEGORY_TOP1_MAX_PPL,
+    )
+
+
 def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
     """Expose stable action latency buckets without the diagnostic GPU payload."""
     suffix_batch_ms = [float(value) for value in stats.get("suffix_batch_ms", [])]
@@ -310,6 +379,38 @@ def _action_timing_breakdown(stats: dict[str, Any]) -> dict[str, Any]:
             "prefix_chunks": [
                 dict(item) for item in stats.get("prefix_chunks", [])
             ],
+            "candidate_preparation": {
+                "snapshot_ms": float(stats.get("candidate_snapshot_ms", 0.0)),
+                "materialize_ms": float(
+                    stats.get("candidate_materialize_ms", 0.0)
+                ),
+                "prefix_copy_ms": float(
+                    stats.get("candidate_prefix_copy_ms", 0.0)
+                ),
+                "tensorize_ms": float(
+                    stats.get("candidate_tensorize_ms", 0.0)
+                ),
+                "req_init_ms": float(
+                    stats.get("candidate_req_init_ms", 0.0)
+                ),
+                "metadata_copy_ms": float(
+                    stats.get("candidate_metadata_copy_ms", 0.0)
+                ),
+                "mrope_ms": float(stats.get("candidate_mrope_ms", 0.0)),
+                "data_init_ms": float(
+                    stats.get("candidate_data_init_ms", 0.0)
+                ),
+                "short_suffix_cache_hit": bool(
+                    stats.get("candidate_short_suffix_cache_hit", False)
+                ),
+                "critical_wait_ms": float(
+                    stats.get("candidate_materialize_wait_ms", 0.0)
+                ),
+                "enqueue_ms": float(stats.get("candidate_enqueue_ms", 0.0)),
+                "queue_wait_ms": float(
+                    stats.get("candidate_queue_wait_ms", sum(suffix_queue_ms))
+                ),
+            },
         },
         "suffix": {
             "batch_count": int(stats.get("suffix_batch_count", len(suffix_batch_ms))),

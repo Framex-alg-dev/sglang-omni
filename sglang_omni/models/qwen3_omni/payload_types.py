@@ -38,6 +38,8 @@ class ThinkerOutput(TypedDict, total=False):
     step: int
     is_final: bool
     extra_model_outputs: dict[str, Any]
+    output_token_logprobs: list[Any]
+    output_top_logprobs: list[Any]
 
 
 @dataclass

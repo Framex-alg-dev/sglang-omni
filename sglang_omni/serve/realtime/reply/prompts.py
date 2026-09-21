@@ -38,6 +38,13 @@ from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_
 from sglang_omni.serve.realtime.runtime_prompt_overrides import (
     effective_runtime_prompt,
 )
+from sglang_omni.serve.realtime.user_image_policy import (
+    USER_IMAGE_REPLY_RULES_EN,
+    USER_IMAGE_REPLY_RULES_ZH,
+)
+from sglang_omni.serve.realtime.visual_observation import (
+    numeric_visual_observation_rules_zh,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,56 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     hook = getattr(multimodal, "emit_structured_log", _base_emit_structured_log)
     return hook(log_type, event, **fields)
 class ReplyPromptComponent:
+    def _visual_arithmetic_operand_output_part(self) -> dict[str, str]:
+        numeric_rules_zh = numeric_visual_observation_rules_zh()
+        return {
+            "type": "text",
+            "text": self._prompt(
+                zh=(
+                    "[服务端内部视觉算术输出约束]\n"
+                    "本段只适用于识别当前画面中的两个有序数字手势；运算类型已由另一条语义链路"
+                    "确定，本链路绝不能判断、猜测或输出加减乘除；"
+                    "其他请求忽略本段并遵循前述规则。先过滤没有刻意数字手型的画面：没有举手、"
+                    "手已放下、空白、遮挡和过渡画面都不表示任何数字，绝不能把它们识别成 0；"
+                    "只有清晰、刻意做出的数字手势才是操作数。先按采集顺序把相同数字手型的连续图片"
+                    "合并成一个稳定展示段；位于两个展示段之间、只短暂出现一次的中间手型属于手指切换"
+                    "过程，即使画面清晰也不能作为操作数。取最早和最晚的稳定展示段填入两个槽位。"
+                    "首帧或末帧中清晰完整的手型可以单独构成边界展示段。若只剩一个稳定展示段，"
+                    "该数字同时填入两个槽位，例如只稳定看到数字 2 时输出 2,2。"
+                    "数字手型统一按以下规则识别：\n"
+                    f"{numeric_rules_zh}\n"
+                    "你只负责识别按展示顺序排列的操作数，不要计算。只输出且必须严格输出 A,B，"
+                    "其中 A 和 B 均为 0 到 10 的整数；无法可靠识别两个槽位时只输出 INVALID；"
+                    "不得输出运算符、前缀、解释、标点句号或其他内容。"
+                ),
+                en=(
+                    "[Server-internal visual arithmetic output contract]\n"
+                    "This block only identifies two ordered numeric hand gestures in the "
+                    "current view. Another semantic path has already determined the operation; "
+                    "never infer, guess, or output add, subtract, multiply, or divide. Ignore this "
+                    "block for every other request and follow the preceding rules. First filter "
+                    "frames with no deliberately formed numeric handshape: no raised hand, a "
+                    "lowered hand, blank, occluded, and transition frames represent no number "
+                    "and must never be read as zero. Only a clear, deliberate numeric gesture is "
+                    "an operand. In capture order, merge consecutive images with the same numeric "
+                    "handshape into one stable display segment. A handshape that appears only "
+                    "briefly between two display segments is a finger-transition state and is not "
+                    "an operand even when the frame is sharp. Fill the slots from the earliest and "
+                    "latest stable display segments. A clear complete handshape in the first or "
+                    "last frame may form a boundary display segment by itself. If only one stable "
+                    "display segment remains, put that number in both slots; for example, if only "
+                    "number 2 is stable, output 2,2. For digit 3, accept either three extended "
+                    "index/middle/ring fingers, or thumb and index fingertips touching in a circle "
+                    "with the other three fingers extended. A circle without those other three "
+                    "extended fingers is an OK/pinch gesture, not digit 3. "
+                    "Identify ordered operands only; do not calculate. Output exactly A,B, where "
+                    "A and B are integers from 0 through 10. If both slots cannot be identified "
+                    "reliably, output only INVALID. Do not output an operator, prefix, explanation, "
+                    "terminal punctuation, or anything else."
+                ),
+            ),
+        }
+
     def _pure_action_short_reply_part(self) -> dict[str, str]:
         return {
             "type": "text",
@@ -101,7 +158,37 @@ class ReplyPromptComponent:
         return effective_runtime_prompt(
             "reply_rules",
             self._repository_reply_role_and_agency_system_prompt(),
-        ) + mixed_instruction_policy(self.language, "reply")
+            language=self.language,
+        ) + mixed_instruction_policy(
+            self.language, "reply"
+        ) + self._client_language_lock_precedence_system_prompt()
+
+    def _client_language_lock_precedence_system_prompt(self) -> str:
+        return self._prompt(
+            zh=(
+                "\n\n[回复语种与内容]\n"
+                "如果前面的角色回复说明指定了每条回复的语种，则每次都使用该语种。用户请求中的"
+                "其他目标语种只修饰输出语言，不改变用户真正需要的内容。保留并直接完成故事、翻译、"
+                "引用、朗读、复述、举例或回答等实际任务，同时只使用指定的回复语种。例如，指定英文"
+                "时遇到‘用中文说个故事’，直接从英文故事正文开始；指定中文时遇到英文要求，直接用"
+                "中文完成相同内容。输出只包含用户请求的实际内容，不添加关于语种选择的前言、道歉或说明。"
+                "如果前面的角色回复说明没有指定语种，则根据当前请求选择语种。"
+            ),
+            en=(
+                "\n\n[Response language and content]\n"
+                "When the preceding character reply instructions specify a language for every "
+                "response, use that language every time. A different target language in the "
+                "user's request modifies only the output language, not the substantive content "
+                "the user wants. Preserve and directly complete the actual story, translation, "
+                "quotation, reading, repetition, example, or answer while using only the specified "
+                "response language. For example, when English is specified and the user says "
+                "'用中文说个故事', begin directly with the English story itself. Apply the same "
+                "behavior in Chinese when Chinese is specified and the user asks for English. "
+                "Output only the requested substantive content, without a preamble, apology, or "
+                "commentary about language choice. When the preceding character reply instructions "
+                "do not specify a language, choose the language from the current request."
+            ),
+        )
 
     def _repository_reply_role_and_agency_system_prompt(self) -> str:
         return self._prompt(
@@ -203,7 +290,10 @@ class ReplyPromptComponent:
                 "并采用语义最小改写，不得未经要求增加、替换或反转动作。普通语言任务"
                 "确实无法完成时可以如实说明，但身体动作是否可执行由独立动作系统判断。"
                 "不得根据角色职业、是否拥有实体、技术实现方式或是否具备专业身份，自行"
-                "断言或拒绝身体动作，也不得向用户谈论这些内部判断依据。只有当用户明确引用"
+                "断言或拒绝身体动作，也不得向用户谈论这些内部判断依据。"
+                "服务端在当前 user 消息中提供的摄像头可用状态和视觉证据标记，是本轮视觉"
+                "事实，优先于角色人设；不得根据角色职业、AI 身份或技术实现方式，自行推断"
+                "本轮是否有视觉输入。只有当用户明确引用"
                 "他人原话、描述第三方、指定角色扮演关系，或明确重新定义“你/我”指代时，"
                 "才按该明确上下文理解。此规则适用于所有会话，优先于角色人设和回复风格。\n\n"
                 "[用户纯动作请求回复规则]\n"
@@ -368,6 +458,11 @@ class ReplyPromptComponent:
                 "physical action is impossible from the character's occupation, embodiment, "
                 "technical implementation, or professional status. Do not refuse a physical "
                 "action or discuss these internal decision factors with the user. "
+                "The camera-availability state and visual-evidence marker supplied by the "
+                "server in the current user message are authoritative facts for the current "
+                "turn and take priority over persona. Do not infer whether visual input is "
+                "available from the character's occupation, AI identity, or technical "
+                "implementation. "
                 "Follow a different mapping only when the user explicitly "
                 "quotes someone, describes a third party, establishes role-play roles, or "
                 "redefines who 'you' or 'I' refers to. This rule applies to every session "
@@ -404,7 +499,8 @@ class ReplyPromptComponent:
             "text": self._prompt(
                 zh=(
                     "[当前用户请求优先]当前这条 user 消息中的用户语音或文本，"
-                    "是你本次需要处理的主要请求。只有该语音或文本明确要求延续、解释、"
+                    "定义你本次需要完成的任务。图片、历史、解析结果和路由标签只用于提供证据、"
+                    "消解指代或选择输出通道，不得改写、缩减、替换或遗漏该任务。只有该语音或文本明确要求延续、解释、"
                     "重复、修改或比较先前内容，或者包含必须依赖先前对话才能确定含义的"
                     "指代或省略时，才使用提供给你的相关历史消息；否则应独立理解并回答"
                     "当前请求，不得延续、复用或重复先前回复的主题或答案。不得假定自己"
@@ -412,7 +508,10 @@ class ReplyPromptComponent:
                 ),
                 en=(
                     "[Current user request takes priority] The user audio or text in the "
-                    "current user message is the primary request you must handle now. Use "
+                    "current user message defines the task you must complete now. Images, "
+                    "history, parsed data, and route labels may only provide evidence, resolve "
+                    "references, or select an output channel; they must not rewrite, narrow, "
+                    "replace, or omit that task. Use "
                     "the provided history only when that audio or text explicitly asks to "
                     "continue, explain, repeat, modify, or compare earlier content, or "
                     "contains a reference or omission that cannot be resolved without prior "
@@ -425,27 +524,57 @@ class ReplyPromptComponent:
         }
 
 
+    def _explicit_client_fixed_reply_language(self) -> Literal["zh", "en"] | None:
+        instructions = self.instructions.casefold()
+        if (
+            "language: always respond in english" in instructions
+            and "use english for every response" in instructions
+        ):
+            return "en"
+        if (
+            "语言: 每条回复都必须使用中文" in instructions
+            and "每条回复都必须使用中文，即使用户使用其他语言" in instructions
+        ):
+            return "zh"
+        return None
+
+    def _reply_current_turn_language_lock_reminder_part(
+        self,
+    ) -> dict[str, str] | None:
+        fixed_language = self._explicit_client_fixed_reply_language()
+        if fixed_language is None:
+            return None
+        if fixed_language == "zh":
+            text = (
+                "[本轮回复语种]本轮只使用中文。保留当前请求的实际内容，只忽略与中文冲突的"
+                "目标语种修饰。例如，用户要求用英文讲故事时，直接从中文故事正文开始。"
+                "输出只包含用户请求的实际中文内容，不添加关于语种选择的前言、道歉或说明。"
+            )
+        else:
+            text = (
+                "[Response language for this reply] Use only English for this reply. Preserve "
+                "the user's substantive content request and ignore only a target-language "
+                "modifier that conflicts with English. For example, if the user says "
+                "'用中文说个故事', begin directly with the English story itself. Output only "
+                "the requested substantive English content, without a preamble, apology, or "
+                "commentary about language choice."
+            )
+        return {
+            "type": "text",
+            "text": text,
+        }
+
+
     def _reply_user_camera_response_guard_part(self) -> dict[str, str]:
         return {
             "type": "text",
-            "text": self._prompt(
-                zh=(
-                    "[当前回复的视觉使用边界]只有当前 user 消息中的用户语音或文本"
-                    "明确询问用户本人或其环境中的视觉内容时，才可使用当前用户摄像头"
-                    "图片。否则必须完全忽略图片，只回答当前用户请求，不得主动描述或"
-                    "评价用户的外观、情绪、健康状态、动作或环境。不得依据用户摄像头"
-                    "图片判断你自身的姿势、动作、外观或状态。"
+            "text": effective_runtime_prompt(
+                "user_image_reply_rules",
+                self._prompt(
+                    zh=USER_IMAGE_REPLY_RULES_ZH,
+                    en=USER_IMAGE_REPLY_RULES_EN,
                 ),
-                en=(
-                    "[Visual-use boundary for the current reply] Use the current "
-                    "user-camera image only when the user audio or text in the current user "
-                    "message explicitly asks about visual content concerning the user or "
-                    "their environment. Otherwise, ignore the image completely and answer "
-                    "only the current user request. Do not proactively describe or judge "
-                    "the user's appearance, emotions, health, actions, or environment. Do "
-                    "not use the user-camera image to infer your own pose, actions, "
-                    "appearance, or state."
-                ),
+                language=self.language,
             ),
         }
 
@@ -503,13 +632,17 @@ class ReplyPromptComponent:
 MultimodalReplyPromptMixin = ReplyPromptComponent
 
 
-def repository_reply_rules_zh() -> str:
-    """Render the checked-in Chinese reply rules for the authoring API."""
+def repository_reply_rules(language: str) -> str:
+    """Render checked-in reply rules for the selected authoring language."""
 
-    class _ChineseReplyRenderer(ReplyPromptComponent):
+    class _ReplyRenderer(ReplyPromptComponent):
         @staticmethod
         def _prompt(*, zh: str, en: str) -> str:
-            del en
-            return zh
+            from sglang_omni.models.qwen3_omni.prompt_localization import localized_prompt
+            return localized_prompt(language, zh=zh, en=en)
 
-    return _ChineseReplyRenderer()._repository_reply_role_and_agency_system_prompt()
+    return _ReplyRenderer()._repository_reply_role_and_agency_system_prompt()
+
+
+def repository_reply_rules_zh() -> str:
+    return repository_reply_rules("zh")

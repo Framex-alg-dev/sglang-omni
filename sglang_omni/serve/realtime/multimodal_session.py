@@ -26,6 +26,10 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
 )
+from sglang_omni.models.qwen3_omni.action_token_mapping import (
+    configured_action_single_token_mode,
+    load_selection_token_mapping,
+)
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
     CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
@@ -82,7 +86,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_SESSIONS = 4
+MAX_CONCURRENT_SESSIONS = 2
 
 
 class SessionBusyError(RuntimeError):
@@ -90,7 +94,7 @@ class SessionBusyError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__(
-            "Maximum concurrent sessions reached (4). Please retry later."
+            f"Maximum concurrent sessions reached ({MAX_CONCURRENT_SESSIONS}). Please retry later."
         )
 
 
@@ -127,6 +131,9 @@ from sglang_omni.serve.realtime.protocol.models import (
 
 
 from sglang_omni.serve.realtime.action import ActionPipeline
+from sglang_omni.serve.realtime.action.background_calibration import (
+    load_action_background_calibration,
+)
 
 from sglang_omni.serve.realtime.avatar_state_analysis import (
     AvatarStateAnalysisPipeline,
@@ -172,6 +179,9 @@ class MultimodalSession:
         action_selection_mode: str | None = None,
         action_micro_batch_size: int | None = None,
         action_category_top_k: int | None = None,
+        action_category_adaptive_top1: bool | None = None,
+        action_category_top1_min_margin: float | None = None,
+        action_category_top1_max_ppl: float | None = None,
         global_action_catalog: GlobalActionCatalog | None = None,
         global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
         allow_unregistered_protocol_actions: bool = False,
@@ -196,7 +206,59 @@ class MultimodalSession:
         self.action_category_top_k = normalize_action_category_top_k(
             action_category_top_k
         )
+        self.action_category_adaptive_top1 = (
+            _env_flag(ACTION_CATEGORY_ADAPTIVE_TOP1_ENV, default=True)
+            if action_category_adaptive_top1 is None
+            else action_category_adaptive_top1
+        )
+        self.action_category_top1_min_margin = (
+            normalize_action_category_top1_min_margin(
+                action_category_top1_min_margin
+            )
+        )
+        self.action_category_top1_max_ppl = normalize_action_category_top1_max_ppl(
+            action_category_top1_max_ppl
+        )
+        self.direct_action_selection = bool(
+            global_action_catalog and global_action_catalog.direct_action_selection
+        )
         self.global_action_catalog = global_action_catalog
+        self.action_background_calibration = None
+        if self.direct_action_selection:
+            try:
+                self.action_background_calibration = (
+                    load_action_background_calibration()
+                )
+            except (OSError, ValueError, json.JSONDecodeError):
+                # Shadow diagnostics must never make the authoritative action
+                # path unavailable when an artifact is missing or stale.
+                logger.exception("failed to load action background calibration")
+        self.action_single_token_mode = configured_action_single_token_mode()
+        self.action_selection_token_mapping = None
+        if self.action_single_token_mode != "off":
+            if not self.direct_action_selection or global_action_catalog is None:
+                raise ValueError(
+                    "single-token action scoring requires the direct action catalog"
+                )
+            from sglang_omni.serve.realtime.action.decision import (
+                ACTION_DECISION_LABELS,
+            )
+
+            mapping = load_selection_token_mapping()
+            if mapping.catalog_hash != global_action_catalog.catalog_hash:
+                raise ValueError(
+                    "single-token action map catalog hash mismatch: "
+                    f"expected={global_action_catalog.catalog_hash} "
+                    f"actual={mapping.catalog_hash}"
+                )
+            mapping.validate_expected_ids(
+                (
+                    *global_action_catalog.candidate_by_id,
+                    UNSUPPORTED_CHILD_SCORE_ID,
+                    *ACTION_DECISION_LABELS,
+                )
+            )
+            self.action_selection_token_mapping = mapping
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
         self.embedded_tts_connector = embedded_tts_connector
@@ -215,6 +277,48 @@ class MultimodalSession:
             ROUTE_ACTION_PARALLEL_ENV,
             default=True,
         )
+        self.visual_gesture_generation_enabled = _env_flag(
+            VISUAL_GESTURE_GENERATION_ENV,
+            default=DEFAULT_VISUAL_GESTURE_GENERATION_ENABLED,
+        )
+        # Experimental latency optimization: warm exact current-turn camera
+        # embeddings while unified intent is still decoding. Disabled by
+        # default until production measurements prove it does not contend with
+        # intent inference on colocated single-GPU deployments.
+        self.image_encoder_prefetch_enabled = _env_flag(
+            IMAGE_ENCODER_PREFETCH_ENV,
+            default=False,
+        )
+        # The avatar frame normally arrives at PTT-down, well before commit.
+        # Warming only its encoder output preserves the exact action request
+        # while moving image-model work out of the post-commit critical path.
+        # Keep an environment kill switch for deployments where frames arrive
+        # only at commit and prefetch would compete with intent decoding.
+        self.avatar_image_encoder_prefetch_enabled = _env_flag(
+            AVATAR_IMAGE_ENCODER_PREFETCH_ENV,
+            default=True,
+        )
+        action_decision_mode = os.environ.get(
+            ACTION_DECISION_BATCH_MODE_ENV, "shadow"
+        ).strip().lower()
+        if action_decision_mode not in {"off", "shadow", "enforce"}:
+            raise ValueError(
+                f"{ACTION_DECISION_BATCH_MODE_ENV} must be off, shadow, or enforce"
+            )
+        self.action_decision_batch_mode = action_decision_mode
+        self.action_decision_batch_visual = _env_flag(
+            ACTION_DECISION_BATCH_VISUAL_ENV,
+            default=False,
+        )
+        try:
+            self.action_decision_min_margin = max(
+                float(os.environ.get(ACTION_DECISION_MIN_MARGIN_ENV, "0.10")),
+                0.0,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{ACTION_DECISION_MIN_MARGIN_ENV} must be a non-negative number"
+            ) from exc
         self.session_instance_id = uuid.uuid4().hex
         self.session_memory_config = (
             session_memory_config
@@ -266,6 +370,8 @@ class MultimodalSession:
         self.protocol_version: int | None = None
         self.locale = DEFAULT_ACTION_PROMPT_LOCALE
         self.language = "en"
+        self.action_locale = DEFAULT_ACTION_PROMPT_LOCALE
+        self.action_language = "en"
         self.instructions = ""
         self.unsupported_action_text = ""
         self.action_profile: SessionActionProfile | None = None
@@ -303,6 +409,9 @@ class MultimodalSession:
         )
         self.action_prefix_cache_namespace = ""
         self.action_prefix_prefilled = False
+        self.turn_intent_prefix_prefilled = False
+        self.visual_gesture_prefix_prefilled = False
+        self.visual_arithmetic_prefix_prefilled = False
         self._prefilled_action_prefix_namespaces: set[str] = set()
         self.prewarm_child_category_ids: tuple[str, ...] = ()
         self.prewarmed_child_category_ids: list[str] = []
@@ -407,7 +516,13 @@ class MultimodalSession:
         finally:
             self.closed = True
             try:
-                await self._cleanup_session_resources()
+                try:
+                    await asyncio.wait_for(self._cleanup_session_resources(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    emit_structured_log(
+                        "error", "session_cleanup_timeout", session_id=self.session_id,
+                        session_instance_id=self.session_instance_id,
+                    )
             finally:
                 try:
                     if self.session_id is not None:
@@ -493,6 +608,9 @@ class MultimodalSession:
 
     def _prompt(self, *, zh: str, en: str) -> str:
         return localized_prompt(self.language, zh=zh, en=en)
+
+    def _action_prompt(self, *, zh: str, en: str) -> str:
+        return localized_prompt(self.action_language, zh=zh, en=en)
 
 
 
@@ -863,6 +981,17 @@ class MultimodalSessionManager:
         )
         self.action_micro_batch_size = normalize_action_micro_batch_size()
         self.action_category_top_k = normalize_action_category_top_k()
+        self.action_category_adaptive_top1 = _env_flag(
+            ACTION_CATEGORY_ADAPTIVE_TOP1_ENV,
+            default=True,
+        )
+        self.action_category_top1_min_margin = (
+            normalize_action_category_top1_min_margin()
+        )
+        self.action_category_top1_max_ppl = normalize_action_category_top1_max_ppl()
+        self.direct_action_selection = bool(
+            global_action_catalog and global_action_catalog.direct_action_selection
+        )
         self.global_action_catalog = global_action_catalog
         self.allow_unregistered_protocol_actions = allow_unregistered_protocol_actions
         self.embedded_tts_config = embedded_tts_config
@@ -905,6 +1034,13 @@ class MultimodalSessionManager:
             self.action_category_top_k,
         )
         logger.info(
+            "[SESSION_ACTION_REALTIME] action_category_adaptive_top1=%s "
+            "min_margin=%s max_ppl=%s",
+            self.action_category_adaptive_top1,
+            self.action_category_top1_min_margin,
+            self.action_category_top1_max_ppl,
+        )
+        logger.info(
             "[SESSION_ACTION_REALTIME] session_memory_enabled=%s "
             "write_enabled=%s read_enabled=%s "
             "batch_turns=%s max_pending_turns=%s max_retries=%s "
@@ -938,6 +1074,11 @@ class MultimodalSessionManager:
             action_selection_mode=self.action_selection_mode,
             action_micro_batch_size=self.action_micro_batch_size,
             action_category_top_k=self.action_category_top_k,
+            action_category_adaptive_top1=self.action_category_adaptive_top1,
+            action_category_top1_min_margin=(
+                self.action_category_top1_min_margin
+            ),
+            action_category_top1_max_ppl=self.action_category_top1_max_ppl,
             global_action_catalog=self.global_action_catalog,
             global_action_prewarm=self.global_action_prewarm,
             allow_unregistered_protocol_actions=(
@@ -971,10 +1112,20 @@ class MultimodalSessionManager:
             raise SessionBusyError()
         # Synchronous check + registration: no await between these operations.
         self.sessions[session_id] = session
+        emit_structured_log(
+            "lifecycle", "session_capacity_reserved", session_id=session_id,
+            session_instance_id=session.session_instance_id,
+            active_session_count=len(self.sessions), max_session_count=MAX_CONCURRENT_SESSIONS,
+        )
 
     def release(self, session_id: str, session: MultimodalSession) -> None:
         if self.sessions.get(session_id) is session:
             del self.sessions[session_id]
+            emit_structured_log(
+                "lifecycle", "session_capacity_released", session_id=session_id,
+                session_instance_id=session.session_instance_id,
+                active_session_count=len(self.sessions),
+            )
 
     def active_sessions(self) -> list[str]:
         return list(self.sessions)
@@ -1068,6 +1219,8 @@ class MultimodalSessionManager:
             },
             "global_action_catalog": {
                 "configured": self.global_action_catalog is not None,
+                "direct_action_selection": self.direct_action_selection,
+                "action_prefix_statuses": dict(self.global_action_prewarm.action_prefix_statuses),
                 "catalog_hash": (
                     self.global_action_catalog.catalog_hash
                     if self.global_action_catalog is not None

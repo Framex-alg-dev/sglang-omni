@@ -2,12 +2,16 @@
 
 from functools import lru_cache
 
-from sglang_omni.models.qwen3_omni.global_action_catalog import load_global_action_catalog
+from sglang_omni.models.qwen3_omni.global_action_catalog import load_runtime_action_catalog
 
 
 @lru_cache(maxsize=1)
 def published_prompts():
-    catalog = load_global_action_catalog()
+    catalog = load_runtime_action_catalog()
+    if catalog.direct_action_selection:
+        return frozenset(catalog.action_system_prompt_for(locale, origin)
+                         for locale in ("zh-CN", "en-US")
+                         for origin in ("user", "proactive"))
     prompts = set(catalog.category_system_prompts_by_locale.values())
     for localized in (catalog.child_system_prompts_by_locale,
                       catalog.proactive_child_system_prompts_by_locale):

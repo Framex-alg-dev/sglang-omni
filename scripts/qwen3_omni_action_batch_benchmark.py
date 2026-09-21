@@ -39,12 +39,15 @@ def encode_image(path: str) -> tuple[str, str]:
     return mime, base64.b64encode(data).decode("ascii")
 
 
-def build_allowed_candidates(path: str) -> tuple[list[dict[str, Any]], int, int]:
+def build_allowed_candidates(
+    path: str, max_candidates: int | None = None
+) -> tuple[list[dict[str, Any]], int, int]:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     categories = document.get("categories")
     if not isinstance(categories, list) or not categories:
         raise ValueError("global catalog has no categories")
     allowed = []
+    seen_candidate_ids: set[str] = set()
     for category in categories:
         children = category.get("children") if isinstance(category, dict) else None
         if not isinstance(children, list) or not children:
@@ -53,6 +56,11 @@ def build_allowed_candidates(path: str) -> tuple[list[dict[str, Any]], int, int]
             candidate_id = child.get("candidate_id") if isinstance(child, dict) else None
             if not isinstance(candidate_id, str) or not candidate_id:
                 raise ValueError(f"invalid global action: {child!r}")
+            if candidate_id in seen_candidate_ids:
+                continue
+            if max_candidates is not None and len(allowed) >= max_candidates:
+                continue
+            seen_candidate_ids.add(candidate_id)
             allowed.append({"candidate_id": candidate_id})
     return allowed, len(categories), len(allowed)
 
@@ -78,6 +86,7 @@ async def run_once(
     pcm: bytes,
     image_mime: str,
     image_b64: str,
+    image_count: int,
     timeout_s: float,
 ) -> dict[str, Any]:
     session_id = f"batch-bench-{batch_size}-{repeat_index}-{uuid.uuid4().hex[:8]}"
@@ -137,20 +146,23 @@ async def run_once(
                 result["error"] = ack
                 return result
 
-        await ws.send(json.dumps({
-            "type": "input.image.append",
-            "turn_id": turn_id,
-            "seq": 1,
-            "capture_timestamp_ms": 1000,
-            "image_source": "user_camera",
-            "media_type": image_mime,
-            "data": image_b64,
-        }))
-        image_ack, events = await recv_until(ws, {"input.ack", "error"}, timeout_s)
-        result["event_types"].extend(events)
-        if image_ack.get("type") != "input.ack" or image_ack.get("error"):
-            result["error"] = image_ack
-            return result
+        for image_seq in range(1, image_count + 1):
+            await ws.send(json.dumps({
+                "type": "input.image.append",
+                "turn_id": turn_id,
+                "seq": image_seq,
+                "capture_timestamp_ms": image_seq * 1000,
+                "image_source": "user_camera",
+                "media_type": image_mime,
+                "data": image_b64,
+            }))
+            image_ack, events = await recv_until(
+                ws, {"input.ack", "error"}, timeout_s
+            )
+            result["event_types"].extend(events)
+            if image_ack.get("type") != "input.ack" or image_ack.get("error"):
+                result["error"] = image_ack
+                return result
 
         await ws.send(json.dumps({
             "type": "input.text.set",
@@ -189,14 +201,16 @@ async def run_once(
 
 
 async def main(args: argparse.Namespace) -> None:
-    catalog, category_count, child_count = build_allowed_candidates(args.catalog)
+    catalog, category_count, child_count = build_allowed_candidates(
+        args.catalog, args.max_candidates
+    )
     pcm = load_pcm16(args.audio)
     image_mime, image_b64 = encode_image(args.image)
     results: list[dict[str, Any]] = []
     for repeat_index in range(1, args.repeats + 1):
         results.append(await run_once(
             args.base_url, args.batch_size, repeat_index,
-            catalog, pcm, image_mime, image_b64, args.timeout,
+            catalog, pcm, image_mime, image_b64, args.image_count, args.timeout,
         ))
     output = {
         "benchmark": "qwen3_omni_action_batch",
@@ -230,8 +244,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, choices=(64, 128, 256), required=True)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--catalog", default=DEFAULT_CATALOG)
+    parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--audio", default=DEFAULT_AUDIO)
     parser.add_argument("--image", default=DEFAULT_IMAGE)
+    parser.add_argument("--image-count", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--output", required=True)
     return parser.parse_args()

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from sglang_omni.serve.realtime.proactive.action_policy import (
+    SCENE_FALLBACK_IDS, persona_first_scene, proactive_selection_instruction,
+)
+
 import asyncio
 import hashlib
 from sglang_omni.serve.realtime.action.cache_observation import prompt_sha256
@@ -10,18 +14,27 @@ import logging
 import random
 import time
 from typing import Any, Callable, Literal
+from sglang_omni.serve.realtime.action.routing import IntentShortcutBackoff
 
 from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
 )
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
+    CANDIDATE_REACTION_SOURCE_LANGUAGE,
+    CANDIDATE_REACTION_SOURCE_USER_CAMERA,
     CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
     CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT,
     UNSUPPORTED_CATEGORY_SCORE_ID,
     UNSUPPORTED_CHILD_SCORE_ID,
     UNSUPPORTED_DECISION_ID,
     child_unsupported_policy,
+)
+from sglang_omni.serve.realtime.action.routing import (
+    choose_category_width,
+    resolve_unique_explicit_action,
+    scope_visual_deictic_categories,
+    visual_deictic_scope_candidates,
 )
 from sglang_omni.serve.realtime.protocol.common import *  # noqa: F403
 from sglang_omni.serve.realtime.protocol.common import (
@@ -34,9 +47,15 @@ from sglang_omni.serve.realtime.protocol.models import (
     SessionActionCategory,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 logger = logging.getLogger(__name__)
+
+
+DIRECT_GREETING_REACTION = "回应用户问候"
+DIRECT_GREETING_CANDIDATE_ID = "288"
+DIRECT_GREETING_ROUTE = "direct_greeting_reaction"
 
 
 def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
@@ -70,7 +89,18 @@ class ActionCategoryComponent:
         (
             action_history, action_history_audios, action_history_images,
             action_images, action_image_roles, action_context,
-        ) = self._build_bounded_action_context(audios, images, image_roles)
+        ) = self._build_bounded_action_context(
+            audios,
+            images,
+            image_roles,
+            current_user_camera_image_limit=(
+                MAX_ACTION_VISUAL_SCOPE_USER_CAMERA_IMAGES
+                if turn.intent is not None
+                and turn.intent.visual_scope_gate
+                and turn.intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
+                else MAX_ACTION_CURRENT_USER_CAMERA_IMAGES
+            ),
+        )
         action_history = []
         action_history_audios = []
         action_history_images = []
@@ -89,6 +119,7 @@ class ActionCategoryComponent:
             turn_origin=turn_origin,
             has_avatar_image=IMAGE_ROLE_AVATAR_STATE in action_image_roles,
         )
+        persona_first = persona_first_scene(turn_origin, trigger)
         forced_category, forced_semantic_tag = self._forced_trigger_category(
             turn_origin=turn_origin,
             trigger=trigger,
@@ -99,7 +130,7 @@ class ActionCategoryComponent:
             )
             if self.global_action_catalog is not None
             and forced_category is None
-            and turn_origin != TURN_ORIGIN_PROACTIVE
+            and (turn_origin != TURN_ORIGIN_PROACTIVE or persona_first)
             else ()
         )
         excluded_category_id_set = set(excluded_category_ids)
@@ -129,37 +160,24 @@ class ActionCategoryComponent:
                 effective_avatar_state, action_image_roles
             ),
         )
-        last_user_action_reference = (
-            self._last_user_action_reference_instruction(
-                turn_origin=turn_origin,
-            )
-        )
+        if persona_first:
+            base += proactive_selection_instruction(self.action_language)
         proactive_repeat_instruction = self._proactive_action_repeat_instruction(
             turn_origin=turn_origin,
             client_last_action_id=turn.client_last_executed_action_id,
         )
         action_context.update(
             {
-                "last_user_action_reference_injected": bool(
-                    last_user_action_reference
-                ),
-                "last_user_action_reference_turn_id": (
-                    self.last_user_executed_action.turn_id
-                    if last_user_action_reference
-                    and self.last_user_executed_action is not None
-                    else None
-                ),
-                "last_user_action_reference_candidate_id": (
-                    self.last_user_executed_action.candidate_id
-                    if last_user_action_reference
-                    and self.last_user_executed_action is not None
-                    else None
-                ),
+                "last_user_action_reference_injected": False,
+                "last_user_action_reference_turn_id": None,
+                "last_user_action_reference_candidate_id": None,
             }
         )
         category_session_instruction = (
             self._build_session_action_profile_instruction(
-                "category", turn_origin=turn_origin
+                "category",
+                turn_origin=turn_origin,
+                has_user_camera=IMAGE_ROLE_USER_CAMERA in action_image_roles,
             )
         )
         category_prefix_namespace = self._session_action_prefix_namespace(
@@ -170,7 +188,7 @@ class ActionCategoryComponent:
         )
         common = dict(
             model=self.model_name,
-            language=self.language,
+            language=self.action_language,
             audios=audios,
             images=action_images,
             sample_rate=16000,
@@ -207,39 +225,366 @@ class ActionCategoryComponent:
                 ],
             )
         ]
+        requested_reaction_sources: set[str] = set()
+        if self._body_accompaniment_only(turn):
+            if turn.intent.reaction_mode == "respond":
+                requested_reaction_sources.add(
+                    CANDIDATE_REACTION_SOURCE_LANGUAGE
+                )
+            if IMAGE_ROLE_USER_CAMERA in action_image_roles:
+                requested_reaction_sources.add(
+                    CANDIDATE_REACTION_SOURCE_USER_CAMERA
+                )
+        session_candidate_ids = {
+            child.candidate_id
+            for category in eligible_categories
+            for child in self._filter_turn_action_candidates(
+                turn, list(category.children)
+            )
+        }
+        implicit_reaction_candidate_ids = {
+            candidate_id
+            for candidate_id, candidate in (
+                self.global_action_catalog.candidate_by_id.items()
+                if self.global_action_catalog is not None
+                else ()
+            )
+            if candidate_id in session_candidate_ids
+            and candidate.reaction_sources.intersection(
+                requested_reaction_sources
+            )
+        }
+        implicit_reaction_sources = {
+            source
+            for candidate_id in implicit_reaction_candidate_ids
+            for source in self.global_action_catalog.candidate_by_id[
+                candidate_id
+            ].reaction_sources
+            if source in requested_reaction_sources
+        }
+        forced_reaction_candidate_id: str | None = None
+        implicit_reaction_instruction = ""
+        if implicit_reaction_sources:
+            eligible_categories = [
+                category
+                for category in eligible_categories
+                if self._is_system_accompaniment_category(category)
+                or any(
+                    child.candidate_id in implicit_reaction_candidate_ids
+                    for child in category.children
+                )
+            ]
+            implicit_reaction_instruction = self._action_prompt(
+                zh=(
+                    "\n[本轮自然动作回应边界]\n"
+                    "仅可在本轮已标记的自然反应候选与系统伴随动作之间选择；"
+                    f"反应来源={','.join(sorted(implicit_reaction_sources))}；"
+                    "图片或语言证据不足时选择系统伴随动作，不得扩展到其他候选。"
+                ),
+                en=(
+                    "\n[Current-turn natural action-response boundary]\n"
+                    "Choose only between the configured natural-reaction candidates "
+                    "and system accompaniment actions; reaction_sources="
+                    f"{','.join(sorted(implicit_reaction_sources))}. Use system "
+                    "accompaniment when language or image evidence is insufficient."
+                ),
+            )
+        if (
+            self._body_accompaniment_only(turn)
+            and turn.intent.speech == "generated"
+            and turn.intent.reaction_mode == "respond"
+            and turn.intent.reaction.strip() == DIRECT_GREETING_REACTION
+        ):
+            greeting_route = next(
+                (
+                    (category, child)
+                    for category in eligible_categories
+                    if category.category_id not in excluded_category_id_set
+                    for child in self._filter_turn_action_candidates(
+                        turn, list(category.children)
+                    )
+                    if child.candidate_id == DIRECT_GREETING_CANDIDATE_ID
+                    and child.candidate_id in implicit_reaction_candidate_ids
+                ),
+                None,
+            )
+            if greeting_route is not None:
+                forced_category, greeting_candidate = greeting_route
+                forced_semantic_tag = DIRECT_GREETING_ROUTE
+                forced_reaction_candidate_id = greeting_candidate.candidate_id
         if not eligible_categories:
             raise ValueError(
                 "per-turn action candidate constraints leave no executable action"
             )
+        visual_deictic_scope = scope_visual_deictic_categories(
+            eligible_categories,
+            body_task=(turn.intent.body if turn.intent is not None else ""),
+            body_mode=(turn.intent.body_mode if turn.intent is not None else "none"),
+            has_user_camera=IMAGE_ROLE_USER_CAMERA in action_image_roles,
+        )
+        visual_deictic_instruction = ""
+        visual_deictic_child_instruction = ""
+        visual_deictic_candidate_ids: set[str] | None = None
+        if visual_deictic_scope is not None:
+            visual_deictic_candidate_ids = {
+                candidate.candidate_id
+                for candidate in visual_deictic_scope_candidates(
+                    visual_deictic_scope
+                )
+            }
+            eligible_categories = [
+                category
+                for category in visual_deictic_scope.categories
+                if any(
+                    child.candidate_id in visual_deictic_candidate_ids
+                    for child in category.children
+                )
+            ]
+            visual_deictic_category_ids = [
+                category.category_id for category in eligible_categories
+            ]
+            action_context.update(
+                {
+                    "category_scope": (
+                        "visual_deictic:" + visual_deictic_scope.name
+                    ),
+                    "category_scope_ids": visual_deictic_category_ids,
+                }
+            )
+            visual_deictic_instruction = self._action_prompt(
+                zh=(
+                    "\n本轮用户通过范围词明确要求模仿 user_camera 中展示的动作；"
+                    f"范围={visual_deictic_scope.name}。只能在该范围对应的动作目录中，"
+                    "依据图片中直接可见的完整行为选择具体匹配项。"
+                ),
+                en=(
+                    "\nThe user explicitly names the range of the action to imitate from "
+                    "the user_camera image; "
+                    f"range={visual_deictic_scope.name}. Match the complete directly visible "
+                    "behavior only against the catalog family for that range."
+                ),
+            )
+            visual_deictic_child_instruction = self._action_prompt(
+                zh=(
+                    "\n具体动作选择必须逐项比较范围部位与候选视觉定义，包括参与"
+                    "部位数量、伸展或弯曲状态、相对位置、朝向以及物体关系；若关键"
+                    "部位被遮挡、证据不足或没有足够匹配的候选，必须选择 000，不得"
+                    "按候选常见程度猜测。"
+                ),
+                en=(
+                    "\nCompare the in-scope body parts against each candidate's visual "
+                    "definition, including the number of participating parts, extension "
+                    "or flexion, relative positions, orientation, and object relations. "
+                    "Select 000 when key parts are occluded, evidence is insufficient, "
+                    "or no candidate matches closely enough; never guess from candidate "
+                    "frequency."
+                ),
+            )
+            emit_structured_log(
+                "action",
+                "visual_deictic_range_scope_applied",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=request_base,
+                scope=visual_deictic_scope.name,
+                category_ids=visual_deictic_category_ids,
+                child_definition_mode="visual",
+                selection_definition_source="short_definition_visual",
+            )
+        child_definition_mode: Literal["contextual", "visual"] = (
+            "visual"
+            if visual_deictic_scope is not None
+            or CANDIDATE_REACTION_SOURCE_USER_CAMERA
+            in implicit_reaction_sources
+            else "contextual"
+        )
+        filtered_user_camera_image_count = 0
+        if (
+            visual_deictic_scope is None
+            and CANDIDATE_REACTION_SOURCE_USER_CAMERA
+            not in implicit_reaction_sources
+            and turn_origin == TURN_ORIGIN_USER
+            and self.global_action_catalog is not None
+            and IMAGE_ROLE_USER_CAMERA in action_image_roles
+        ):
+            retained_media = [
+                (image, role)
+                for image, role in zip(
+                    action_images,
+                    action_image_roles,
+                    strict=True,
+                )
+                if role != IMAGE_ROLE_USER_CAMERA
+            ]
+            filtered_user_camera_image_count = (
+                len(action_image_roles) - len(retained_media)
+            )
+            action_images = [image for image, _ in retained_media]
+            action_image_roles = [role for _, role in retained_media]
+            base = self._build_turn_action_instruction(
+                text,
+                turn_origin=turn_origin,
+                trigger=trigger,
+                has_audio=bool(audios),
+                image_roles=action_image_roles,
+                has_state_description=(
+                    "state_description" in effective_avatar_state
+                ),
+                avatar_state_source=self._avatar_state_source(
+                    effective_avatar_state,
+                    action_image_roles,
+                ),
+            )
+            category_session_instruction = (
+                self._build_session_action_profile_instruction(
+                    "category",
+                    turn_origin=turn_origin,
+                    has_user_camera=False,
+                )
+            )
+            category_prefix_namespace = self._session_action_prefix_namespace(
+                base_namespace=self.action_prefix_cache_namespace,
+                stage="category",
+                turn_origin=turn_origin,
+                session_instruction=category_session_instruction,
+            )
+            common.update(
+                images=action_images,
+                image_roles=action_image_roles,
+                prefix_cache_namespace=category_prefix_namespace,
+                cache_static_system_only=not bool(category_session_instruction),
+            )
+            emit_structured_log(
+                "action",
+                "user_camera_action_media_filtered",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=request_base,
+                filtered_user_camera_image_count=(
+                    filtered_user_camera_image_count
+                ),
+                reason="no_named_visual_action_scope",
+            )
+        action_context.update(
+            {
+                "visual_scope_user_camera_image_count": (
+                    sum(
+                        role == IMAGE_ROLE_USER_CAMERA
+                        for role in action_image_roles
+                    )
+                    if visual_deictic_scope is not None
+                    or CANDIDATE_REACTION_SOURCE_USER_CAMERA
+                    in implicit_reaction_sources
+                    else 0
+                ),
+                "filtered_user_camera_action_image_count": (
+                    filtered_user_camera_image_count
+                ),
+            }
+        )
         category_by_id = {
             item.category_id: item for item in eligible_categories
         }
-        # Exact semantic labels from the shared parse can resolve a catalog
-        # category without another classification. Never substring-match raw
-        # speech or drop constraints; Child still checks state/support.
+        # A parsed, explicit body task may name one catalog action directly.
+        # The shortcut only narrows recall; Child still validates support.
         exact_body_ids: set[str] = set()
-        if allow_intent_shortcut and turn.intent is not None and self.global_action_catalog is not None and turn.intent.body_mode == "perform":
-            matches = [
-                (category.category_id, child.candidate_id)
-                for category in self.global_action_catalog.categories
-                for child in category.children
-                if child.source_label == turn.intent.body
-                and category.category_id != FACIAL_EXPRESSION_CATEGORY_ID
+        exact_body_matched_alias: str | None = None
+        exact_catalog_alias_authoritative = False
+        if forced_reaction_candidate_id is not None:
+            exact_body_ids = {forced_reaction_candidate_id}
+        if (
+            allow_intent_shortcut
+            and forced_category is None
+            and turn.intent is not None
+            and turn.intent.body_mode == "perform"
+        ):
+            shortcut_candidates = [
+                (category, child)
+                for category in eligible_categories
+                if category.category_id not in excluded_category_id_set
+                if not self._is_system_accompaniment_category(category)
+                for child in self._filter_turn_action_candidates(
+                    turn, list(category.children)
+                )
             ]
-            ids = {candidate_id for _, candidate_id in matches}
-            if len(ids) == 1:
-                matching_categories = [category_by_id[cid] for cid, _ in matches if cid in category_by_id]
-                if matching_categories:
-                    forced_category = matching_categories[0]
-                    forced_semantic_tag = "shared_intent_exact_label"
-                    exact_body_ids = ids
+            explicit_route = resolve_unique_explicit_action(
+                turn.intent.body,
+                shortcut_candidates,
+                aliases_by_candidate_id={
+                    candidate_id: candidate.aliases
+                    for candidate_id, candidate in (
+                        self.global_action_catalog.candidate_by_id.items()
+                        if self.global_action_catalog is not None
+                        else ()
+                    )
+                },
+            )
+            if explicit_route is not None and turn_origin == TURN_ORIGIN_USER:
+                backoff = getattr(self, "_intent_shortcut_backoff", None)
+                if backoff is None:
+                    backoff = self._intent_shortcut_backoff = IntentShortcutBackoff()
+                hint_key = (explicit_route.candidate.candidate_id, turn.intent.body.strip())
+                if backoff.blocked(hint_key, time.monotonic()):
+                    emit_structured_log(
+                        "action", "action_intent_hint_backoff",
+                        session_id=self.session_id, turn_id=turn.turn_id,
+                        candidate_id=explicit_route.candidate.candidate_id,
+                        reason="recent_validation_failure", ttl_seconds=30,
+                    )
+                    explicit_route = None
+            if explicit_route is not None:
+                shortcut_state_exclusions = (
+                    self._state_description_excluded_candidate_ids(
+                        effective_avatar_state.get("state_description"),
+                        [explicit_route.candidate],
+                    )
+                    if self.global_action_catalog is not None
+                    and turn_origin != TURN_ORIGIN_PROACTIVE
+                    else ()
+                )
+                if not shortcut_state_exclusions:
+                    forced_category = explicit_route.category
+                    forced_semantic_tag = "shared_intent_unique_catalog_alias"
+                    exact_body_ids = {explicit_route.candidate.candidate_id}
+                    exact_body_matched_alias = explicit_route.matched_alias
+                    catalog_candidate = (
+                        self.global_action_catalog.candidate_by_id.get(
+                            explicit_route.candidate.candidate_id
+                        )
+                        if self.global_action_catalog is not None
+                        else None
+                    )
+                    exact_catalog_alias_authoritative = bool(
+                        catalog_candidate is not None
+                        and explicit_route.matched_alias
+                        in catalog_candidate.aliases
+                    )
         category_result = None
         category_ranked: list[Any] = []
         category_ms = 0.0
         category_scoring_skipped = forced_category is not None
         category_scoring_skip_reason = (
-            ("shared_intent_exact_label" if exact_body_ids else "trigger_policy") if forced_category is not None else None
+            (
+                DIRECT_GREETING_ROUTE
+                if forced_reaction_candidate_id is not None
+                else (
+                    "shared_intent_unique_catalog_alias"
+                    if exact_body_ids
+                    else "trigger_policy"
+                )
+            )
+            if forced_category is not None
+            else None
         )
+        effective_category_top_k = 1 if forced_category is not None else 0
+        category_adaptive_top1_applied = False
+        category_width_reason = (
+            "category_forced" if forced_category is not None else None
+        )
+        category_top_ppl: float | None = None
+        category_confidence_margin: float | None = None
         if forced_category is not None:
             category_unsupported = False
             selected_category = forced_category
@@ -257,6 +602,7 @@ class ActionCategoryComponent:
                 category_scoring_skipped=True,
                 category_scoring_skip_reason=category_scoring_skip_reason,
                 forced_semantic_tag=forced_semantic_tag,
+                matched_catalog_alias=exact_body_matched_alias,
                 resolved_category_id=forced_category.category_id,
             )
         else:
@@ -281,9 +627,10 @@ class ActionCategoryComponent:
                 request_id=request_base + "-category",
                 session_instruction=category_session_instruction,
                 prefix=(
-                    last_user_action_reference
-                    + proactive_repeat_instruction
+                    proactive_repeat_instruction
                     + base
+                    + visual_deictic_instruction
+                    + implicit_reaction_instruction
                     + self._category_whitelist_instruction()
                     + self._state_description_exclusion_instruction(
                         category_ids=excluded_category_ids
@@ -293,14 +640,16 @@ class ActionCategoryComponent:
                         enabled=("state_description" in effective_avatar_state),
                     )
                 ),
-                output_prompt=self._prompt(
+                output_prompt=self._action_prompt(
                     zh="最合适的 category_id：",
                     en="Best matching category_id:",
                 ),
                 system_prompt=self._build_category_system_prompt(),
                 candidates=category_candidates,
                 suffix_tokenization_mode="short_id",
-                micro_batch_size=self.action_micro_batch_size,
+                micro_batch_size=min(
+                    self.action_micro_batch_size, len(category_candidates)
+                ),
                 **common,
             )
             category_started = time.perf_counter()
@@ -332,9 +681,9 @@ class ActionCategoryComponent:
                 raise ValueError(
                     "category action score did not return a decision"
                 )
-            # The category stage is a recall stage. B000 remains useful as a
+            # The category stage is a recall stage. 00 remains useful as a
             # diagnostic score, but it must not prevent the best real
-            # categories from reaching child scoring. Only A000 at the child
+            # categories from reaching child scoring. Only 000 at the child
             # stage is allowed to make the final unsupported decision.
             category_unsupported = False
             ranked_real_categories = [
@@ -342,9 +691,66 @@ class ActionCategoryComponent:
                 for item in category_ranked
                 if item.candidate_id in category_by_id
             ]
+            top_category_prewarmed = (
+                turn_origin == TURN_ORIGIN_USER
+                and self.global_action_catalog is not None
+                and bool(ranked_real_categories)
+                and ranked_real_categories[0].candidate_id
+                in self.global_action_prewarm.for_locale(
+                    self.action_locale
+                ).ready_child_category_ids
+            )
+            if visual_deictic_scope is not None:
+                effective_category_top_k = len(ranked_real_categories)
+                category_adaptive_top1_applied = False
+                category_width_reason = "visual_deictic_range_scope"
+                category_top_ppl = (
+                    ranked_real_categories[0].ppl
+                    if ranked_real_categories
+                    else None
+                )
+                category_confidence_margin = (
+                    ranked_real_categories[0].mean_logprob
+                    - ranked_real_categories[1].mean_logprob
+                    if len(ranked_real_categories) > 1
+                    else None
+                )
+            else:
+                width_decision = choose_category_width(
+                    configured_top_k=self.action_category_top_k,
+                    ranked_real_scores=[
+                        (item.candidate_id, item.mean_logprob, item.ppl)
+                        for item in ranked_real_categories
+                    ],
+                    overall_top_candidate_id=category_ranked[0].candidate_id,
+                    adaptive_enabled=self.action_category_adaptive_top1,
+                    top_category_prewarmed=top_category_prewarmed,
+                    min_margin=self.action_category_top1_min_margin,
+                    max_ppl=self.action_category_top1_max_ppl,
+                )
+                effective_category_top_k = width_decision.effective_top_k
+                category_adaptive_top1_applied = width_decision.adaptive_top1
+                category_width_reason = width_decision.reason
+                category_top_ppl = width_decision.top_ppl
+                category_confidence_margin = width_decision.confidence_margin
+            emit_structured_log(
+                "action",
+                "action_category_width_selected",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=request_base,
+                configured_top_k=self.action_category_top_k,
+                effective_top_k=effective_category_top_k,
+                adaptive_top1_applied=category_adaptive_top1_applied,
+                decision_reason=category_width_reason,
+                top_ppl=category_top_ppl,
+                confidence_margin=category_confidence_margin,
+                top_category_prewarmed=top_category_prewarmed,
+            )
             selected_categories = [
                 category_by_id[item.candidate_id]
-                for item in ranked_real_categories[: self.action_category_top_k]
+                for item in ranked_real_categories[:effective_category_top_k]
             ]
             if not selected_categories:
                 raise ValueError(
@@ -352,26 +758,63 @@ class ActionCategoryComponent:
                 )
             selected_category = selected_categories[0]
             category_scoring_candidate_id = category_ranked[0].candidate_id
+        implicit_reaction_active = False
         if self._body_accompaniment_only(turn):
             # Keep the raw category scores/top-k untouched for audit. The parsed
             # task constrains the execution pool, including its fallback paths.
             raw_category_ids = [item.category_id for item in selected_categories]
-            tag = (CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
-                   if turn.intent.speech == "none"
-                   else CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
-            accompaniment = self._category_with_semantic_tag(tag)
-            if accompaniment is None:
-                raise ValueError("session is missing the required accompaniment category")
-            selected_category = accompaniment
-            selected_categories = [accompaniment]
-            category_unsupported = False
+            if (
+                implicit_reaction_sources
+                and selected_categories
+                and not self._is_system_accompaniment_category(
+                    selected_categories[0]
+                )
+            ):
+                selected_categories = [
+                    category
+                    for category in selected_categories
+                    if not self._is_system_accompaniment_category(category)
+                    and any(
+                        child.candidate_id
+                        in implicit_reaction_candidate_ids
+                        for child in category.children
+                    )
+                ]
+                selected_category = selected_categories[0]
+                implicit_reaction_active = True
+                category_unsupported = False
+            else:
+                tag = (CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT
+                       if turn.intent.speech == "none"
+                       else CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT)
+                accompaniment = self._category_with_semantic_tag(tag)
+                if accompaniment is None:
+                    raise ValueError("session is missing the required accompaniment category")
+                selected_category = accompaniment
+                selected_categories = [accompaniment]
+                category_unsupported = False
             emit_structured_log(
                 "action", "action_execution_scope_constrained",
                 session_id=self.session_id, turn_id=turn.turn_id,
                 raw_selected_category_ids=raw_category_ids,
-                execution_category_ids=[accompaniment.category_id],
-                reason="shared_intent_no_body_request",
+                execution_category_ids=[selected_category.category_id],
+                reason=(
+                    "implicit_candidate_reaction"
+                    if implicit_reaction_active
+                    else "shared_intent_no_body_request"
+                ),
             )
+        action_context.update(
+            {
+                "implicit_reaction_active": implicit_reaction_active,
+                "implicit_reaction_sources": sorted(
+                    implicit_reaction_sources
+                ),
+                "implicit_reaction_candidate_ids": sorted(
+                    implicit_reaction_candidate_ids
+                ),
+            }
+        )
         reply_prefix = ""
         reply_prefix_status: str | None = None
         reply_prefix_wait_ms = 0.0
@@ -397,7 +840,14 @@ class ActionCategoryComponent:
         ):
             original_category_id = selected_category.category_id
             system_route_original_category_id = original_category_id
-            if provisional_reply is None:
+            if turn_origin == TURN_ORIGIN_USER and turn.intent is not None:
+                # Accompaniment follows the already parsed speech intent; never
+                # wait for generated text on the action-critical user path.
+                reply_prefix_status = (
+                    "reply_pending" if turn.intent.speech != "none"
+                    else "empty_completed"
+                )
+            elif provisional_reply is None:
                 reply_prefix_status = "empty_completed"
             else:
                 (
@@ -457,8 +907,20 @@ class ActionCategoryComponent:
         )
 
         child_candidates = self._child_candidates_for_categories(selected_categories)
+        if visual_deictic_candidate_ids is not None:
+            child_candidates = [
+                item
+                for item in child_candidates
+                if item.candidate_id in visual_deictic_candidate_ids
+            ]
         if exact_body_ids:
             child_candidates = [item for item in child_candidates if item.candidate_id in exact_body_ids]
+        if implicit_reaction_active:
+            child_candidates = [
+                item
+                for item in child_candidates
+                if item.candidate_id in implicit_reaction_candidate_ids
+            ]
         child_candidates = self._filter_turn_action_candidates(
             turn, child_candidates
         )
@@ -467,7 +929,7 @@ class ActionCategoryComponent:
                 effective_avatar_state.get("state_description"), child_candidates
             )
             if self.global_action_catalog is not None
-            and turn_origin != TURN_ORIGIN_PROACTIVE
+            and (turn_origin != TURN_ORIGIN_PROACTIVE or persona_first)
             else ()
         )
         excluded_candidate_id_set = set(excluded_candidate_ids)
@@ -494,6 +956,28 @@ class ActionCategoryComponent:
         ]
         system_candidates_exhausted = False
         system_route_degradation_reason: str | None = None
+        if persona_first and not child_candidates:
+            fallback_ids = SCENE_FALLBACK_IDS[trigger]
+            pool = self._filter_turn_action_candidates(
+                turn, [c for c in self.candidates if c.candidate_id in fallback_ids]
+            )
+            prohibited = set(self._state_description_excluded_candidate_ids(
+                effective_avatar_state.get("state_description"), pool
+            ))
+            child_candidates = [c for c in pool if c.candidate_id not in prohibited
+                                and c.category_id not in excluded_category_id_set]
+            if not child_candidates:
+                raise ValueError("proactive scene has no executable action candidate")
+            selected_categories = [c for c in self.categories if any(
+                item.category_id == c.category_id for item in child_candidates
+            )]
+            execution_category = selected_category = selected_categories[0]
+            selected_category_ids = [c.category_id for c in selected_categories]
+            emit_structured_log(
+                "action", "proactive_scene_fallback_selected",
+                session_id=self.session_id, turn_id=turn.turn_id, trigger=trigger,
+                candidate_ids=[c.candidate_id for c in child_candidates],
+            )
         if (
             not child_candidates
             and self._category_has_semantic_tag(
@@ -674,6 +1158,22 @@ class ActionCategoryComponent:
                 repeat_unavoidable=action_finished_repeat_unavoidable,
             )
         elif (
+            forced_reaction_candidate_id is not None
+            and len(child_candidates) == 1
+        ):
+            direct_child = child_candidates[0]
+            child_scoring_skip_reason = DIRECT_GREETING_ROUTE
+        elif (
+            exact_catalog_alias_authoritative
+            and len(child_candidates) == 1
+        ):
+            # A versioned catalog alias is an exact action contract.  The
+            # allowlist and avatar-state exclusions above remain authoritative;
+            # once they admit the sole target, a second semantic score must not
+            # reinterpret the same request as unsupported.
+            direct_child = child_candidates[0]
+            child_scoring_skip_reason = "exact_catalog_alias"
+        elif (
             len(selected_categories) == 1
             and len(child_candidates) == 1
             and (
@@ -733,12 +1233,21 @@ class ActionCategoryComponent:
                         system_route_degradation_reason
                     ),
                     "child_candidate_count": len(child_candidates),
+                    "child_definition_mode": child_definition_mode,
                     "support_status": (
                         "unsupported" if category_unsupported else "supported"
                     ),
                     "fallback_applied": category_unsupported,
                     "selected_category_ids": selected_category_ids,
                     "category_top_k": self.action_category_top_k,
+                    "effective_category_top_k": effective_category_top_k,
+                    "category_adaptive_top1_applied": (
+                        category_adaptive_top1_applied
+                    ),
+                    "category_width_reason": category_width_reason,
+                    "category_top_ppl": category_top_ppl,
+                    "category_confidence_margin": category_confidence_margin,
+                    "intent_shortcut_matched_alias": exact_body_matched_alias,
                     "state_description_excluded_category_ids": list(
                         excluded_category_ids
                     ),
@@ -756,7 +1265,7 @@ class ActionCategoryComponent:
                     "child_prefix_prefilled": (
                         execution_category.category_id
                         in self.global_action_prewarm.for_locale(
-                            self.locale
+                            self.action_locale
                         ).ready_child_category_ids
                         if self.global_action_catalog is not None
                         else False
@@ -793,23 +1302,38 @@ class ActionCategoryComponent:
             return action, [], total_ms, action_context
 
         child_namespace = ",".join(selected_category_ids)
+        if turn_origin == TURN_ORIGIN_USER and len(selected_categories) > 1:
+            child_namespace = ",".join(sorted(selected_category_ids))
         if len(selected_categories) == 1:
             child_system_prompt = self._build_child_system_prompt(
-                execution_category, child_candidates, turn_origin
+                execution_category,
+                child_candidates,
+                turn_origin,
+                child_definition_mode,
+                persona_first=persona_first,
             )
         else:
             child_system_prompt = self._build_child_system_prompt(
-                selected_categories, child_candidates, turn_origin
+                selected_categories,
+                child_candidates,
+                turn_origin,
+                child_definition_mode,
+                persona_first=persona_first,
             )
-        if self.global_action_catalog is not None and len(selected_categories) == 1:
+        if (
+            self.global_action_catalog is not None
+            and len(selected_categories) == 1
+            and child_definition_mode == "contextual"
+            and not persona_first
+        ):
             child_namespace = self.global_action_catalog.child_cache_namespace(
-                execution_category.category_id, self.locale, turn_origin
+                execution_category.category_id, self.action_locale, turn_origin
             )
         elif self.global_action_catalog is not None:
             combined_prompt_hash = prompt_sha256(child_system_prompt)
             child_namespace = (
-                f"hierarchical:{self.locale}:child:{child_namespace}:"
-                f"{turn_origin}:sha256:{combined_prompt_hash}"
+                f"hierarchical:{self.action_locale}:child:{child_namespace}:"
+                f"{turn_origin}:{child_definition_mode}:sha256:{combined_prompt_hash}"
             )
         else:
             child_namespace = (
@@ -817,7 +1341,9 @@ class ActionCategoryComponent:
             )
 
         child_session_instruction = self._build_session_action_profile_instruction(
-            "child", turn_origin=turn_origin
+            "child",
+            turn_origin=turn_origin,
+            has_user_camera=IMAGE_ROLE_USER_CAMERA in action_image_roles,
         )
         child_session_namespace = self._session_action_prefix_namespace(
             base_namespace=child_namespace,
@@ -834,9 +1360,10 @@ class ActionCategoryComponent:
             len(selected_categories) == 1
             and self.global_action_catalog is not None
             and turn_origin == TURN_ORIGIN_USER
+            and child_definition_mode == "contextual"
             and execution_category.category_id
             in self.global_action_prewarm.for_locale(
-                self.locale
+                self.action_locale
             ).ready_child_category_ids
         )
         child_catalog_prefill_ms = 0.0
@@ -868,7 +1395,7 @@ class ActionCategoryComponent:
                     ],
                     prefix_cache_namespace=child_session_namespace,
                     stage="child",
-                    language=self.language,
+                    language=self.action_language,
                     session_instruction=child_session_instruction,
                 )
             finally:
@@ -886,7 +1413,9 @@ class ActionCategoryComponent:
             **common,
             "stage": "child",
             "admission_priority": 1,
-            "micro_batch_size": self.action_micro_batch_size,
+            "micro_batch_size": min(
+                self.action_micro_batch_size, len(child_candidates)
+            ),
             "prefix_cache_namespace": child_session_namespace,
         }
         action_common["cache_static_system_only"] = not bool(
@@ -896,15 +1425,17 @@ class ActionCategoryComponent:
             request_id=request_base + "-child",
             session_instruction=child_session_instruction,
             prefix=(
-                last_user_action_reference
-                + proactive_repeat_instruction
+                proactive_repeat_instruction
                 + base
+                + visual_deictic_instruction
+                + visual_deictic_child_instruction
+                + implicit_reaction_instruction
                 + self._system_accompaniment_child_instruction(
                     execution_category,
                     reply_prefix=reply_prefix,
                 )
                 + self._child_whitelist_instruction(
-                    selected_categories, child_candidates
+                    selected_categories, child_candidates, persona_first=persona_first
                 )
                 + self._state_description_exclusion_instruction(
                     candidate_ids=excluded_candidate_ids
@@ -914,7 +1445,7 @@ class ActionCategoryComponent:
                     enabled=("state_description" in effective_avatar_state),
                 )
             ),
-            output_prompt=self._prompt(
+            output_prompt=self._action_prompt(
                 zh="最合适的 candidate_id：",
                 en="Best matching candidate_id:",
             ),
@@ -931,9 +1462,19 @@ class ActionCategoryComponent:
             + (
                 []
                 if self.global_action_catalog is None
+                or persona_first
                 or all(
                     self._is_system_accompaniment_category(category)
                     for category in selected_categories
+                )
+                # Language intent has already made the bounded social-reaction
+                # decision.  Keep visual-only reactions rejectable because a
+                # still image may be ambiguous, but do not let Child undo an
+                # explicit greeting/farewell reaction with 000.
+                or (
+                    implicit_reaction_active
+                    and CANDIDATE_REACTION_SOURCE_LANGUAGE
+                    in implicit_reaction_sources
                 )
                 else [
                     ActionScoreCandidate(
@@ -969,8 +1510,18 @@ class ActionCategoryComponent:
         )
         if not ranked:
             raise ValueError("child action score did not return a decision")
+        if persona_first:
+            # Never accept out-of-contract sentinel scores from an adapter.
+            ranked = [score for score in ranked if score.candidate_id in child_by_id]
+            if not ranked:
+                raise ValueError("proactive action scoring returned no allowed candidate")
         child_unsupported = ranked[0].candidate_id == UNSUPPORTED_CHILD_SCORE_ID
         if child_unsupported and exact_body_ids.intersection(child_by_id):
+            if turn_origin == TURN_ORIGIN_USER and turn.intent is not None:
+                backoff = getattr(self, "_intent_shortcut_backoff", None)
+                if backoff is not None:
+                    for candidate_id in exact_body_ids:
+                        backoff.reject((candidate_id, turn.intent.body.strip()), time.monotonic())
             # A semantic hint is only a recall shortcut. If its narrowed child
             # set fails validation, run the original ranked top-k path once.
             # Do not force a hinted ID or discard state/negation constraints.
@@ -1063,8 +1614,21 @@ class ActionCategoryComponent:
                 )
         if self._body_accompaniment_only(turn):
             candidate = self.candidate_by_id.get(action["candidate_id"])
-            if candidate is None or not self._is_accompaniment_candidate(candidate):
+            if candidate is None or not (
+                self._is_accompaniment_candidate(candidate)
+                or (
+                    implicit_reaction_active
+                    and candidate.candidate_id
+                    in implicit_reaction_candidate_ids
+                )
+            ):
                 raise ValueError("action exceeds parsed accompaniment scope")
+        if (
+            visual_deictic_scope is not None
+            and visual_deictic_scope.name == "gesture"
+            and action.get("support_status") != "unsupported"
+        ):
+            action["allow_adjacent_repeat"] = True
         selected_candidate = self.candidate_by_id.get(
             action["candidate_id"]
         )
@@ -1100,21 +1664,41 @@ class ActionCategoryComponent:
             "support_status": action.get("support_status"),
             "fallback_applied": action.get("fallback_applied"),
             "selection_definition_source": (
-                selected_candidate.definition_source(turn_origin)
+                (
+                    "short_definition_visual"
+                    if child_definition_mode == "visual"
+                    else selected_candidate.definition_source(turn_origin)
+                )
                 if selected_candidate is not None
                 else None
             ),
             "selection_definition_hash": (
                 "sha256:" + hashlib.sha256(
-                    selected_candidate.effective_definition(
-                        turn_origin
+                    (
+                        selected_candidate.short_definition
+                        if child_definition_mode == "visual"
+                        else selected_candidate.effective_definition(turn_origin)
                     ).encode("utf-8")
                 ).hexdigest()
                 if selected_candidate is not None
                 else None
             ),
+            "child_definition_mode": child_definition_mode,
+            "implicit_reaction_active": implicit_reaction_active,
+            "implicit_reaction_sources": sorted(
+                implicit_reaction_sources
+            ),
+            "implicit_reaction_candidate_ids": sorted(
+                implicit_reaction_candidate_ids
+            ),
             "selected_category_ids": selected_category_ids,
             "category_top_k": self.action_category_top_k,
+            "effective_category_top_k": effective_category_top_k,
+            "category_adaptive_top1_applied": category_adaptive_top1_applied,
+            "category_width_reason": category_width_reason,
+            "category_top_ppl": category_top_ppl,
+            "category_confidence_margin": category_confidence_margin,
+            "intent_shortcut_matched_alias": exact_body_matched_alias,
             "state_description_excluded_category_ids": list(
                 excluded_category_ids
             ),

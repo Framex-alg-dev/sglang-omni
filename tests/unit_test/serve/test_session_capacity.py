@@ -64,22 +64,22 @@ async def runtime(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_eight_starts_only_four_admitted_and_duplicate_keeps_error(runtime):
+async def test_eight_starts_only_two_admitted_and_duplicate_keeps_error(runtime):
     manager, client, open_socket = runtime
     sockets = [open_socket() for _ in range(8)]
     for i, (ws, _, _) in enumerate(sockets):
         ws.event(start(f's{i}'))
     results = await asyncio.gather(*(ws.result() for ws, _, _ in sockets))
-    assert [r['type'] for r in results[:4]] == ['session.started'] * 4
-    for i, result in enumerate(results[4:], 4):
+    assert [r['type'] for r in results[:2]] == ['session.started'] * 2
+    for i, result in enumerate(results[2:], 2):
         assert result == {'type': 'error', 'session_id': f's{i}', 'error': {
             'type': 'server_error', 'code': 'session_busy',
-            'message': 'Maximum concurrent sessions reached (4). Please retry later.'}}
+            'message': 'Maximum concurrent sessions reached (2). Please retry later.'}}
         await sockets[i][2]
         assert sockets[i][0].code == 1013
-    assert len(manager.sessions) == 4
+    assert len(manager.sessions) == 2
     snapshot = manager.load_snapshot()
-    assert snapshot['max_session_count'] == 4
+    assert snapshot['max_session_count'] == 2
     assert snapshot['available_session_count'] == 0
     client.release_session_cache.assert_not_awaited()
     ws, _, task = open_socket()
@@ -90,7 +90,7 @@ async def test_eight_starts_only_four_admitted_and_duplicate_keeps_error(runtime
     assert not task.done()
     # Release is owner-checked and idempotent.
     manager.release('s0', sockets[4][1])
-    assert len(manager.sessions) == 4
+    assert len(manager.sessions) == 2
     sockets[0][0].event({'type': 'session.close'})
     assert (await sockets[0][0].result())['type'] == 'session.closed'
     await sockets[0][2]
@@ -98,7 +98,7 @@ async def test_eight_starts_only_four_admitted_and_duplicate_keeps_error(runtime
     manager.release('s0', sockets[0][1])
     ws.event(start('replacement'))
     assert (await ws.result())['type'] == 'session.started'
-    assert len(manager.sessions) == 4
+    assert len(manager.sessions) == 2
 
 
 @pytest.mark.asyncio
@@ -109,10 +109,10 @@ async def test_unstarted_and_invalid_connections_do_not_reserve(runtime):
     sockets[0][0].event(start('invalid', outputs=['unknown']))
     assert (await sockets[0][0].result())['type'] == 'error'
     assert not manager.sessions
-    for i, (ws, _, _) in enumerate(sockets[:4]):
+    for i, (ws, _, _) in enumerate(sockets[:2]):
         ws.event(start(str(i)))
         assert (await ws.result())['type'] == 'session.started'
-    assert len(manager.sessions) == 4
+    assert len(manager.sessions) == 2
 
 
 @pytest.mark.asyncio
@@ -128,27 +128,27 @@ async def test_initializing_sessions_reserve_before_knowledge_io(runtime, cancel
         raise ValueError('initialization failed')
 
     controller = SimpleNamespace(resolve_session=AsyncMock(side_effect=resolve))
-    sockets = [open_socket() for _ in range(5)]
+    sockets = [open_socket() for _ in range(3)]
     for i, (ws, session, _) in enumerate(sockets):
         session.knowledge_controller = controller
         ws.event(start(f'k{i}', knowledge={'binding_id': 'test', 'required': True}))
-        if i < 4:
+        if i < 2:
             assert await asyncio.wait_for(entered.get(), 5) == f'k{i}'
-    assert len(manager.sessions) == 4
+    assert len(manager.sessions) == 2
     assert not any(s.started for _, s, _ in sockets)
-    assert (await sockets[4][0].result())['error']['code'] == 'session_busy'
-    await sockets[4][2]
-    assert controller.resolve_session.await_count == 4
+    assert (await sockets[2][0].result())['error']['code'] == 'session_busy'
+    await sockets[2][2]
+    assert controller.resolve_session.await_count == 2
     if cancel_initialization:
-        for _, _, task in sockets[:4]:
+        for _, _, task in sockets[:2]:
             task.cancel()
-        await asyncio.gather(*(task for _, _, task in sockets[:4]), return_exceptions=True)
+        await asyncio.gather(*(task for _, _, task in sockets[:2]), return_exceptions=True)
     else:
         unblock.set()
-        for ws, _, task in sockets[:4]:
+        for ws, _, task in sockets[:2]:
             assert (await ws.result())['type'] == 'error'
             await task
-    assert all(ws.code == 1000 for ws, _, _ in sockets[:4])
+    assert all(ws.code == 1000 for ws, _, _ in sockets[:2])
     assert not manager.sessions
 
 
@@ -184,7 +184,7 @@ async def test_cleanup_failures_release_owner_and_attempt_remaining_layers(runti
 @pytest.mark.asyncio
 async def test_cleaning_owner_holds_slot_until_cleanup_finishes(runtime):
     manager, client, open_socket = runtime
-    sockets = [open_socket() for _ in range(4)]
+    sockets = [open_socket() for _ in range(2)]
     for i, (ws, _, _) in enumerate(sockets):
         ws.event(start(str(i)))
         assert (await ws.result())['type'] == 'session.started'
@@ -201,7 +201,7 @@ async def test_cleaning_owner_holds_slot_until_cleanup_finishes(runtime):
     ws.event(start('during-cleanup'))
     assert (await ws.result())['error']['code'] == 'session_busy'
     await task
-    assert len(manager.sessions) == 4
+    assert len(manager.sessions) == 2
     unblock.set()
     await sockets[0][2]
-    assert len(manager.sessions) == 3
+    assert len(manager.sessions) == 1

@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import logging
+import threading
 import time
+from array import array
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +49,10 @@ CODE2WAV_STAGE = "code2wav"
 MM_AGGREGATE_STAGE = "mm_aggregate"
 ACTION_SCORE_STAGE = "action_score"
 ACTION_SCORE_TASK = "action_suffix_scoring"
+ENCODER_PREFETCH_STAGE = "encoder_prefetch_done"
+IMAGE_ENCODER_PREFETCH_TASK = "image_encoder_prefetch"
+_ACTION_SELECTION_TOKEN_VALIDATION_LOCK = threading.Lock()
+_VALIDATED_ACTION_SELECTION_TOKEN_MAPS: set[tuple[int, str]] = set()
 
 # Note(Chenchen Hong): PyTorch sampling_seed must fit a positive int32.
 MAX_INT32_POSITIVE = 0x7FFFFFFF
@@ -70,6 +77,21 @@ def is_action_scoring_request(request_or_payload: OmniRequest | StagePayload | N
         request is not None
         and isinstance(request.metadata, dict)
         and request.metadata.get("task") == ACTION_SCORE_TASK
+    )
+
+
+def is_image_encoder_prefetch_request(
+    request_or_payload: OmniRequest | StagePayload | None,
+) -> bool:
+    request = (
+        request_or_payload.request
+        if isinstance(request_or_payload, StagePayload)
+        else request_or_payload
+    )
+    return bool(
+        request is not None
+        and isinstance(request.metadata, dict)
+        and request.metadata.get("task") == IMAGE_ENCODER_PREFETCH_TASK
     )
 
 
@@ -116,6 +138,8 @@ def resolve_mm_aggregate_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
     del request_id
+    if is_image_encoder_prefetch_request(output):
+        return ENCODER_PREFETCH_STAGE
     if is_action_scoring_request(output):
         return THINKER_STAGE
     if should_generate_audio_output(output):
@@ -135,6 +159,8 @@ def resolve_thinker_stream_done_targets(
 
 
 def resolve_terminal_stages(request: OmniRequest) -> list[str]:
+    if is_image_encoder_prefetch_request(request):
+        return [ENCODER_PREFETCH_STAGE]
     if is_action_scoring_request(request):
         return [ACTION_SCORE_STAGE]
     if should_generate_audio_output(request):
@@ -656,6 +682,17 @@ def build_sglang_thinker_request(
     sampling_params.normalize(tokenizer)
     sampling_params.verify(vocab_size)
 
+    top_logprobs_num = params.get("top_logprobs_num", 0)
+    if isinstance(top_logprobs_num, bool) or not isinstance(top_logprobs_num, int):
+        raise ValueError("top_logprobs_num must be an integer")
+    if not 0 <= top_logprobs_num <= 20:
+        raise ValueError("top_logprobs_num must be between 0 and 20")
+    return_logprob = bool(
+        params.get("return_logprob")
+        or top_logprobs_num > 0
+        or isinstance(params.get("action_scoring"), dict)
+    )
+
     # Build SGLang Req
     rid = request_id or "req-0"
     req = Req(
@@ -663,12 +700,18 @@ def build_sglang_thinker_request(
         origin_input_text="",
         origin_input_ids=input_ids_list,
         sampling_params=sampling_params,
-        return_logprob=bool(
-            params.get("return_logprob") or isinstance(params.get("action_scoring"), dict)
-        ),
+        return_logprob=return_logprob,
+        top_logprobs_num=top_logprobs_num,
         vocab_size=vocab_size,
     )
     req.tokenizer = tokenizer
+    if return_logprob:
+        # GenerateRequest exposes output-token logprobs only.  Req defaults
+        # logprob_start_len to zero, which asks SGLang for prompt logprobs and
+        # consequently caps radix-prefix matching at zero tokens.  Start at
+        # the end of the prompt so output confidence remains available while
+        # static text before dynamic audio/images can reuse its cached KV.
+        req.logprob_start_len = len(input_ids_list)
     if prompt.get("cache_owner"):
         req.extra_key = "qwen3-omni-private:owner:" + str(prompt["cache_owner"])
 
@@ -701,7 +744,8 @@ def build_sglang_thinker_request(
         output_ids=req.output_ids,
         req=req,
     )
-    data.return_logprob = bool(params.get("return_logprob"))
+    data.return_logprob = bool(params.get("return_logprob") or top_logprobs_num > 0)
+    data.top_logprobs_num = top_logprobs_num
     action_spec = params.get("action_scoring")
     if isinstance(action_spec, dict):
         return _prepare_action_scoring_request(
@@ -749,6 +793,32 @@ def _resolve_action_terminal_token_id(tokenizer: Any) -> int:
     return int(token_id)
 
 
+@functools.lru_cache(maxsize=64)
+def _cached_short_action_suffix_ids(
+    tokenizer: Any,
+    suffixes: tuple[str, ...],
+    terminal_token_id: int,
+) -> tuple[tuple[int, ...], ...]:
+    """Tokenize prefix-independent short action IDs once per catalog shape.
+
+    Session-start prewarm traverses this builder before ordinary turns, so the
+    production short-ID catalog normally populates this cache during prewarm.
+    Unlike descriptive suffixes, these IDs are explicitly tokenized without a
+    prefix and can therefore be reused safely across turns and sessions that
+    share the tokenizer and catalog suffixes.
+    """
+    return tuple(
+        (
+            *tuple(
+                int(value)
+                for value in tokenizer.encode(suffix, add_special_tokens=False)
+            ),
+            int(terminal_token_id),
+        )
+        for suffix in suffixes
+    )
+
+
 def _verified_scope_boundaries(prompt_cache, positions, cache_prefix_token_count):
     """Share only a published, ordinary-position prefix before private media.
 
@@ -760,7 +830,10 @@ def _verified_scope_boundaries(prompt_cache, positions, cache_prefix_token_count
         return None
     public_end = min(prompt_cache["public_prefix_token_count"], cache_prefix_token_count)
     has_media = prompt_cache.get("scope_has_media", False)
-    session_end = public_end if has_media else cache_prefix_token_count
+    # Generated combinations need not be public to be reusable in one session.
+    # Trust only the exact pre-media session boundary verified by preprocessing.
+    session_verified = prompt_cache.get("session_instruction_cached") is True
+    session_end = cache_prefix_token_count if (not has_media or session_verified) else public_end
     if positions is None:
         return None if has_media else (public_end, session_end)
     if positions.shape[-1] < session_end:
@@ -795,6 +868,13 @@ def _prepare_action_scoring_request(
             suffix=str(item["suffix"]),
             action_id=item.get("action_id"),
             execution_binding=dict(item.get("execution_binding") or {}),
+            selection_token=item.get("selection_token"),
+            selection_token_id=(
+                int(item["selection_token_id"])
+                if item.get("selection_token_id") is not None
+                else None
+            ),
+            selection_score_bias=float(item.get("selection_score_bias", 0.0)),
         )
         for item in raw_candidates
     ]
@@ -814,6 +894,11 @@ def _prepare_action_scoring_request(
             images=list(images) if isinstance(images, list) else [str(images)],
             sample_rate=int(action_spec.get("sample_rate", 16000)),
             micro_batch_size=int(action_spec.get("micro_batch_size", 64)),
+            scoring_mode=str(action_spec.get("scoring_mode", "suffix_ppl")),
+            selection_mapping_version=action_spec.get("selection_mapping_version"),
+            selection_mapping_hash=action_spec.get("selection_mapping_hash"),
+            selection_calibration_version=action_spec.get("selection_calibration_version"),
+            selection_calibration_hash=action_spec.get("selection_calibration_hash"),
         )
     )
     prompt_text = str((state.prompt or {}).get("prompt_text") or "")
@@ -827,7 +912,50 @@ def _prepare_action_scoring_request(
         if value is not None
     )
     terminal_token_id = _resolve_action_terminal_token_id(tokenizer)
-    if prompt_text:
+    scoring_mode = str(action_spec.get("scoring_mode", "suffix_ppl"))
+    if scoring_mode.startswith("single_token_"):
+        validation_key = (
+            id(tokenizer),
+            str(action_spec.get("selection_mapping_hash") or ""),
+        )
+        with _ACTION_SELECTION_TOKEN_VALIDATION_LOCK:
+            if validation_key not in _VALIDATED_ACTION_SELECTION_TOKEN_MAPS:
+                special_ids = set(special_token_ids)
+                for item in candidates:
+                    encoded = tokenizer.encode(
+                        item.selection_token, add_special_tokens=False
+                    )
+                    encoded = [int(value) for value in encoded]
+                    if encoded != [item.selection_token_id]:
+                        raise ValueError(
+                            "selection-token mapping does not match the runtime tokenizer: "
+                            f"candidate_id={item.candidate_id!r} expected="
+                            f"{[item.selection_token_id]} actual={encoded}"
+                        )
+                    if item.selection_token_id in special_ids:
+                        raise ValueError(
+                            f"selection token is special: {item.candidate_id!r}"
+                        )
+                _VALIDATED_ACTION_SELECTION_TOKEN_MAPS.add(validation_key)
+    suffix_tokenization_mode = action_spec.get("suffix_tokenization_mode")
+    short_suffix_cache_hit = False
+    enforce_without_suffix = scoring_mode == "single_token_enforce"
+    if enforce_without_suffix:
+        suffix_ids = [tuple() for _ in candidates]
+    elif prompt_text and suffix_tokenization_mode == "short_id":
+        cache_info_before = _cached_short_action_suffix_ids.cache_info()
+        suffix_ids = list(
+            _cached_short_action_suffix_ids(
+                tokenizer,
+                tuple(item.suffix for item in candidates),
+                terminal_token_id,
+            )
+        )
+        short_suffix_cache_hit = (
+            _cached_short_action_suffix_ids.cache_info().hits
+            > cache_info_before.hits
+        )
+    elif prompt_text:
         tokenizations = tokenize_suffixes(
             tokenizer,
             prompt_text,
@@ -835,9 +963,7 @@ def _prepare_action_scoring_request(
             prefix_token_ids=prefix_ids,
             special_token_ids=special_token_ids,
             terminal_token_id=terminal_token_id,
-            suffix_only=(
-                action_spec.get("suffix_tokenization_mode") == "short_id"
-            ),
+            suffix_only=False,
         )
         suffix_ids = [item.suffix_token_ids for item in tokenizations]
     else:
@@ -848,7 +974,7 @@ def _prepare_action_scoring_request(
             )
             for item in candidates
         ]
-    if any(not item for item in suffix_ids):
+    if not enforce_without_suffix and any(not item for item in suffix_ids):
         raise ValueError("all action suffixes must contain at least one token")
 
     raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
@@ -923,7 +1049,25 @@ def _prepare_action_scoring_request(
         prefix_req.multimodal_inputs.mrope_positions = torch.cat(
             [prefix_positions, prefix_positions[..., -1:] + 1], dim=-1
         )
-    first_token_ids = sorted({int(ids[0]) for ids in suffix_ids})
+    legacy_first_token_ids = {
+        int(ids[0])
+        for ids in suffix_ids
+        if ids
+    }
+    selection_token_ids = {
+        item.candidate_id: int(item.selection_token_id)
+        for item in candidates
+        if item.selection_token_id is not None
+    }
+    first_token_ids = sorted(
+        (
+            legacy_first_token_ids | set(selection_token_ids.values())
+            if scoring_mode == "single_token_shadow"
+            else set(selection_token_ids.values())
+            if scoring_mode == "single_token_enforce"
+            else legacy_first_token_ids
+        )
+    )
     # SGLang stores token-id probes under Req.logprob. Keeping this on the
     # request logprob object lets ForwardBatch.init_new carry the probes into
     # the prefill-only logits path.
@@ -934,24 +1078,87 @@ def _prepare_action_scoring_request(
     prefix_data.action_scoring_role = "prefix"
     prefix_data.action_scoring_parent = prefix_data
     prefix_data.action_scoring_candidate_id = None
+    prefix_budget = action_spec.get("max_prefix_tokens")
+    if prefix_budget is not None and len(prefix_ids) > int(prefix_budget):
+        raise ValueError("session_child_prewarm_budget_exceeded")
     prefix_data.action_scoring_plan = {
+        "stage": action_spec.get("stage"),
+        "turn_origin": action_spec.get("turn_origin", "user"),
+        "admission_priority": action_spec.get("admission_priority", 1),
+        "session_id": action_spec.get("session_id"),
+        "session_instance_id": action_spec.get("session_instance_id"),
+        "logical_request_id": action_spec.get("logical_request_id"),
         "candidate_ids": [item.candidate_id for item in candidates],
+        "suffix_candidate_ids": [
+            item.candidate_id
+            for item in candidates
+        ],
+        "scoring_mode": scoring_mode,
+        "selection_mapping_version": action_spec.get("selection_mapping_version"),
+        "selection_mapping_hash": action_spec.get("selection_mapping_hash"),
+        "selection_token_ids": selection_token_ids,
+        "selection_score_bias": {
+            item.candidate_id: float(item.selection_score_bias)
+            for item in candidates
+        },
+        "selection_calibration_version": action_spec.get("selection_calibration_version"),
+        "selection_calibration_hash": action_spec.get("selection_calibration_hash"),
         "candidate_suffix_ids": {
             item.candidate_id: tuple(ids)
             for item, ids in zip(candidates, suffix_ids, strict=True)
         },
+        "candidate_short_suffix_cache_hit": short_suffix_cache_hit,
         "terminal_token_id": terminal_token_id,
-        "suffix_total_tokens": sum(len(ids) for ids in suffix_ids),
-        "suffix_unique_trie_edges": len({tuple(ids[:end]) for ids in suffix_ids for end in range(1, len(ids) + 1)}),
+        "suffix_total_tokens": sum(
+            len(ids)
+            for ids in suffix_ids
+        ),
+        "suffix_unique_trie_edges": len({
+            tuple(ids[:end])
+            for ids in suffix_ids
+            for end in range(1, len(ids) + 1)
+        }),
         "suffix_unique_first_tokens": len(first_token_ids),
-        # Candidate Req objects are built lazily after the shared prefix
-        # terminalizes. Keeping only suffix ids here avoids materializing
-        # N full prefix+suffix token arrays before the prefix can enter the
-        # scheduler.
+        # Candidate Req objects are not built in the request-builder critical
+        # path. The scheduler may materialize them on a background worker while
+        # the shared prefix runs, then releases the complete physical batch.
         "candidate_data": [],
-        "candidate_tokenizer": tokenizer,
+        "candidate_tokenizer": (
+            tokenizer if not enforce_without_suffix else None
+        ),
         "candidate_vocab_size": vocab_size,
         "candidate_prefix_positions": prefix_positions,
+        # Immutable snapshots used by the background candidate materializer.
+        # Do not read the live prefix Req while it is executing on the GPU.
+        "candidate_prefix_ids": tuple(prefix_ids),
+        # Req needs a private mutable array, but cloning an array is a C-level
+        # memcpy. Rebuilding it from the Python tuple for every candidate walks
+        # the entire prefix under the GIL.
+        "candidate_prefix_array": (
+            array("q", prefix_ids)
+            if not enforce_without_suffix else None
+        ),
+        "candidate_omni_model_inputs": (
+            dict(prefix_req.omni_model_inputs)
+            if (
+                not enforce_without_suffix
+                and prefix_req.omni_model_inputs is not None
+            )
+            else None
+        ),
+        "candidate_model_inputs": (
+            dict(prefix_data.model_inputs)
+            if not enforce_without_suffix else None
+        ),
+        "candidate_sampling_params": (
+            copy.copy(prefix_req.sampling_params)
+            if not enforce_without_suffix else None
+        ),
+        "candidate_mrope_position_delta": (
+            getattr(prefix_req.multimodal_inputs, "mrope_position_delta", None)
+            if prefix_req.multimodal_inputs is not None
+            else None
+        ),
         "prefix_token_count": len(prefix_ids),
         "cache_prefix_token_count": cache_prefix_token_count,
         "public_prefix_token_count": (prompt_cache.get("public_prefix_token_count", 0) if isinstance(prompt_cache, dict) else 0),
@@ -968,6 +1175,9 @@ def _prepare_action_scoring_request(
         "prefix_chunk_timings": [],
         "started_at": float(action_spec.get("client_started_at", time.perf_counter())),
         "client_request_build_ms": float(action_spec.get("client_build_ms", 0.0)),
+        "candidate_snapshot_ms": float(
+            action_spec.get("candidate_snapshot_ms", 0.0)
+        ),
         "server_build_started_at": server_build_started,
         "server_request_build_ms": 0.0,
         "scheduler_queue_entered_at": None,
@@ -975,6 +1185,15 @@ def _prepare_action_scoring_request(
         "prefix_scheduler_started_at": None,
         "prefix_prefill_ms": 0.0,
         "suffix_batch_queue_wait_ms": [],
+        "candidate_materialize_ms": 0.0,
+        "candidate_prefix_copy_ms": 0.0,
+        "candidate_tensorize_ms": 0.0,
+        "candidate_req_init_ms": 0.0,
+        "candidate_metadata_copy_ms": 0.0,
+        "candidate_mrope_ms": 0.0,
+        "candidate_data_init_ms": 0.0,
+        "candidate_materialize_wait_ms": 0.0,
+        "candidate_enqueue_ms": 0.0,
         "suffix_batch_scheduler_started_at": None,
         "candidate_prefix_recompute_tokens": {},
     }
@@ -1006,47 +1225,92 @@ def build_action_scoring_candidate_data(
     if not isinstance(suffix_map, dict) or candidate_id not in suffix_map:
         raise KeyError(f"unknown action scoring candidate: {candidate_id}")
     suffix = tuple(int(value) for value in suffix_map[candidate_id])
-    prefix_token_count = int(plan["prefix_token_count"])
     prefix_req = prefix_data.req
-    origin_ids = list(prefix_req.origin_input_ids)
-    if len(origin_ids) < prefix_token_count:
-        raise RuntimeError("action scoring prefix request is shorter than its token count")
-    prefix_ids = tuple(int(value) for value in origin_ids[:prefix_token_count])
-    full_ids = torch.tensor(prefix_ids + suffix, dtype=torch.long)
-    sampling_params = copy.copy(prefix_req.sampling_params)
+    prefix_ids = plan.get("candidate_prefix_ids")
+    if not isinstance(prefix_ids, tuple):
+        prefix_token_count = int(plan["prefix_token_count"])
+        origin_ids = prefix_req.origin_input_ids
+        if len(origin_ids) < prefix_token_count:
+            raise RuntimeError(
+                "action scoring prefix request is shorter than its token count"
+            )
+        prefix_ids = tuple(
+            int(value) for value in origin_ids[:prefix_token_count]
+        )
+    phase_started = time.perf_counter()
+    prefix_array = plan.get("candidate_prefix_array")
+    if isinstance(prefix_array, array) and prefix_array.typecode == "q":
+        full_id_array = prefix_array[:]
+    else:
+        full_id_array = array("q", prefix_ids)
+    full_id_array.extend(suffix)
+    plan["candidate_prefix_copy_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    # Candidate scheduling consumes Req.origin_input_ids. The parallel
+    # SGLangARRequestData.input_ids tensor was never read, yet materializing it
+    # copied the complete prefix 169 more times.
+    plan["candidate_tensorize_ms"] += 0.0
+
+    sampling_params = plan.get("candidate_sampling_params")
+    if sampling_params is None:
+        sampling_params = copy.copy(prefix_req.sampling_params)
+    phase_started = time.perf_counter()
     candidate_req = Req(
         rid=f"{prefix_req.rid}::candidate::{candidate_id}",
         origin_input_text="",
-        origin_input_ids=full_ids.tolist(),
+        origin_input_ids=full_id_array,
         sampling_params=sampling_params,
         return_logprob=True,
         vocab_size=int(plan["candidate_vocab_size"]),
     )
+    plan["candidate_req_init_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    phase_started = time.perf_counter()
     candidate_req.tokenizer = plan["candidate_tokenizer"]
     candidate_req.extra_key = plan["cache_key"]
     candidate_req.return_logprob = True
     candidate_req.logprob_start_len = len(prefix_ids)
-    candidate_req.omni_model_inputs = (
-        dict(prefix_req.omni_model_inputs)
-        if prefix_req.omni_model_inputs is not None
-        else None
-    )
+    # The runner clears the per-Req reference after use but does not mutate the
+    # immutable snapshot itself. Sharing it avoids 169 shallow dictionary
+    # copies while retaining the safety fallback if radix cache recomputation
+    # ever includes multimodal prefix tokens.
+    candidate_req.omni_model_inputs = plan.get("candidate_omni_model_inputs")
     candidate_req._omni_consumed = None
     candidate_req._action_scoring_role = "candidate"
+    plan["candidate_metadata_copy_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    phase_started = time.perf_counter()
     prefix_positions = plan.get("candidate_prefix_positions")
     if prefix_positions is not None:
         candidate_req.multimodal_inputs = MultimodalInputs(mm_items=[])
-        candidate_req.multimodal_inputs.mrope_positions = _extend_action_mrope_positions(
-            prefix_positions, len(suffix)
-        )
-        candidate_req.multimodal_inputs.mrope_position_delta = getattr(
-            prefix_req.multimodal_inputs, "mrope_position_delta", None
+        mrope_cache = plan.setdefault("candidate_mrope_positions_by_suffix_len", {})
+        suffix_len = len(suffix)
+        extended_positions = mrope_cache.get(suffix_len)
+        if extended_positions is None:
+            extended_positions = _extend_action_mrope_positions(
+                prefix_positions, suffix_len
+            )
+            mrope_cache[suffix_len] = extended_positions
+        candidate_req.multimodal_inputs.mrope_positions = extended_positions
+        candidate_req.multimodal_inputs.mrope_position_delta = plan.get(
+            "candidate_mrope_position_delta"
         )
     else:
         candidate_req.multimodal_inputs = None
+    plan["candidate_mrope_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+
+    phase_started = time.perf_counter()
     candidate_data = SGLangARRequestData(
-        input_ids=full_ids,
-        model_inputs=dict(prefix_data.model_inputs),
+        input_ids=None,
+        model_inputs=plan.get("candidate_model_inputs", prefix_data.model_inputs),
         max_new_tokens=0,
         temperature=0.0,
         output_ids=candidate_req.output_ids,
@@ -1057,6 +1321,19 @@ def build_action_scoring_candidate_data(
         action_scoring_candidate_id=candidate_id,
     )
     candidate_data.return_logprob = True
+    # Preserve scheduling identity without sharing the mutable prefix lifecycle
+    # plan (candidate completion is accounted for through the parent).
+    candidate_data.action_scoring_plan = {
+        key: plan[key]
+        for key in (
+            "stage", "turn_origin", "admission_priority", "session_id",
+            "session_instance_id", "logical_request_id",
+        )
+        if key in plan
+    }
+    plan["candidate_data_init_ms"] += (
+        time.perf_counter() - phase_started
+    ) * 1000.0
     return candidate_data
 
 
@@ -1238,6 +1515,10 @@ def apply_thinker_result(
     output_token_logprobs = getattr(result, "output_token_logprobs", None)
     if output_token_logprobs is not None:
         thinker_out["output_token_logprobs"] = output_token_logprobs
+
+    output_top_logprobs = getattr(result, "output_top_logprobs", None)
+    if output_top_logprobs is not None:
+        thinker_out["output_top_logprobs"] = output_top_logprobs
 
     state.thinker_out = thinker_out
     state.engine_outputs[stage_name] = thinker_out

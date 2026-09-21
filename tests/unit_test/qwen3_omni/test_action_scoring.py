@@ -17,6 +17,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     TokenScore,
     aggregate_candidate_score,
     score_candidate_from_runtime,
+    score_single_token_from_prefix,
     align_suffix_logprobs,
     build_multimodal_cache_identity,
     build_suffix_batches,
@@ -113,6 +114,62 @@ def test_contract_validation_and_limits():
         validate_action_suffix_request(request(image_roles=[""]))
 
 
+def test_single_token_contract_requires_unique_complete_mapping() -> None:
+    mapped = candidate("left", "使用左手挥手")
+    mapped.selection_token = "AA"
+    mapped.selection_token_id = 123
+    validate_action_suffix_request(
+        request(
+            candidates=[mapped],
+            scoring_mode="single_token_enforce",
+            selection_mapping_version="v1",
+            selection_mapping_hash="sha256:test",
+        )
+    )
+
+    missing = candidate("left", "使用左手挥手")
+    with pytest.raises(ValueError, match="selection_token"):
+        validate_action_suffix_request(
+            request(
+                candidates=[missing],
+                scoring_mode="single_token_enforce",
+                selection_mapping_version="v1",
+                selection_mapping_hash="sha256:test",
+            )
+        )
+
+
+def test_single_token_score_reads_probed_prefix_logprob() -> None:
+    score = score_single_token_from_prefix("wave", 123, {123: -0.25})
+
+    assert score.candidate_id == "wave"
+    assert score.token_count == 1
+    assert score.mean_logprob == pytest.approx(-0.25)
+    assert score.ppl == pytest.approx(math.exp(0.25))
+    assert score.token_scores == [TokenScore(token_id=123, logprob=-0.25)]
+
+
+def test_single_token_request_serializes_mapping_contract() -> None:
+    mapped = candidate("left", "使用左手挥手")
+    mapped.selection_token = "AA"
+    mapped.selection_token_id = 123
+    req = request(
+        candidates=[mapped],
+        scoring_mode="single_token_enforce",
+        selection_mapping_version="v1",
+        selection_mapping_hash="sha256:test",
+    )
+
+    omni = Client._build_action_scoring_request(req)
+    spec = omni.params["action_scoring"]
+
+    assert spec["scoring_mode"] == "single_token_enforce"
+    assert spec["selection_mapping_version"] == "v1"
+    assert spec["selection_mapping_hash"] == "sha256:test"
+    assert spec["candidates"][0]["selection_token"] == "AA"
+    assert spec["candidates"][0]["selection_token_id"] == 123
+
+
 def test_turn_semantics_validation_and_metadata_propagation():
     proactive = request(
         turn_origin="proactive",
@@ -192,16 +249,16 @@ def test_short_id_tokenization_composes_suffix_without_retokenizing_prefix():
     class ShortIdTokenizer:
         def encode(self, text, add_special_tokens=False):
             del add_special_tokens
-            if text == "A328":
+            if text == "328":
                 return [328]
-            if text == "A329":
+            if text == "329":
                 return [329]
             raise AssertionError(f"unexpected text encoded: {text!r}")
 
     items = tokenize_suffixes(
         ShortIdTokenizer(),
         "ignored long multimodal prompt",
-        [candidate("A328", "A328"), candidate("A329", "A329")],
+        [candidate("328", "328"), candidate("329", "329")],
         prefix_token_ids=[101, 102, 103],
         terminal_token_id=999,
         suffix_only=True,
@@ -236,6 +293,21 @@ def test_batches_cover_386_candidates_without_reordering():
     assert [item.candidate_id for batch in batches for item in batch.candidates] == [str(i) for i in range(386)]
 
 
+def test_batch_capacity_does_not_pad_142_candidates_to_200():
+    items = [
+        type("Item", (), {"candidate_id": str(index)})()
+        for index in range(142)
+    ]
+
+    batches = build_suffix_batches(items, 200)
+
+    assert len(batches) == 1
+    assert len(batches[0].candidates) == 142
+    assert [item.candidate_id for item in batches[0].candidates] == [
+        str(index) for index in range(142)
+    ]
+
+
 def test_math_counts_only_finite_suffix_tokens():
     scores = aggregate_candidate_score("left", [TokenScore(1, -0.1), TokenScore(2, -0.3)])
     assert scores.token_count == 2
@@ -259,22 +331,22 @@ def test_aggregate_math_counts_every_explicit_token_score():
 
 def test_runtime_score_excludes_terminal_from_identifier_ppl():
     score = score_candidate_from_runtime(
-        "B027",
-        [100, 0, 2, 7, 151645],
+        "27",
+        [2, 7, 151645],
         {},
-        [-9.2338, -0.0056, -0.2165, -0.0035, -6.4764],
+        [-0.2165, -0.0035, -6.4764],
         terminal_token_id=151645,
     )
 
-    assert [item.token_id for item in score.token_scores] == [100, 0, 2, 7]
-    assert score.token_count == 4
-    assert score.mean_logprob == pytest.approx(-2.36485)
-    assert score.ppl == pytest.approx(math.exp(2.36485))
+    assert [item.token_id for item in score.token_scores] == [2, 7]
+    assert score.token_count == 2
+    assert score.mean_logprob == pytest.approx(-0.11)
+    assert score.ppl == pytest.approx(math.exp(0.11))
 
 
 def test_runtime_score_excludes_terminal_on_continuation_only_backend():
     score = score_candidate_from_runtime(
-        "B027",
+        "27",
         [10, 11, 151645],
         {10: -0.7},
         [-0.2, -6.0],
@@ -288,25 +360,25 @@ def test_runtime_score_excludes_terminal_on_continuation_only_backend():
 
 def test_terminal_bias_cannot_flip_captured_category_ranking():
     terminal = 151645
-    b000 = score_candidate_from_runtime(
-        "B000",
+    category_00_score = score_candidate_from_runtime(
+        "00",
         [100, 0, 0, 0, terminal],
         {},
         [-9.2338, -0.0056, -2.3386, -1.5422, -0.0122],
         terminal_token_id=terminal,
     )
-    b027 = score_candidate_from_runtime(
-        "B027",
+    category_27_score = score_candidate_from_runtime(
+        "27",
         [100, 0, 2, 7, terminal],
         {},
         [-9.2338, -0.0056, -0.2165, -0.0035, -6.4764],
         terminal_token_id=terminal,
     )
 
-    assert b027.mean_logprob > b000.mean_logprob
-    assert b027.ppl < b000.ppl
-    assert all(item.token_id != terminal for item in b000.token_scores)
-    assert all(item.token_id != terminal for item in b027.token_scores)
+    assert category_27_score.mean_logprob > category_00_score.mean_logprob
+    assert category_27_score.ppl < category_00_score.ppl
+    assert all(item.token_id != terminal for item in category_00_score.token_scores)
+    assert all(item.token_id != terminal for item in category_27_score.token_scores)
 
 
 def test_alignment_rejects_nan_and_preserves_first_suffix_token():
@@ -356,6 +428,21 @@ def test_result_contract_requires_verified_cache_and_input_order():
             req,
             ActionSuffixScoreResult(req.request_id, req.model, False, good_scores),
         )
+    direct_req = request(
+        candidates=[candidate("left", "左手"), candidate("right", "右手")],
+        scoring_mode="single_token_enforce",
+        selection_mapping_version="v1",
+        selection_mapping_hash="sha256:test",
+    )
+    for index, item in enumerate(direct_req.candidates):
+        item.selection_token = f"A{index}"
+        item.selection_token_id = 100 + index
+    validate_score_result(
+        direct_req,
+        ActionSuffixScoreResult(
+            direct_req.request_id, direct_req.model, False, good_scores
+        ),
+    )
 
 
 @pytest.mark.asyncio

@@ -92,10 +92,44 @@ def test_empty_queue_passes_through(upstream):
     assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
 
 
+@pytest.mark.parametrize("wait_seconds,isolated", [(0.01, True), (0.3, False)])
+def test_action_prefill_isolation_has_bounded_generation_wait(upstream, clock, wait_seconds, isolated):
+    sched = _StubScheduler(coalesce_requests=0)
+    action = _req(100.0)
+    action._omni_data = SimpleNamespace(action_scoring_plan={"stage": "child", "admission_priority": 1})
+    reply = _req(100.0)
+    sched.waiting_queue = [reply, action]
+    clock.return_value = 100.0 + wait_seconds
+    seen = []
+    def select(owner, running):
+        seen.extend(owner.waiting_queue)
+        owner.waiting_queue = []
+        return NextBatchPlan(batch_to_run=_UPSTREAM_BATCH, running_batch=running)
+    upstream.side_effect = select
+    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
+    assert seen == ([action] if isolated else [reply, action])
+    assert sched.waiting_queue == ([reply] if isolated else [])
+
+
 def test_full_batch_passes_through_immediately(upstream):
     sched = _StubScheduler(coalesce_requests=4)
     sched.waiting_queue = [_req(100.0)] * 4
     assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
+
+
+def test_complete_action_suffix_cohort_bypasses_coalesce_deadline(upstream):
+    sched = _StubScheduler(
+        coalesce_requests=256,
+        wait_ms=60.0,
+        coalesce_when_idle=True,
+    )
+    # 117 concrete actions + UNSUPPORTED + 12 core + 12 visual labels.
+    sched.waiting_queue = [_req(100.0) for _ in range(142)]
+    for req in sched.waiting_queue:
+        req._omni_data = SimpleNamespace(action_scoring_role="candidate")
+
+    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
+    upstream.assert_called_once()
 
 
 def test_small_queue_is_held_until_oldest_expires(upstream, clock):

@@ -61,6 +61,10 @@ from sglang_omni.serve.realtime.reply.generation import ReplyGenerationComponent
 from sglang_omni.serve.realtime.reply.prompts import ReplyPromptComponent
 from sglang_omni.serve.realtime.reply.history import ReplyHistoryComponent
 from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
+from sglang_omni.serve.realtime.visual_observation import (
+    VISUAL_OBSERVATION_TOP_LOGPROBS,
+)
 
 
 @compose_components(
@@ -72,6 +76,109 @@ from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
     ReplyHistoryComponent,
 )
 class ReplyPipeline:
+    def _build_visual_arithmetic_image_prefetch_request(
+        self,
+        turn: TurnBuffer,
+        images: list[Any],
+        image_roles: list[str],
+    ) -> tuple[GenerateRequest, list[str]]:
+        """Build an encoder-only request for the exact arithmetic image set."""
+
+        selected_images, selected_roles = self._select_reply_user_camera_images(
+            images, image_roles
+        )
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(
+                    role="system",
+                    content="Encode the current images for a later private request.",
+                ),
+                Message(
+                    role="user",
+                    content=[
+                        *({"type": "image"} for _ in selected_images),
+                        {"type": "text", "text": "Encode only."},
+                    ],
+                ),
+            ],
+            sampling=SamplingParams(temperature=0, max_new_tokens=1),
+            stream=False,
+            output_modalities=["text"],
+            metadata={
+                "audios": [],
+                "images": list(selected_images),
+                "image_roles": list(selected_roles),
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "turn_id": turn.turn_id,
+                "logical_request_id": turn.request_base,
+                "task": "image_encoder_prefetch",
+                "private_output": True,
+            },
+        )
+        return request, selected_roles
+
+    def _build_visual_arithmetic_probe_request(
+        self,
+        turn: TurnBuffer,
+        audios: list[str],
+        images: list[Any],
+        image_roles: list[str],
+    ) -> tuple[GenerateRequest, list[str]]:
+        """Build a private, current-turn-only visual arithmetic request.
+
+        This request is safe to start after the unified intent stream emits its
+        first visual route but before the complete intent is available. Its
+        output is never published directly; the turn pipeline consumes it only
+        if the authoritative intent later resolves to ``VISUAL_ANSWER``.
+        """
+
+        reply_images, reply_image_roles = self._select_reply_user_camera_images(
+            images, image_roles
+        )
+        parts: list[dict[str, Any]] = []
+        if reply_image_roles:
+            parts.append(self._reply_user_camera_context_part())
+            parts.extend({"type": "image"} for _ in reply_image_roles)
+        # Intent owns language understanding, including the exact operation.
+        # This private request sees pixels only and returns ordered operands.
+        # Keeping audio/text out avoids duplicate semantic work and makes the
+        # static visual contract independently cacheable.
+
+        contract = self._visual_arithmetic_operand_output_part()["text"]
+        request = GenerateRequest(
+            model=self.model_name,
+            messages=[
+                Message(role="system", content=contract),
+                Message(role="user", content=parts),
+            ],
+            sampling=SamplingParams(
+                temperature=0,
+                top_p=1.0,
+                max_new_tokens=8,
+                stop=["\n"],
+            ),
+            stream=True,
+            extra_params={
+                "return_logprob": True,
+                "top_logprobs_num": VISUAL_OBSERVATION_TOP_LOGPROBS,
+            },
+            output_modalities=["text"],
+            metadata={
+                "audios": [],
+                "images": list(reply_images),
+                "image_roles": list(reply_image_roles),
+                "session_id": self.session_id,
+                "session_instance_id": self.session_instance_id,
+                "turn_id": turn.turn_id,
+                "logical_request_id": turn.request_base,
+                "task": "session_visual_arithmetic_probe",
+                "private_output": True,
+            },
+        )
+        return request, reply_image_roles
+
     def _build_reply_request(
         self,
         turn: TurnBuffer,
@@ -179,9 +286,8 @@ class ReplyPipeline:
         parts: list[dict[str, Any]] = []
         if reply_image_roles:
             # Put visual evidence before the user's speech/text so the actual
-            # request remains closest to the assistant generation. Only one
-            # latest camera frame is forwarded, but keep this grouped in case
-            # that policy changes later.
+            # request remains closest to the assistant generation. The bounded
+            # current-turn camera window stays grouped in capture order.
             parts.append(self._reply_user_camera_context_part())
             parts.extend({"type": "image"} for _ in reply_image_roles)
         reply_context = (
@@ -258,17 +364,32 @@ class ReplyPipeline:
                 parts.append(self._pure_action_short_reply_part())
         if reply_context is not None and not podcast_context:
             parts.append({"type": "text", "text": reply_context})
-        if reply_image_roles:
+        visual_gesture_answer = bool(
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
+        )
+        if reply_image_roles and not visual_gesture_answer:
             # Repeat only the decision boundary after the current speech/text.
             # The earlier label explains the image role; this final guard keeps
-            # an available camera frame from becoming the default reply topic.
+            # available camera frames from becoming the default reply topic.
             parts.append(self._reply_user_camera_response_guard_part())
-        else:
+        elif not reply_image_roles:
             # Keep the current-turn visual fact closest to generation so it
             # overrides stale visual claims in reply history. The instruction
             # is deliberately scoped so non-visual requests, including camera-
             # relative motions of the digital character, remain unaffected.
             parts.append(self._reply_no_user_camera_context_part())
+        # Keep this server-owned prompt reminder closest to generation. Qwen can
+        # otherwise treat a target-language modifier in the latest user text as
+        # stronger than an earlier fixed-language client instruction.
+        if turn.turn_origin == TURN_ORIGIN_USER:
+            language_lock_reminder = (
+                self._reply_current_turn_language_lock_reminder_part()
+            )
+            if language_lock_reminder is not None:
+                parts.append(language_lock_reminder)
+        if visual_gesture_answer:
+            parts.append(self._visual_arithmetic_operand_output_part())
         if parts:
             messages.append(Message(role="user", content=parts))
         request = GenerateRequest(

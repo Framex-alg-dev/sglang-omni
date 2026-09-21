@@ -4,19 +4,19 @@
 离线生成、验证并版本化一套全局唯一的单-token 短 ID。该流程不修改 tokenizer
 词表或模型权重。
 
-## 为什么不能继续假设 A000 是单 token
+## 为什么不能继续假设 000 是单 token
 
 部署配置 `deploy/config_single_gpu.yaml` 中的 FP8 Thinker checkpoint 与用于
 chat template fallback 的 Instruct checkpoint 使用相同的 Qwen2Tokenizer。
 Instruct checkpoint 不作为 Talker 加载。实测结果如下：
 
 ~~~text
-A000 -> [32, 15, 15, 15]
-A328 -> [32, 18, 17, 23]
-B051 -> [33, 15, 20, 16]
+000 -> [32, 15, 15, 15]
+328 -> [32, 18, 17, 23]
+51 -> [33, 15, 20, 16]
 ~~~
 
-因此 `A000/B051` 是短字符串，但不是单 token。新的离线工具从实际 tokenizer
+因此 `000/51` 是短字符串，但不是单 token。新的离线工具从实际 tokenizer
 词表中筛选满足以下全部条件的字符串：
 
 - 已存在于模型词表，不调用 `tokenizer.add_tokens`；
@@ -62,15 +62,15 @@ allowed_ids = select_session_candidate_ids(document)
 session_start["action"]["allowed_candidates"] = [
     {"candidate_id": candidate_id} for candidate_id in allowed_ids
 ]
-session_start["action"]["fallback_category_ids"] = ["B008"]
+session_start["action"]["fallback_category_ids"] = ["08"]
 ~~~
 
 `fallback_category_ids` 是客户端根据当前数字人配置给出的有序类别数组，不是服务端固定值；
 显式非空白名单必须包含每个兜底类别下至少一个真实动作 candidate ID；白名单缺省或为空时，
 服务端自动展开所有兜底类别下的全部动作。服务端根据权威全局目录
 恢复类别、动作名称、定义和 `action_id`，并校验客户端 ID 是否属于当前目录版本。
-`UNSUPPORTED` 是服务端自动加入的非执行型推理判断；Category 使用 `B000`、Child 使用
-`A000` 参与 PPL 评分。三者均为保留值，不占用业务类别或动作 ID。
+`UNSUPPORTED` 是服务端自动加入的非执行型推理判断；Category 使用 `00`、Child 使用
+`000` 参与 PPL 评分。三者均为保留值，不占用业务类别或动作 ID。
 
 业务 `action_id` 保持 canonical catalog 中的永久 ID；只有模型实际评分的
 `category_id/candidate_id` 会替换成单-token ID。

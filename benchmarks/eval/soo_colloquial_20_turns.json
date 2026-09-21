@@ -1,0 +1,164 @@
+{
+  "schema_version": "1.0",
+  "name": "soo_live_show_rehearsal_20_turns",
+  "character_id": "character_4ef8a49978444c9aba77fc7293fb5984",
+  "description": "Soo 开播彩排：20 个连续用户音频 turn；prompt 仅用于制作输入录音，不随音频发送。",
+  "status": "designed_not_executed",
+  "character_reference": "reports/soo_multimodal_506/character_snapshot.json",
+  "session_start_reference": "reports/soo_multimodal_506/session_start.json",
+  "persona_input_fields": ["reply.instructions", "character_profile.visual_behavior_preferences", "action.allowed_candidates", "action.category_guidance", "action.candidate_guidance", "action.fallback_category_ids", "locale"],
+  "session_reference": "reports/realtime_multimodal_user_journey/journey-20260916-110916/summary.json",
+  "run_contract": {
+    "turns_per_session": 20,
+    "repeats": 1,
+    "concurrency_groups": [1, 2],
+    "target_start_interval_seconds": 6,
+    "origin": "user",
+    "preserve_order_and_history": true,
+    "use_actual_character_session_start": true,
+    "never_send_prompt_as_transcript_with_audio": true,
+    "manual_assertions_require_review": true
+  },
+  "turns": [
+    {
+      "id": "01", "scene": "neutral_desk",
+      "prompt": "嗨，Soo，我是小林，今晚想跟你排练一下节目的开场。今天咱们用中文聊，你先跟新观众介绍一下自己，平时主要聊些什么？",
+      "coverage_targets": ["generated_reply", "tts_stream", "ordinary_accompaniment", "persona"],
+      "manual_assertions": ["中文介绍 Soo 的 AI 新闻与时事主持人身份，不能只有问候；不捏造与小林的旧交情或现实经历；不强制某个陪伴动作。"]
+    },
+    {
+      "id": "02", "scene": "neutral_desk",
+      "prompt": "我把安排告诉你哈：今晚八点半开播，主题是 AI 怎么帮老师备课，开场就留两分钟。先帮我记着。",
+      "expected_reply_groups": [["好", "记", "明白", "八点半", "两分钟"]],
+      "coverage_targets": ["history_write", "generated_reply"],
+      "manual_assertions": ["记住时间、主题、时长；时间中的数字不得被当成显式数字手势请求。"]
+    },
+    {
+      "id": "03", "scene": "neutral_desk",
+      "prompt": "对了，改一下，不是八点半，是九点，其他安排不变，别记串了。",
+      "expected_reply_groups": [["九点", "9点", "21:00"]],
+      "coverage_targets": ["history_update", "generated_reply"],
+      "manual_assertions": ["更新时间为九点，不修改主题或两分钟时长。"]
+    },
+    {
+      "id": "04", "scene": "neutral_desk",
+      "prompt": "我刚才最后定的是几点开播来着？讲什么，开场留多久？你帮我捋一下。",
+      "expected_reply_groups": [["九点", "9点", "21:00"], ["老师", "教师"], ["备课"], ["两分钟", "2分钟"]],
+      "coverage_targets": ["history_read", "generated_reply"],
+      "manual_assertions": ["以第三轮修正后的信息回答，不回退到八点半。"]
+    },
+    {
+      "id": "05", "scene": "desk_start",
+      "prompt": "你看我桌上这一堆东西，主要有哪三样？就看画面说，别猜镜头外的。",
+      "expected_reply_groups": [["杯", "mug", "cup"], ["笔记本", "本子", "notebook"], ["电脑", "laptop"]],
+      "coverage_targets": ["image_preprocess", "visual_generated_reply"],
+      "manual_assertions": ["识别杯子、纸质笔记本和电脑；不要把三样物品理解成执行数字三。"]
+    },
+    {
+      "id": "06", "scene": "supplies_three",
+      "prompt": "桌上这些盒子是给嘉宾的小礼物，你帮我数一下，现在一共有几个？",
+      "expected_reply_groups": [["三", "3", "three"]],
+      "coverage_targets": ["visual_counting", "numeric_override_disabled"],
+      "manual_assertions": ["主答案是三个；不应走 complete_reply_numeric 分支。普通陪伴动作不固定。"]
+    },
+    {
+      "id": "07", "scene": "supplies_two",
+      "prompt": "我拿走了一个。跟刚才比，现在还剩几个？少了几个？",
+      "expected_reply_groups": [["两", "二", "2", "two"], ["一", "1", "one"]],
+      "coverage_targets": ["visual_history_comparison", "history_read"],
+      "manual_assertions": ["剩两个、少一个；区分当前画面和第六轮画面。"]
+    },
+    {
+      "id": "08", "scene": "neutral_desk",
+      "prompt": "有人跟我说，AI 下个月就能把老师全替代了。我想把这句当开场噱头，你觉得靠谱吗？咱可别为了好笑把没证实的事说成真的。",
+      "coverage_targets": ["generated_reply", "performance_optional", "ordinary_accompaniment", "persona_uncertainty"],
+      "manual_assertions": ["不把用户转述当事实；说明缺少何种证据或限定，而非只贴炒作标签；不编造新闻、数据或来源；不指定身体或表情候选。"]
+    },
+    {
+      "id": "09", "scene": "neutral_desk",
+      "prompt": "先不用说话，冲镜头挥挥手就行，像刚看到老朋友那样。",
+      "expected_action_candidates": ["288", "289", "217", "218"],
+      "coverage_targets": ["speech_none", "body_perform", "action_first", "silent_reply_discard"],
+      "manual_assertions": ["支持挥手时只执行动作，不说确认语；缺少音频是预期行为而不是首包失败。"]
+    },
+    {
+      "id": "10", "scene": "neutral_desk",
+      "prompt": "来，笑一个就好，手别动，也先别说话，我看看镜头里的感觉。",
+      "expected_expression_candidates": ["154"],
+      "coverage_targets": ["face_only", "body_prohibit", "speech_none", "performance_branch"],
+      "manual_assertions": ["微笑，无可执行身体动作、无口头确认；动作优先窗口应按实际意图判定是否绕过。"]
+    },
+    {
+      "id": "11", "scene": "neutral_desk",
+      "prompt": "咱们正式试一次：笑着跟观众挥挥手，再说一句，大家晚上好。",
+      "expected_reply_groups": [["大家晚上好"]],
+      "expected_action_candidates": ["288", "289", "217", "218"],
+      "expected_expression_candidates": ["154"],
+      "coverage_targets": ["speech_verbatim", "body_and_face", "independent_events", "action_first", "tts_stream"],
+      "manual_assertions": ["去除句末标点后仅为“大家晚上好”；身体、表情各自返回，不要求固定到达顺序。"]
+    },
+    {
+      "id": "12", "scene": "neutral_desk",
+      "prompt": "接下来介绍桌上的礼物，你用一只手摊开来展示一下，顺便说，这是给大家准备的小礼物。",
+      "expected_reply_groups": [["这是给大家准备的小礼物"]],
+      "expected_action_candidates": ["237"],
+      "coverage_targets": ["body_perform", "category_or_shortcut", "child_scoring", "speech_verbatim"],
+      "manual_assertions": ["单手摊开展示；记录是否走类别召回，快捷命中时不能计为类别评分覆盖。"]
+    },
+    {
+      "id": "13", "scene": "neutral_desk",
+      "prompt": "刚才动作有点多，这一段先别挥手，也别比数字，就用一句话解释一下什么叫 AI 幻觉。",
+      "coverage_targets": ["body_prohibit", "generated_reply", "negative_constraints"],
+      "manual_assertions": ["通俗解释模型可能编造错误内容；执行动作不得为挥手或任何数字手势。允许未被禁止的普通陪伴动作。"]
+    },
+    {
+      "id": "14", "scene": "neutral_desk",
+      "prompt": "有句绕口的话要试音，你只照着念：说一比二。不要真的做手势。",
+      "expected_reply_groups": [["说一比二"]],
+      "coverage_targets": ["speech_verbatim", "quoted_action_boundary", "body_prohibit"],
+      "manual_assertions": ["去除句末标点后回复恰为“说一比二”；不执行数字一、数字二或其他手势。"]
+    },
+    {
+      "id": "15", "scene": "number_one_gesture",
+      "prompt": "看我的手，照着画面里这个手势做一个就行，先别说话。",
+      "expected_action_candidates": ["258"], "expected_action_categories": ["31"],
+      "coverage_targets": ["visual_scope", "visual_imitation", "speech_none", "visual_child_prefix"],
+      "manual_assertions": ["依据图中一根手指选择数字一手势，而不是依据文本猜数字。"]
+    },
+    {
+      "id": "16", "scene": "number_two_gesture",
+      "prompt": "我换了个手型，你再照着这个手势做一下，还是不用说话。",
+      "expected_action_candidates": ["274"], "expected_action_categories": ["31"],
+      "coverage_targets": ["visual_imitation", "latest_image", "speech_none"],
+      "manual_assertions": ["该实拍图是 V 形手势，按已有图像用例预期单手比耶 274，不把文件名 number_two 当成数字二 259 的依据。"]
+    },
+    {
+      "id": "17", "scene": "number_two_gesture",
+      "image_scenes": ["number_two_gesture", "number_one_gesture"],
+      "prompt": "前后这两张图里，我伸出的手指加起来是几个？你告诉我答案就好，不用比出来。",
+      "expected_reply_groups": [["三", "3", "three"]],
+      "coverage_targets": ["multi_image_retention", "visual_reasoning", "numeric_override_disabled", "body_prohibit"],
+      "manual_assertions": ["合计三；确认两帧均进入当前 turn；无完整回复数字二阶段评分，不执行数字三。"]
+    },
+    {
+      "id": "18", "scene": "neutral_desk",
+      "prompt": "收尾能不能来个夸张点的，做一个后空翻？做不到就直接告诉我，别硬来。",
+      "coverage_targets": ["unsupported_action", "support_gated_reply", "fallback"],
+      "manual_assertions": ["启动前确认角色无后空翻候选；明确说明不能执行，不用相近动作冒充成功。允许按实际配置安全回退。"]
+    },
+    {
+      "id": "19", "scene": "neutral_desk",
+      "prompt": "好，那收尾的时候你给大家一点鼓励，动作有精神一点，再送观众一句打气的话。",
+      "coverage_targets": ["semantic_category_recall", "child_scoring", "generated_reply", "action_first"],
+      "manual_assertions": ["鼓励性回复与合理鼓励动作；候选从当前角色可用的“鼓励与庆祝”类别评审，不锁死一种动作。必须查日志确认类别和 Child 评分实际发生。"]
+    },
+    {
+      "id": "20", "scene": "neutral_desk",
+      "prompt": "行，今天先练到这儿。最后再提醒我一下，几点开播、讲什么、开场留多久？说完跟我挥手道个别吧。",
+      "expected_reply_groups": [["九点", "9点", "21:00"], ["老师", "教师"], ["备课"], ["两分钟", "2分钟"]],
+      "expected_action_candidates": ["288", "289", "217", "218"],
+      "coverage_targets": ["long_history_read", "generated_reply", "body_perform", "turn_join"],
+      "manual_assertions": ["仍记得修改后的安排；“说完再挥手”是时序语义挑战，记录是否遵守，不把动作提前返回自动判为正确执行顺序。"]
+    }
+  ]
+}

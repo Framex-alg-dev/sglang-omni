@@ -167,7 +167,10 @@ def main(argv: list[str] | None = None) -> None:
             "--realtime-tts-url and --realtime-tts-voice must be provided together"
         )
     embedded_tts_config = (
-        EmbeddedTTSConfig(url=args.realtime_tts_url, voice=args.realtime_tts_voice)
+        EmbeddedTTSConfig(
+            url=args.realtime_tts_url, voice=args.realtime_tts_voice,
+            **EmbeddedTTSConfig.text_options_from_env(),
+        )
         if args.realtime_tts_url
         else None
     )

@@ -1,0 +1,191 @@
+{
+  "schema_version": "1.0",
+  "name": "workshop_preparation_29_turns",
+  "description": "One continuous, realistic user journey. Every turn contains one spoken user request and one or more camera images.",
+  "turns": [
+    {
+      "id": "01",
+      "scene": "desk_start",
+      "prompt": "Hi Soo, I'm Nora. I'm preparing an AI literacy workshop for teachers tomorrow. Please stay with me while I get ready.",
+      "expected_reply_groups": [["nora"], ["workshop", "get ready", "prepare"]]
+    },
+    {
+      "id": "02",
+      "scene": "desk_start",
+      "prompt": "Look at my desk. What three main objects can you see?",
+      "expected_reply_groups": [["mug", "cup"], ["notebook"], ["laptop", "computer"]]
+    },
+    {
+      "id": "03",
+      "scene": "desk_start",
+      "prompt": "Which item is immediately to the left of the laptop?",
+      "expected_reply_groups": [["notebook"]]
+    },
+    {
+      "id": "04",
+      "scene": "schedule_a",
+      "prompt": "Read the workshop time and room from this schedule.",
+      "expected_reply_groups": [["14:30", "2:30"], ["room a"]]
+    },
+    {
+      "id": "05",
+      "scene": "schedule_a",
+      "prompt": "Remember that plan. The event starts at two thirty in Room A.",
+      "expected_reply_groups": [["2:30", "two thirty", "14:30"], ["room a"]]
+    },
+    {
+      "id": "06",
+      "scene": "task_board",
+      "prompt": "Which sticky note is marked high priority?",
+      "expected_reply_groups": [["check audio", "audio"]]
+    },
+    {
+      "id": "07",
+      "scene": "task_board",
+      "prompt": "I finished printing the badges. Which unfinished task should I do next?",
+      "expected_reply_groups": [["check audio", "audio"]]
+    },
+    {
+      "id": "08",
+      "scene": "supplies_three",
+      "prompt": "How many supply boxes are on the table?",
+      "expected_reply_groups": [["three", "3"]]
+    },
+    {
+      "id": "09",
+      "scene": "supplies_two",
+      "prompt": "I removed one box. Compared with the previous view, how many are left?",
+      "expected_reply_groups": [["two", "2"]]
+    },
+    {
+      "id": "10",
+      "scene": "budget",
+      "prompt": "Which budget item costs the most, and how much is it?",
+      "expected_reply_groups": [["projector"], ["680"]]
+    },
+    {
+      "id": "11",
+      "scene": "budget",
+      "prompt": "What is the combined cost of the cables and badges?",
+      "expected_reply_groups": [["210"]]
+    },
+    {
+      "id": "12",
+      "scene": "schedule_b",
+      "prompt": "The venue has changed. Read the updated room and keep the same time.",
+      "expected_reply_groups": [["room c"], ["14:30", "2:30"]]
+    },
+    {
+      "id": "13",
+      "scene": "neutral_desk",
+      "prompt": "The schedule is no longer in view. Remind me of the current room and time.",
+      "expected_reply_groups": [["room c"], ["14:30", "2:30", "two thirty"]]
+    },
+    {
+      "id": "14",
+      "scene": "claim_slide",
+      "prompt": "This slide says AI saves fifty percent of teachers' time. What evidence limitation is visible?",
+      "expected_reply_groups": [["five", "5"], ["no baseline", "without a baseline", "baseline"]]
+    },
+    {
+      "id": "15",
+      "scene": "claim_slide",
+      "prompt": "Give me one cautious sentence I can say on stage about that claim.",
+      "expected_reply_groups": [["pilot", "small", "limited", "preliminary", "cannot", "not enough", "not officially confirmed", "not been officially confirmed", "not confirmed", "unconfirmed"]]
+    },
+    {
+      "id": "16",
+      "scene": "neutral_desk",
+      "prompt": "I'm getting nervous. Give me one short encouraging sentence and smile.",
+      "expected_reply_groups": [["you", "ready", "can", "got this", "well"]],
+      "expected_expression_candidates": ["154"]
+    },
+    {
+      "id": "17",
+      "scene": "neutral_desk",
+      "prompt": "Wave once and say exactly: Welcome, everyone.",
+      "expected_reply_groups": [["welcome, everyone", "welcome everyone"]],
+      "expected_action_candidates": ["217", "218", "288", "289"]
+    },
+    {
+      "id": "18",
+      "scene": "claim_slide",
+      "prompt": "Keep a serious expression and tell me one reason not to overstate this pilot.",
+      "expected_reply_groups": [["five", "small", "baseline", "limited"]],
+      "expected_expression_candidates": ["156"]
+    },
+    {
+      "id": "19",
+      "scene": "badge_maya",
+      "prompt": "I changed my badge. From now on, call me Maya, not Nora.",
+      "expected_reply_groups": [["maya"]]
+    },
+    {
+      "id": "20",
+      "scene": "neutral_desk",
+      "prompt": "What should you call me now, and what kind of event am I preparing?",
+      "expected_reply_groups": [["maya"], ["ai literacy", "workshop", "teachers"]]
+    },
+    {
+      "id": "21",
+      "scene": "spill",
+      "prompt": "I just spilled water beside the power strip. What should I do first?",
+      "expected_reply_groups": [["power", "unplug", "electric", "switch off", "turn off"]]
+    },
+    {
+      "id": "22",
+      "scene": "spill_clean",
+      "prompt": "I've unplugged it and dried the area. Does the picture still show a visible puddle?",
+      "expected_reply_groups": [["no", "not", "doesn't", "does not"]]
+    },
+    {
+      "id": "23",
+      "scene": "final_checklist",
+      "prompt": "Review this final checklist and tell me the only unchecked item.",
+      "expected_reply_groups": [["practice opening", "practice the opening", "opening"]]
+    },
+    {
+      "id": "24",
+      "scene": "final_summary",
+      "prompt": "Before I go, recap my current name, room, time, and remaining task, then wave goodbye.",
+      "expected_reply_groups": [["maya"], ["room c"], ["14:30", "2:30", "two thirty"], ["practice", "opening"]],
+      "expected_action_candidates": ["217", "218", "288", "289"]
+    },
+    {
+      "id": "25",
+      "scene": "number_one_gesture",
+      "prompt": "请做出这个手势",
+      "expected_action_candidates": ["258"],
+      "expected_action_categories": ["31"]
+    },
+    {
+      "id": "26",
+      "scene": "number_one_gesture",
+      "prompt": "请做出手势",
+      "expected_action_candidates": ["258"],
+      "expected_action_categories": ["31"]
+    },
+    {
+      "id": "27",
+      "scene": "number_two_gesture",
+      "prompt": "请做出这个手势",
+      "expected_action_candidates": ["274"],
+      "expected_action_categories": ["31"]
+    },
+    {
+      "id": "28",
+      "scene": "number_two_gesture",
+      "prompt": "这个是什么手势",
+      "expected_reply_groups": [["peace sign", "v sign", "two", "数字二", "比耶", "耶"]]
+    },
+    {
+      "id": "29",
+      "scene": "number_two_gesture",
+      "image_scenes": ["number_two_gesture", "number_one_gesture"],
+      "prompt": "这两个加起来等于多少",
+      "expected_reply_groups": [["三", "3", "three"]],
+      "expected_action_candidates": ["260"],
+      "expected_action_categories": ["31"]
+    }
+  ]
+}

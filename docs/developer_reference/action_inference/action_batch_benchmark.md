@@ -22,7 +22,7 @@
 `protocol_version=1` 固定使用 hierarchical，benchmark 脚本只上传全局目录的紧凑
 candidate ID 白名单，不再接受 `--mode` 或上传动作语义目录。
 
-为了验证 batch 大小本身，benchmark 使用短的外部 `candidate_id`（`A000`、`A001`……），同时保留目录中的长 canonical `action_id` 作为动作执行 ID。这样不会把长 action_id 的 token 数量误算成 batch 优化收益。
+为了验证 batch 大小本身，benchmark 使用短的外部 `candidate_id`（`000`、`001`……），同时保留目录中的长 canonical `action_id` 作为动作执行 ID。这样不会把长 action_id 的 token 数量误算成 batch 优化收益。
 
 ## 2. 实现改动
 
@@ -34,7 +34,7 @@ SGLANG_OMNI_ACTION_MICRO_BATCH_SIZE
 
 行为：
 
-- 默认值为 `64`，保持原有行为
+- realtime 默认最大值为 `169`；实际候选少于 169 时使用实际候选数
 - 支持范围为 `1–256`
 - 服务启动创建 `MultimodalSessionManager` 时校验非法值；非法值不会创建 session
 - batch 配置在 manager 初始化时解析，并固定传递给后续 session

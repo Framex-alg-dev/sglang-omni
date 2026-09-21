@@ -108,7 +108,7 @@ def _aggregate_stage(
             wait_for=["preprocessing", "image_encoder", "audio_encoder"],
             wait_for_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_wait_sources",
             merge_fn=f"{_PKG}.merge.merge_for_thinker",
-            next=["thinker", "talker_ar"],
+            next=["thinker", "talker_ar", "encoder_prefetch_done"],
             route_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_next_stages",
             disable_direct_cuda_ipc_payload=True,
             project_payload={
@@ -125,7 +125,7 @@ def _aggregate_stage(
         wait_for=["preprocessing", "image_encoder", "audio_encoder"],
         wait_for_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_wait_sources",
         merge_fn=f"{_PKG}.merge.merge_for_thinker",
-        next="thinker",
+        next=["thinker", "encoder_prefetch_done"],
         route_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_next_stages",
         disable_direct_cuda_ipc_payload=True,
     )
@@ -163,6 +163,15 @@ def _action_score_stage(*, process: str) -> StageConfig:
         name="action_score",
         process=process,
         factory=f"{_PKG}.stages.create_action_score_executor",
+        terminal=True,
+    )
+
+
+def _encoder_prefetch_stage(*, process: str) -> StageConfig:
+    return StageConfig(
+        name="encoder_prefetch_done",
+        process=process,
+        factory=f"{_PKG}.stages.create_encoder_prefetch_executor",
         terminal=True,
     )
 
@@ -235,6 +244,7 @@ def _text_stages() -> list[StageConfig]:
         _audio_encoder_stage(gpu=0, process="pipeline"),
         _aggregate_stage(process="pipeline", gpu=0, speech_enabled=False),
         _thinker_stage(gpu=0, speech_enabled=False, process="pipeline"),
+        _encoder_prefetch_stage(process="pipeline"),
         _action_score_stage(process="pipeline"),
         _decode_stage(process="pipeline"),
     ]
@@ -267,6 +277,7 @@ def _speech_stages(
             speech_enabled=True,
             process=process_by_stage["thinker"],
         ),
+        _encoder_prefetch_stage(process=process_by_stage["mm_aggregate"]),
         _action_score_stage(process=process_by_stage["thinker"]),
         _decode_stage(process=process_by_stage["decode"]),
         _talker_stage(

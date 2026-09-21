@@ -13,53 +13,82 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionScoreCandidate,
     ActionSuffixScoreRequest,
 )
+from sglang_omni.serve.realtime.action.routing import (
+    is_visual_deictic_expression_request,
+)
 from sglang_omni.serve.realtime.performance.models import PerformanceDecision
 from sglang_omni.serve.realtime.protocol.common import (
     FACIAL_EXPRESSION_CATEGORY_ID,
+    IMAGE_ROLE_USER_CAMERA,
 )
 from sglang_omni.serve.realtime.protocol.models import TurnBuffer
 from sglang_omni.utils.structured_logs import emit_structured_log
 
 _FACE_ONLY_DESCRIPTIONS = {
-    "A154": "a natural smile with gently raised mouth corners and cheerful eyes",
-    "A155": "an open joyful laugh with a wide mouth and strongly smiling eyes",
-    "A156": "a serious expression with tightened brows and a straight closed mouth",
-    "A157": "a surprised expression with raised brows, widened eyes, and a slightly open mouth",
-    "A158": "a playful funny face with exaggerated features, a crooked mouth, and the tongue out",
-    "A159": "a frightened expression with wide eyes, raised brows, and lowered mouth corners",
-    "A160": "an aggrieved expression with lowered mouth corners and slightly knitted brows",
-    "A161": "a sad expression with drooping eyes and brows, lowered mouth corners, and a subdued gaze",
-    "A162": "a puzzled expression with one raised brow and a slightly crooked mouth",
-    "A163": "an angry expression with deeply knitted brows, flared nostrils, and a tense mouth",
-    "A164": "a vulnerable pleading expression with a gently bitten lower lip and upward-looking eyes",
+    "154": "a natural smile with gently raised mouth corners and cheerful eyes",
+    "155": "an open joyful laugh with a wide mouth and strongly smiling eyes",
+    "156": "a serious expression with tightened brows and a straight closed mouth",
+    "157": "a surprised expression with raised brows, widened eyes, and a slightly open mouth",
+    "158": "a playful funny face with exaggerated features, a crooked mouth, and the tongue out",
+    "159": "a frightened expression with wide eyes, raised brows, and lowered mouth corners",
+    "160": "an aggrieved expression with lowered mouth corners and slightly knitted brows",
+    "161": "a sad expression with drooping eyes and brows, lowered mouth corners, and a subdued gaze",
+    "162": "a puzzled expression with one raised brow and a slightly crooked mouth",
+    "163": "an angry expression with deeply knitted brows, flared nostrils, and a tense mouth",
+    "164": "a vulnerable pleading expression with a gently bitten lower lip and upward-looking eyes",
 }
 
 _TTS_BY_EXPRESSION = {
-    "A154": "语气轻快温暖，音调略微上扬，语速适中，带有自然笑意",
-    "A155": "语气开朗活泼，音调偏高，语速略快，笑意明显但保持吐字清楚",
-    "A156": "语气克制严肃，音调平稳偏低，语速稍慢，吐字清晰",
-    "A157": "语气惊讶，音调明显上扬，语速略快，保留自然停顿",
-    "A158": "语气俏皮活泼，音调偏高，语速略快，节奏轻盈",
-    "A159": "语气紧张不安，音调略高，语速稍快，声音力度偏弱",
-    "A160": "语气轻柔委屈，音调略低，语速偏慢，声音力度较轻",
-    "A161": "语气低落悲伤，音调偏低，语速缓慢，声音轻柔",
-    "A162": "语气带有疑问，句尾自然上扬，语速适中，停顿清楚",
-    "A163": "语气坚定不满，音调偏低，语速适中，力度稍强但不喊叫",
-    "A164": "语气柔软可怜，音调略高，语速偏慢，声音轻柔",
+    "154": "语气轻快温暖，音调略微上扬，语速适中，带有自然笑意",
+    "155": "语气开朗活泼，音调偏高，语速略快，笑意明显但保持吐字清楚",
+    "156": "语气克制严肃，音调平稳偏低，语速稍慢，吐字清晰",
+    "157": "语气惊讶，音调明显上扬，语速略快，保留自然停顿",
+    "158": "语气俏皮活泼，音调偏高，语速略快，节奏轻盈",
+    "159": "语气紧张不安，音调略高，语速稍快，声音力度偏弱",
+    "160": "语气轻柔委屈，音调略低，语速偏慢，声音力度较轻",
+    "161": "语气低落悲伤，音调偏低，语速缓慢，声音轻柔",
+    "162": "语气带有疑问，句尾自然上扬，语速适中，停顿清楚",
+    "163": "语气坚定不满，音调偏低，语速适中，力度稍强但不喊叫",
+    "164": "语气柔软可怜，音调略高，语速偏慢，声音轻柔",
 }
 
 _TTS_BY_EXPRESSION_EN = {
-    "A154": "warm and upbeat tone, slightly rising pitch, medium pace, with a natural smile",
-    "A155": "bright and lively tone, higher pitch, slightly faster pace, clear articulation",
-    "A156": "restrained and serious tone, steady lower pitch, slightly slower pace, clear articulation",
-    "A157": "surprised tone, clearly rising pitch, slightly faster pace, with natural pauses",
-    "A158": "playful lively tone, higher pitch, slightly faster pace, light rhythm",
-    "A159": "nervous uneasy tone, slightly higher pitch and faster pace, with low vocal force",
-    "A160": "soft aggrieved tone, slightly lower pitch, slower pace, and gentle vocal force",
-    "A161": "subdued sad tone, lower pitch, slow pace, and a soft voice",
-    "A162": "questioning tone, naturally rising sentence endings, medium pace, and clear pauses",
-    "A163": "firm displeased tone, lower pitch, medium pace, stronger force without shouting",
-    "A164": "soft vulnerable tone, slightly higher pitch, slower pace, and gentle vocal force",
+    "154": "warm and upbeat tone, slightly rising pitch, medium pace, with a natural smile",
+    "155": "bright and lively tone, higher pitch, slightly faster pace, clear articulation",
+    "156": "restrained and serious tone, steady lower pitch, slightly slower pace, clear articulation",
+    "157": "surprised tone, clearly rising pitch, slightly faster pace, with natural pauses",
+    "158": "playful lively tone, higher pitch, slightly faster pace, light rhythm",
+    "159": "nervous uneasy tone, slightly higher pitch and faster pace, with low vocal force",
+    "160": "soft aggrieved tone, slightly lower pitch, slower pace, and gentle vocal force",
+    "161": "subdued sad tone, lower pitch, slow pace, and a soft voice",
+    "162": "questioning tone, naturally rising sentence endings, medium pace, and clear pauses",
+    "163": "firm displeased tone, lower pitch, medium pace, stronger force without shouting",
+    "164": "soft vulnerable tone, slightly higher pitch, slower pace, and gentle vocal force",
+}
+
+_EXPLICIT_FACE_IDS = {
+    "微笑": "154",
+    "smile": "154",
+    "大笑": "155",
+    "laugh": "155",
+    "严肃": "156",
+    "serious": "156",
+    "惊讶": "157",
+    "surprised": "157",
+    "鬼脸": "158",
+    "funny face": "158",
+    "害怕": "159",
+    "frightened": "159",
+    "委屈": "160",
+    "aggrieved": "160",
+    "悲伤": "161",
+    "sad": "161",
+    "困惑": "162",
+    "puzzled": "162",
+    "生气": "163",
+    "angry": "163",
+    "可怜": "164",
+    "pleading": "164",
 }
 
 
@@ -90,17 +119,22 @@ class PerformancePipeline:
             if item.candidate_id in _FACE_ONLY_DESCRIPTIONS
         ]
 
-    def _performance_system_prompt(self, choices: dict[str, _Choice]) -> str:
+    def _performance_system_prompt(
+        self,
+        choices: dict[str, _Choice],
+        *,
+        visual_deictic_expression: bool = False,
+    ) -> str:
         choice_lines: list[str] = []
         labels = {
-            item.candidate_id: item.source_label
+            item.candidate_id: item.prompt_label or item.source_label
             for item in self._expression_candidates()
         }
         for decision_id, choice in choices.items():
             expression = (
-                "不改变脸部表情"
+                self._action_prompt(zh="不改变脸部表情", en="no change in facial expression")
                 if choice.expression_id is None
-                else labels.get(choice.expression_id, "不支持的脸部表情")
+                else labels.get(choice.expression_id, self._action_prompt(zh="不支持的脸部表情", en="unsupported facial expression"))
             )
             choice_lines.append(
                 f"{decision_id}: request_scope={choice.scope}; expression={expression}"
@@ -127,7 +161,7 @@ class PerformancePipeline:
             if persona_body
             else ""
         )
-        return self._prompt(
+        prompt = self._action_prompt(
             zh=(
                 "你只负责判断当前这条消息要求的可视执行通道，并为当前角色选择脸部表情。"
                 "expression_only 表示用户只明确要求眉眼、口部或面颊构成的脸部表情；"
@@ -154,7 +188,25 @@ class PerformancePipeline:
                 "from this list and no explanation.\n"
                 f"{mapping}{persona_context_en}"
             ),
-        ) + mixed_instruction_policy(self.language, "expression")
+        )
+        if visual_deictic_expression:
+            prompt += self._action_prompt(
+                zh=(
+                    "\n本轮用户通过表情范围词要求匹配 user_camera 中的表情。必须根据图片"
+                    "中直接可见的眉眼、口部和面颊形态选择表情候选；这是匹配可见"
+                    "脸部形态，不是推断用户的内在情绪。"
+                ),
+                en=(
+                    "\nThe user names the facial-expression range for the user_camera image. "
+                    "Match directly visible eyes, brows, mouth, and "
+                    "cheek configuration; this is visual shape matching, not an inference "
+                    "about the user's internal emotion."
+                ),
+            )
+        return prompt + mixed_instruction_policy(
+            self.action_language,
+            "expression",
+        )
 
     @staticmethod
     def _choices(expression_ids: list[str]) -> dict[str, _Choice]:
@@ -194,32 +246,131 @@ class PerformancePipeline:
             elapsed_ms=0.0,
         )
 
+    def _explicit_face_performance_decision(
+        self,
+        face_task: str,
+    ) -> PerformanceDecision:
+        """Resolve a normalized explicit face without another model request."""
+
+        normalized = face_task.strip().casefold()
+        expressions = self._expression_candidates()
+        global_catalog = getattr(self, "global_action_catalog", None)
+        if global_catalog is not None:
+            global_face_category = next(
+                (
+                    category
+                    for category in global_catalog.categories
+                    if category.category_id == FACIAL_EXPRESSION_CATEGORY_ID
+                ),
+                None,
+            )
+            if global_face_category is not None:
+                expressions = list(
+                    {
+                        item.candidate_id: item
+                        for item in (*expressions, *global_face_category.children)
+                        if item.candidate_id in _FACE_ONLY_DESCRIPTIONS
+                    }.values()
+                )
+        candidate = next(
+            (
+                item
+                for item in expressions
+                if item.source_label.strip().casefold() == normalized
+            ),
+            None,
+        )
+        if candidate is None:
+            candidate_id = _EXPLICIT_FACE_IDS.get(normalized)
+            candidate = next(
+                (
+                    item
+                    for item in expressions
+                    if item.candidate_id == candidate_id
+                ),
+                None,
+            )
+        if candidate is None:
+            return PerformanceDecision(
+                request_scope="expression_only",
+                expression=None,
+                expression_unsupported=True,
+                tts_instruction=self._tts_instruction(None),
+                elapsed_ms=0.0,
+            )
+        return PerformanceDecision(
+            request_scope="expression_only",
+            expression={
+                "category_id": FACIAL_EXPRESSION_CATEGORY_ID,
+                "candidate_id": candidate.candidate_id,
+                "expression_id": candidate.action_id,
+                "label": candidate.source_label,
+                "description": _FACE_ONLY_DESCRIPTIONS[candidate.candidate_id],
+                "apply": True,
+            },
+            expression_unsupported=False,
+            tts_instruction=self._tts_instruction(candidate.candidate_id),
+            elapsed_ms=0.0,
+        )
+
     async def _infer_turn_performance(
         self,
         turn: TurnBuffer,
         audios: list[str],
         *,
         current_text: str | None,
+        images: list[Any] | None = None,
+        image_roles: list[str] | None = None,
     ) -> PerformanceDecision:
         started = time.perf_counter()
         expressions = self._expression_candidates()
         expression_by_id = {item.candidate_id: item for item in expressions}
         choices = self._choices(list(expression_by_id))
+        current_images = images or []
+        current_image_roles = image_roles or []
+        if len(current_images) != len(current_image_roles):
+            raise ValueError("performance images and image_roles must have equal length")
+        visual_deictic_expression = bool(
+            turn.intent is not None
+            and is_visual_deictic_expression_request(
+                face_task=turn.intent.face,
+                has_user_camera=IMAGE_ROLE_USER_CAMERA in current_image_roles,
+            )
+        )
+        expression_media = (
+            [
+                (image, role)
+                for image, role in zip(
+                    current_images,
+                    current_image_roles,
+                    strict=True,
+                )
+                if role == IMAGE_ROLE_USER_CAMERA
+            ]
+            if visual_deictic_expression
+            else []
+        )
         if turn.intent is not None:
             if turn.intent.body_mode == "perform":
                 scope = "both" if turn.intent.face else "body_only"
             else:
                 scope = "expression_only" if turn.intent.face else "none"
             choices = {key: value for key, value in choices.items() if value.scope == scope}
-        system_prompt = self._performance_system_prompt(choices)
+        system_prompt = self._performance_system_prompt(
+            choices,
+            visual_deictic_expression=visual_deictic_expression,
+        )
         request = ActionSuffixScoreRequest(
             request_id=f"{turn.request_base}-performance",
             model=self.model_name,
-            prefix=self._prompt(zh="表现控制结果：", en="Performance control result:"),
+            prefix=self._action_prompt(
+                zh="表现控制结果：",
+                en="Performance control result:",
+            ),
             current_text=(current_text or "").strip(),
             output_prompt="",
             system_prompt=system_prompt,
-            language=self.language,
+            language=self.action_language,
             candidates=[
                 ActionScoreCandidate(
                     candidate_id=decision_id,
@@ -230,8 +381,8 @@ class PerformancePipeline:
             ],
             suffix_tokenization_mode="short_id",
             audios=audios,
-            images=[],
-            image_roles=[],
+            images=[image for image, _ in expression_media],
+            image_roles=[role for _, role in expression_media],
             sample_rate=16000,
             micro_batch_size=min(self.action_micro_batch_size, len(choices)),
             session_id=self.session_id,
@@ -245,7 +396,7 @@ class PerformancePipeline:
             history_audios=[],
             history_images=[],
             prefix_cache_namespace=(
-                f"performance:v1:{self.locale}:"
+                f"performance:v1:{self.action_locale}:"
                 f"{hashlib.sha256(system_prompt.encode()).hexdigest()[:16]}"
             ),
             cache_static_system_only=True,
@@ -283,6 +434,8 @@ class PerformancePipeline:
                 expression.get("candidate_id") if expression else None
             ),
             expression_unsupported=decision.expression_unsupported,
+            visual_deictic_expression=visual_deictic_expression,
+            user_camera_image_count=len(expression_media),
             tts_instruction=decision.tts_instruction,
             tts_instruction_generated=True,
             tts_instruction_delivery=(

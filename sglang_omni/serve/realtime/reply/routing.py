@@ -20,6 +20,7 @@ from sglang_omni.serve.realtime.protocol.models import (
     ReplySpeechModeResult,
     TurnBuffer,
 )
+from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 
@@ -253,7 +254,7 @@ class ReplyRoutingComponent:
         current_text: str | None,
         fallback_reply_mode: Literal["LANGUAGE_REQUIRED", "PURE_ACTION"],
     ) -> ReplySpeechModeResult:
-        """Resolve language-vs-action, preserving the initial route on failure."""
+        """Resolve language-vs-action with the caller's safe failure fallback."""
         request_id = f"{turn.request_base}-reply-speech-mode"
         system_prompt = self._reply_speech_mode_system_prompt()
         normalized_text = current_text.strip() if isinstance(current_text, str) else ""
@@ -396,14 +397,179 @@ class ReplyRoutingComponent:
         R0-R3 are short, symmetric score suffixes. Any operational failure
         fails closed to CURRENT_ONLY + LANGUAGE_REQUIRED so stale history
         cannot contaminate an otherwise independent turn and a legitimate
-        reply is never suppressed.
+        reply is never suppressed. A shared ``speech=none`` result with no
+        concrete action is also checked by the independent S0/S1 route before
+        it may suppress speech. Once unified intent has resolved a concrete
+        silent action, that structured result is authoritative for both action
+        and reply routing and must not be overturned by a second classifier.
         """
         if turn.intent is not None:
+            decision = (
+                REPLY_HISTORY_REQUIRED
+                if turn.intent.history
+                else REPLY_HISTORY_CURRENT_ONLY
+            )
+            if (
+                turn.intent.visual_scope_gate
+                and turn.intent.visual_scope_gate != VISUAL_GESTURE_ANSWER_GATE
+                and turn.intent.speech == "none"
+            ):
+                # A silent COPY_* route is authoritative pure action. Mixed
+                # copy-and-speech requests continue below so the independent
+                # speech task is not discarded.
+                emit_structured_log(
+                    "reply",
+                    "visual_scope_gate_reply_route_applied",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    visual_scope_gate=turn.intent.visual_scope_gate,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    decision=decision,
+                )
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    elapsed_ms=turn.intent.elapsed_ms,
+                    stats={"source": "visual_scope_gate"},
+                )
+            if (
+                turn.intent.speech == "generated"
+                and turn.intent.body_intent != "capability"
+                and turn.intent.body_mode == "none"
+                and not turn.intent.body
+                and not turn.intent.face
+                and turn.intent.reaction_mode == "none"
+            ):
+                # The shared parser can occasionally copy a short physical
+                # imperative (for example, "stand up") into the speech task and
+                # leave every action field empty.  Trusting that contradiction
+                # would preserve an acknowledgement such as "I'm standing up"
+                # even when the independent action pipeline rejects execution.
+                # Reuse the bounded S0/S1 semantic route here: it classifies the
+                # user's task structure, not whether the eventual response has
+                # conversational accompaniment.  Mixed body+speech requests do
+                # not enter this branch and therefore keep their language task.
+                speech_mode = await self._disambiguate_reply_speech_mode(
+                    turn,
+                    audios,
+                    current_text=current_text,
+                    fallback_reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+                )
+                stats = {
+                    "source": "shared_turn_intent",
+                    "shared_intent_speech": turn.intent.speech,
+                    "generated_without_action_rechecked": True,
+                    "speech_mode_disambiguation": {
+                        "reply_mode": speech_mode.reply_mode,
+                        "elapsed_ms": speech_mode.elapsed_ms,
+                        "confidence_margin": speech_mode.confidence_margin,
+                        "scores": dict(speech_mode.scores),
+                        "fallback_reason": speech_mode.fallback_reason,
+                    },
+                }
+                emit_structured_log(
+                    "reply",
+                    "shared_generated_intent_speech_mode_reconciled",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    reply_mode=speech_mode.reply_mode,
+                    classification_ms=speech_mode.elapsed_ms,
+                    confidence_margin=speech_mode.confidence_margin,
+                    fallback_reason=speech_mode.fallback_reason,
+                )
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=speech_mode.reply_mode,
+                    elapsed_ms=turn.intent.elapsed_ms + speech_mode.elapsed_ms,
+                    confidence_margin=speech_mode.confidence_margin,
+                    scores=dict(speech_mode.scores),
+                    fallback_reason=speech_mode.fallback_reason,
+                    stats=stats,
+                )
+
+            if turn.intent.speech != "none":
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+                    elapsed_ms=turn.intent.elapsed_ms,
+                    stats={"source": "shared_turn_intent"},
+                )
+
+            if self._pure_action_reply_uses_structured_intent(turn):
+                emit_structured_log(
+                    "reply",
+                    "structured_action_reply_route_applied",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    logical_request_id=turn.request_base,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    decision=decision,
+                    body_task=turn.intent.body,
+                    face_task=turn.intent.face,
+                    reaction_task=turn.intent.reaction,
+                )
+                return ReplyHistoryRouteResult(
+                    decision=decision,
+                    reply_mode=REPLY_MODE_PURE_ACTION,
+                    elapsed_ms=turn.intent.elapsed_ms,
+                    stats={"source": "structured_silent_action"},
+                )
+
+            # A valid shared-intent JSON result is not necessarily a correct
+            # semantic decision when it does not contain a concrete action. In
+            # particular, a false ``speech=none`` would otherwise suppress the
+            # user's entire reply without consulting the bounded S0/S1 route.
+            # Fail open to language on timeout/error so an ordinary question
+            # is never converted into an empty pure-action response.
+            speech_mode = await self._disambiguate_reply_speech_mode(
+                turn,
+                audios,
+                current_text=current_text,
+                fallback_reply_mode=REPLY_MODE_LANGUAGE_REQUIRED,
+            )
+            stats = {
+                "source": "shared_turn_intent",
+                "shared_intent_speech": turn.intent.speech,
+                "speech_mode_rechecked": True,
+                "speech_mode_disambiguation": {
+                    "reply_mode": speech_mode.reply_mode,
+                    "elapsed_ms": speech_mode.elapsed_ms,
+                    "confidence_margin": speech_mode.confidence_margin,
+                    "scores": dict(speech_mode.scores),
+                    "fallback_reason": speech_mode.fallback_reason,
+                },
+            }
+            emit_structured_log(
+                "reply",
+                "shared_turn_intent_speech_mode_reconciled",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                trace_id=turn.trace_id,
+                logical_request_id=turn.request_base,
+                original_reply_mode=REPLY_MODE_PURE_ACTION,
+                reply_mode=speech_mode.reply_mode,
+                decision=decision,
+                confidence_margin=speech_mode.confidence_margin,
+                classification_ms=speech_mode.elapsed_ms,
+                fallback_reason=speech_mode.fallback_reason,
+                current_audio_count=len(audios),
+                current_text_present=bool(
+                    isinstance(current_text, str) and current_text.strip()
+                ),
+            )
             return ReplyHistoryRouteResult(
-                decision="HISTORY_REQUIRED" if turn.intent.history else "CURRENT_ONLY",
-                reply_mode="PURE_ACTION" if turn.intent.speech == "none" else "LANGUAGE_REQUIRED",
-                elapsed_ms=turn.intent.elapsed_ms,
-                stats={"source": "shared_turn_intent"},
+                decision=decision,
+                reply_mode=speech_mode.reply_mode,
+                elapsed_ms=turn.intent.elapsed_ms + speech_mode.elapsed_ms,
+                confidence_margin=speech_mode.confidence_margin,
+                scores=dict(speech_mode.scores),
+                fallback_reason=speech_mode.fallback_reason,
+                stats=stats,
             )
         normalized_text = current_text.strip() if isinstance(current_text, str) else ""
         if turn.turn_origin != TURN_ORIGIN_USER or not (audios or normalized_text):

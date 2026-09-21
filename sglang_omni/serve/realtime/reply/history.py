@@ -129,10 +129,9 @@ class ReplyHistoryComponent:
             for image, role in zip(images, image_roles, strict=True)
             if role == IMAGE_ROLE_USER_CAMERA
         ]
-        # Camera frames describe transient current state. Multiple samples
-        # from one turn are usually near-duplicates and can overpower the
-        # spoken request, so replies use only the latest frame.
-        selected = selected[-1:]
+        # Keep enough ordered current-turn evidence for explicit comparisons
+        # without allowing a long camera stream to dominate the request.
+        selected = selected[-MAX_REPLY_CURRENT_IMAGES:]  # noqa: F405
         return (
             [image for image, _ in selected],
             [role for _, role in selected],
@@ -144,18 +143,15 @@ class ReplyHistoryComponent:
             "type": "text",
             "text": self._prompt(
                 zh=(
-                    "[当前 user 消息附带用户摄像头图片]"
-                    "该图片只表示当前用户及其周围环境，不表示你的姿势、动作、"
-                    "外观或状态。只有当前用户语音或文本明确要求判断用户本人或"
-                    "其环境中的视觉内容时，才使用该图片；否则忽略该图片。"
+                    "[当前用户摄像头图片]紧随其后的一张或多张图片来自本轮用户摄像头，"
+                    "按采集顺序排列，只表示用户及其周围环境，不表示当前角色自身的"
+                    "外观、姿势、动作或状态。"
                 ),
                 en=(
-                    "[The current user message includes a user-camera image] "
-                    "The image represents only the current user and their surroundings; "
-                    "it does not represent your own pose, actions, appearance, or state. "
-                    "Use it only when the current user audio or text explicitly asks for "
-                    "a visual judgment about the user or their environment; otherwise "
-                    "ignore it."
+                    "[Current user-camera images] The one or more images immediately "
+                    "following this text come from the user's camera in this turn and are "
+                    "ordered by capture. They represent only the user and their surroundings, "
+                    "not the current character's appearance, pose, actions, or state."
                 ),
             ),
         }

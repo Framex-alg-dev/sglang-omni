@@ -53,14 +53,14 @@ def test_config_parses_session_fake_settings() -> None:
             "SGLANG_OMNI_DEV_FAKE_MODEL_RESPONSE_TEXT": "固定回复",
             "SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_SIZE": "2",
             "SGLANG_OMNI_DEV_FAKE_MODEL_CHUNK_INTERVAL_MS": "3",
-            "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID": "A002",
+            "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID": "002",
         }
     )
-    assert (config.response_text, config.action_candidate_id) == ("固定回复", "A002")
+    assert (config.response_text, config.action_candidate_id) == ("固定回复", "002")
     assert "固定回复" not in str(config.log_summary())
 
 
-@pytest.mark.parametrize("candidate_id", ["A000", "B000", "UNSUPPORTED", "DEV_NONE_0"])
+@pytest.mark.parametrize("candidate_id", ["000", "00", "UNSUPPORTED", "DEV_NONE_0"])
 def test_config_rejects_reserved_action_candidate(candidate_id: str) -> None:
     with pytest.raises(ValueError, match="reserved action identifier"):
         DevRealtimeModelConfig.from_env(
@@ -85,15 +85,15 @@ async def test_text_stream_and_abort() -> None:
 @pytest.mark.asyncio
 async def test_action_scoring_selects_configured_whitelisted_candidate() -> None:
     client = DevRealtimeModelClient(
-        DevRealtimeModelConfig(enabled=True, action_candidate_id="A002")
+        DevRealtimeModelConfig(enabled=True, action_candidate_id="002")
     )
-    result = await client.score_action_suffixes(_action_request("A001", "A002"))
-    assert max(result.scores, key=lambda item: item.mean_logprob).candidate_id == "A002"
+    result = await client.score_action_suffixes(_action_request("001", "002"))
+    assert max(result.scores, key=lambda item: item.mean_logprob).candidate_id == "002"
     client = DevRealtimeModelClient(
-        DevRealtimeModelConfig(enabled=True, action_candidate_id="A999")
+        DevRealtimeModelConfig(enabled=True, action_candidate_id="999")
     )
     with pytest.raises(DevRealtimeModelRequestError, match="Session whitelist"):
-        await client.score_action_suffixes(_action_request("A001"))
+        await client.score_action_suffixes(_action_request("001"))
 
 
 def _dev_app(*, action_candidate_id: str = ""):
@@ -183,12 +183,12 @@ def test_text_audio_session_requires_provider_configuration() -> None:
     "action",
     [
         {
-            "fallback_category_ids": ["B000"],
+            "fallback_category_ids": ["00"],
             "allowed_candidates": [{"candidate_id": "ADEV"}],
         },
         {
             "fallback_category_ids": ["BDEV"],
-            "allowed_candidates": [{"candidate_id": "A000"}],
+            "allowed_candidates": [{"candidate_id": "000"}],
         },
         {
             "fallback_category_ids": ["BDEV"],
@@ -254,7 +254,7 @@ def test_optional_capability_detection_is_safe() -> None:
 
 
 def test_fusion_reports_unavailable_child_preference_and_uses_safe_fallback() -> None:
-    with TestClient(_dev_app(action_candidate_id="A999")).websocket_connect(
+    with TestClient(_dev_app(action_candidate_id="999")).websocket_connect(
         "/v1/session/realtime"
     ) as ws:
         ws.send_json(_session_start(["text", "action"]))

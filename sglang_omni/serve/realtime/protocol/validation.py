@@ -193,6 +193,7 @@ class ProtocolValidationComponent:
             )
         normalized: list[str] = []
         seen: set[str] = set()
+        ignored_unknown: list[str] = []
         for index, raw_id in enumerate(value):
             candidate_id = self._bounded_optional_text(
                 raw_id,
@@ -205,12 +206,47 @@ class ProtocolValidationComponent:
             if candidate_id in seen:
                 continue
             if candidate_id not in self.candidate_by_id:
+                if self.direct_action_selection:
+                    # Limited-catalog mode deliberately replaces the legacy
+                    # client catalog with the server-owned scoring set during
+                    # session.start.  Older clients can therefore send valid
+                    # constraints from their larger catalog that are not part
+                    # of this session. Preserve the constraint by intersecting
+                    # it with the effective session catalog.
+                    ignored_unknown.append(candidate_id)
+                    continue
                 raise ValueError(
                     f"{name}[{index}] is not available in this session: "
                     f"{candidate_id}"
                 )
             seen.add(candidate_id)
             normalized.append(candidate_id)
+        if ignored_unknown:
+            logger.info(
+                "Ignored %d action constraint IDs outside the limited session "
+                "catalog field=%s retained=%d",
+                len(ignored_unknown),
+                name,
+                len(normalized),
+            )
+            emit_structured_log(
+                "diagnostic",
+                "limited_action_constraints_intersected",
+                session_id=getattr(self, "session_id", None),
+                field=name,
+                supplied_count=len(seen) + len(ignored_unknown),
+                retained_count=len(normalized),
+                ignored_count=len(ignored_unknown),
+            )
+        if (
+            value
+            and not normalized
+            and self.direct_action_selection
+            and name.endswith("allowed_candidate_ids")
+        ):
+            raise ValueError(
+                f"{name} contains no candidates in the limited session catalog"
+            )
         return tuple(normalized)
 
 
@@ -281,8 +317,9 @@ class ProtocolValidationComponent:
         ):
             raise ValueError("action output requires the server global action catalog")
 
-        raw_fallback_ids = action_config.get("fallback_category_ids")
-        if not isinstance(raw_fallback_ids, list) or not raw_fallback_ids:
+        direct = self.direct_action_selection
+        raw_fallback_ids = [] if direct else action_config.get("fallback_category_ids")
+        if not direct and (not isinstance(raw_fallback_ids, list) or not raw_fallback_ids):
             raise ValueError("action.fallback_category_ids must be a non-empty list")
         if len(raw_fallback_ids) > MAX_ACTION_CATEGORIES:
             raise ValueError(
@@ -360,6 +397,7 @@ class ProtocolValidationComponent:
                 raise ValueError(f"duplicate action candidate_id: {candidate_id}")
             if (
                 self.global_action_catalog is not None
+                and not direct
                 and candidate_id not in self.global_action_catalog.candidate_by_id
             ):
                 raise ValueError(f"unknown global action candidate_id: {candidate_id}")
@@ -386,6 +424,23 @@ class ProtocolValidationComponent:
                 )
             bindings[candidate_id] = dict(binding)
 
+        if direct:
+            # Explicit role capabilities constrain the server's limited catalog.
+            # Omitted capabilities retain the standalone full-catalog default.
+            if "allowed_candidates" in action_config:
+                bindings = {
+                    candidate_id: binding
+                    for candidate_id, binding in bindings.items()
+                    if candidate_id in self.global_action_catalog.candidate_by_id
+                }
+                if not bindings:
+                    raise ValueError("action.allowed_candidates has no actions in the limited catalog")
+            else:
+                bindings = {
+                    candidate_id: {}
+                    for candidate_id in self.global_action_catalog.candidate_by_id
+                }
+
         fallback_only_category_ids: set[str] | None = None
         if not raw_allowed and self.global_action_catalog is None:
             raise ValueError(
@@ -398,7 +453,7 @@ class ProtocolValidationComponent:
                     "development category_id and candidate_id values must be "
                     "disjoint: " + ", ".join(sorted(collisions))
                 )
-        elif not raw_allowed:
+        elif not raw_allowed and not direct:
             fallback_only_category_ids = set(fallback_category_ids)
             for category_id in fallback_category_ids:
                 for candidate in self.global_action_catalog.category_by_id[
@@ -607,14 +662,18 @@ class ProtocolValidationComponent:
                 action_config,
                 "action",
                 allowed={
+                    "locale",
                     "category_guidance",
                     "candidate_guidance",
                     "passive_policy",
                     "allowed_candidates",
                     "fallback_category_ids",
                 },
-                required={"fallback_category_ids"},
+                required=set() if self.direct_action_selection else {"fallback_category_ids"},
             )
+            action_locale = action_config.get("locale", locale)
+            if action_locale not in locale_to_language:
+                raise ValueError("action.locale must be 'zh-CN' or 'en-US'")
             (
                 action_candidates,
                 action_profile,
@@ -804,6 +863,9 @@ class ProtocolValidationComponent:
             "analyze_avatar_state": analyze_avatar_state,
             "_protocol_version": version,
             "_locale": locale,
+            "_action_locale": (
+                action_locale if "action" in outputs else locale
+            ),
             "_reply_instructions_provided": "instructions" in reply_config,
         }
         if unsupported_action_text is not None:
@@ -1573,11 +1635,15 @@ class ProtocolValidationComponent:
                     action_id=global_child.action_id,
                     source_label=global_child.source_label,
                     short_definition=global_child.short_definition,
+                    prompt_label=global_child.label_for(self.action_locale),
+                    prompt_definition=global_child.definition_for(self.action_locale),
                     execution_binding=dict(parsed.execution_binding),
                     category_id=category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
                 session_children.append(child)
@@ -1587,6 +1653,8 @@ class ProtocolValidationComponent:
                     category_id=global_category.category_id,
                     source_label=global_category.source_label,
                     short_definition=global_category.short_definition,
+                    prompt_label=global_category.label_for(self.action_locale),
+                    prompt_definition=global_category.definition_for(self.action_locale),
                     category_path=global_category.category_path,
                     children=tuple(session_children),
                 )
@@ -1645,11 +1713,15 @@ class ProtocolValidationComponent:
                     action_id=global_child.action_id,
                     source_label=global_child.source_label,
                     short_definition=global_child.short_definition,
+                    prompt_label=global_child.label_for(self.action_locale),
+                    prompt_definition=global_child.definition_for(self.action_locale),
                     execution_binding=dict(parsed.execution_binding),
                     category_id=global_child.category_id,
-                    proactive_expression=global_child.proactive_expression,
+                    proactive_expression=global_child.expression_for(
+                        "proactive", self.action_locale
+                    ),
                     user_reaction_expression=(
-                        global_child.user_reaction_expression
+                        global_child.expression_for("user", self.action_locale)
                     ),
                 )
             )

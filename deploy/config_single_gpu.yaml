@@ -11,6 +11,16 @@ name: qwen3-omni-single-gpu
 model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
 
 runtime_overrides:
+  thinker:
+    server_args_overrides:
+      # Keep the locally validated prefill chunk size.
+      chunked_prefill_size: 8192
+      # Capacity only: runtime batches retain their true request count (for
+      # example 117 actions plus UNSUPPORTED and 12 core decision labels; the
+      # optional visual group raises the true request count to 142). No empty
+      # slot is padded.
+      # No request is added merely to fill the remaining slots.
+      max_running_requests: 200
   audio_encoder:
     max_batch_wait_ms: 0
   image_encoder:

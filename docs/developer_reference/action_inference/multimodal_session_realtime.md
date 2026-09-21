@@ -15,11 +15,11 @@
   "action": {
     "category_guidance": "优先低打扰类别。",
     "candidate_guidance": "避免大幅位移。",
-    "fallback_category_ids": ["B008"],
+    "fallback_category_ids": ["08"],
     "allowed_candidates": [
-      {"candidate_id": "A124"},
-      {"candidate_id": "A125"},
-      {"candidate_id": "A071"}
+      {"candidate_id": "124"},
+      {"candidate_id": "125"},
+      {"candidate_id": "071"}
     ]
   }
 }
@@ -27,15 +27,15 @@
 
 action-only 与融合模式使用同一个两阶段动作选择逻辑：
 
-1. 从当前 Session 白名单实际覆盖的类别或内部 `B000`（`UNSUPPORTED`）中选择一个结果；
-   `B000` 只表示明确动作请求的目标语义类别不在当前 Session 中；
-2. 普通类别只评分该类别下的白名单 Child，并允许返回内部 `A000`（`UNSUPPORTED`）；
-   `A000` 只表示类别已存在、但白名单具体动作均无法满足明确请求；
+1. 从当前 Session 白名单实际覆盖的类别或内部 `00`（`UNSUPPORTED`）中选择一个结果；
+   `00` 只表示明确动作请求的目标语义类别不在当前 Session 中；
+2. 普通类别只评分该类别下的白名单 Child，并允许返回内部 `000`（`UNSUPPORTED`）；
+   `000` 只表示类别已存在、但白名单具体动作均无法满足明确请求；
 3. 支持时返回具体动作；不支持时进入 `fallback_category_ids[0]` 并返回真实动作。
 
 `fallback_category_ids` 是按优先级排列的非空类别数组，白名单必须在每个兜底类别下包含
 至少一个真实动作；如果 `allowed_candidates` 缺省或为空，则自动使用兜底类别下的全部动作。
-`B000`、`A000` 和 `UNSUPPORTED` 都是服务端保留值，客户端不得将其作为类别或动作上传。
+`00`、`000` 和 `UNSUPPORTED` 都是服务端保留值，客户端不得将其作为类别或动作上传。
 
 客户端不再传递类别结构、名称、定义或 `action_id`。这些信息由服务端全局目录提供。
 
@@ -81,9 +81,9 @@ Category 和 Child 只使用本轮输入、当前数字人图片与当前结构�
   "status": "completed",
   "outputs": {"action": "completed"},
   "action": {
-    "candidate_id": "A124",
-    "action_id": "A124",
-    "category_id": "B027",
+    "candidate_id": "124",
+    "action_id": "124",
+    "category_id": "27",
     "execution_binding": {},
     "execute": true
   },

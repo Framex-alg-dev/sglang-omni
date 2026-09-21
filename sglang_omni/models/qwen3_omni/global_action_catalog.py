@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
@@ -35,11 +35,19 @@ DEFAULT_GLOBAL_ACTION_CATALOG_RESOURCE = (
     "assets/character_action_global_catalog.json"
 )
 UNSUPPORTED_DECISION_ID = "UNSUPPORTED"
-UNSUPPORTED_CATEGORY_SCORE_ID = "B000"
-UNSUPPORTED_CHILD_SCORE_ID = "A000"
+UNSUPPORTED_CATEGORY_SCORE_ID = "00"
+UNSUPPORTED_CHILD_SCORE_ID = "000"
 UNSUPPORTED_SOURCE_LABEL = "不支持的动作"
 CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT = "reply_accompaniment"
 CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT = "silent_accompaniment"
+CANDIDATE_REACTION_SOURCE_LANGUAGE = "language"
+CANDIDATE_REACTION_SOURCE_USER_CAMERA = "user_camera"
+SUPPORTED_CANDIDATE_REACTION_SOURCES = frozenset(
+    {
+        CANDIDATE_REACTION_SOURCE_LANGUAGE,
+        CANDIDATE_REACTION_SOURCE_USER_CAMERA,
+    }
+)
 EXCLUSIVE_CATEGORY_SEMANTIC_TAGS = frozenset(
     {
         CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT,
@@ -396,6 +404,23 @@ def _required_string(value: Any, field: str) -> str:
     return value.strip()
 
 
+def _parse_prompt_text_by_locale(
+    value: Any, field_name: str
+) -> Mapping[str, Mapping[str, str]]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    result: dict[str, Mapping[str, str]] = {}
+    for locale, fields in value.items():
+        _normalize_prompt_locale(locale)
+        if not isinstance(fields, dict) or set(fields) != {"label", "short_definition"}:
+            raise ValueError(f"{field_name}[{locale!r}] requires label and short_definition")
+        result[locale] = MappingProxyType({
+            key: _required_string(text, f"{field_name}[{locale!r}].{key}")
+            for key, text in fields.items()
+        })
+    return MappingProxyType(result)
+
+
 @dataclass(frozen=True, slots=True)
 class GlobalActionCandidate:
     candidate_id: str
@@ -406,14 +431,57 @@ class GlobalActionCandidate:
     category_id: str
     proactive_expression: str = ""
     user_reaction_expression: str = ""
+    expressions_by_locale: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    aliases: tuple[str, ...] = ()
+    reaction_sources: frozenset[str] = frozenset()
 
-    def effective_definition(self, turn_origin: str) -> str:
-        contextual = (
+    prompt_text_by_locale: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    def label_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("label", self.source_label)
+
+    def definition_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("short_definition", self.short_definition)
+
+    def expression_for(
+        self,
+        turn_origin: str,
+        locale: str | None = None,
+    ) -> str:
+        field_name = (
+            "proactive_expression"
+            if turn_origin == "proactive"
+            else "user_reaction_expression"
+        )
+        localized = (
+            self.expressions_by_locale.get(
+                _normalize_prompt_locale(locale), {}
+            ).get(field_name, "")
+            if locale is not None
+            else ""
+        )
+        contextual = localized or (
             self.proactive_expression
             if turn_origin == "proactive"
             else self.user_reaction_expression
         )
-        return contextual.strip() or self.short_definition
+        return contextual.strip()
+
+    def effective_definition(
+        self,
+        turn_origin: str,
+        locale: str | None = None,
+    ) -> str:
+        contextual = self.expression_for(turn_origin, locale)
+        return contextual.strip() or (
+            self.definition_for(locale) if locale is not None else self.short_definition
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +492,17 @@ class GlobalActionCategory:
     category_path: tuple[str, ...]
     semantic_tags: frozenset[str]
     children: tuple[GlobalActionCandidate, ...]
+    prompt_text_by_locale: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    def label_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("label", self.source_label)
+
+    def definition_for(self, locale: str) -> str:
+        localized = self.prompt_text_by_locale.get(_normalize_prompt_locale(locale), {})
+        return localized.get("short_definition", self.short_definition)
 
 
 def is_system_accompaniment_category(category: GlobalActionCategory) -> bool:
@@ -461,6 +540,56 @@ class GlobalActionCatalog:
     proactive_child_prompt_hashes_by_locale: Mapping[
         str, Mapping[str, str]
     ] = field(default_factory=lambda: MappingProxyType({}))
+
+    direct_action_selection: bool = False
+
+    def action_system_prompt_for(
+        self,
+        locale: str,
+        turn_origin: str = "user",
+        *,
+        selection_tokens: Mapping[str, str] | None = None,
+        output_selection_token: bool = False,
+    ) -> str:
+        locale = _normalize_prompt_locale(locale)
+        english = locale == "en-US"
+        lines = [
+            (
+                "Select exactly one selection_token from the complete action list below."
+                if output_selection_token else
+                "Select exactly one result identifier; each selection_token and candidate_id pair denotes the same choice."
+                if selection_tokens else
+                "Select exactly one candidate_id from the complete action list below."
+            ) if english else (
+                "请直接从以下完整动作列表选择一个 selection_token，只输出一个结果。"
+                if output_selection_token else
+                "请直接选择一个结果标识；每组 selection_token 与 candidate_id 表示同一选择，只输出一个结果。"
+                if selection_tokens else
+                "请直接从以下完整动作列表选择一个 candidate_id，只输出一个结果。"
+            ),
+            DIRECTION_REFERENCE_POLICY_EN if english else DIRECTION_REFERENCE_POLICY,
+            child_unsupported_policy(locale).replace(
+                "its semantic category has already been selected, but none of the candidates allowed in that category for this conversation",
+                "none of the candidates in the complete action list",
+            ).replace(UNSUPPORTED_CHILD_SHORT_DEFINITION,
+                      "用户明确要求执行动作，但完整动作列表中没有候选能够完成该请求"),
+        ]
+        for item in self.candidate_by_id.values():
+            definition = item.effective_definition(turn_origin, locale)
+            selection_prefix = (
+                f"selection_token={selection_tokens[item.candidate_id]} | "
+                if selection_tokens else ""
+            )
+            lines.append(
+                f"{selection_prefix}candidate_id={item.candidate_id} | action={item.label_for(locale)} | description={definition}"
+                if english else
+                f"{selection_prefix}candidate_id={item.candidate_id}｜动作={item.label_for(locale)}｜说明={definition}"
+            )
+        return mixed_instruction_policy(locale, "body") + "\n\n" + "\n".join(lines)
+
+    def action_cache_namespace(self, locale: str, turn_origin: str = "user") -> str:
+        digest = _sha256_text(self.action_system_prompt_for(locale, turn_origin))
+        return f"global-actions:{self.catalog_hash}:{locale}:{turn_origin}:{digest}"
 
     @property
     def candidate_count(self) -> int:
@@ -565,6 +694,10 @@ class GlobalActionCatalogPrewarmStatus:
         default_factory=lambda: MappingProxyType({})
     )
 
+    action_prefix_statuses: Mapping[str, bool] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
     @classmethod
     def not_run(cls) -> "GlobalActionCatalogPrewarmStatus":
         return cls(False, frozenset(), frozenset(), 0.0)
@@ -584,14 +717,102 @@ class GlobalActionCatalogPrewarmStatus:
         )
 
 
+def load_runtime_action_catalog() -> GlobalActionCatalog:
+    """Production defaults to direct selection from the limited catalog."""
+    mode = os.environ.get("SGLANG_OMNI_ACTION_CATALOG_MODE", "limited")
+    if mode == "hierarchical":
+        return load_global_action_catalog()
+    if mode != "limited":
+        raise ValueError("SGLANG_OMNI_ACTION_CATALOG_MODE must be limited or hierarchical")
+    path = os.environ.get(GLOBAL_ACTION_CATALOG_PATH_ENV) or files("sglang_omni").joinpath(
+        "assets/character_limited_action_global_catalog.json"
+    )
+    return replace(load_global_action_catalog(path), direct_action_selection=True)
+
+
+async def _prewarm_direct_actions(
+    client: Any, *, model: str, catalog: GlobalActionCatalog,
+) -> GlobalActionCatalogPrewarmStatus:
+    started = time.perf_counter()
+    prefill = getattr(client, "prefill_action_catalog", None)
+    timeout = float(os.environ.get(GLOBAL_ACTION_PREWARM_TIMEOUT_ENV, "10"))
+    if not 0 < timeout < float("inf"):
+        raise ValueError("global action prewarm timeout must be finite and positive")
+    budget = float(os.environ.get("SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S", "30"))
+    if not 0 < budget < float("inf"):
+        raise ValueError("global prewarm budget must be finite and positive")
+    statuses: dict[str, bool] = {}
+    candidates = [
+        ActionScoreCandidate(
+            candidate_id=c.candidate_id, suffix=c.candidate_id, action_id=c.action_id,
+        )
+        for c in catalog.candidate_by_id.values()
+    ]
+    candidates.append(ActionScoreCandidate(
+        candidate_id=UNSUPPORTED_CHILD_SCORE_ID,
+        suffix=UNSUPPORTED_CHILD_SCORE_ID,
+        action_id=UNSUPPORTED_DECISION_ID,
+    ))
+    for locale in SUPPORTED_ACTION_PROMPT_LOCALES:
+        for origin in ("user", "proactive"):
+            item_started = time.perf_counter()
+            stats: dict[str, Any] = {}
+            request_id = f"global-action-single-prewarm-{locale}-{origin}"
+            namespace = catalog.action_cache_namespace(locale, origin)
+            failure_reason = None
+            ready = False
+            try:
+                remaining = budget - (time.perf_counter() - started)
+                if callable(prefill) and remaining > 0:
+                    ready = bool(await asyncio.wait_for(
+                        prefill(
+                            request_id=request_id,
+                            model=model,
+                            system_prompt=catalog.action_system_prompt_for(locale, origin),
+                            candidates=candidates,
+                            stage="single",
+                            language=ACTION_PROMPT_LANGUAGE_BY_LOCALE[locale],
+                            prefix_cache_namespace=namespace,
+                            stats_out=stats,
+                        ),
+                        timeout=min(timeout, remaining),
+                    ))
+                    if not ready:
+                        failure_reason = "prefill_returned_false"
+                else:
+                    failure_reason = "client_unavailable" if not callable(prefill) else "budget_exhausted"
+            except Exception as exc:
+                failure_reason = type(exc).__name__
+                logger.warning("Direct action prewarm failed: %s %s", locale, origin, exc_info=True)
+            statuses[f"{locale}:{origin}"] = ready
+            emit_structured_log(
+                "performance", "global_action_single_prewarm_completed",
+                locale=locale, turn_origin=origin, prewarmed=ready,
+                stage="single", selection_mode="flat_children",
+                catalog_hash=catalog.catalog_hash,
+                request_id=request_id, prefix_cache_namespace=namespace,
+                action_count=catalog.candidate_count,
+                candidate_count=len(candidates), probe_candidate_count=1,
+                elapsed_ms=round((time.perf_counter() - item_started) * 1000, 3),
+                failure_reason=failure_reason, stats=stats,
+            )
+    return GlobalActionCatalogPrewarmStatus(
+        False, frozenset(), frozenset(),
+        round((time.perf_counter() - started) * 1000, 3),
+        action_prefix_statuses=MappingProxyType(statuses),
+    )
+
+
 async def prewarm_global_action_catalog(
     client: Any,
     *,
     model: str,
     catalog: GlobalActionCatalog,
 ) -> GlobalActionCatalogPrewarmStatus:
-    """Best-effort prefill of both localized Category and Child prefixes."""
+    """Best-effort prefill of the active catalog scoring prefixes."""
 
+    if catalog.direct_action_selection:
+        return await _prewarm_direct_actions(client, model=model, catalog=catalog)
     started = time.perf_counter()
     prefill = getattr(client, "prefill_action_catalog", None)
     if not callable(prefill):
@@ -884,7 +1105,7 @@ def build_category_system_prompt(
             "Fixed category set:",
         ]
         lines.extend(
-            f"category_id={item.category_id} | category={item.source_label} | description={item.short_definition}"
+            f"category_id={item.category_id} | category={item.label_for(locale)} | description={item.definition_for(locale)}"
             for item in categories
         )
         lines.append(
@@ -909,7 +1130,7 @@ def build_category_system_prompt(
         "固定类别集合如下：",
     ]
     lines.extend(
-        f"category_id={item.category_id}｜类别={item.source_label}｜说明={item.short_definition}"
+        f"category_id={item.category_id}｜类别={item.label_for(locale)}｜说明={item.definition_for(locale)}"
         for item in categories
     )
     lines.append(
@@ -931,7 +1152,7 @@ def build_child_system_prompt(
             DIRECTION_REFERENCE_POLICY_EN,
             (
                 f"Selected category: category_id={category.category_id} | "
-                f"category={category.source_label} | description={category.short_definition}"
+                f"category={category.label_for(locale)} | description={category.definition_for(locale)}"
             ),
         ]
         if category_allows_unsupported_child(category):
@@ -941,7 +1162,7 @@ def build_child_system_prompt(
         else:
             lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY_EN)
         lines.extend(
-            f"candidate_id={item.candidate_id} | action={item.source_label} | description={item.effective_definition(turn_origin)}"
+            f"candidate_id={item.candidate_id} | action={item.label_for(locale)} | description={item.effective_definition(turn_origin, locale)}"
             for item in category.children
         )
         lines.append(
@@ -953,8 +1174,8 @@ def build_child_system_prompt(
         "你是数字人动作识别器。请从以下集合中选择一个 candidate_id。",
         DIRECTION_REFERENCE_POLICY,
         (
-            f"已选类别：category_id={category.category_id}｜类别={category.source_label}｜"
-            f"说明={category.short_definition}"
+            f"已选类别：category_id={category.category_id}｜类别={category.label_for(locale)}｜"
+            f"说明={category.definition_for(locale)}"
         ),
     ]
     if category_allows_unsupported_child(category):
@@ -964,7 +1185,7 @@ def build_child_system_prompt(
     else:
         lines.append(SILENT_ACCOMPANIMENT_CHILD_POLICY)
     lines.extend(
-        f"candidate_id={item.candidate_id}｜动作={item.source_label}｜说明={item.effective_definition(turn_origin)}"
+        f"candidate_id={item.candidate_id}｜动作={item.label_for(locale)}｜说明={item.effective_definition(turn_origin, locale)}"
         for item in category.children
     )
     lines.append(
@@ -1102,6 +1323,82 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 raise ValueError(
                     f"{child_prefix}.user_reaction_expression must be a string"
                 )
+            raw_expressions_by_locale = raw_child.get(
+                "expressions_by_locale", {}
+            )
+            if raw_expressions_by_locale is None:
+                raw_expressions_by_locale = {}
+            if not isinstance(raw_expressions_by_locale, dict):
+                raise ValueError(
+                    f"{child_prefix}.expressions_by_locale must be an object"
+                )
+            expressions_by_locale: dict[str, Mapping[str, str]] = {}
+            for expression_locale, raw_expressions in (
+                raw_expressions_by_locale.items()
+            ):
+                normalized_locale = _normalize_prompt_locale(
+                    expression_locale
+                )
+                if not isinstance(raw_expressions, dict):
+                    raise ValueError(
+                        f"{child_prefix}.expressions_by_locale[{expression_locale!r}] "
+                        "must be an object"
+                    )
+                unknown_fields = set(raw_expressions) - {
+                    "proactive_expression",
+                    "user_reaction_expression",
+                }
+                if unknown_fields:
+                    raise ValueError(
+                        f"{child_prefix}.expressions_by_locale[{expression_locale!r}] "
+                        "contains unsupported fields: "
+                        + ", ".join(sorted(unknown_fields))
+                    )
+                localized_expressions: dict[str, str] = {}
+                for expression_field, expression_value in (
+                    raw_expressions.items()
+                ):
+                    if not isinstance(expression_value, str):
+                        raise ValueError(
+                            f"{child_prefix}.expressions_by_locale"
+                            f"[{expression_locale!r}][{expression_field!r}] "
+                            "must be a string"
+                        )
+                    localized_expressions[expression_field] = (
+                        expression_value.strip()
+                    )
+                expressions_by_locale[normalized_locale] = MappingProxyType(
+                    localized_expressions
+                )
+            raw_aliases = raw_child.get("aliases", [])
+            if not isinstance(raw_aliases, list):
+                raise ValueError(f"{child_prefix}.aliases must be a string list")
+            aliases = tuple(
+                _required_string(value, f"{child_prefix}.aliases[{index}]")
+                for index, value in enumerate(raw_aliases)
+            )
+            if len(set(aliases)) != len(aliases):
+                raise ValueError(f"{child_prefix}.aliases must not contain duplicates")
+            raw_reaction_sources = raw_child.get("reaction_sources", [])
+            if not isinstance(raw_reaction_sources, list):
+                raise ValueError(
+                    f"{child_prefix}.reaction_sources must be a string list"
+                )
+            reaction_sources = frozenset(
+                _required_string(
+                    value,
+                    f"{child_prefix}.reaction_sources[{index}]",
+                )
+                for index, value in enumerate(raw_reaction_sources)
+            )
+            unsupported_reaction_sources = (
+                reaction_sources - SUPPORTED_CANDIDATE_REACTION_SOURCES
+            )
+            if unsupported_reaction_sources:
+                raise ValueError(
+                    f"{child_prefix}.reaction_sources contains unsupported values: "
+                    + ", ".join(sorted(unsupported_reaction_sources))
+                )
             if candidate_id in category_candidate_ids:
                 raise ValueError(
                     "duplicate global candidate_id within category "
@@ -1132,9 +1429,18 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 source_label=child_label,
                 short_definition=prompt_definition,
                 source_short_definition=source_definition,
+                prompt_text_by_locale=_parse_prompt_text_by_locale(
+                    raw_child.get("prompt_text_by_locale", {}),
+                    f"{child_prefix}.prompt_text_by_locale",
+                ),
                 category_id=category_id,
                 proactive_expression=proactive_expression.strip(),
                 user_reaction_expression=user_reaction_expression.strip(),
+                expressions_by_locale=MappingProxyType(
+                    expressions_by_locale
+                ),
+                aliases=aliases,
+                reaction_sources=reaction_sources,
             )
             children.append(child)
             candidate_occurrences_by_id.setdefault(candidate_id, []).append(
@@ -1148,6 +1454,10 @@ def load_global_action_catalog(path: str | Path | None = None) -> GlobalActionCa
                 category_path=category_path,
                 semantic_tags=frozenset(semantic_tags),
                 children=tuple(children),
+                prompt_text_by_locale=_parse_prompt_text_by_locale(
+                    raw_category.get("prompt_text_by_locale", {}),
+                    f"{prefix}.prompt_text_by_locale",
+                ),
             )
         )
 
@@ -1273,6 +1583,9 @@ __all__ = [
     "DEFAULT_ACTION_PROMPT_LOCALE",
     "CATEGORY_SEMANTIC_TAG_REPLY_ACCOMPANIMENT",
     "CATEGORY_SEMANTIC_TAG_SILENT_ACCOMPANIMENT",
+    "CANDIDATE_REACTION_SOURCE_LANGUAGE",
+    "CANDIDATE_REACTION_SOURCE_USER_CAMERA",
+    "SUPPORTED_CANDIDATE_REACTION_SOURCES",
     "UNSUPPORTED_CATEGORY_SCORE_ID",
     "UNSUPPORTED_CHILD_SCORE_ID",
     "UNSUPPORTED_CATEGORY_SHORT_DEFINITION",

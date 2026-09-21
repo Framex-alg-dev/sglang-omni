@@ -31,7 +31,7 @@ _DEFAULT_RESPONSE_TEXT = "这是本地开发模型返回的固定回复。"
 _DEFAULT_CHUNK_SIZE = 4
 _DEFAULT_CHUNK_INTERVAL_MS = 0
 _ACTION_CANDIDATE_ENV = "SGLANG_OMNI_DEV_FAKE_ACTION_CANDIDATE_ID"
-_RESERVED_ACTION_IDS = frozenset({"A000", "B000", "UNSUPPORTED"})
+_RESERVED_ACTION_IDS = frozenset({"000", "00", "UNSUPPORTED"})
 _FAKE_AVATAR_STATE = (
     '{"pose":"standing","gaze":"camera","left_hand":"relaxed",'
     '"right_hand":"relaxed","held_object":""}'

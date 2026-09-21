@@ -152,6 +152,7 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
         "audio_encoder",
         "mm_aggregate",
         "thinker",
+        "encoder_prefetch_done",
         "action_score",
         "decode",
     ]
@@ -159,7 +160,12 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
         text_config.terminal_stages_fn
         == "sglang_omni.models.qwen3_omni.request_builders.resolve_terminal_stages"
     )
-    assert speech_config.terminal_stages == ["action_score", "decode", "code2wav"]
+    assert speech_config.terminal_stages == [
+        "encoder_prefetch_done",
+        "action_score",
+        "decode",
+        "code2wav",
+    ]
     assert (
         speech_config.terminal_stages_fn
         == "sglang_omni.models.qwen3_omni.request_builders.resolve_terminal_stages"
@@ -220,13 +226,17 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
     # routes its final payload to decode; its hidden-state stream to
     # talker_ar is preserved via stream_to (locked above).
     speech_aggregate = _stage(speech_config, "mm_aggregate")
-    assert speech_aggregate.next == ["thinker", "talker_ar"]
+    assert speech_aggregate.next == [
+        "thinker",
+        "talker_ar",
+        "encoder_prefetch_done",
+    ]
     assert speech_aggregate.project_payload is not None
     assert "talker_ar" in speech_aggregate.project_payload
     assert _stage(speech_config, "thinker").next == ["decode", "action_score"]
 
     text_aggregate = _stage(text_config, "mm_aggregate")
-    assert text_aggregate.next == "thinker"
+    assert text_aggregate.next == ["thinker", "encoder_prefetch_done"]
     assert _stage(text_config, "thinker").next == ["decode", "action_score"]
 
     state = Qwen3OmniPipelineState.from_dict(
@@ -557,6 +567,24 @@ def test_qwen_speech_config_wires_request_granular_active_subgraph() -> None:
     assert route_fn("default", default_payload) == "decode"
     assert stream_done_to_fn("default", default_payload) == ["talker_ar", "decode"]
     assert terminal_stages_fn(default_payload.request) == ["decode", "code2wav"]
+
+    prefetch_payload = StagePayload(
+        request_id="image-prefetch",
+        request=OmniRequest(
+            inputs=[],
+            metadata={
+                "task": "image_encoder_prefetch",
+                "output_modalities": ["text"],
+            },
+        ),
+        data={},
+    )
+    assert aggregate_route_fn("image-prefetch", prefetch_payload) == (
+        "encoder_prefetch_done"
+    )
+    assert terminal_stages_fn(prefetch_payload.request) == [
+        "encoder_prefetch_done"
+    ]
 
     action_payload = StagePayload(
         request_id="action",
@@ -1490,7 +1518,44 @@ def test_qwen_sglang_request_hashes_media_tokens_without_changing_mrope_ids(
     assert captured["input_ids"].tolist() == input_ids.tolist()
 
 
-def test_action_scoring_candidate_requests_are_materialized_lazily():
+def test_qwen_output_logprobs_preserve_radix_prefix_matching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "sglang.srt.sampling.sampling_params.SamplingParams.normalize",
+        lambda self, tokenizer: None,
+    )
+    monkeypatch.setattr(
+        "sglang.srt.sampling.sampling_params.SamplingParams.verify",
+        lambda self, vocab_size: None,
+    )
+    input_ids = torch.tensor([11, 12, 13, 14], dtype=torch.long)
+    state = make_qwen_state(
+        prompt={
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+        }
+    )
+
+    req_data = build_sglang_thinker_request(
+        state,
+        params={
+            "max_new_tokens": 3,
+            "return_logprob": True,
+            "top_logprobs_num": 2,
+        },
+        tokenizer=FakeQwenTokenizer(),
+        vocab_size=256,
+        request_id="output-logprobs-with-prefix-cache",
+    )
+
+    assert req_data.req.return_logprob is True
+    assert req_data.req.logprob_start_len == len(input_ids)
+    assert req_data.req._compute_max_prefix_len(len(input_ids)) == len(input_ids) - 1
+
+
+@pytest.mark.parametrize("stage", ["category", "child"])
+def test_action_scoring_candidate_requests_are_materialized_lazily(stage):
     class ShortIdTokenizer:
         eos_token_id = 99
 
@@ -1540,8 +1605,25 @@ def test_action_scoring_candidate_requests_are_materialized_lazily():
         assert plan["prefix_chunk_timings"] == []
 
         candidate_data = build_action_scoring_candidate_data(req_data, "A1")
-        assert candidate_data.req.origin_input_ids == [11, 12, 13, 1001, 99]
+        assert list(candidate_data.req.origin_input_ids) == [11, 12, 13, 1001, 99]
+        assert candidate_data.input_ids is None
+        assert candidate_data.model_inputs is plan["candidate_model_inputs"]
+        assert candidate_data.req.origin_input_ids is not plan["candidate_prefix_array"]
+        assert list(plan["candidate_prefix_array"]) == [11, 12, 13]
+        assert plan["candidate_tensorize_ms"] == 0.0
+        assert plan["candidate_prefix_copy_ms"] >= 0.0
+        assert plan["candidate_req_init_ms"] >= 0.0
         assert candidate_data.action_scoring_candidate_id == "A1"
+        plan.update(stage=stage, turn_origin="user", admission_priority=0,
+                    session_id="session-test", logical_request_id="turn-test")
+        candidate_data = build_action_scoring_candidate_data(req_data, "A2")
+        assert candidate_data.action_scoring_plan["stage"] == stage
+        assert candidate_data.action_scoring_plan["admission_priority"] == 0
+        assert candidate_data.action_scoring_plan["turn_origin"] == "user"
+        assert candidate_data.action_scoring_plan["logical_request_id"] == "turn-test"
+        assert candidate_data.action_scoring_plan["session_id"] == "session-test"
+        assert candidate_data.action_scoring_parent is req_data
+        assert "candidate_data" not in candidate_data.action_scoring_plan
     finally:
         monkeypatch.undo()
 

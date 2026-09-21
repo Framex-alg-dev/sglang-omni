@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections import OrderedDict
 
 import pytest
+import torch
 
 from sglang_omni.client.client import Client, _PriorityAdmissionGate
 from sglang_omni.models.qwen3_omni.action_scoring import (
@@ -21,6 +23,9 @@ from sglang_omni.models.qwen3_omni.action_timing import (
     record_action_stage_timing,
 )
 from sglang_omni.proto import OmniRequest, StagePayload
+from sglang_omni.models.qwen3_omni.components.preprocessor import (
+    Qwen3OmniPreprocessor,
+)
 from sglang_omni.utils.async_jsonl import AsyncJSONLWriter
 
 
@@ -33,6 +38,40 @@ def _payload(request_id: str) -> StagePayload:
         ),
         data={},
     )
+
+
+def test_action_static_token_blueprint_is_reused_after_prewarm() -> None:
+    preprocessor = object.__new__(Qwen3OmniPreprocessor)
+    preprocessor._action_token_blueprints = OrderedDict()
+    preprocessor._action_token_blueprint_limit = 4
+    preprocessor._action_token_blueprint_invalid_scopes = set()
+    calls = []
+
+    class Tokenizer:
+        def __call__(self, text, **kwargs):
+            calls.append((text, kwargs))
+            return {"input_ids": torch.tensor([[1, 2, 3]])}
+
+    preprocessor.tokenizer = Tokenizer()
+    payload = _payload("blueprint")
+    payload.request.params["action_scoring"] = {
+        "session_instruction": "会话固定指令",
+        "prefix_cache_namespace": "session:single",
+    }
+    prompt = "系统目录\n会话固定指令\n动态用户输入"
+
+    first_ids, first_tail, first_status = preprocessor._action_token_blueprint(
+        payload, prompt
+    )
+    second_ids, second_tail, second_status = preprocessor._action_token_blueprint(
+        payload, prompt
+    )
+
+    assert first_status == "miss"
+    assert second_status == "hit"
+    assert first_tail == second_tail == "动态用户输入"
+    assert torch.equal(first_ids, second_ids)
+    assert len(calls) == 1
 
 
 def test_action_stage_timings_merge_parallel_payloads() -> None:
@@ -180,7 +219,7 @@ async def test_session_catalog_prefill_places_session_prefix_before_turn_prompt(
                 prefix_cached=True,
                 scores=[
                     CandidateScore(
-                        candidate_id="B001",
+                        candidate_id="01",
                         token_count=1,
                         mean_logprob=-0.1,
                         mean_nll=0.1,
@@ -206,7 +245,7 @@ async def test_session_catalog_prefill_places_session_prefix_before_turn_prompt(
         session_instruction="会话人设、实体信息和动作偏好。",
         candidates=[
             ActionScoreCandidate(
-                candidate_id="B001", suffix="B001", action_id="B001"
+                candidate_id="01", suffix="01", action_id="01"
             )
         ],
         prefix_cache_namespace="category:session:test",

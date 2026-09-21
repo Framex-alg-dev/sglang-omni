@@ -78,6 +78,131 @@ async def _chunks(*values: str) -> AsyncIterator[str]:
         yield value
 
 
+def test_text_options_environment_and_validation(monkeypatch):
+    monkeypatch.setenv("SGLANG_OMNI_TTS_TEXT_NORMALIZE_WHITESPACE", "0")
+    monkeypatch.setenv("SGLANG_OMNI_TTS_TEXT_COALESCE", "true")
+    monkeypatch.setenv("SGLANG_OMNI_TTS_TEXT_APPEND_TARGET_CHARS", "512")
+    config = EmbeddedTTSConfig(url="ws://tts.local", voice="v", **EmbeddedTTSConfig.text_options_from_env())
+    assert not config.normalize_text_whitespace and config.text_coalesce
+    assert config.text_append_target_chars == 512
+    monkeypatch.setenv("SGLANG_OMNI_TTS_TEXT_COALESCE", "typo")
+    with pytest.raises(ValueError, match="COALESCE"):
+        EmbeddedTTSConfig.text_options_from_env()
+
+
+@pytest.mark.parametrize("settings", [
+    {"max_turn_text_chars": 0}, {"max_turn_text_bytes": True},
+    {"normalize_text_whitespace": "true"}, {"text_append_target_chars": -1},
+    {"max_turn_text_chars": 10, "text_append_target_chars": 11},
+])
+def test_text_config_rejects_invalid_limits(settings):
+    with pytest.raises(ValueError):
+        EmbeddedTTSConfig(url="ws://tts.local", voice="v", **settings)
+
+
+async def _send_text_only(parts, **settings):
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url="ws://tts.local/realtime", voice="v", **settings),
+        session_id="text-test",
+    )
+    queue = asyncio.Queue(maxsize=2)
+    socket = FakeWebSocket([])
+    await asyncio.gather(
+        manager._produce_text(_chunks(*parts), queue, "turn"),
+        manager._send_text(socket, queue, asyncio.Event(), "turn", instruct=None),
+    )
+    return socket.sent
+
+
+@pytest.mark.asyncio
+async def test_actual_append_normalization_and_payload_logging(monkeypatch):
+    records = []
+    monkeypatch.setattr(
+        "sglang_omni.serve.realtime.embedded_tts.emit_structured_log",
+        lambda kind, event, **fields: records.append((event, fields)),
+    )
+    sent = await _send_text_only(["  Hel", "lo ", "\r", "\n", " world\t ", "again.  "])
+    assert "".join(e["text"] for e in sent if "text" in e) == "Hello\nworld again."
+    assert [e["type"] for e in sent].count("input_text_buffer.commit") == 1
+    append_logs = [d for e, d in records if e == "tts_text_append_sent"]
+    assert all("text" not in d for d in append_logs)
+    assert sum(d["chars"] for d in append_logs) == len("Hello\nworld again.")
+    records.clear()
+    await _send_text_only(["hello"], log_text_payloads=True)
+    assert next(d for e, d in records if e == "tts_text_append_sent")["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_text_baseline_and_large_append_partition():
+    original = "  Hello\n\n world  "
+    sent = await _send_text_only([original], normalize_text_whitespace=False, text_buffer_enabled=False)
+    assert [e["text"] for e in sent if "text" in e] == [original]
+    text = "What's new? 3.14 remains intact. " * 50
+    sent = await _send_text_only([text], text_append_target_chars=256)
+    pieces = [e["text"] for e in sent if "text" in e]
+    assert len(pieces) > 1 and "".join(pieces) == text.rstrip()
+    assert all(len(p) <= 256 for p in pieces)
+
+
+@pytest.mark.asyncio
+async def test_first_append_does_not_wait_for_more_model_text():
+    manager = _manager(FakeConnector([]))
+    queue = asyncio.Queue()
+    socket = FakeWebSocket([])
+    release = asyncio.Event()
+    first = asyncio.Event()
+    async def delayed():
+        yield "Hel"
+        await release.wait()
+        yield "lo"
+    producer = asyncio.create_task(manager._produce_text(delayed(), queue, "turn"))
+    sender = asyncio.create_task(manager._send_text(socket, queue, first, "turn", instruct=None))
+    try:
+        await asyncio.wait_for(first.wait(), 1)
+        assert socket.sent == [{"type": "input_text_buffer.append", "text": "Hel"}]
+    finally:
+        release.set()
+        await asyncio.gather(producer, sender)
+
+
+@pytest.mark.asyncio
+async def test_cumulative_text_budget_and_cancelled_normalizer():
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url="ws://tts.local/realtime", voice="v", max_turn_text_bytes=5),
+        session_id="limit",
+    )
+    with pytest.raises(EmbeddedTTSError, match="budget") as exc:
+        await manager._produce_text(_chunks("你", "好"), asyncio.Queue(), "limit")
+    assert exc.value.phase == "text_budget"
+    manager = _manager(FakeConnector([]))
+    queue = asyncio.Queue(maxsize=1)
+    task = asyncio.create_task(manager._produce_text(_chunks("old ", "tail", "more"), queue, "old"))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    new_queue = asyncio.Queue()
+    await manager._produce_text(_chunks("  new"), new_queue, "new")
+    assert new_queue.get_nowait().text == "new"
+
+
+@pytest.mark.asyncio
+async def test_zero_wait_coalescing_preserves_carry_and_eof():
+    from sglang_omni.serve.realtime.tts_text import TTSTextAppend
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url="ws://tts.local/realtime", voice="v", text_coalesce=True, text_buffer_enabled=False,
+                          text_append_target_chars=8), session_id="batch",
+    )
+    queue = asyncio.Queue()
+    for i, text in enumerate(["Hel", "lo", " world", ".", " next"], 1):
+        queue.put_nowait(TTSTextAppend(text, i, i, 1.0, "delta"))
+    queue.put_nowait(None)
+    batches = [item async for item in manager._text_batches(queue)]
+    assert "".join(b.text for b in batches) == "Hello world. next"
+    assert batches[0].text == "Hello"
+    assert max(len(b.text) for b in batches) <= 8
+
+
 def _manager(
     connector: FakeConnector, session_id: str = "external-session"
 ) -> EmbeddedTTSConnection:
@@ -118,7 +243,7 @@ async def test_connect_failure_retries_once_without_consuming_text():
     )
     assert len(attempts) == 2
     assert [event["text"] for event in connector.contexts[0].websocket.sent
-            if event["type"] == "input_text_buffer.append"] == ["what", "'s"]
+            if event["type"] == "input_text_buffer.append"] == ["what's"]
     await manager.close()
 
 
@@ -192,7 +317,6 @@ async def test_streaming_protocol_and_connection_reuse() -> None:
     }
     assert [item["type"] for item in connector.contexts[0].websocket.sent] == [
         "input_text_buffer.append",
-        "input_text_buffer.append",
         "input_text_buffer.commit",
         "input_text_buffer.append",
         "input_text_buffer.commit",
@@ -205,12 +329,7 @@ async def test_streaming_protocol_and_connection_reuse() -> None:
     assert appends == [
         {
             "type": "input_text_buffer.append",
-            "text": "你",
-            "instruct": "请开心、清晰地说。",
-        },
-        {
-            "type": "input_text_buffer.append",
-            "text": "好",
+            "text": "你好",
             "instruct": "请开心、清晰地说。",
         },
         {
@@ -257,12 +376,7 @@ async def test_streaming_waits_for_delayed_instruction_before_first_append() -> 
     assert appends == [
         {
             "type": "input_text_buffer.append",
-            "text": "太好了",
-            "instruct": "请非常开心地说一句话。",
-        },
-        {
-            "type": "input_text_buffer.append",
-            "text": "！",
+            "text": "太好了！",
             "instruct": "请非常开心地说一句话。",
         },
     ]
@@ -700,3 +814,119 @@ async def test_standby_has_no_text_until_failover_and_both_lanes_close():
     assert connector.contexts[0].closed
     await manager.close()
     assert all(context.closed for context in connector.contexts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('terminal, expected', [(False, 'audio_idle_timeout'), (True, 'completion_timeout')])
+async def test_progress_timeout_ignores_control_and_empty_audio(terminal, expected):
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url='ws://tts.local', voice='v',
+                          audio_idle_timeout_seconds=.04, completion_timeout_seconds=.04),
+        session_id='progress-test',
+    )
+    ws = FakeWebSocket(_successful_events()[1:3])
+    if terminal:
+        ws.events.put_nowait(_event('response.audio.done'))
+    started = asyncio.Event()
+    started.set()
+
+    async def noise():
+        while True:
+            await asyncio.sleep(.005)
+            ws.events.put_nowait(_event('session.updated'))
+            if not terminal:
+                ws.events.put_nowait(_event('response.audio.delta', delta=''))
+
+    task = asyncio.create_task(noise())
+    try:
+        with pytest.raises(EmbeddedTTSError) as err:
+            await asyncio.wait_for(manager._receive_turn(ws, lambda _: asyncio.sleep(0), started, 't'), 1)
+        assert err.value.phase == expected
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('duration, interval', [(.15, .01), (31, .25)])
+async def test_continuous_audio_survives_old_turn_deadline(duration, interval):
+    connector = FakeConnector([_successful_events()[:1]])
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url='ws://tts.local', voice='v', audio_idle_timeout_seconds=.8),
+        session_id='long-progress', connector=connector,
+    )
+    received = []
+
+    async def feed():
+        while not connector.contexts:
+            await asyncio.sleep(0)
+        ws = connector.contexts[0].websocket
+        while not any(e['type'] == 'input_text_buffer.commit' for e in ws.sent):
+            await asyncio.sleep(0)
+        ws.events.put_nowait(_event('response.created'))
+        deadline = asyncio.get_running_loop().time() + duration
+        while asyncio.get_running_loop().time() < deadline:
+            ws.events.put_nowait(_event('response.audio.delta', delta='AAE='))
+            await asyncio.sleep(interval)
+        ws.events.put_nowait(_event('response.audio.done'))
+        ws.events.put_nowait(_event('response.done'))
+
+    async def sink(chunk):
+        received.append(chunk)
+
+    feeder = asyncio.create_task(feed())
+    try:
+        result = await manager.synthesize_streaming(turn_id='long', text_chunks=_chunks('Long reply.'), audio_sink=sink)
+        assert result.chunk_count == len(received) > 1
+        assert not connector.contexts[0].closed
+    finally:
+        feeder.cancel()
+        await asyncio.gather(feeder, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_audio_delivery_stall_has_distinct_timeout():
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url='ws://tts.local', voice='v', send_timeout_seconds=.02),
+        session_id='sink-stall',
+    )
+    started = asyncio.Event()
+    started.set()
+    with pytest.raises(EmbeddedTTSError) as err:
+        await manager._receive_turn(FakeWebSocket(_successful_events()[1:]),
+                                    lambda _: asyncio.Event().wait(), started, 't')
+    assert err.value.phase == 'audio_delivery_timeout'
+
+
+@pytest.mark.parametrize('value', [0, -1, float('inf'), float('nan'), True])
+@pytest.mark.parametrize('field', ['audio_idle_timeout_seconds', 'completion_timeout_seconds', 'turn_timeout_seconds'])
+def test_timeout_limits_are_finite_positive(field, value):
+    with pytest.raises(ValueError):
+        EmbeddedTTSConfig(url='ws://tts.local', voice='v', **{field: value})
+
+
+@pytest.mark.asyncio
+async def test_hard_deadline_still_bounds_continuous_audio():
+    connector = FakeConnector([_successful_events()[:3]])
+    manager = EmbeddedTTSConnection(
+        EmbeddedTTSConfig(url='ws://tts.local', voice='v', turn_timeout_seconds=.08),
+        session_id='hard-cap', connector=connector,
+    )
+
+    async def feed():
+        while not connector.contexts:
+            await asyncio.sleep(0)
+        while True:
+            await asyncio.sleep(.005)
+            connector.contexts[0].websocket.events.put_nowait(_event('response.audio.delta', delta='AAE='))
+
+    task = asyncio.create_task(feed())
+    try:
+        with pytest.raises(EmbeddedTTSError) as err:
+            await manager.synthesize_streaming(turn_id='t', text_chunks=_chunks('reply'), audio_sink=lambda _: asyncio.sleep(0))
+        assert err.value.phase == 'turn_timeout'
+        assert connector.contexts[0].closed
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

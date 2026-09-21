@@ -41,6 +41,11 @@ def test_completion_surfaces_logprobs_and_weight_version() -> None:
         "text": "hello",
         "finish_reason": "stop",
         "output_token_logprobs": [[-0.1, 11], [-0.2, 22], [-0.3, 33]],
+        "output_top_logprobs": [
+            [[-0.1, 11], [-0.9, 12]],
+            [[-0.2, 22], [-1.0, 23]],
+            [[-0.3, 33], [-1.1, 34]],
+        ],
         "weight_version": "v7",
         "completion_tokens": 3,
     }
@@ -51,6 +56,11 @@ def test_completion_surfaces_logprobs_and_weight_version() -> None:
     )
 
     assert out.output_token_logprobs == [[-0.1, 11], [-0.2, 22], [-0.3, 33]]
+    assert out.output_top_logprobs == [
+        [[-0.1, 11], [-0.9, 12]],
+        [[-0.2, 22], [-1.0, 23]],
+        [[-0.3, 33], [-1.1, 34]],
+    ]
     assert out.weight_version == "v7"
 
 

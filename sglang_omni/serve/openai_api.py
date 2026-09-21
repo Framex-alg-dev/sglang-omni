@@ -19,6 +19,8 @@ Provides the following endpoints:
 
 from __future__ import annotations
 
+from typing import Literal
+
 import asyncio
 import dataclasses
 import io
@@ -124,9 +126,15 @@ from sglang_omni.serve.realtime.runtime_prompt_overrides import (
     prompt_slot_payloads as realtime_prompt_slot_payloads,
     write_runtime_prompt as write_realtime_prompt,
 )
-from sglang_omni.models.qwen3_omni.global_action_catalog import ACTION_INTENT_POLICY
+from sglang_omni.models.qwen3_omni.global_action_catalog import ACTION_INTENT_POLICY, ACTION_INTENT_POLICY_EN
 from sglang_omni.serve.realtime.proactive.policies import _POLICIES
-from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules_zh
+from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules
+from sglang_omni.serve.realtime.user_image_policy import (
+    USER_IMAGE_ACTION_RULES_ZH,
+    USER_IMAGE_ACTION_RULES_EN,
+    USER_IMAGE_REPLY_RULES_ZH,
+    USER_IMAGE_REPLY_RULES_EN,
+)
 from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
 from sglang_omni.serve.speech_errors import (
     SpeechAPIError,
@@ -372,28 +380,31 @@ def _register_runtime_prompt_overrides(
 
     auth = make_admin_auth_dependency(admin_api_key)
 
-    def prompt_defaults() -> dict[str, str]:
+    def prompt_defaults(locale: str) -> dict[str, str]:
+        english = locale == "en-US"
         return {
-            "reply_rules": repository_reply_rules_zh(),
-            "action_rules": ACTION_INTENT_POLICY,
+            "reply_rules": repository_reply_rules(locale),
+            "action_rules": ACTION_INTENT_POLICY_EN if english else ACTION_INTENT_POLICY,
             "proactive_reply_rules": "\n\n".join(
-                f"[{trigger}]\n{policy.reply_policy_zh}"
+                f"[{trigger}]\n{policy.reply_policy_en if english else policy.reply_policy_zh}"
                 for trigger, policy in _POLICIES.items()
             ),
             "proactive_action_rules": "\n\n".join(
-                f"[{trigger}]\n{policy.default_action_guidance_zh}"
+                f"[{trigger}]\n{policy.default_action_guidance_en if english else policy.default_action_guidance_zh}"
                 for trigger, policy in _POLICIES.items()
             ),
+            "user_image_reply_rules": USER_IMAGE_REPLY_RULES_EN if english else USER_IMAGE_REPLY_RULES_ZH,
+            "user_image_action_rules": USER_IMAGE_ACTION_RULES_EN if english else USER_IMAGE_ACTION_RULES_ZH,
         }
 
     @app.get("/admin/runtime-prompts", dependencies=[Depends(auth)])
-    async def list_runtime_prompts() -> JSONResponse:
+    async def list_runtime_prompts(locale: Literal["zh-CN", "en-US"] = "zh-CN") -> JSONResponse:
         return JSONResponse(
-            content={"items": realtime_prompt_slot_payloads(prompt_defaults())}
+            content={"items": realtime_prompt_slot_payloads(prompt_defaults(locale), language=locale)}
         )
 
     @app.put("/admin/runtime-prompts/{key}", dependencies=[Depends(auth)])
-    async def update_runtime_prompt(key: str, request: Request) -> JSONResponse:
+    async def update_runtime_prompt(key: str, request: Request, locale: Literal["zh-CN", "en-US"] = "zh-CN") -> JSONResponse:
         try:
             payload = await request.json()
             if not isinstance(payload, dict) or set(payload) != {"content"}:
@@ -401,10 +412,10 @@ def _register_runtime_prompt_overrides(
             content = payload.get("content")
             if not isinstance(content, str):
                 raise ValueError("content must be a string")
-            write_realtime_prompt(key, content)
+            write_realtime_prompt(key, content, language=locale)
             item = next(
                 item
-                for item in realtime_prompt_slot_payloads(prompt_defaults())
+                for item in realtime_prompt_slot_payloads(prompt_defaults(locale), language=locale)
                 if item["key"] == key
             )
             return JSONResponse(content=item)

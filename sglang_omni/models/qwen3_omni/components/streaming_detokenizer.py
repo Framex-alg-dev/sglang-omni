@@ -276,6 +276,9 @@ class StreamingDetokenizeScheduler:
         output_token_logprobs = thinker_out.get("output_token_logprobs")
         if output_token_logprobs is not None:
             result.setdefault("output_token_logprobs", output_token_logprobs)
+        output_top_logprobs = thinker_out.get("output_top_logprobs")
+        if output_top_logprobs is not None:
+            result.setdefault("output_top_logprobs", output_top_logprobs)
         weight_version = thinker_out.get("weight_version")
         if weight_version is not None:
             result.setdefault("weight_version", weight_version)

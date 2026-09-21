@@ -244,6 +244,9 @@ def _action_request_debug_payload(
                 "suffix": item.suffix,
                 "action_id": item.action_id,
                 "execution_binding": dict(item.execution_binding),
+                "selection_token": item.selection_token,
+                "selection_token_id": item.selection_token_id,
+                "selection_score_bias": item.selection_score_bias,
             }
             for item in request.candidates
         ],
@@ -320,23 +323,32 @@ class Client:
         """Score all suffixes as one logical multimodal pipeline request."""
         score_started = time.perf_counter()
         validate_action_suffix_request(request)
+        snapshot_started = time.perf_counter()
         candidates = [
             {
                 "candidate_id": item.candidate_id,
                 "suffix": item.suffix,
                 "action_id": item.action_id,
                 "execution_binding": dict(item.execution_binding),
+                "selection_token": item.selection_token,
+                "selection_token_id": item.selection_token_id,
+                "selection_score_bias": item.selection_score_bias,
             }
             for item in request.candidates
         ]
+        candidate_snapshot_ms = (time.perf_counter() - snapshot_started) * 1000.0
         build_started = time.perf_counter()
         omni_request = self._build_action_scoring_request(request, candidates)
         client_build_ms = (time.perf_counter() - build_started) * 1000.0
         action_params = omni_request.params.get("action_scoring")
         if isinstance(action_params, dict):
             action_params["client_build_ms"] = round(client_build_ms, 3)
+            action_params["candidate_snapshot_ms"] = round(
+                candidate_snapshot_ms, 3
+            )
         phase: dict[str, Any] = {
             "client_build_ms": round(client_build_ms, 3),
+            "candidate_snapshot_ms": round(candidate_snapshot_ms, 3),
             "name": "waiting_for_action_score_slot",
             "slot_wait_ms": None,
             "pipeline_ms": None,
@@ -740,6 +752,8 @@ class Client:
         session_instruction: str = "",
         admission_priority: int = 3,
         session_instance_id: str | None = None,
+        stats_out: dict[str, Any] | None = None,
+        max_prefix_tokens: int | None = None,
     ) -> bool:
         """Prefill one immutable action catalog prefix."""
         if not candidates:
@@ -766,13 +780,17 @@ class Client:
             system_prompt=system_prompt,
             stage=stage,
             admission_priority=admission_priority,
+            max_prefix_tokens=max_prefix_tokens,
             logical_request_id=f"catalog-prefill-{prefix_cache_namespace}",
             prefix_cache_namespace=prefix_cache_namespace,
             cache_static_system_only=not bool(session_instruction),
             suffix_tokenization_mode="short_id",
         )
         try:
-            await self.score_action_suffixes(request)
+            result = await self.score_action_suffixes(request)
+            if stats_out is not None:
+                stats_out.update(result.stats)
+                stats_out["prefix_cached"] = result.prefix_cached
         except Exception:
             logger.warning(
                 "[ACTION_CATALOG_PREFILL] failed namespace=%s stage=%s",
@@ -1141,6 +1159,9 @@ class Client:
                     "suffix": item.suffix,
                     "action_id": item.action_id,
                     "execution_binding": dict(item.execution_binding),
+                    "selection_token": item.selection_token,
+                    "selection_token_id": item.selection_token_id,
+                    "selection_score_bias": item.selection_score_bias,
                 }
                 for item in request.candidates
             ]
@@ -1206,6 +1227,11 @@ class Client:
                     "prefix_cache_namespace": request.prefix_cache_namespace,
                     "cache_static_system_only": request.cache_static_system_only,
                     "admission_priority": request.admission_priority,
+                    "stage": request.stage,
+                    "max_prefix_tokens": request.max_prefix_tokens,
+                    "session_id": request.session_id,
+                    "session_instance_id": request.session_instance_id,
+                    "logical_request_id": request.logical_request_id,
                     "action_context_cache_key": request.action_context_cache_key,
                     "turn_origin": request.turn_origin,
                     "text_role": request.text_role,
@@ -1214,6 +1240,11 @@ class Client:
                     "history_audio_count": history_audio_count,
                     "history_image_count": history_image_count,
                     "suffix_tokenization_mode": request.suffix_tokenization_mode,
+                    "scoring_mode": request.scoring_mode,
+                    "selection_mapping_version": request.selection_mapping_version,
+                    "selection_mapping_hash": request.selection_mapping_hash,
+                    "selection_calibration_version": request.selection_calibration_version,
+                    "selection_calibration_hash": request.selection_calibration_hash,
                 },
             },
             metadata=metadata,
@@ -1269,6 +1300,8 @@ class Client:
         finish_reason: str | None = None
         logprobs_parts: list[Any] = []
         saw_output_token_logprobs = False
+        top_logprobs_parts: list[Any] = []
+        saw_output_top_logprobs = False
         omni_rollout: dict[str, Any] | None = None
         weight_version: str | None = None
 
@@ -1285,6 +1318,9 @@ class Client:
             if chunk.output_token_logprobs is not None:
                 saw_output_token_logprobs = True
                 logprobs_parts.extend(chunk.output_token_logprobs)
+            if chunk.output_top_logprobs is not None:
+                saw_output_top_logprobs = True
+                top_logprobs_parts.extend(chunk.output_top_logprobs)
             if chunk.omni_rollout is not None:
                 omni_rollout = chunk.omni_rollout
             if chunk.weight_version is not None:
@@ -1323,9 +1359,40 @@ class Client:
             output_token_logprobs=(
                 logprobs_parts if saw_output_token_logprobs else None
             ),
+            output_top_logprobs=(
+                top_logprobs_parts if saw_output_top_logprobs else None
+            ),
             omni_rollout=omni_rollout,
             weight_version=weight_version,
         )
+
+    async def prefill_completion_prefix(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+    ) -> bool:
+        """Populate the normal completion radix cache and discard the output.
+
+        This intentionally uses the ordinary completion path so prewarm and
+        runtime requests have identical chat-template/tokenization behavior.
+        The separate method lets session startup detect support without
+        treating every lightweight test or third-party client as prewarmable.
+        """
+
+        await self.completion(request, request_id=request_id)
+        return True
+
+    async def prefetch_completion_images(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+    ) -> bool:
+        """Populate the image-encoder cache without running the Thinker."""
+
+        await self.completion(request, request_id=request_id)
+        return True
 
     # ------------------------------------------------------------------
     # High-level: streaming completion
@@ -1370,6 +1437,8 @@ class Client:
                     finish_reason=chunk.finish_reason,
                     usage=chunk.usage,
                     stage_name=chunk.stage_name,
+                    output_token_logprobs=chunk.output_token_logprobs,
+                    output_top_logprobs=chunk.output_top_logprobs,
                 )
 
     # ------------------------------------------------------------------
@@ -1665,6 +1734,9 @@ class Client:
                 output_token_logprobs = decode_result.get("output_token_logprobs")
                 if output_token_logprobs is not None:
                     chunk.output_token_logprobs = output_token_logprobs
+                output_top_logprobs = decode_result.get("output_top_logprobs")
+                if output_top_logprobs is not None:
+                    chunk.output_top_logprobs = output_top_logprobs
                 omni_rollout = decode_result.get("omni_rollout")
                 if omni_rollout is not None:
                     chunk.omni_rollout = omni_rollout
@@ -1690,6 +1762,9 @@ class Client:
             output_token_logprobs = result.get("output_token_logprobs")
             if output_token_logprobs is not None:
                 chunk.output_token_logprobs = output_token_logprobs
+            output_top_logprobs = result.get("output_top_logprobs")
+            if output_top_logprobs is not None:
+                chunk.output_top_logprobs = output_top_logprobs
             omni_rollout = result.get("omni_rollout")
             if omni_rollout is not None:
                 chunk.omni_rollout = omni_rollout
@@ -1746,6 +1821,9 @@ class Client:
             output_token_logprobs = data.get("output_token_logprobs")
             if output_token_logprobs is not None:
                 chunk.output_token_logprobs = output_token_logprobs
+            output_top_logprobs = data.get("output_top_logprobs")
+            if output_top_logprobs is not None:
+                chunk.output_top_logprobs = output_top_logprobs
             omni_rollout = data.get("omni_rollout")
             if omni_rollout is not None:
                 chunk.omni_rollout = omni_rollout

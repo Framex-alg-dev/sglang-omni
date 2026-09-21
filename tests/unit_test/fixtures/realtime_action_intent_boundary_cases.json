@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "description": "Text/audio pairs for grouped body-intent accuracy. Audio cases send no transcript.",
+  "cases": [
+    {
+      "id": "stand-direct-text",
+      "pair": "stand-direct",
+      "modality": "text",
+      "text": "站起来",
+      "expected": {"body_mode": "perform", "execute": false, "support_status": "unsupported"}
+    },
+    {
+      "id": "stand-direct-audio",
+      "pair": "stand-direct",
+      "modality": "audio",
+      "text": "站起来",
+      "expected": {"body_mode": "perform", "execute": false, "support_status": "unsupported"}
+    },
+    {
+      "id": "stand-polite-text",
+      "pair": "stand-polite",
+      "modality": "text",
+      "text": "你能站起来吗？",
+      "expected": {"body_mode": "perform", "execute": false, "support_status": "unsupported"}
+    },
+    {
+      "id": "stand-polite-audio",
+      "pair": "stand-polite",
+      "modality": "audio",
+      "text": "你能站起来吗？",
+      "expected": {"body_mode": "perform", "execute": false, "support_status": "unsupported"}
+    },
+    {
+      "id": "stand-prohibit-text",
+      "pair": "stand-prohibit",
+      "modality": "text",
+      "text": "不要站起来。",
+      "expected": {"body_mode": "prohibit", "execute": false}
+    },
+    {
+      "id": "stand-prohibit-audio",
+      "pair": "stand-prohibit",
+      "modality": "audio",
+      "text": "不要站起来。",
+      "expected": {"body_mode": "prohibit", "execute": false}
+    },
+    {
+      "id": "stand-capability-text",
+      "pair": "stand-capability",
+      "modality": "text",
+      "text": "你会站起来吗？",
+      "expected": {"body_mode": "capability_query", "execute": false}
+    },
+    {
+      "id": "stand-capability-audio",
+      "pair": "stand-capability",
+      "modality": "audio",
+      "text": "你会站起来吗？",
+      "expected": {"body_mode": "capability_query", "execute": false}
+    },
+    {
+      "id": "stand-quote-text",
+      "pair": "stand-quote",
+      "modality": "text",
+      "text": "请只说“站起来”这三个字，不要做动作。",
+      "expected": {"body_mode": "prohibit", "execute": false}
+    },
+    {
+      "id": "stand-quote-audio",
+      "pair": "stand-quote",
+      "modality": "audio",
+      "text": "请只说站起来这三个字，不要做动作。",
+      "expected": {"body_mode": "prohibit", "execute": false}
+    },
+    {
+      "id": "stand-statement-text",
+      "pair": "stand-statement",
+      "modality": "text",
+      "text": "他刚才站起来了。",
+      "expected": {"body_mode": "none", "execute": false}
+    },
+    {
+      "id": "stand-statement-audio",
+      "pair": "stand-statement",
+      "modality": "audio",
+      "text": "他刚才站起来了。",
+      "expected": {"body_mode": "none", "execute": false}
+    },
+    {
+      "id": "wave-direct-text",
+      "pair": "wave-direct",
+      "modality": "text",
+      "text": "请挥挥手。",
+      "expected": {"body_mode": "perform", "candidate_id": "288", "execute": true, "support_status": "supported"}
+    },
+    {
+      "id": "wave-direct-audio",
+      "pair": "wave-direct",
+      "modality": "audio",
+      "text": "请挥挥手。",
+      "expected": {"body_mode": "perform", "candidate_id": "288", "execute": true, "support_status": "supported"}
+    },
+    {
+      "id": "wave-prohibit-text",
+      "pair": "wave-prohibit",
+      "modality": "text",
+      "text": "不要挥手。",
+      "expected": {"body_mode": "prohibit", "execute": false}
+    },
+    {
+      "id": "wave-prohibit-audio",
+      "pair": "wave-prohibit",
+      "modality": "audio",
+      "text": "不要挥手。",
+      "expected": {"body_mode": "prohibit", "execute": false}
+    }
+  ]
+}
