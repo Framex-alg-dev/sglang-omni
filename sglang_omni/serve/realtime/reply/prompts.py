@@ -57,6 +57,27 @@ def emit_structured_log(log_type: str, event: str, **fields: Any) -> bool:
     hook = getattr(multimodal, "emit_structured_log", _base_emit_structured_log)
     return hook(log_type, event, **fields)
 class ReplyPromptComponent:
+    def _reply_current_view_answer_part(self) -> dict[str, str]:
+        return {
+            "type": "text",
+            "text": self._prompt(
+                zh=(
+                    "[当前画面问答]意图解析已确认：用户正在询问当前摄像头画面。"
+                    "必须依据本条消息附带的用户摄像头图片直接回答，不要把问题解释成动作模仿，"
+                    "不要声称看不到已附带的画面。若画面不足以可靠判断，应简短说明不确定或请用户"
+                    "把目标靠近镜头，不得猜测。"
+                ),
+                en=(
+                    "[Current-view question] Intent parsing confirmed that the user is asking "
+                    "about the current camera view. Answer directly from the user-camera images "
+                    "attached to this message. Do not reinterpret the request as action imitation "
+                    "or claim that an attached view is unavailable. If the view is insufficient "
+                    "for a reliable answer, briefly express uncertainty or ask the user to move "
+                    "the subject closer instead of guessing."
+                ),
+            ),
+        }
+
     def _visual_arithmetic_operand_output_part(self) -> dict[str, str]:
         numeric_rules_zh = numeric_visual_observation_rules_zh()
         return {

@@ -16,6 +16,7 @@ from sglang_omni.utils.structured_logs import emit_structured_log
 TURN_INTENT_TIMEOUT_SECONDS = 4.0
 GENERAL_INTENT_GATE = "GENERAL"
 VISUAL_GESTURE_ANSWER_GATE = "VISUAL_ANSWER"
+VISUAL_GENERAL_ANSWER_GATE = "VIEW_ANSWER"
 VISUAL_HAND_MODE_IMITATE = "imitate"
 VISUAL_HAND_MODE_IDENTIFY_NUMBER = "identify_number"
 VISUAL_HAND_MODE_IDENTIFY_GESTURE = "identify_gesture"
@@ -37,7 +38,12 @@ _VISUAL_SCOPE_GATE_CHOICES = {
     "COPY_SCREEN": ("body", "这个屏幕交互"),
 }
 _VISUAL_SCOPE_GATE_RESULTS = frozenset(
-    {GENERAL_INTENT_GATE, VISUAL_GESTURE_ANSWER_GATE, *_VISUAL_SCOPE_GATE_CHOICES}
+    {
+        GENERAL_INTENT_GATE,
+        VISUAL_GESTURE_ANSWER_GATE,
+        VISUAL_GENERAL_ANSWER_GATE,
+        *_VISUAL_SCOPE_GATE_CHOICES,
+    }
 )
 _MODEL_VISUAL_ROUTE_TO_INTERNAL = {
     "NO_CURRENT_VIEW": GENERAL_INTENT_GATE,
@@ -52,6 +58,7 @@ _MODEL_VISUAL_ROUTE_TO_INTERNAL = {
     "COPY_CURRENT_POSE": "COPY_POSE",
     "COPY_CURRENT_OBJECT": "COPY_OBJECT",
     "COPY_CURRENT_SCREEN": "COPY_SCREEN",
+    "ANSWER_CURRENT_VIEW": VISUAL_GENERAL_ANSWER_GATE,
     "ANSWER_CURRENT_VIEW_WITH_GESTURE": VISUAL_GESTURE_ANSWER_GATE,
 }
 _VISUAL_ROUTE_PREFIX_RE = re.compile(
@@ -185,9 +192,9 @@ def _visual_route_from_partial_output(
         return route if _same_visual_target(target, canonical_target) else ""
     return "" if route == GENERAL_INTENT_GATE else route
 
-SYSTEM = '''你是数字人意图解析器。理解当前中英文音频或文本，不识别图片；只输出紧凑JSON。
+SYSTEM = '''你是数字人意图解析器，理解中英音频或文本，不识别图片，输出JSON。
 
-has_user_camera=true/false是服务端事实。只有true才允许需要当前画面的visual；有图片不等于要求模仿。
+has_user_camera=true/false是服务端事实。只有true才允许需画面的visual；有图片不等于要求模仿。
 
 字段必须按流式优先级输出：首字段visual，第二字段body_intent；perform/prohibit时第三字段必须是body_task；
 存在face_task时紧随动作字段输出；然后依次输出speech、reaction，再输出其他非默认载荷。visual使用下文枚举；speech只能是verbatim/generated/none；
@@ -195,16 +202,17 @@ body_intent只能是perform/prohibit/capability/none；reaction只能是respond/
 其他非默认载荷依次为：text、speech_independent_of_body、history、reaction_task、voice_tone、
 voice_pace、visual_hand_mode、visual_answer_operation、visual_answer_output。空字符串、history=false、natural和normal不得输出。
 body_task只能在perform/prohibit时输出，且必须早于speech，以便身体通道独立就绪。
-visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW_WITH_GESTURE。
+visual_route只能是：NO_CURRENT_VIEW、COPY_CURRENT_ACTION、COPY_CURRENT_HAND、COPY_CURRENT_FACE、COPY_CURRENT_HEAD、COPY_CURRENT_ARM、COPY_CURRENT_UPPER_BODY、COPY_CURRENT_LEG、COPY_CURRENT_BODY、COPY_CURRENT_POSE、COPY_CURRENT_OBJECT、COPY_CURRENT_SCREEN、ANSWER_CURRENT_VIEW、ANSWER_CURRENT_VIEW_WITH_GESTURE。
 
 visual_route先于其他字段按以下互斥顺序判定：
 1. 仅当不看当前画面就无法确定动作目标时选COPY_CURRENT_*：“做这个动作”=COPY_CURRENT_ACTION；“做这个手势/比这个数字/照着我的手比”=COPY_CURRENT_HAND。COPY的body_task/face_task必须使用对应标准目标“这个动作/这个手势/这个表情”等。
-2. 视觉四则运算：要求对当前画面中的两个指代数字做加、减、乘、除时，选ANSWER_CURRENT_VIEW_WITH_GESTURE。未指定回答方式时默认手势加语音；明确“用手势回答/只用手势/不要说话”时仅手势。
-3. 语言已明确动作或数字时选NO_CURRENT_VIEW，与有无摄像头无关。“个/一个”是量词，不是“这个”；“比个数字三/比一个三/比个三/给我比六/挥手/点头/比个心”均不看图片，数字动作输出标准名“数字N手势”。
+2. 必须看画面才能答的“这是什么/手里是什么/什么颜色”=ANSWER_CURRENT_VIEW+none+generated；只回答不模仿。明确模仿才COPY_CURRENT_*。
+3. 画面中两个指代数字的四则运算=ANSWER_CURRENT_VIEW_WITH_GESTURE。默认手势加语音；只用手势/不说话时仅手势。手势识别仍用COPY_CURRENT_HAND+identify_*。
+4. 语言已明确动作或数字时选NO_CURRENT_VIEW，与有无摄像头无关。“个/一个”是量词，不是“这个”；“比个数字三/比一个三/比个三/给我比六/挥手/点头/比个心”均不看图片，数字动作输出标准名“数字N手势”。
 
-最小对比：“比个数字三/Show number three”=NO_CURRENT_VIEW+数字三手势；“比这个数字/Copy this hand sign”=COPY_CURRENT_HAND+这个手势。“不要做这个动作/做这个动作是什么意思”不得转COPY。有画面时“这是什么手势/What gesture is this”用identify_gesture；“这是数字几/这是几/What number is this”用identify_number。“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”=NO_CURRENT_VIEW。
+最小对比：“比个数字三/Show number three”=NO_CURRENT_VIEW+数字三手势；“比这个数字/Copy this hand sign”=COPY_CURRENT_HAND+这个手势。“不要做这个动作/做这个动作是什么意思”不得转COPY。有画面时“这是什么/What is this”=ANSWER_CURRENT_VIEW；“这是什么手势/What gesture is this”用identify_gesture；“这是数字几/这是几/What number is this”用identify_number。“这个加这个等于多少”=ANSWER_CURRENT_VIEW_WITH_GESTURE；“一加二等于多少”=NO_CURRENT_VIEW。
 
-COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手臂，UPPER_BODY=肩膀/躯干，LEG=腿脚，BODY=全身，POSE=姿态，OBJECT=物品交互，SCREEN=屏幕交互；范围不明才用ACTION。gesture/hand sign属于HAND。has_user_camera=false时选NO_CURRENT_VIEW、generated、body_intent=none，省略body_task/face_task并说明需要画面。
+COPY：HAND手/gesture，FACE脸，HEAD头，ARM臂，UPPER_BODY躯干，LEG腿，BODY全身，POSE姿态，OBJECT物品，SCREEN屏幕；否则ACTION。无相机选NO_CURRENT_VIEW并说明。
 
 一致性：COPY_CURRENT_HAND必须带visual_hand_mode：模仿=imitate，问数字=identify_number，问手势=identify_gesture。identify_*必须speech=none、无text，并以visual_answer_output控制答案：明确只用手势/不要说话=gesture_only，未指定或手势加语音播报答案=gesture_and_speech。模仿与说话可以同时存在，仍为COPY；纯模仿speech=none。“做这个动作/手势”不得选NO_CURRENT_VIEW。视觉计算必须带visual_answer_operation：加/减/乘/除对应add/subtract/multiply/divide，减除保留顺序；visual_answer_output同上。仅语音回答选NO_CURRENT_VIEW并省略两字段；额外原样话术与答案播报独立。明确的表情、语气、语速必须保留，未指定时不得编造。
 
@@ -231,6 +239,7 @@ COPY范围：HAND=手势/手型，FACE=表情/脸，HEAD=头部/视线，ARM=手
 这是几 -> {"visual":"COPY_CURRENT_HAND","body_intent":"perform","body_task":"这个手势","speech":"none","reaction":"none","visual_hand_mode":"identify_number","visual_answer_output":"gesture_and_speech"}
 这是什么手势 -> {"visual":"COPY_CURRENT_HAND","body_intent":"perform","body_task":"这个手势","speech":"none","reaction":"none","visual_hand_mode":"identify_gesture","visual_answer_output":"gesture_and_speech"}
 这个加这个等于多少，用手势回答 -> {"visual":"ANSWER_CURRENT_VIEW_WITH_GESTURE","body_intent":"none","speech":"none","reaction":"none","visual_answer_operation":"add","visual_answer_output":"gesture_only"}
+这是什么 -> {"visual":"ANSWER_CURRENT_VIEW","body_intent":"none","speech":"generated","reaction":"none"}
 
 保留方向、范围、对象、否定及多个通道。用户自述事实是generated而非要求复述；询问用户先前提供的姓名、偏好或事实才输出history=true。visual、body_intent、speech、reaction四字段必须存在，其余字段仅在非默认时输出；输出最多128个token。'''
 
@@ -571,6 +580,13 @@ class TurnIntent:
                 raise ValueError(
                     "visual answer cannot combine with an implicit reaction"
                 )
+        elif visual_route == VISUAL_GENERAL_ANSWER_GATE:
+            if data["speech"] != "generated":
+                raise ValueError("current-view answer requires generated speech")
+            if data["body_mode"] != "none" or data["body"] or data["face"]:
+                raise ValueError("current-view answer cannot execute an action")
+            if data["reaction_mode"] != "none" or data["reaction"]:
+                raise ValueError("current-view answer cannot contain a reaction")
 
         if (data["body_mode"] == "none") != (not bool(data["body"])):
             raise ValueError("inconsistent body mode")
@@ -664,6 +680,7 @@ class TurnIntent:
                 "speech_independent_of_body": self.speech_independent_of_body,
                 "visual_hand_mode": self.visual_hand_mode,
                 "visual_answer_output": self.visual_answer_output,
+                "visual_scope_gate": self.visual_scope_gate,
                 "reaction_mode": self.reaction_mode,
                 "reaction_task": self.reaction,
             },

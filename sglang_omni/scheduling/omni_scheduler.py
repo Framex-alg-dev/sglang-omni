@@ -1846,6 +1846,83 @@ class OmniScheduler:
         return plan.batch_to_run
 
     def get_new_batch_prefill(self, running_batch):
+        # Realtime intent and post-route visual probes get a short, hard-bounded
+        # admission advantage.  This changes execution order only; after the
+        # window expires they rejoin the normal queue unchanged.
+        if self.chunked_req is None and self.waiting_queue:
+            now = time.perf_counter()
+            priority, other = [], []
+            for req in self.waiting_queue:
+                data = getattr(req, "_omni_data", None)
+                plan = getattr(data, "latency_priority_plan", None) or {}
+                entered_at = getattr(req, "_coalesce_enqueue_t", now)
+                priority_s = float(plan.get("prefill_priority_s", 0.0))
+                target = (
+                    priority
+                    if priority_s > 0.0 and now - entered_at < priority_s
+                    else other
+                )
+                target.append(req)
+            if priority:
+                if not other:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                self.waiting_queue = priority
+                try:
+                    return _Upstream.get_new_batch_prefill(self, running_batch)
+                finally:
+                    self.waiting_queue.extend(other)
+
+        # Once intent prefill has produced its first token, let the short
+        # leading ``visual`` field finish before admitting the matching action
+        # suffix cohort.  The token and wall-clock limits both bound the impact
+        # on non-visual turns and on unrelated sessions.
+        if (
+            self.chunked_req is None
+            and self.waiting_queue
+            and running_batch is not None
+            and not running_batch.is_empty()
+        ):
+            now = time.perf_counter()
+            protected_logical_ids: set[str] = set()
+            for req in getattr(running_batch, "reqs", ()):
+                data = getattr(req, "_omni_data", None)
+                plan = getattr(data, "latency_priority_plan", None) or {}
+                step_budget = int(plan.get("decode_protect_steps", 0))
+                time_budget = float(plan.get("decode_protect_s", 0.0))
+                steps = int(getattr(data, "generation_steps", 0))
+                if step_budget <= 0 or steps <= 0 or steps >= step_budget:
+                    continue
+                started_at = getattr(req, "_latency_decode_started_at", None)
+                if started_at is None:
+                    started_at = req._latency_decode_started_at = now
+                if time_budget <= 0.0 or now - started_at >= time_budget:
+                    continue
+                logical_request_id = plan.get("logical_request_id")
+                if logical_request_id:
+                    protected_logical_ids.add(str(logical_request_id))
+            matching_suffix_waits = any(
+                getattr(
+                    getattr(req, "_omni_data", None),
+                    "action_scoring_role",
+                    None,
+                )
+                == "candidate"
+                and str(
+                    (
+                        getattr(
+                            getattr(req, "_omni_data", None),
+                            "action_scoring_plan",
+                            None,
+                        )
+                        or {}
+                    ).get("logical_request_id", "")
+                )
+                in protected_logical_ids
+                for req in self.waiting_queue
+            )
+            if matching_suffix_waits:
+                return NextBatchPlan(batch_to_run=None, running_batch=running_batch)
+
         # A complete action-suffix cohort is published atomically immediately
         # after its shared prefix finishes.  Holding it for the generic prefill
         # coalescing deadline adds a fixed ~40-60 ms without collecting any
@@ -1927,10 +2004,13 @@ class OmniScheduler:
             for req in batch.reqs:
                 data = getattr(req, "_omni_data", None)
                 plan = getattr(data, "action_scoring_plan", None) or {}
+                latency_plan = getattr(data, "latency_priority_plan", None) or {}
                 extend = getattr(req, "extend_range", None)
                 members.append({
                     "request_id": req.rid,
-                    "stage": plan.get("stage", "generation"),
+                    "stage": plan.get(
+                        "stage", latency_plan.get("stage", "generation")
+                    ),
                     "turn_origin": plan.get("turn_origin"),
                     "admission_priority": plan.get("admission_priority"),
                     "session_id": plan.get("session_id"),

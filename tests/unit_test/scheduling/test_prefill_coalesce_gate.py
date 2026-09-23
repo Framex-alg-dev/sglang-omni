@@ -132,6 +132,89 @@ def test_complete_action_suffix_cohort_bypasses_coalesce_deadline(upstream):
     upstream.assert_called_once()
 
 
+def test_realtime_latency_prefill_is_admitted_before_normal_work(upstream, clock):
+    sched = _StubScheduler(coalesce_requests=0)
+    normal = _req(100.0)
+    priority = _req(100.0)
+    priority._omni_data = SimpleNamespace(
+        latency_priority_plan={"prefill_priority_s": 0.25}
+    )
+    sched.waiting_queue = [normal, priority]
+    seen = []
+
+    def select(owner, running):
+        seen.extend(owner.waiting_queue)
+        owner.waiting_queue = []
+        return NextBatchPlan(batch_to_run=_UPSTREAM_BATCH, running_batch=running)
+
+    upstream.side_effect = select
+    clock.return_value = 100.1
+    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
+    assert seen == [priority]
+    assert sched.waiting_queue == [normal]
+
+
+def test_realtime_latency_prefill_priority_expires(upstream, clock):
+    sched = _StubScheduler(coalesce_requests=0)
+    normal = _req(100.0)
+    priority = _req(100.0)
+    priority._omni_data = SimpleNamespace(
+        latency_priority_plan={"prefill_priority_s": 0.25}
+    )
+    sched.waiting_queue = [normal, priority]
+    seen = []
+
+    def select(owner, running):
+        seen.extend(owner.waiting_queue)
+        owner.waiting_queue = []
+        return NextBatchPlan(batch_to_run=_UPSTREAM_BATCH, running_batch=running)
+
+    upstream.side_effect = select
+    clock.return_value = 100.3
+    assert sched.get_new_batch_prefill() is _UPSTREAM_BATCH
+    assert seen == [normal, priority]
+
+
+@pytest.mark.parametrize(
+    "steps,elapsed,logical_request_id,blocked",
+    [
+        (1, 0.01, "turn-a", True),
+        (17, 0.19, "turn-a", True),
+        (18, 0.01, "turn-a", False),
+        (1, 0.21, "turn-a", False),
+        (1, 0.01, "turn-b", False),
+    ],
+)
+def test_turn_intent_decode_protection_is_bounded_and_turn_scoped(
+    upstream, clock, steps, elapsed, logical_request_id, blocked
+):
+    sched = _StubScheduler(coalesce_requests=0)
+    intent_req = _req(99.0)
+    intent_req._latency_decode_started_at = 100.0
+    intent_req._omni_data = SimpleNamespace(
+        generation_steps=steps,
+        latency_priority_plan={
+            "logical_request_id": "turn-a",
+            "decode_protect_steps": 18,
+            "decode_protect_s": 0.20,
+        },
+    )
+    sched.running_batch = SimpleNamespace(
+        is_empty=lambda: False,
+        reqs=[intent_req],
+    )
+    suffix = _req(99.0)
+    suffix._omni_data = SimpleNamespace(
+        action_scoring_role="candidate",
+        action_scoring_plan={"logical_request_id": logical_request_id},
+    )
+    sched.waiting_queue = [suffix]
+    clock.return_value = 100.0 + elapsed
+
+    assert (sched.get_new_batch_prefill() is None) is blocked
+    assert upstream.call_count == (0 if blocked else 1)
+
+
 def test_small_queue_is_held_until_oldest_expires(upstream, clock):
     sched = _StubScheduler(coalesce_requests=8, wait_ms=60.0)
     sched.waiting_queue = [_req(100.0), _req(100.01)]

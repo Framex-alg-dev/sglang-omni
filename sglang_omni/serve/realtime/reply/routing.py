@@ -20,7 +20,10 @@ from sglang_omni.serve.realtime.protocol.models import (
     ReplySpeechModeResult,
     TurnBuffer,
 )
-from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
+from sglang_omni.serve.realtime.turn_intent import (
+    VISUAL_GENERAL_ANSWER_GATE,
+    VISUAL_GESTURE_ANSWER_GATE,
+)
 from sglang_omni.utils.structured_logs import emit_structured_log as _base_emit_structured_log
 
 
@@ -436,6 +439,7 @@ class ReplyRoutingComponent:
                 )
             if (
                 turn.intent.speech == "generated"
+                and turn.intent.visual_scope_gate != VISUAL_GENERAL_ANSWER_GATE
                 and turn.intent.body_intent != "capability"
                 and turn.intent.body_mode == "none"
                 and not turn.intent.body
