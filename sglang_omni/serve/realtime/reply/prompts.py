@@ -78,6 +78,31 @@ class ReplyPromptComponent:
             ),
         }
 
+    def _reply_spoken_output_only_reminder_part(self) -> dict[str, str]:
+        """Keep the final generation contract adjacent to the user request."""
+
+        return {
+            "type": "text",
+            "text": self._prompt(
+                zh=(
+                    "[本次回复最终输出约束]\n"
+                    "只输出当前角色实际说出口、会直接交给 TTS 的语言。若当前请求同时包含"
+                    "动作、姿势、表情或眼神与要说的话，只输出要说的话；动作和表情由独立"
+                    "链路执行。绝不能用 Markdown、星号、括号、方括号、标签、旁白或英文"
+                    "舞台说明描写动作和表情。"
+                ),
+                en=(
+                    "[Final output contract for this reply]\n"
+                    "Output only words the current character actually speaks and that can be "
+                    "sent directly to TTS. If the current request combines an action, pose, "
+                    "facial expression, or gaze with speech, output only the requested speech; "
+                    "separate pipelines execute actions and expressions. Never render an action "
+                    "or expression as Markdown, asterisks, parentheses, brackets, tags, narration, "
+                    "or a stage direction."
+                ),
+            ),
+        }
+
     def _visual_arithmetic_operand_output_part(self) -> dict[str, str]:
         numeric_rules_zh = numeric_visual_observation_rules_zh()
         return {

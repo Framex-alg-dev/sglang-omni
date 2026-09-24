@@ -31,7 +31,7 @@ async def pace_turn(previous, interval):
 
 def summarize(rows):
     summary = {}
-    for concurrency in (1, 2):
+    for concurrency in sorted({row["concurrency"] for row in rows}):
         subset = [r for r in rows if r["concurrency"] == concurrency]
         metrics = {}
         for name in ("turn.action.ready", "response.audio.delta"):
@@ -58,7 +58,10 @@ async def evaluate(args):
                 a["candidate_id"] for c in catalog["categories"] for a in c["children"]})]},
     }
     if args.session:
-        session.update(json.loads(args.session.read_text()))
+        session_override = json.loads(args.session.read_text())
+        if args.session_reply_only:
+            session_override.pop("action", None)
+        session.update(session_override)
     cases = json.loads(args.cases.read_text()) if args.cases else [
         {"id": "chat", "text": "你好，简单介绍一下自己。"},
         {"id": "wave", "text": "挥挥手，再说你好。"},
@@ -90,7 +93,7 @@ async def evaluate(args):
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
     try:
-        for concurrency in (1, 2):
+        for concurrency in args.concurrency:
             sockets = []
             previous_starts = {}
             try:
@@ -118,6 +121,8 @@ async def evaluate(args):
                                 "iteration": iteration, "case_id": case["id"],
                                 "session_id": result["session_id"], "turn_id": result["turn_id"],
                                 "status": result["status"], "action": result.get("action"),
+                                "reply": result.get("reply"),
+                                "expression": result.get("expression"),
                                 "checks": judge(case, result, catalog) if case.get("expected") else {},
                                 "timing": result.get("timing"), "wire_first_ms": first, "events": events}
                         results = await asyncio.gather(*(one(i, ws) for i, ws in enumerate(sockets)), return_exceptions=True)
@@ -142,16 +147,31 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="ws://127.0.0.1:18007/v1/session/realtime")
     parser.add_argument("--session", type=Path)
+    parser.add_argument(
+        "--session-reply-only",
+        action="store_true",
+        help="Reuse persona/reply fields but keep the current synthetic action catalog",
+    )
     parser.add_argument("--cases", type=Path)
     parser.add_argument("--image", type=Path, help="Append one fixed JPEG to every turn; no video pacing")
     parser.add_argument("--case-base", type=Path, default=ROOT)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        action="append",
+        choices=(1, 2),
+        default=None,
+        help="Concurrency group to run; repeat for both (default: 1 and 2)",
+    )
     parser.add_argument("--turn-interval", type=float, default=0,
                         help="Minimum start-to-start seconds per session; never overlap turns")
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--label", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.concurrency is None:
+        args.concurrency = [1, 2]
     if args.repeats < 1 or args.timeout <= 0 or not math.isfinite(args.turn_interval) or args.turn_interval < 0:
         parser.error("repeats/timeout must be positive; turn-interval must be finite and nonnegative")
     asyncio.run(evaluate(args))

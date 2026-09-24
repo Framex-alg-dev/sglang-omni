@@ -661,6 +661,25 @@ class ProvisionalReplyComponent:
         abort_request: bool,
     ) -> None:
         await self._abort_reply_tts(tts_state)
+        # Fence fallback before cancelling the local stream. Async-generator
+        # teardown may surface as RuntimeError rather than CancelledError; the
+        # routed client must already know that this request is being discarded.
+        mark_intentional_abort = getattr(
+            self.client, "mark_intentional_abort", None
+        )
+        if (
+            abort_request
+            and state.request_id is not None
+            and callable(mark_intentional_abort)
+        ):
+            await mark_intentional_abort(state.request_id)
+
+        # Request local cancellation before the remote abort, but do not wait
+        # for stream teardown yet. Waiting here can deadlock an in-flight
+        # ``anext``/``aclose`` pair until the HTTP timeout expires.
+        if state.task is not None and state.task is not asyncio.current_task():
+            if not state.task.done():
+                state.task.cancel()
         if abort_request and state.request_id is not None:
             abort = getattr(self.client, "abort", None)
             if callable(abort):
@@ -676,8 +695,6 @@ class ProvisionalReplyComponent:
                         exc_info=True,
                     )
         if state.task is not None and state.task is not asyncio.current_task():
-            if not state.task.done():
-                state.task.cancel()
             await asyncio.gather(state.task, return_exceptions=True)
 
     @staticmethod

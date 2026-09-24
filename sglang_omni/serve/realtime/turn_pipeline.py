@@ -2432,6 +2432,33 @@ class TurnPipeline:
 
             action_task: asyncio.Task[Any] | None = None
             action_started: float | None = None
+            performance_admission_released = asyncio.Event()
+
+            def release_performance_admission(
+                completed: asyncio.Task[Any] | None = None,
+                *,
+                reason: str | None = None,
+            ) -> None:
+                if performance_admission_released.is_set():
+                    return
+                if reason is None and completed is not None:
+                    reason = (
+                        "cancelled"
+                        if completed.cancelled()
+                        else "failed"
+                        if completed.exception() is not None
+                        else "completed"
+                    )
+                performance_admission_released.set()
+                emit_structured_log(
+                    "performance",
+                    "performance_admission_released",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    reason=reason or "not_required",
+                    after_commit_ms=self._after_commit_ms(turn),
+                )
 
             def start_action_scoring() -> None:
                 nonlocal action_task, action_started
@@ -2441,6 +2468,11 @@ class TurnPipeline:
                     or early_expression
                     or visual_gesture_answer
                     or body_action_not_requested
+                    or (
+                        turn.intent is not None
+                        and bool(turn.intent.face)
+                        and turn.intent.body_mode == "none"
+                    )
                 ):
                     return
                 action_started = time.perf_counter()
@@ -2505,6 +2537,12 @@ class TurnPipeline:
                     ),
                     name=f"session-action-{self.session_id}-{turn.turn_id}",
                 )
+                # Performance uses the same GPU as action scoring.  Create its
+                # task eagerly, but do not admit its model request until the
+                # action task has left the GPU-critical path.  In particular,
+                # the one-second reply/history latency window must not allow a
+                # performance batch to contend with a still-running action.
+                action_task.add_done_callback(release_performance_admission)
 
             # Only enforce mode may select an action from the raw turn before
             # the canonical intent is ready: its grouped labels are the active
@@ -2780,6 +2818,8 @@ class TurnPipeline:
                     "action" in self.modalities
                     and "expression" in self.modalities
                     and not self.direct_action_selection
+                    and not action_ready_sent
+                    and (action_task is None or not action_task.done())
                     and decision.request_scope == "expression_only"
                     and decision.expression is not None
                     and not decision.expression_unsupported
@@ -2817,6 +2857,119 @@ class TurnPipeline:
                         body_scoring_cancel_requested=action_task is not None,
                     )
                 return decision
+
+            async def infer_performance_after_action() -> PerformanceDecision:
+                wait_started = time.perf_counter()
+                await performance_admission_released.wait()
+                emit_structured_log(
+                    "performance",
+                    "performance_admission_acquired",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    trace_id=turn.trace_id,
+                    wait_ms=round(
+                        (time.perf_counter() - wait_started) * 1000.0, 3
+                    ),
+                    after_commit_ms=self._after_commit_ms(turn),
+                )
+                return await infer_performance_and_release()
+
+            if "expression" in self.modalities or "audio" in self.modalities:
+                if "audio" in self.modalities:
+                    if turn.tts_instruction_future is None:
+                        turn.tts_instruction_future = (
+                            asyncio.get_running_loop().create_future()
+                        )
+                    if turn.intent is not None:
+                        turn.tts_instruction_future.set_result(
+                            turn.intent.tts_instruction()
+                        )
+                        emit_structured_log(
+                            "performance",
+                            "voice_plan_released",
+                            session_id=self.session_id,
+                            turn_id=turn.turn_id,
+                            trace_id=turn.trace_id,
+                            after_commit_ms=self._after_commit_ms(turn),
+                            voice_tone=turn.intent.voice_tone,
+                            voice_pace=turn.intent.voice_pace,
+                        )
+                if (
+                    visual_gesture_answer
+                    and turn.intent is not None
+                    and bool(turn.intent.face)
+                ):
+                    # Unified intent has already normalized an explicitly
+                    # requested face. Resolve the small fixed expression set
+                    # deterministically so the visual-arithmetic fast path does
+                    # not add a performance-model request or delay its action.
+                    performance = self._explicit_face_performance_decision(
+                        turn.intent.face
+                    )
+                    performance = replace(
+                        performance,
+                        # The numeric answer already owns the body channel;
+                        # the explicit face is an independent second channel,
+                        # not an expression-only turn that may suppress it.
+                        request_scope="both",
+                        tts_instruction=turn.intent.tts_instruction(),
+                    )
+                    expression = performance.expression
+                    emit_structured_log(
+                        "performance",
+                        "visual_answer_explicit_face_resolved",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        trace_id=turn.trace_id,
+                        face_task=turn.intent.face,
+                        expression_candidate_id=(
+                            expression.get("candidate_id")
+                            if expression is not None
+                            else None
+                        ),
+                        expression_unsupported=(
+                            performance.expression_unsupported
+                        ),
+                        model_request_added=False,
+                        after_commit_ms=self._after_commit_ms(turn),
+                    )
+                    if (
+                        "expression" in self.modalities
+                        and expression is not None
+                        and not performance.expression_unsupported
+                    ):
+                        await send_expression_ready(expression)
+                elif (
+                    not visual_gesture_answer
+                    and not visual_general_answer
+                    and ("expression" in self.modalities or turn.intent is None)
+                ):
+                    performance_task = track_branch(
+                        infer_performance_after_action(),
+                        name=(
+                            f"session-performance-{self.session_id}-"
+                            f"{turn.turn_id}"
+                        ),
+                    )
+                else:
+                    performance = replace(
+                        self._default_performance_decision(),
+                        tts_instruction=turn.intent.tts_instruction(),
+                    )
+
+            action_scoring_expected = bool(
+                "action" in self.modalities
+                and not early_expression
+                and not visual_gesture_answer
+                and not body_action_not_requested
+                and not (
+                    turn.intent is not None
+                    and bool(turn.intent.face)
+                    and turn.intent.body_mode == "none"
+                )
+            )
+            if not action_scoring_expected:
+                release_performance_admission(reason="action_not_required")
 
             action_priority_enabled = bool(
                 turn.turn_origin == TURN_ORIGIN_USER
@@ -2876,84 +3029,12 @@ class TurnPipeline:
                 # History routing and Category are the latency-critical
                 # branches.  Give a previously-created route task one event
                 # loop turn to submit, then start Category without waiting for
-                # the route result.  Performance/TTS control is created only
-                # afterwards so admission priority, rather than create_task
-                # timing, governs contention.
+                # the route result. Performance is already represented by an
+                # owned task, but its GPU request remains behind the strict
+                # action-completion admission gate.
                 if reply_history_route_task is not None:
                     await asyncio.sleep(0)
                 start_action_scoring()
-
-            if "expression" in self.modalities or "audio" in self.modalities:
-                if "audio" in self.modalities:
-                    if turn.tts_instruction_future is None:
-                        turn.tts_instruction_future = (
-                            asyncio.get_running_loop().create_future()
-                        )
-                    if turn.intent is not None:
-                        turn.tts_instruction_future.set_result(turn.intent.tts_instruction())
-                        emit_structured_log(
-                            "performance", "voice_plan_released",
-                            session_id=self.session_id, turn_id=turn.turn_id,
-                            trace_id=turn.trace_id, after_commit_ms=self._after_commit_ms(turn),
-                            voice_tone=turn.intent.voice_tone, voice_pace=turn.intent.voice_pace,
-                        )
-                if (
-                    visual_gesture_answer
-                    and turn.intent is not None
-                    and bool(turn.intent.face)
-                ):
-                    # Unified intent has already normalized an explicitly
-                    # requested face. Resolve the small fixed expression set
-                    # deterministically so the visual-arithmetic fast path does
-                    # not add a performance-model request or delay its action.
-                    performance = self._explicit_face_performance_decision(
-                        turn.intent.face
-                    )
-                    performance = replace(
-                        performance,
-                        # The numeric answer already owns the body channel;
-                        # the explicit face is an independent second channel,
-                        # not an expression-only turn that may suppress it.
-                        request_scope="both",
-                        tts_instruction=turn.intent.tts_instruction(),
-                    )
-                    expression = performance.expression
-                    emit_structured_log(
-                        "performance",
-                        "visual_answer_explicit_face_resolved",
-                        session_id=self.session_id,
-                        turn_id=turn.turn_id,
-                        trace_id=turn.trace_id,
-                        face_task=turn.intent.face,
-                        expression_candidate_id=(
-                            expression.get("candidate_id")
-                            if expression is not None
-                            else None
-                        ),
-                        expression_unsupported=(
-                            performance.expression_unsupported
-                        ),
-                        model_request_added=False,
-                        after_commit_ms=self._after_commit_ms(turn),
-                    )
-                    if (
-                        "expression" in self.modalities
-                        and expression is not None
-                        and not performance.expression_unsupported
-                    ):
-                        await send_expression_ready(expression)
-                elif (
-                    not visual_gesture_answer
-                    and not visual_general_answer
-                    and ("expression" in self.modalities or turn.intent is None)
-                ):
-                    performance_task = track_branch(
-                        infer_performance_and_release(),
-                        name=f"session-performance-{self.session_id}-{turn.turn_id}",
-                    )
-                else:
-                    performance = replace(self._default_performance_decision(),
-                                          tts_instruction=turn.intent.tts_instruction())
 
             knowledge_eligible = bool(
                 self.knowledge_binding is not None
@@ -3016,11 +3097,6 @@ class TurnPipeline:
                 and turn.turn_origin == TURN_ORIGIN_USER
                 and reply_history_route is not None
                 and reply_history_route.reply_mode == REPLY_MODE_LANGUAGE_REQUIRED
-                and turn.intent is not None
-                and (
-                    turn.intent.speech_independent_of_body
-                    or turn.intent.body_intent == "capability"
-                )
                 and not visual_gesture_answer
             )
             preserve_visual_answer_speech = bool(
@@ -3719,11 +3795,7 @@ class TurnPipeline:
                 )
                 suppress_reply_for_unsupported_action = bool(
                     action_unsupported
-                    and not (
-                        preserve_language_reply_on_unsupported_action
-                        and turn.intent is not None
-                        and turn.intent.body_intent == "capability"
-                    )
+                    and not preserve_language_reply_on_unsupported_action
                     and not preserve_visual_answer_speech
                 )
                 if provisional_state is not None:
@@ -3817,11 +3889,7 @@ class TurnPipeline:
             )
             suppress_reply_for_unsupported_action = bool(
                 action_unsupported
-                and not (
-                    preserve_language_reply_on_unsupported_action
-                    and turn.intent is not None
-                    and turn.intent.body_intent == "capability"
-                )
+                and not preserve_language_reply_on_unsupported_action
                 and not preserve_visual_answer_speech
             )
             if (

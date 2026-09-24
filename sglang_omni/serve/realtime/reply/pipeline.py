@@ -408,6 +408,7 @@ class ReplyPipeline:
             )
             if language_lock_reminder is not None:
                 parts.append(language_lock_reminder)
+            parts.append(self._reply_spoken_output_only_reminder_part())
         if visual_gesture_answer:
             parts.append(self._visual_arithmetic_operand_output_part())
         if parts:

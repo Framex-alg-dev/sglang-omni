@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from sglang_omni.client.realtime_executor import (
+    action_score_request_from_wire,
     completion_to_wire,
     frame_wire,
     internal_model_api_enabled,
@@ -107,6 +108,30 @@ def register_internal_realtime_model_api(app: FastAPI) -> None:
         except Exception as exc:
             logger.exception(
                 "Internal realtime completion failed request_id=%s", request_id
+            )
+            payload = {
+                "kind": "error",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        return Response(content=pack_wire(payload), media_type=_WIRE_MEDIA_TYPE)
+
+    @app.post("/internal/realtime-model/action-score")
+    async def internal_action_score(request: Request) -> Response:
+        envelope = await read_envelope(request)
+        request_id = str(envelope.get("request_id") or "")
+        if not request_id:
+            raise HTTPException(status_code=400, detail="request_id is required")
+        try:
+            model_request = action_score_request_from_wire(envelope)
+            result = await app.state.client.score_action_suffixes(model_request)
+            payload = {"kind": "result", "result": result}
+        except asyncio.CancelledError:
+            await app.state.client.abort(request_id)
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Internal realtime action scoring failed request_id=%s", request_id
             )
             payload = {
                 "kind": "error",

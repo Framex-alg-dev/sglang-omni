@@ -25,6 +25,12 @@ from sglang_omni.client.types import (
     SamplingParams,
     UsageInfo,
 )
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+    ActionSuffixScoreResult,
+    CandidateScore,
+)
 from sglang_omni.serve.internal_realtime_model_api import (
     register_internal_realtime_model_api,
 )
@@ -39,6 +45,7 @@ class RecordingClient:
         self.aborts: list[str] = []
         self.prefills: list[str] = []
         self.released_sessions: list[str] = []
+        self.score_stages: list[str] = []
 
     async def completion(
         self,
@@ -90,6 +97,26 @@ class RecordingClient:
     ) -> dict[str, Any]:
         self.released_sessions.append(session_instance_id)
         return {"released": True}
+
+    async def score_action_suffixes(self, request):
+        self.score_stages.append(request.stage)
+        if self.fail_before:
+            raise ConnectionError("executor unavailable")
+        return ActionSuffixScoreResult(
+            request_id=request.request_id,
+            model=request.model,
+            prefix_cached=True,
+            scores=[
+                CandidateScore(
+                    candidate_id=request.candidates[0].candidate_id,
+                    token_count=1,
+                    mean_logprob=-0.1,
+                    mean_nll=0.1,
+                    ppl=1.1,
+                    token_scores=[],
+                )
+            ],
+        )
 
     def health(self) -> dict[str, Any]:
         return {"running": True}
@@ -143,21 +170,60 @@ async def test_routed_client_moves_only_allowlisted_reply_tasks() -> None:
                 "session_reply",
                 "session_pure_action_reply",
                 "session_action_rejection",
+                "session_turn_intent",
+                "session_turn_intent_prewarm",
+                "session_memory_extract",
+                "session_visual_arithmetic_probe",
+                "session_visual_arithmetic_prewarm",
             )
         )
     ]
     control_result = await client.completion(
-        make_request("session_turn_intent"), request_id="control-request"
+        make_request("session_visual_gesture_probe"), request_id="control-request"
     )
 
-    assert [result.text for result in reply_results] == ["reply"] * 3
+    assert [result.text for result in reply_results] == ["reply"] * 8
     assert control_result.text == "control"
-    assert reply.completions == [
-        "reply-request-0",
-        "reply-request-1",
-        "reply-request-2",
-    ]
+    assert reply.completions == [f"reply-request-{index}" for index in range(8)]
     assert control.completions == ["control-request"]
+
+
+def make_score_request(stage: str) -> ActionSuffixScoreRequest:
+    return ActionSuffixScoreRequest(
+        request_id=f"score-{stage}", model="model", prefix="result:",
+        language="en", candidates=[ActionScoreCandidate("R0", "R0")],
+        audios=[], images=[], sample_rate=16000, stage=stage,
+        session_id="sess-test", session_instance_id="instance-test",
+    )
+
+
+@pytest.mark.asyncio
+async def test_routed_client_moves_reply_score_stages_only() -> None:
+    control = RecordingClient()
+    reply = RecordingClient()
+    client = RoutedRealtimeModelClient(control, reply)  # type: ignore[arg-type]
+
+    await client.score_action_suffixes(make_score_request("reply_history_route"))
+    await client.score_action_suffixes(make_score_request("performance"))
+
+    assert reply.score_stages == ["reply_history_route"]
+    assert control.score_stages == ["performance"]
+
+
+@pytest.mark.asyncio
+async def test_reply_score_falls_back_to_control() -> None:
+    control = RecordingClient()
+    reply = RecordingClient(fail_before=True)
+    client = RoutedRealtimeModelClient(control, reply)  # type: ignore[arg-type]
+
+    result = await client.score_action_suffixes(
+        make_score_request("reply_speech_mode")
+    )
+
+    assert result.request_id == "score-reply_speech_mode"
+    assert reply.score_stages == ["reply_speech_mode"]
+    assert reply.aborts == ["score-reply_speech_mode"]
+    assert control.score_stages == ["reply_speech_mode"]
 
 
 @pytest.mark.asyncio
@@ -232,6 +298,9 @@ async def test_remote_executor_stream_and_abort_round_trip(monkeypatch) -> None:
         result = await remote.completion(
             make_request("session_reply"), request_id="remote-completion"
         )
+        score = await remote.score_action_suffixes(
+            make_score_request("reply_history_route")
+        )
         aborted = await remote.abort("remote-abort")
         released = await remote.release_session_cache("remote-session")
     finally:
@@ -241,10 +310,13 @@ async def test_remote_executor_stream_and_abort_round_trip(monkeypatch) -> None:
     assert chunks[-1].usage is not None
     assert chunks[-1].usage.total_tokens == 11
     assert result.text == "remote"
+    assert score.request_id == "score-reply_history_route"
+    assert score.scores[0].candidate_id == "R0"
     assert aborted.success is True
     assert released == {"released": True}
     assert local.streams == ["remote-stream"]
     assert local.completions == ["remote-completion"]
+    assert local.score_stages == ["reply_history_route"]
     assert local.aborts == ["remote-abort"]
     assert local.released_sessions == ["remote-session"]
 
@@ -307,6 +379,92 @@ async def test_routed_abort_reaches_active_reply_executor() -> None:
     assert result.success is True
     assert reply.aborts == ["active-reply"]
     assert control.aborts == []
+
+
+@pytest.mark.asyncio
+async def test_intentional_remote_abort_never_falls_back_to_control() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class AbortedReply(RecordingClient):
+        async def completion_stream(
+            self, request, *, request_id, audio_format="wav"
+        ):
+            self.streams.append(request_id)
+            started.set()
+            await release.wait()
+            raise ConnectionError("remote request aborted")
+            yield  # pragma: no cover
+
+        async def abort(
+            self,
+            request_id: str,
+            level: AbortLevel = AbortLevel.SOFT,
+        ) -> AbortResult:
+            self.aborts.append(request_id)
+            release.set()
+            return AbortResult(success=True, level_applied=level)
+
+    control = RecordingClient(text="must-not-run")
+    reply = AbortedReply()
+    client = RoutedRealtimeModelClient(control, reply)  # type: ignore[arg-type]
+
+    async def consume() -> None:
+        async for _ in client.completion_stream(
+            make_request("session_reply"), request_id="intentional-abort"
+        ):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    result = await client.abort("intentional-abort")
+
+    assert result.success is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert reply.aborts == ["intentional-abort"]
+    assert control.streams == []
+
+
+@pytest.mark.asyncio
+async def test_marked_stream_cancel_teardown_error_never_falls_back() -> None:
+    started = asyncio.Event()
+
+    class BrokenClosingStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self) -> None:
+            raise RuntimeError("aclose(): asynchronous generator is already running")
+
+    class BrokenClosingReply(RecordingClient):
+        def completion_stream(self, request, *, request_id, audio_format="wav"):
+            self.streams.append(request_id)
+            return BrokenClosingStream()
+
+    control = RecordingClient(text="must-not-run")
+    reply = BrokenClosingReply()
+    client = RoutedRealtimeModelClient(control, reply)  # type: ignore[arg-type]
+
+    async def consume() -> None:
+        async for _ in client.completion_stream(
+            make_request("session_reply"), request_id="marked-cancel"
+        ):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await client.mark_intentional_abort("marked-cancel")
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert reply.streams == ["marked-cancel"]
+    assert control.streams == []
 
 
 @pytest.mark.asyncio

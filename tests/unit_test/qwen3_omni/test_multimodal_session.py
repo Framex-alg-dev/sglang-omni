@@ -12,6 +12,7 @@ from PIL import Image
 from starlette.websockets import WebSocketState
 
 import sglang_omni.serve.realtime.multimodal as multimodal_module
+import sglang_omni.serve.realtime.turn_pipeline as turn_pipeline_module
 from sglang_omni.client.client import Client
 from sglang_omni.client.types import CompletionResult, CompletionStreamChunk, UsageInfo
 from sglang_omni.models.qwen3_omni.action_scoring import (
@@ -3665,7 +3666,10 @@ def assert_generic_action_scoring_was_bypassed(client: Any) -> None:
 @pytest.mark.parametrize("outcome", ["completed", "timeout", "failed", "cancelled"])
 async def test_action_priority_window_releases_other_models(monkeypatch, outcome):
     import sglang_omni.serve.realtime.turn_pipeline as pipeline
-    entered, release, other_started = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    other_started = asyncio.Event()
+    performance_started = asyncio.Event()
     records = []
     original_log = pipeline.emit_structured_log
 
@@ -3687,6 +3691,7 @@ async def test_action_priority_window_releases_other_models(monkeypatch, outcome
 
         async def score_action_suffixes(self, request):
             if request.stage == "performance":
+                performance_started.set()
                 other_started.set()
             return await super().score_action_suffixes(request)
 
@@ -3724,7 +3729,12 @@ async def test_action_priority_window_releases_other_models(monkeypatch, outcome
             await asyncio.wait_for(other_started.wait(), 2)
             if outcome == "timeout":
                 assert not task.done()  # timeout did not cancel body scoring
+                # Reply/history work is released by the bounded latency window,
+                # but performance shares GPU0 with action and must remain gated
+                # until the action task actually leaves its critical path.
+                assert not performance_started.is_set()
                 release.set()
+                await asyncio.wait_for(performance_started.wait(), 2)
     finally:
         release.set()
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 3)
@@ -7274,12 +7284,112 @@ async def test_parallel_unsupported_category_waits_for_language_route() -> None:
         for event in ws.events
         if event["type"] == "response.provisional.resolved"
     )
-    assert resolved["status"] == "discarded"
-    assert resolved["reason"] in {"category_unsupported", "child_unsupported"}
+    assert resolved["status"] == "promoted"
+    assert resolved["reason"] == "language_required"
     result = ws.events[-1]
     assert result["type"] == "turn.result"
     assert result["reply"]["text"] == "你好呀，今天过得怎么样？"
     assert result.get("outputs", result.get("modalities"))["text"] == "completed"
+    assert session.reply_history_turns[-1].model_visible is True
+    assert session.reply_history_turns[-1].history_kind == "reply"
+
+
+@pytest.mark.asyncio
+async def test_independent_language_reply_survives_unsupported_body_and_enters_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def infer_mixed_turn(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        body_intent_future=None,
+    ):
+        del session, turn, audios, images, image_roles
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        if body_intent_future is not None and not body_intent_future.done():
+            body_intent_future.set_result(
+                EarlyBodyIntent(body_intent="perform", body_task="挥手")
+            )
+        return TurnIntent(
+            speech="verbatim",
+            text="大家晚上好",
+            body="挥手",
+            body_mode="perform",
+            face="",
+            history=False,
+            body_intent="perform",
+            speech_independent_of_body=True,
+        )
+
+    monkeypatch.setattr(
+        turn_pipeline_module,
+        "infer_turn_intent",
+        infer_mixed_turn,
+    )
+    ws = FakeWebSocket()
+    client = FusionFakeClient()
+    session = make_session(ws, client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-independent-language-history",
+            "language": "zh",
+            "instructions": "自然回复。",
+            "unsupported_action_text": "这个动作暂时做不了。",
+            "fallback_category_ids": ["00"],
+            "action_candidates": fusion_catalog(),
+        }
+    )
+
+    async def language_route(*args, **kwargs):
+        del args, kwargs
+        return multimodal_module.ReplyHistoryRouteResult(
+            decision="CURRENT_ONLY",
+            reply_mode="LANGUAGE_REQUIRED",
+        )
+
+    async def unsupported_body(*args, **kwargs):
+        del args
+        callback = kwargs.get("on_category_selected")
+        if callback is not None:
+            callback(None, "unsupported")
+        return (
+            {
+                "candidate_id": "000",
+                "action_id": "no_action",
+                "category_id": "00",
+                "execution_binding": {},
+                "execute": False,
+                "support_status": "unsupported",
+            },
+            [],
+            0.0,
+            {"category_decision_id": "UNSUPPORTED"},
+        )
+
+    session._classify_reply_history_requirement = language_route
+    session._score_action = unsupported_body
+    await session.handle_turn_start(
+        user_turn_start("turn-independent-language-history")
+    )
+    await session._dispatch_turn_commit(
+        user_turn_commit(
+            "turn-independent-language-history",
+            text="挥挥手，再说大家晚上好",
+        )
+    )
+    await asyncio.wait_for(session.active_turn.inference_task, timeout=1)
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["reply"]["text"] == "大家晚上好"
+    assert result["reply"]["text"] != "这个动作暂时做不了。"
+    assert session.reply_history_turns[-1].model_visible is True
+    assert session.reply_history_turns[-1].history_kind == "reply"
+    assert session.reply_history_turns[-1] in session._visible_reply_history_turns()
 
 
 @pytest.mark.asyncio
@@ -7344,6 +7454,71 @@ async def test_action_ready_does_not_wait_for_promoted_reply_tts_done() -> None:
     release_tts_done.set()
     await asyncio.wait_for(turn_task, timeout=1)
     assert ws.events[-1]["type"] == "turn.result"
+
+
+@pytest.mark.asyncio
+async def test_discarded_provisional_cancels_local_consumer_before_remote_abort() -> None:
+    cancellation_observed = asyncio.Event()
+    order: list[str] = []
+
+    class AbortOrderClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.aborted: list[str] = []
+
+        async def mark_intentional_abort(self, request_id: str) -> None:
+            assert request_id == "request-provisional-abort-order"
+            order.append("marked")
+
+        async def abort(self, request_id: str) -> None:
+            assert consumer.cancelling()
+            order.append("aborted")
+            self.aborted.append(request_id)
+
+    client = AbortOrderClient()
+    session = make_session(FakeWebSocket(), client)
+    turn = multimodal_module.TurnBuffer(
+        turn_id="turn-provisional-abort-order",
+        started_at=0.0,
+        audio=multimodal_module.RealtimeAudioBuffer(),
+        images=[],
+        audio_seqs=set(),
+        image_seqs=set(),
+        turn_origin="user",
+        text_role="user_input",
+    )
+
+    async def consume_remote_reply():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            order.append("cancelled")
+            cancellation_observed.set()
+            raise
+
+    consumer = asyncio.create_task(consume_remote_reply())
+    await asyncio.sleep(0)
+    state = multimodal_module.ProvisionalReplyState(
+        response_id="response-provisional-abort-order",
+        source="generated",
+        started_at=0.0,
+        created_after_commit_ms=0.0,
+        request_id="request-provisional-abort-order",
+        task=consumer,
+    )
+
+    await session._cleanup_discarded_provisional_reply(
+        turn,
+        state,
+        tts_state=None,
+        abort_request=True,
+    )
+
+    assert consumer.cancelled()
+    assert cancellation_observed.is_set()
+    assert client.aborted == ["request-provisional-abort-order"]
+    assert order[0] == "marked"
+    assert set(order[1:]) == {"aborted", "cancelled"}
 
 
 @pytest.mark.asyncio
@@ -7967,6 +8142,7 @@ async def test_reply_without_instructions_has_global_role_system_prompt() -> Non
                 "camera."
             ),
         },
+        session._reply_spoken_output_only_reminder_part(),
     ]
 
 
@@ -8049,6 +8225,81 @@ def test_reply_role_system_prompt_has_equivalent_english_rule() -> None:
     assert "mandatory output-language constraint" not in prompt
     assert "explain the language restriction" not in prompt
     assert prompt.endswith("choose the language from the current request.")
+
+
+@pytest.mark.parametrize(
+    ("language", "required_fragments"),
+    [
+        (
+            "zh",
+            (
+                "[本次回复最终输出约束]",
+                "只输出当前角色实际说出口、会直接交给 TTS 的语言",
+                "只输出要说的话",
+                "动作和表情由独立链路执行",
+                "英文舞台说明",
+            ),
+        ),
+        (
+            "en",
+            (
+                "[Final output contract for this reply]",
+                "sent directly to TTS",
+                "output only the requested speech",
+                "separate pipelines execute actions and expressions",
+                "stage direction",
+            ),
+        ),
+    ],
+)
+def test_reply_spoken_output_contract_is_repeated_near_generation(
+    language: str,
+    required_fragments: tuple[str, ...],
+) -> None:
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.language = language
+
+    reminder = session._reply_spoken_output_only_reminder_part()["text"]
+
+    for fragment in required_fragments:
+        assert fragment in reminder
+
+    # Payload extraction belongs to the turn-intent contract. Keeping concrete
+    # examples out of this last-mile format guard avoids duplicated semantics.
+    assert "大家晚上好" not in reminder
+    assert "welcome to the show" not in reminder
+
+
+def test_turn_intent_prompt_cleanly_separates_verbatim_and_generated_speech() -> None:
+    from sglang_omni.serve.realtime.turn_intent import SYSTEM
+
+    assert "text只保留要实际说出的正文" in SYSTEM
+    assert "不含身体动作、表情、说话指令框架或框架中的受众说明" in SYSTEM
+    assert "没有给出可直接说出的正文时用generated" in SYSTEM
+    assert "混合请求中的独立语言任务必须设置speech_independent_of_body=true" in SYSTEM
+    assert (
+        '挥手，再跟观众说一句大家晚上好 -> '
+        '{"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"挥手",'
+        '"speech":"verbatim","reaction":"none","text":"大家晚上好",'
+        '"speech_independent_of_body":true}'
+    ) in SYSTEM
+    assert (
+        '挥手，再用一句话欢迎观众 -> '
+        '{"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"挥手",'
+        '"speech":"generated","reaction":"none","text":"用一句话欢迎观众",'
+        '"speech_independent_of_body":true}'
+    ) in SYSTEM
+    assert (
+        'Smile and tell the audience welcome to the show -> '
+        '{"visual":"NO_CURRENT_VIEW","body_intent":"none","face_task":"smile",'
+        '"speech":"verbatim","reaction":"none","text":"welcome to the show"}'
+    ) in SYSTEM
+    assert (
+        'Smile and welcome the audience in one sentence -> '
+        '{"visual":"NO_CURRENT_VIEW","body_intent":"none","face_task":"smile",'
+        '"speech":"generated","reaction":"none",'
+        '"text":"welcome the audience in one sentence"}'
+    ) in SYSTEM
 
 
 def test_reply_role_system_prompt_covers_chinese_relationship_pronouns() -> None:
@@ -8387,7 +8638,8 @@ async def test_podcast_reply_context_is_scoped_before_current_user_input() -> No
         {"type": "audio"},
         {"type": "text", "text": "你可以摸摸自己的脸颊吗？"},
     ]
-    assert current_content[-1] == session._reply_no_user_camera_context_part()
+    assert current_content[-2] == session._reply_no_user_camera_context_part()
+    assert current_content[-1] == session._reply_spoken_output_only_reminder_part()
 
 
 def test_podcast_reply_context_scope_has_equivalent_english_rule() -> None:
@@ -8530,9 +8782,10 @@ async def test_explicit_client_language_lock_is_reminded_after_current_user_text
 
     current_content = client.chat_requests[-1].messages[-1].content
     assert {"type": "text", "text": "用中文说个故事"} in current_content
-    assert current_content[-1] == (
+    assert current_content[-2] == (
         session._reply_current_turn_language_lock_reminder_part()
     )
+    assert current_content[-1] == session._reply_spoken_output_only_reminder_part()
 
 
 def test_reply_history_keeps_two_recent_unique_assistant_replies() -> None:
@@ -10946,6 +11199,7 @@ async def test_reply_uses_bounded_current_user_camera_images_and_drops_history(
         {"type": "text", "text": "看看我"},
         {"type": "text", "text": "只回答本轮问题。"},
         session._reply_user_camera_response_guard_part(),
+        session._reply_spoken_output_only_reminder_part(),
     ]
     assert "avatar-current" not in request.metadata["images"]
     assert request.metadata["images"][:2] == [
@@ -11006,13 +11260,61 @@ async def test_reply_uses_bounded_current_user_camera_images_and_drops_history(
                 "用户要求你看向、面向或靠近镜头等由你执行的动作。"
             ),
         },
+        session._reply_spoken_output_only_reminder_part(),
     ]
-    assert "不得声称已经看见用户" in next_request.messages[-1].content[-1]["text"]
+    assert "不得声称已经看见用户" in next_request.messages[-1].content[-2]["text"]
     assert "不得将历史消息或历史回复作为当前视觉证据" in (
-        next_request.messages[-1].content[-1]["text"]
+        next_request.messages[-1].content[-2]["text"]
     )
     assert "avatar-history" not in next_request.metadata["images"]
     assert "avatar-next" not in next_request.metadata["images"]
+
+
+@pytest.mark.asyncio
+async def test_verbatim_turn_intent_uses_exact_text_without_reply_generation() -> None:
+    client = FusionFakeClient()
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-verbatim-fast-path",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    turn = multimodal_module.TurnBuffer(
+        turn_id="turn-verbatim-fast-path",
+        started_at=0.0,
+        audio=multimodal_module.RealtimeAudioBuffer(),
+        images=[],
+        audio_seqs=set(),
+        image_seqs=set(),
+        turn_origin="user",
+        text_role="user_input",
+    )
+    turn.phase = "processing"
+    turn.request_base = "request-verbatim-fast-path"
+    turn.intent = TurnIntent(
+        speech="verbatim",
+        text="大家晚上好",
+        body="挥手",
+        body_mode="perform",
+        face="",
+        history=False,
+        body_intent="perform",
+        speech_independent_of_body=True,
+    )
+
+    reply_text, _ = await session._run_generated_reply(
+        turn,
+        [],
+        [],
+        [],
+        None,
+    )
+
+    assert reply_text == "大家晚上好"
+    assert client.reply_requests == []
 
 
 @pytest.mark.asyncio
@@ -13809,7 +14111,7 @@ async def test_session_start_prefills_flat_children_without_category_stage() -> 
     ("blocked_stage", "route_parallel"),
     [("category", True), ("child", True), ("route", True), ("route", False)],
 )
-async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
+async def test_performance_waits_for_action_critical_path_and_slow_route(
     blocked_stage, route_parallel, monkeypatch,
 ):
     records = []
@@ -13881,24 +14183,28 @@ async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
     await session.handle_turn_start(user_turn_start("early-face-turn"))
     task = asyncio.create_task(session.handle_turn_commit(user_turn_commit("early-face-turn", text="笑一个")))
     try:
+        await asyncio.wait_for(blocked.wait(), timeout=2)
+        if blocked_stage in {"category", "child"}:
+            await asyncio.sleep(0.02)
+            assert not ready.is_set()
+            assert not any(
+                event["type"] == "turn.expression.ready" for event in ws.events
+            )
+        release.set()
         await asyncio.wait_for(ready.wait(), timeout=2)
+        await asyncio.wait_for(task, timeout=2)
         types = [e["type"] for e in ws.events]
-        assert types.index("turn.expression.ready") < types.index("turn.action.ready")
-        assert "turn.result" not in types
         action = next(e["action"] for e in ws.events if e["type"] == "turn.action.ready")
         assert action["support_status"] == "not_required"
         assert action["execute"] is False
-        if blocked_stage != "route":
-            await asyncio.wait_for(cancellation_seen.wait(), timeout=1)
-            await asyncio.wait_for(audio_ready.wait(), timeout=1)
-            types = [e["type"] for e in ws.events]
-            assert types.index("turn.action.ready") < types.index("response.audio.delta")
-            assert "turn.result" not in types
-        else:
-            assert not cancellation_seen.is_set()  # Do not abort reply routing.
+        assert not cancellation_seen.is_set()
+        await asyncio.wait_for(audio_ready.wait(), timeout=1)
+        types = [e["type"] for e in ws.events]
+        assert "response.audio.delta" in types
     finally:
         release.set()
-        await asyncio.wait_for(task, timeout=2)
+        if not task.done():
+            await asyncio.wait_for(task, timeout=2)
     assert sum(e["type"] == "turn.action.ready" for e in ws.events) == 1
     assert sum(e["type"] == "turn.expression.ready" for e in ws.events) == 1
     assert any(e["type"] == "turn.result" for e in ws.events)
@@ -13909,7 +14215,7 @@ async def test_expression_ready_overtakes_body_cleanup_and_slow_route(
         assert len(requests) == len(results) == 1
         assert requests[0]["request_id"] == results[0]["request_id"]
         assert requests[0]["selected_category_ids"]
-        assert results[0]["status"] == "cancelled"
+        assert results[0]["status"] == "completed"
         assert results[0]["parent_computed_token_count"] is None
 
 
@@ -14007,8 +14313,8 @@ def test_runtime_reply_override_retains_mixed_instruction_contract(monkeypatch, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('winner,independent', [('P001', True), ('P201', True), ('P301', True)])
-async def test_optional_face_publishes_before_slow_body_only_when_independent(winner, independent):
+@pytest.mark.parametrize("winner", ["P001", "P201", "P301"])
+async def test_optional_face_waits_for_slow_body_action(winner):
     child_entered, release, face_ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
     class Socket(FakeWebSocket):
         async def send_text(self, value):
@@ -14037,12 +14343,9 @@ async def test_optional_face_publishes_before_slow_body_only_when_independent(wi
     task = asyncio.create_task(session.handle_turn_commit(user_turn_commit('early-optional-turn', text='你好')))
     try:
         await asyncio.wait_for(child_entered.wait(), 2)
-        if independent:
-            await asyncio.wait_for(face_ready.wait(), 1)
-            assert not any(event['type'] == 'turn.action.ready' for event in ws.events)
-        else:
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(face_ready.wait(), .05)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(face_ready.wait(), .05)
+        assert not any(event['type'] == 'turn.action.ready' for event in ws.events)
     finally:
         release.set()
         await asyncio.wait_for(task, 2)

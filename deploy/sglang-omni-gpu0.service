@@ -31,14 +31,15 @@ Environment=SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL=0
 Environment=SGLANG_OMNI_ACTION_SINGLE_TOKEN_MODE=off
 Environment=SGLANG_OMNI_ACTION_DECISION_MIN_MARGIN=0.10
 Environment=SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH=1
-# Keep the websocket/session/TTS owner on GPU0, while only the allowlisted
-# language-reply model calls use the private GPU1 executor.  Any connection
-# failure before streamed output automatically falls back to this GPU0 model.
+# Keep websocket/session/TTS state ownership on GPU0.  Allowlisted reply-side
+# generation and classification model calls use the private GPU1 executor.
+# Any connection failure before visible output falls back to the GPU0 model.
 Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_URL=http://127.0.0.1:18005
-Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_TASKS=session_reply,session_pure_action_reply,session_action_rejection
+Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_TASKS=session_reply,session_pure_action_reply,session_action_rejection,session_turn_intent,session_turn_intent_prewarm,session_memory_extract,session_visual_arithmetic_probe,session_visual_arithmetic_prewarm
+Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_SCORE_STAGES=reply_history_route,reply_speech_mode,pure_action_reply_validation
 # This deployment has not served production traffic, so use the target path:
 # start the private GPU1 reply at turn.commit and promote it only after the
-# unchanged intent/history/knowledge/action gates prove it authoritative.
+# stateful gateway gates prove it authoritative.
 Environment=SGLANG_OMNI_SPECULATIVE_REPLY_MODE=enforce
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

@@ -224,13 +224,22 @@ COPY：HAND手/gesture，FACE脸，HEAD头，ARM臂，UPPER_BODY躯干，LEG腿�
 - reaction仅为respond/none；用户直接问候、道别、感谢或亲昵，且无明确或禁止动作时可respond并写reaction_task。
 - body_intent不是none时reaction必须none。未指定的动作、表情不要编造。只要求动作时speech=none；动作请求的礼貌疑问形式不会自动产生语言回答。
 
-先划分语言和动作通道。对任意数字X、Y，“说X比Y”中“说X”只进入text，“比Y”只进入body_task：text=X，body_task=数字Y手势；严禁把X同时作为动作数字。“说X比Y这几个字”才是完整朗读“X比Y”，不执行手势。引用的动作词不执行；text内否定不改变body_intent。数字动作使用“数字Y手势”标准名。generated的text保留原语言任务，不作答、不变换人称。
+先划分语言和动作通道。语言通道再按交付形态判断：
+1. 用户已经给出可直接说出的正文，并要求“说/说一句/告诉某人/念/读/重复”时，即使正文没有引号或冒号，也用verbatim。text只保留要实际说出的正文，不含身体动作、表情、说话指令框架或框架中的受众说明。
+2. 用户只给出主题、目的或创作任务，没有给出可直接说出的正文时用generated。text保留完整语言任务，不作答、不变换人称。
+3. 混合请求中的独立语言任务必须设置speech_independent_of_body=true。
+
+对任意数字X、Y，“说X比Y”中“说X”只进入text，“比Y”只进入body_task：text=X，body_task=数字Y手势；严禁把X同时作为动作数字。“说X比Y这几个字”才是完整朗读“X比Y”，不执行手势。引用的动作词不执行；text内否定不改变body_intent。数字动作使用“数字Y手势”标准名。
 
 具体立即请求通常要执行：“能挥挥手吗”“可以比个心吗”是perform；真正询问能力或范围才回答：“你会挥手吗”“你支持哪些动作”是generated且body_intent=capability。
 
 示例：
 说二比三 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字三手势","speech":"verbatim","reaction":"none","text":"二","speech_independent_of_body":true}
 说三比四 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字四手势","speech":"verbatim","reaction":"none","text":"三","speech_independent_of_body":true}
+挥手，再跟观众说一句大家晚上好 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"挥手","speech":"verbatim","reaction":"none","text":"大家晚上好","speech_independent_of_body":true}
+挥手，再用一句话欢迎观众 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"挥手","speech":"generated","reaction":"none","text":"用一句话欢迎观众","speech_independent_of_body":true}
+Smile and tell the audience welcome to the show -> {"visual":"NO_CURRENT_VIEW","body_intent":"none","face_task":"smile","speech":"verbatim","reaction":"none","text":"welcome to the show"}
+Smile and welcome the audience in one sentence -> {"visual":"NO_CURRENT_VIEW","body_intent":"none","face_task":"smile","speech":"generated","reaction":"none","text":"welcome the audience in one sentence"}
 比个数字三 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字三手势","speech":"none","reaction":"none"}
 比一个四 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字四手势","speech":"none","reaction":"none"}
 比个一 -> {"visual":"NO_CURRENT_VIEW","body_intent":"perform","body_task":"数字一手势","speech":"none","reaction":"none"}

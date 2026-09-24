@@ -34,6 +34,13 @@ from sglang_omni.client.types import (
     SamplingParams,
     UsageInfo,
 )
+from sglang_omni.models.qwen3_omni.action_scoring import (
+    ActionScoreCandidate,
+    ActionSuffixScoreRequest,
+    ActionSuffixScoreResult,
+    CandidateScore,
+    TokenScore,
+)
 from sglang_omni.utils.structured_logs import emit_structured_log
 
 logger = logging.getLogger(__name__)
@@ -43,6 +50,9 @@ INTERNAL_MODEL_TOKEN_ENV = "SGLANG_OMNI_INTERNAL_MODEL_TOKEN"
 REPLY_EXECUTOR_URL_ENV = "SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_URL"
 REPLY_EXECUTOR_TOKEN_ENV = "SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_TOKEN"
 REPLY_EXECUTOR_TASKS_ENV = "SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_TASKS"
+REPLY_EXECUTOR_SCORE_STAGES_ENV = (
+    "SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_SCORE_STAGES"
+)
 REPLY_EXECUTOR_CONNECT_TIMEOUT_ENV = (
     "SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_CONNECT_TIMEOUT_S"
 )
@@ -55,7 +65,15 @@ DEFAULT_REPLY_EXECUTOR_TASKS = frozenset(
         "session_reply",
         "session_pure_action_reply",
         "session_action_rejection",
+        "session_turn_intent",
+        "session_turn_intent_prewarm",
+        "session_memory_extract",
+        "session_visual_arithmetic_probe",
+        "session_visual_arithmetic_prewarm",
     }
+)
+DEFAULT_REPLY_EXECUTOR_SCORE_STAGES = frozenset(
+    {"reply_history_route", "reply_speech_mode", "pure_action_reply_validation"}
 )
 
 _FRAME_HEADER = struct.Struct("!I")
@@ -160,6 +178,38 @@ def request_from_wire(payload: dict[str, Any]) -> GenerateRequest:
         output_modalities=payload.get("output_modalities"),
         multimodal_train_inputs=payload.get("multimodal_train_inputs"),
         metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def action_score_request_from_wire(payload: dict[str, Any]) -> ActionSuffixScoreRequest:
+    return ActionSuffixScoreRequest(
+        **{
+            **payload,
+            "candidates": [
+                ActionScoreCandidate(**candidate)
+                for candidate in payload.get("candidates", [])
+            ],
+        }
+    )
+
+
+def action_score_result_from_wire(payload: dict[str, Any]) -> ActionSuffixScoreResult:
+    return ActionSuffixScoreResult(
+        request_id=str(payload["request_id"]),
+        model=str(payload["model"]),
+        prefix_cached=bool(payload["prefix_cached"]),
+        scores=[
+            CandidateScore(
+                **{
+                    **score,
+                    "token_scores": [
+                        TokenScore(**token) for token in score.get("token_scores", [])
+                    ],
+                }
+            )
+            for score in payload.get("scores", [])
+        ],
+        stats=dict(payload.get("stats") or {}),
     )
 
 
@@ -280,6 +330,24 @@ class RemoteRealtimeModelClient:
         if payload.get("kind") == "error":
             raise ClientError(str(payload.get("message") or "secondary executor failed"))
         return completion_from_wire(payload["result"])
+
+    async def score_action_suffixes(
+        self, request: ActionSuffixScoreRequest
+    ) -> ActionSuffixScoreResult:
+        response = await self._client.post(
+            f"{self.base_url}/internal/realtime-model/action-score",
+            content=pack_wire(dataclasses.asdict(request)),
+            headers=self._headers,
+            timeout=self.control_timeout_s,
+        )
+        response.raise_for_status()
+        payload = unpack_wire(response.content)
+        if payload.get("kind") == "error":
+            raise ClientError(
+                f"remote action scoring failed: {payload.get('error_type')}: "
+                f"{payload.get('message')}"
+            )
+        return action_score_result_from_wire(payload["result"])
 
     async def completion_stream(
         self,
@@ -414,11 +482,16 @@ class RoutedRealtimeModelClient:
         reply_client: RemoteRealtimeModelClient,
         *,
         reply_tasks: set[str] | frozenset[str] = DEFAULT_REPLY_EXECUTOR_TASKS,
+        reply_score_stages: set[str] | frozenset[str] = (
+            DEFAULT_REPLY_EXECUTOR_SCORE_STAGES
+        ),
     ) -> None:
         self.control_client = control_client
         self.reply_client = reply_client
         self.reply_tasks = frozenset(reply_tasks)
+        self.reply_score_stages = frozenset(reply_score_stages)
         self._request_backends: dict[str, Any] = {}
+        self._intentionally_aborted: set[str] = set()
         self._lock = asyncio.Lock()
 
     def _select(self, request: GenerateRequest) -> tuple[Any, str]:
@@ -435,6 +508,25 @@ class RoutedRealtimeModelClient:
         async with self._lock:
             if self._request_backends.get(request_id) is backend:
                 self._request_backends.pop(request_id, None)
+            self._intentionally_aborted.discard(request_id)
+
+    async def _was_intentionally_aborted(self, request_id: str) -> bool:
+        async with self._lock:
+            return request_id in self._intentionally_aborted
+
+    async def mark_intentional_abort(self, request_id: str) -> None:
+        """Fence fallback before local stream cancellation starts.
+
+        Cancelling a task that is currently advancing an async HTTP stream can
+        make its close path raise a regular ``RuntimeError`` instead of
+        ``CancelledError``.  Callers that are deliberately discarding a reply
+        mark the request first so that teardown errors cannot be mistaken for
+        a secondary-executor failure and retried on the control GPU.
+        """
+
+        async with self._lock:
+            if request_id in self._request_backends:
+                self._intentionally_aborted.add(request_id)
 
     @staticmethod
     def _log_route(
@@ -474,6 +566,8 @@ class RoutedRealtimeModelClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if await self._was_intentionally_aborted(request_id):
+                    raise asyncio.CancelledError from exc
                 if backend is self.control_client:
                     raise
                 await self._abort_secondary_best_effort(request_id)
@@ -490,6 +584,7 @@ class RoutedRealtimeModelClient:
         finally:
             async with self._lock:
                 self._request_backends.pop(request_id, None)
+                self._intentionally_aborted.discard(request_id)
 
     async def completion_stream(
         self,
@@ -515,6 +610,8 @@ class RoutedRealtimeModelClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if await self._was_intentionally_aborted(request_id):
+                    raise asyncio.CancelledError from exc
                 if backend is self.control_client or emitted:
                     raise
                 await self._abort_secondary_best_effort(request_id)
@@ -554,6 +651,8 @@ class RoutedRealtimeModelClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if await self._was_intentionally_aborted(request_id):
+                    raise asyncio.CancelledError from exc
                 if backend is self.control_client:
                     raise
                 await self._abort_secondary_best_effort(request_id)
@@ -573,6 +672,53 @@ class RoutedRealtimeModelClient:
         finally:
             await self._untrack(request_id, backend)
 
+    async def score_action_suffixes(
+        self, request: ActionSuffixScoreRequest
+    ) -> ActionSuffixScoreResult:
+        backend = (
+            self.reply_client
+            if request.stage in self.reply_score_stages
+            else self.control_client
+        )
+        executor = "reply" if backend is self.reply_client else "control"
+        await self._track(request.request_id, backend)
+        emit_structured_log(
+            "performance",
+            "realtime_model_request_routed",
+            request_id=request.request_id,
+            session_id=request.session_id,
+            session_instance_id=request.session_instance_id,
+            task=f"action_score:{request.stage}",
+            executor=executor,
+        )
+        try:
+            try:
+                return await backend.score_action_suffixes(request)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if await self._was_intentionally_aborted(request.request_id):
+                    raise asyncio.CancelledError from exc
+                if backend is self.control_client:
+                    raise
+                await self._abort_secondary_best_effort(request.request_id)
+                await self._track(request.request_id, self.control_client)
+                emit_structured_log(
+                    "performance",
+                    "realtime_model_request_routed",
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    session_instance_id=request.session_instance_id,
+                    task=f"action_score:{request.stage}",
+                    executor="control_fallback",
+                    fallback_reason=type(exc).__name__,
+                )
+                return await self.control_client.score_action_suffixes(request)
+        finally:
+            async with self._lock:
+                self._request_backends.pop(request.request_id, None)
+                self._intentionally_aborted.discard(request.request_id)
+
     async def _abort_secondary_best_effort(self, request_id: str) -> None:
         try:
             await asyncio.wait_for(self.reply_client.abort(request_id), timeout=1.0)
@@ -588,6 +734,7 @@ class RoutedRealtimeModelClient:
         request_id: str,
         level: AbortLevel = AbortLevel.SOFT,
     ) -> AbortResult:
+        await self.mark_intentional_abort(request_id)
         async with self._lock:
             backend = self._request_backends.get(request_id)
         if backend is not None:
@@ -630,8 +777,8 @@ class RoutedRealtimeModelClient:
         return control_result
 
     def __getattr__(self, name: str) -> Any:
-        # Action scoring, cache prewarm/release, admin, and status remain
-        # authoritative on GPU0 without duplicating a broad wrapper surface.
+        # Unclassified model operations, admin, and status remain authoritative
+        # on GPU0 without duplicating a broad wrapper surface.
         return getattr(self.control_client, name)
 
     async def aclose(self) -> None:
@@ -661,6 +808,14 @@ def build_realtime_model_client(control_client: Any) -> Any:
     )
     if not tasks:
         raise ValueError("reply executor task allowlist must not be empty")
+    raw_score_stages = os.environ.get(REPLY_EXECUTOR_SCORE_STAGES_ENV, "")
+    score_stages = (
+        {part.strip() for part in raw_score_stages.split(",") if part.strip()}
+        if raw_score_stages.strip()
+        else set(DEFAULT_REPLY_EXECUTOR_SCORE_STAGES)
+    )
+    if not score_stages:
+        raise ValueError("reply executor score-stage allowlist must not be empty")
     connect_timeout_s = float(
         os.environ.get(REPLY_EXECUTOR_CONNECT_TIMEOUT_ENV, "1.0")
     )
@@ -674,12 +829,14 @@ def build_realtime_model_client(control_client: Any) -> Any:
         control_timeout_s=control_timeout_s,
     )
     logger.info(
-        "Configured realtime reply executor url=%s tasks=%s",
+        "Configured realtime reply executor url=%s tasks=%s score_stages=%s",
         base_url,
         sorted(tasks),
+        sorted(score_stages),
     )
     return RoutedRealtimeModelClient(
         control_client,
         remote,
         reply_tasks=tasks,
+        reply_score_stages=score_stages,
     )
