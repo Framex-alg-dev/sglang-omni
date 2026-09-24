@@ -1767,7 +1767,7 @@ class TurnPipeline:
                     blocked = dict(result[0])
                     blocked.update(
                         execute=False,
-                        support_status="unsupported",
+                        support_status="not_required",
                         intent_gate_blocked=True,
                         reason_code="intent_gate_blocked",
                     )

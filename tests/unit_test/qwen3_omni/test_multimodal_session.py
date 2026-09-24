@@ -3994,6 +3994,94 @@ async def test_enforced_greeting_reaction_allows_wave_with_no_explicit_body(
 
 
 @pytest.mark.asyncio
+async def test_intent_gate_block_is_not_reported_as_unsupported(monkeypatch):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
+
+    async def language_only_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        body_intent_future=None,
+        full_intent_start_event=None,
+    ):
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        if body_intent_future is not None and not body_intent_future.done():
+            body_intent_future.set_result(EarlyBodyIntent("none", ""))
+        assert full_intent_start_event is not None
+        await full_intent_start_event.wait()
+        return TurnIntent(
+            speech="generated",
+            text="正常回答",
+            body="",
+            body_mode="none",
+            face="",
+            history=False,
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", language_only_intent)
+
+    class LanguageOnlyDecisionClient(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            self.score_requests.append(request)
+            winners = {"288", "IB1", "IF0", "IR0", "IC32", "IS0"}
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=item.candidate_id,
+                        token_count=1,
+                        mean_logprob=(
+                            -0.01 if item.candidate_id in winners else -10.0
+                        ),
+                        mean_nll=(
+                            0.01 if item.candidate_id in winners else 10.0
+                        ),
+                        ppl=(
+                            1.01 if item.candidate_id in winners else 22026.0
+                        ),
+                        token_scores=[],
+                    )
+                    for item in request.candidates
+                ],
+            )
+
+    catalog = load_runtime_action_catalog()
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        LanguageOnlyDecisionClient("P201", body_id="288"),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "intent-gate-not-required",
+            outputs=["text", "action"],
+            reply={"unsupported_action_text": "不应出现的动作拒绝"},
+            action={},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("language-only"))
+    await session.handle_turn_commit(
+        user_turn_commit("language-only", text="介绍一下今天的话题")
+    )
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["action"]["execute"] is False
+    assert result["action"]["support_status"] == "not_required"
+    assert result["action"]["reason_code"] == "intent_gate_blocked"
+    assert result["reply"]["text"] != "不应出现的动作拒绝"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("speculative_candidate_id", ["259", "000"])
 async def test_parallel_action_selection_reconciles_exact_streamed_body_intent(
     monkeypatch,
