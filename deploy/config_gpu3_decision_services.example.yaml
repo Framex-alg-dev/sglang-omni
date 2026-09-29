@@ -1,0 +1,33 @@
+# GPU3 shared base model for classifier and task Brain. Both logical services use
+# one pipeline; do not run a second model process on this card.
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-gpu3-task-decision
+model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
+
+runtime_overrides:
+  thinker:
+    server_args_overrides:
+      chunked_prefill_size: 8192
+      max_running_requests: 8
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 60000
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 60000
+      resources:
+        total_gpu_memory_fraction: 0.78

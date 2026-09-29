@@ -39,8 +39,6 @@ class SessionOutputCapabilities:
 
         if "audio" in outputs and "text" not in outputs:
             raise ValueError("audio output requires the text output")
-        if "expression" in outputs and "action" not in outputs:
-            raise ValueError("expression output requires the action output")
         return cls(
             outputs=outputs,
             text_enabled="text" in outputs,

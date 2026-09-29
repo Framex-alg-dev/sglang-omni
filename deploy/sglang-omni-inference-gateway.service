@@ -1,0 +1,28 @@
+[Unit]
+Description=SGLang-Omni CPU inference session gateway on 18003
+After=network-online.target sglang-omni-GPU0_1-dev.service sglang-omni-gpu3-decision-services.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/data/fanshide/sglang-omni-dev
+Environment=PYTHONPATH=/data/fanshide/sglang-omni-dev
+Environment=PYTHONUNBUFFERED=1
+Environment=SGLANG_OMNI_GATEWAY_HOST=127.0.0.1
+Environment=SGLANG_OMNI_GATEWAY_PORT=18003
+Environment=SGLANG_OMNI_GATEWAY_SPEECH_URL=http://127.0.0.1:50001/v1/tts/stream
+Environment=SGLANG_OMNI_GATEWAY_SPEECH_TIMEOUT_SECONDS=60
+Environment=PATH=/data/fanshide/sglang-omni-dev/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/data/fanshide/sglang-omni-dev/deploy/realtime-executors.env
+EnvironmentFile=/data/fanshide/sglang-omni-dev/deploy/gpu3-decision-services.env
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+ExecStart=/data/fanshide/sglang-omni-dev/.venv/bin/python -m sglang_omni.serve.inference_gateway
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

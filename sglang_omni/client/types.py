@@ -71,6 +71,9 @@ class SamplingParams:
     stop_token_ids: list[int] = field(default_factory=list)
     seed: int | None = None
     max_new_tokens: int | None = None
+    min_new_tokens: int = 0
+    ignore_eos: bool = False
+    regex: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +86,9 @@ class SamplingParams:
             "stop_token_ids": list(self.stop_token_ids),
             "seed": self.seed,
             "max_new_tokens": self.max_new_tokens,
+            "min_new_tokens": self.min_new_tokens,
+            "ignore_eos": self.ignore_eos,
+            "regex": self.regex,
         }
 
 

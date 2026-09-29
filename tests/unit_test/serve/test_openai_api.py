@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from typing import Any
 
 import pytest
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from sglang_omni.client import Client, GenerateChunk
 from sglang_omni.client.audio import encode_pcm
-from sglang_omni.client.types import GenerateRequest
+from sglang_omni.client.types import CompletionStreamChunk, GenerateRequest
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import (
     EXPLICIT_GENERATION_PARAMS_KEY,
@@ -293,6 +294,40 @@ class SuccessfulTranscriptionClient:
             text="hello world",
             finish_reason="stop",
         )
+
+
+class SuccessfulChatClient:
+    def __init__(self) -> None:
+        self.requests: list[GenerateRequest] = []
+
+    def health(self) -> dict[str, Any]:
+        return {"running": True}
+
+    async def completion(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+        audio_format: str = "wav",
+    ):
+        from sglang_omni.client.types import CompletionResult
+
+        del audio_format
+        self.requests.append(request)
+        return CompletionResult(request_id=request_id, text="hello")
+
+    async def completion_stream(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+        audio_format: str = "wav",
+    ):
+        del audio_format
+        self.requests.append(request)
+        yield CompletionStreamChunk(request_id=request_id, text="你")
+        yield CompletionStreamChunk(request_id=request_id, text="好")
+        yield CompletionStreamChunk(request_id=request_id, finish_reason="stop")
 
 
 class FailingTranscriptionClient:
@@ -755,6 +790,87 @@ def test_chat_stream_failure_closes_without_done_sentinel() -> None:
 
     assert chunks
     assert all(chunk != "data: [DONE]\n\n" for chunk in chunks)
+
+
+def test_chat_websocket_accepts_binary_media_then_commits() -> None:
+    model = SuccessfulChatClient()
+    raw_image = b"jpeg-frame"
+    client = TestClient(create_app(model, model_name="qwen3-omni"))
+
+    with client.websocket_connect("/v1/chat/completions/realtime") as socket:
+        socket.send_json(
+            {
+                "type": "request.start",
+                "contract_version": 1,
+                "request_id": "request-1",
+                "payload": {
+                    "model": "qwen3-omni",
+                    "messages": [{"role": "user", "content": "describe it"}],
+                },
+            }
+        )
+        assert socket.receive_json()["type"] == "request.ready"
+        socket.send_json(
+            {
+                "type": "input.media",
+                "request_id": "request-1",
+                "media_id": "image-1",
+                "kind": "image",
+                "start_ms": 0,
+                "end_ms": 100,
+                "encoding": "image/jpeg",
+                "checksum": "sha256:" + hashlib.sha256(raw_image).hexdigest(),
+                "payload_bytes": len(raw_image),
+            }
+        )
+        socket.send_bytes(raw_image)
+        assert socket.receive_json()["type"] == "input.media.ack"
+        socket.send_json(
+            {"type": "request.commit", "request_id": "request-1"}
+        )
+        completed = socket.receive_json()
+
+    assert completed["type"] == "response.completed"
+    assert completed["response"]["choices"][0]["message"]["content"] == "hello"
+    assert model.requests
+    assert model.requests[0].messages[-1].content[1] == {"type": "image"}
+    assert model.requests[0].metadata["images"][0].startswith(
+        "data:image/jpeg;base64,"
+    )
+
+
+def test_chat_websocket_streams_output_deltas() -> None:
+    model = SuccessfulChatClient()
+    client = TestClient(create_app(model, model_name="qwen3-omni"))
+
+    with client.websocket_connect("/v1/chat/completions/realtime") as socket:
+        socket.send_json(
+            {
+                "type": "request.start",
+                "contract_version": 1,
+                "request_id": "request-stream",
+                "payload": {
+                    "model": "qwen3-omni",
+                    "messages": [{"role": "user", "content": "say hello"}],
+                    "stream": True,
+                },
+            }
+        )
+        assert socket.receive_json()["type"] == "request.ready"
+        socket.send_json(
+            {"type": "request.commit", "request_id": "request-stream"}
+        )
+        events = [socket.receive_json() for _ in range(4)]
+
+    assert [event["type"] for event in events] == [
+        "response.delta",
+        "response.delta",
+        "response.delta",
+        "response.completed",
+    ]
+    assert events[0]["response"]["choices"][0]["delta"]["content"] == "你"
+    assert events[1]["response"]["choices"][0]["delta"]["content"] == "好"
+    assert events[2]["response"]["choices"][0]["finish_reason"] == "stop"
 
 
 def test_chat_asgi_send_failure_aborts_backend_and_cleans_state() -> None:

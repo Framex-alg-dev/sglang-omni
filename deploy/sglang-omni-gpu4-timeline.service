@@ -1,0 +1,38 @@
+[Unit]
+Description=SGLang-Omni GPU4 timeline observer on 18008
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/data/fanshide/sglang-omni-dev
+Environment=XDG_CACHE_HOME=/data/fanshide/.cache
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=SGLANG_OMNI_QWEN3_CHAT_TEMPLATE_MODEL=/data/models/Qwen3-Omni-30B-A3B-Instruct
+Environment=SGLANG_OMNI_SERVICE_ROLE=timeline-detection
+Environment=SGLANG_OMNI_SERVICE_INSTANCE_ID=sglang-omni-gpu4-timeline
+Environment=SGLANG_OMNI_STRICT_PORT=1
+Environment=SGLANG_OMNI_ACTION_WARMUP=0
+Environment=PYTHONPATH=/data/fanshide/sglang-omni-dev
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/data/fanshide/sglang-omni-dev/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/data/fanshide/sglang-omni-dev/deploy/gpu4-timeline.env
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+ExecStart=/data/fanshide/sglang-omni-dev/.venv/bin/sgl-omni serve --config ${GPU4_TIMELINE_CONFIG} --model-name ${GPU4_TIMELINE_MODEL_NAME} --host 127.0.0.1 --port ${GPU4_TIMELINE_PORT} --log-level info
+Restart=always
+RestartSec=10
+TimeoutStartSec=infinity
+TimeoutStopSec=120
+KillMode=control-group
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+TasksMax=infinity
+StandardOutput=append:/data/fanshide/sglang-omni-dev/logs/sglang-omni-gpu4.log
+StandardError=append:/data/fanshide/sglang-omni-dev/logs/sglang-omni-gpu4.log
+SyslogIdentifier=sglang-omni-gpu4-timeline
+
+[Install]
+WantedBy=multi-user.target

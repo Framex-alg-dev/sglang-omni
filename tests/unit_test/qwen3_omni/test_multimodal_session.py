@@ -4092,6 +4092,137 @@ async def test_intent_gate_block_is_not_reported_as_unsupported(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body_intent", "grouped_confident", "expected_execute"),
+    [
+        pytest.param("none", True, True, id="implicit-policy-action"),
+        pytest.param("none", False, False, id="low-confidence"),
+        pytest.param("prohibit", True, False, id="explicit-prohibition"),
+        pytest.param("capability", True, False, id="capability-query"),
+    ],
+)
+async def test_passive_policy_prompt_only_authorizes_confident_implicit_action(
+    monkeypatch,
+    body_intent,
+    grouped_confident,
+    expected_execute,
+):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
+
+    async def policy_turn_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        body_intent_future=None,
+        full_intent_start_event=None,
+    ):
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        if body_intent_future is not None and not body_intent_future.done():
+            body_intent_future.set_result(EarlyBodyIntent(body_intent, ""))
+        assert full_intent_start_event is not None
+        await full_intent_start_event.wait()
+        return TurnIntent(
+            speech="generated",
+            text="正常回答",
+            body="不要动作" if body_intent == "prohibit" else "",
+            body_mode=("prohibit" if body_intent == "prohibit" else "none"),
+            body_intent=body_intent,
+            face="",
+            history=False,
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", policy_turn_intent)
+
+    class PassivePolicyDecisionClient(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            self.score_requests.append(request)
+            winners = {"288", "IB1", "IF0", "IR0", "IC32", "IS0"}
+            scores = []
+            for item in request.candidates:
+                score = -0.01 if item.candidate_id in winners else -10.0
+                if not grouped_confident and item.candidate_id == "IB1":
+                    score = -0.10
+                elif not grouped_confident and item.candidate_id == "IB0":
+                    score = -0.15
+                elif not grouped_confident and item.candidate_id == "ICN0":
+                    score = -0.10
+                elif not grouped_confident and item.candidate_id == "IC32":
+                    score = -0.15
+                scores.append(
+                    CandidateScore(
+                        candidate_id=item.candidate_id,
+                        token_count=1,
+                        mean_logprob=score,
+                        mean_nll=-score,
+                        ppl=math.exp(-score),
+                        token_scores=[],
+                    )
+                )
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=scores,
+            )
+
+    guidance = "普通讲解时可以使用自然、克制的手部陪伴动作。"
+    catalog = load_runtime_action_catalog()
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        PassivePolicyDecisionClient("P201", body_id="288"),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            f"passive-policy-{body_intent}-{grouped_confident}",
+            outputs=["text", "action"],
+            reply={"unsupported_action_text": "不应出现的动作拒绝"},
+            action={
+                "passive_policy": {
+                    "policy_id": "policy-1",
+                    "revision": 1,
+                    "content_sha256": "sha256:"
+                    + hashlib.sha256(guidance.encode("utf-8")).hexdigest(),
+                    "guidance": guidance,
+                }
+            },
+        )
+    )
+    await session.handle_turn_start(user_turn_start("policy-turn"))
+    await session.handle_turn_commit(
+        user_turn_commit("policy-turn", text="介绍一下今天的话题")
+    )
+
+    action_ready = next(
+        event for event in ws.events if event["type"] == "turn.action.ready"
+    )["action"]
+    result_action = next(
+        event for event in ws.events if event["type"] == "turn.result"
+    )["action"]
+    assert result_action["execute"] is expected_execute
+    if expected_execute:
+        assert action_ready == result_action
+        assert result_action["candidate_id"] == "288"
+        assert result_action["support_status"] == "supported"
+        assert result_action["decision_source"] == "passive_policy_prompt"
+        assert result_action["intent_gate_reason"] == "implicit_body_intent"
+    else:
+        assert action_ready["execute"] is False
+        assert action_ready["support_status"] == "not_required"
+        assert action_ready["reason_code"] == "intent_gate_blocked"
+        assert result_action["support_status"] == "not_required"
+        assert "decision_source" not in result_action
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("speculative_candidate_id", ["259", "000"])
 async def test_parallel_action_selection_reconciles_exact_streamed_body_intent(
     monkeypatch,

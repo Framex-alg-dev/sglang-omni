@@ -1213,6 +1213,10 @@ class ActionPipeline:
             compact["support_status"] = action["support_status"]
         if action.get("reason_code"):
             compact["reason_code"] = action["reason_code"]
+        if action.get("decision_source"):
+            compact["decision_source"] = action["decision_source"]
+        if action.get("intent_gate_reason"):
+            compact["intent_gate_reason"] = action["intent_gate_reason"]
         if "fallback_applied" in action:
             compact["fallback_applied"] = bool(action["fallback_applied"])
         if action.get("allow_adjacent_repeat") is True:

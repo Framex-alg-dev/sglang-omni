@@ -52,6 +52,7 @@ ACTION_SCORE_TASK = "action_suffix_scoring"
 ENCODER_PREFETCH_STAGE = "encoder_prefetch_done"
 IMAGE_ENCODER_PREFETCH_TASK = "image_encoder_prefetch"
 TURN_INTENT_TASK = "session_turn_intent"
+TURN_ROUTER_TASK = "turn_router"
 VISUAL_PROBE_TASKS = frozenset(
     {"session_visual_gesture_probe", "session_visual_arithmetic_probe"}
 )
@@ -129,6 +130,14 @@ def realtime_latency_priority_plan(
             "prefill_priority_s": 0.25,
             "decode_protect_steps": 18,
             "decode_protect_s": 0.20,
+        }
+    if task == TURN_ROUTER_TASK:
+        return {
+            "stage": "turn_router",
+            "logical_request_id": logical_request_id,
+            "prefill_priority_s": 0.25,
+            "decode_protect_steps": 1,
+            "decode_protect_s": 0.05,
         }
     if task in VISUAL_PROBE_TASKS and metadata.get("private_output") is True:
         return {
@@ -711,6 +720,9 @@ def build_sglang_thinker_request(
     repetition_penalty = params.get("repetition_penalty", 1.0)
     stop = params.get("stop") or []
     stop_token_ids = params.get("stop_token_ids") or []
+    min_new_tokens = params.get("min_new_tokens", 0)
+    ignore_eos = params.get("ignore_eos", False)
+    regex = params.get("regex")
     seed = _resolve_seed(params)
 
     # Build SGLang SamplingParams and normalize
@@ -723,6 +735,9 @@ def build_sglang_thinker_request(
         repetition_penalty=repetition_penalty,
         stop=stop,
         stop_token_ids=stop_token_ids,
+        min_new_tokens=min_new_tokens,
+        ignore_eos=ignore_eos,
+        regex=regex,
         sampling_seed=seed,
     )
     sampling_params.normalize(tokenizer)

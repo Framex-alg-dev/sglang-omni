@@ -58,6 +58,12 @@ logs/*
 deploy/sglang-omni-18001.service
 deploy/realtime-knowledge.env
 deploy/realtime-executors.env
+deploy/gpu3-decision-services.env
+deploy/gpu4-timeline.env
+deploy/gpu0-performance.env
+deploy/config_gpu3_decision_services.yaml
+deploy/config_gpu4_timeline.yaml
+deploy/gpu4-timeline-model-release.json
 
 runtime/*
 !runtime/.gitkeep

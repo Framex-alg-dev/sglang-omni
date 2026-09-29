@@ -50,6 +50,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from starlette.websockets import WebSocketDisconnect
 from starlette.types import Receive, Scope, Send
 
 from sglang_omni.client.types import (
@@ -128,6 +129,9 @@ from sglang_omni.serve.realtime.runtime_prompt_overrides import (
 )
 from sglang_omni.models.qwen3_omni.global_action_catalog import ACTION_INTENT_POLICY, ACTION_INTENT_POLICY_EN
 from sglang_omni.serve.realtime.proactive.policies import _POLICIES
+from sglang_omni.serve.realtime.performance.service import (
+    register_performance_control,
+)
 from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules
 from sglang_omni.serve.realtime.user_image_policy import (
     USER_IMAGE_ACTION_RULES_ZH,
@@ -354,7 +358,9 @@ def create_app(
     _register_runtime_prompt_overrides(app, resolved_key)
     register_realtime_debug_routes(app, resolved_key)
     _register_chat_completions(app)
+    _register_chat_completions_realtime(app)
     _register_action_scores(app)
+    register_performance_control(app)
     _register_voices(app)
     _register_generate(app)
     _register_speech(app)
@@ -891,6 +897,135 @@ def _register_chat_completions(app: FastAPI) -> None:
             req,
             audio_format,
         )
+
+
+def _register_chat_completions_realtime(app: FastAPI) -> None:
+    """Receive one multimodal completion through binary-media WebSocket frames."""
+
+    from sglang_omni.serve.streaming_request import (
+        inject_openai_media,
+        receive_streamed_request,
+        run_until_websocket_disconnect,
+    )
+
+    @app.websocket("/v1/chat/completions/realtime")
+    async def chat_completions_realtime(websocket: WebSocket) -> None:
+        try:
+            streamed = await receive_streamed_request(websocket)
+            if streamed is None:
+                return
+            payload = inject_openai_media(streamed.payload, streamed.media)
+            req = ChatCompletionRequest.model_validate(payload)
+            client: Client = app.state.client
+            default_model: str = app.state.model_name
+            request_id = req.request_id or streamed.request_id
+            response_id = f"chatcmpl-{request_id}"
+            created = int(time.time())
+            model = req.model or default_model
+            audio_format = "wav"
+            if req.audio and isinstance(req.audio, dict):
+                audio_format = req.audio.get("format", "wav")
+            await run_until_websocket_disconnect(
+                websocket,
+                _send_chat_websocket_response(
+                    websocket=websocket,
+                    client=client,
+                    req=req,
+                    request_id=request_id,
+                    outer_request_id=streamed.request_id,
+                    response_id=response_id,
+                    created=created,
+                    model=model,
+                    audio_format=audio_format,
+                ),
+                abort=lambda: client.abort(request_id),
+            )
+        except WebSocketDisconnect:
+            return
+        except HTTPException as exc:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "code": "invalid_request",
+                    "detail": str(exc.detail),
+                }
+            )
+            await websocket.close(code=4400)
+        except ValueError as exc:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "code": "invalid_request",
+                    "detail": str(exc),
+                }
+            )
+            await websocket.close(code=4400)
+        except Exception:
+            logger.exception("streamed chat completion failed")
+            try:
+                await websocket.close(code=1011)
+            except RuntimeError:
+                pass
+
+
+async def _send_chat_websocket_response(
+    *,
+    websocket: WebSocket,
+    client: Client,
+    req: ChatCompletionRequest,
+    request_id: str,
+    outer_request_id: str,
+    response_id: str,
+    created: int,
+    model: str,
+    audio_format: str,
+) -> None:
+    if req.stream:
+        async for event in _chat_stream(
+            client,
+            _build_chat_generate_request(req),
+            request_id,
+            response_id,
+            created,
+            model,
+            req,
+            audio_format,
+        ):
+            encoded = event.removeprefix("data:").strip()
+            if encoded == STREAM_DONE_SENTINEL:
+                continue
+            await websocket.send_json(
+                {
+                    "type": "response.delta",
+                    "request_id": outer_request_id,
+                    "response": json.loads(encoded),
+                }
+            )
+        await websocket.send_json(
+            {
+                "type": "response.completed",
+                "request_id": outer_request_id,
+                "response": {},
+            }
+        )
+        return
+    response = await _chat_non_stream(
+        client,
+        _build_chat_generate_request(req),
+        request_id,
+        response_id,
+        created,
+        model,
+        req,
+        audio_format,
+    )
+    await websocket.send_json(
+        {
+            "type": "response.completed",
+            "request_id": outer_request_id,
+            "response": json.loads(response.body),
+        }
+    )
 
 
 async def _chat_non_stream(

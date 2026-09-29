@@ -1,0 +1,33 @@
+# Qwen3-Omni E43 action-only runtime. Body and expression use two independent
+# requests to the same model and the /v1/action-decision contract.
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-action-gpu
+model_path: /data/xingmt/action_omni_output/fp8_overlay_e43_ratio075
+
+runtime_overrides:
+  thinker:
+    server_args_overrides:
+      chunked_prefill_size: 8192
+      max_running_requests: 32
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 60000
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 60000
+      resources:
+        total_gpu_memory_fraction: 0.78

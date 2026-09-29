@@ -98,6 +98,70 @@ def _is_direct_greeting_intent(turn: TurnBuffer) -> bool:
     )
 
 
+def _passive_policy_prompt_authorizes_body(
+    *,
+    turn_origin: str,
+    passive_policy_present: bool,
+    action: dict[str, Any] | None,
+    intent: Any,
+    early_body_intent: EarlyBodyIntent | None,
+    decision: Any,
+    use_batched_decision: bool,
+    visual_probe_authoritative: bool,
+) -> bool:
+    """Let the existing passive-policy prompt own only implicit body turns.
+
+    The action scorer has already consumed the natural-language policy.  This
+    reconciliation prevents the separate explicit-intent gate from vetoing
+    that policy, while retaining fail-closed behavior for explicit execution,
+    prohibition, capability queries, visual routes, social reactions, faces,
+    unsupported candidates, and low-confidence grouped decisions.
+    """
+
+    if (
+        turn_origin != TURN_ORIGIN_USER
+        or not passive_policy_present
+        or action is None
+        or not action.get("execute")
+        or action.get("support_status") == "unsupported"
+        or action.get("fallback_applied") is True
+        or visual_probe_authoritative
+    ):
+        return False
+
+    observed_body_modes: list[str] = []
+    if early_body_intent is not None:
+        observed_body_modes.append(early_body_intent.body_intent)
+    if intent is not None:
+        observed_body_modes.append(
+            str(getattr(intent, "body_intent", "") or intent.body_mode)
+        )
+        if (
+            intent.face
+            or intent.reaction_mode != "none"
+            or intent.visual_scope_gate
+        ):
+            return False
+    if not observed_body_modes or any(
+        mode not in {"", "none"} for mode in observed_body_modes
+    ):
+        return False
+
+    if not use_batched_decision:
+        return intent is not None
+    if decision is None or (
+        decision.face_mode != "none"
+        or decision.reaction_type != "none"
+        or decision.visual_scope
+    ):
+        return False
+    if decision.body_mode == "perform":
+        return bool(decision.body_gate_confident)
+    if decision.body_mode == "none":
+        return bool(decision.body_confident)
+    return False
+
+
 def _speculative_reply_adoption_decision(
     turn: TurnBuffer,
     *,
@@ -1928,6 +1992,66 @@ class TurnPipeline:
                         confidence_margin=decision.body_gate_margin,
                         all_groups_min_margin=decision.min_margin,
                     )
+                passive_policy_prompt_applied = (
+                    _passive_policy_prompt_authorizes_body(
+                        turn_origin=turn.turn_origin,
+                        passive_policy_present=bool(
+                            self.action_profile is not None
+                            and self.action_profile.passive_action_policy
+                        ),
+                        action=result[0],
+                        intent=intent,
+                        early_body_intent=early_body_intent,
+                        decision=decision,
+                        use_batched_decision=use_batched_decision,
+                        visual_probe_authoritative=visual_probe_authoritative,
+                    )
+                )
+                if passive_policy_prompt_applied:
+                    selected_action = dict(result[0])
+                    selected_action.update(
+                        decision_source="passive_policy_prompt",
+                        intent_gate_reason="implicit_body_intent",
+                    )
+                    action_context = dict(result[3])
+                    action_context.update(
+                        passive_policy_prompt_applied=True,
+                        passive_policy_metadata=dict(
+                            self.passive_action_policy_metadata or {}
+                        ),
+                    )
+                    result = (
+                        selected_action,
+                        result[1],
+                        result[2],
+                        action_context,
+                    )
+                    scored_action = selected_action
+                    intent_allows_body = True
+                    emit_structured_log(
+                        "action",
+                        "passive_policy_prompt_action_authorized",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        candidate_id=selected_action.get("candidate_id"),
+                        action_id=selected_action.get("action_id"),
+                        decision_source="passive_policy_prompt",
+                        intent_gate_reason="implicit_body_intent",
+                        policy_metadata=(
+                            self.passive_action_policy_metadata or {}
+                        ),
+                        grouped_body_mode=(
+                            decision.body_mode if decision is not None else None
+                        ),
+                        grouped_body_confident=(
+                            decision.body_gate_confident
+                            if decision is not None else None
+                        ),
+                        unsafe_decision_disagreement=(
+                            unsafe_decision_disagreement
+                        ),
+                    )
                 if (
                     turn.turn_origin == TURN_ORIGIN_USER
                     and (
@@ -1977,6 +2101,7 @@ class TurnPipeline:
                         unsafe_decision_disagreement=(
                             unsafe_decision_disagreement
                         ),
+                        passive_policy_prompt_applied=False,
                     )
                 publish_action_independently = bool(
                     turn.turn_origin == TURN_ORIGIN_USER

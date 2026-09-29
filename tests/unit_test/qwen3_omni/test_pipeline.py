@@ -75,6 +75,16 @@ from tests.unit_test.fixtures.qwen_fakes import (
             },
         ),
         (
+            {"task": "turn_router", "logical_request_id": "router-a"},
+            {
+                "stage": "turn_router",
+                "logical_request_id": "router-a",
+                "prefill_priority_s": 0.25,
+                "decode_protect_steps": 1,
+                "decode_protect_s": 0.05,
+            },
+        ),
+        (
             {
                 "task": "session_visual_gesture_probe",
                 "logical_request_id": "turn-a",

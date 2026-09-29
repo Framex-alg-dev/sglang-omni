@@ -45,6 +45,9 @@ from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
 from sglang_omni.profiler.event_recorder import get_recorder as _get_event_recorder
 from sglang_omni.profiler.profiler_control import ProfilerControlClient
 from sglang_omni.serve.openai_api import create_app
+from sglang_omni.serve.model_release_manifest import (
+    validate_model_release_from_env,
+)
 from sglang_omni.serve.protocol import DEFAULT_TTS_BATCH_MAX_ITEMS
 from sglang_omni.serve.realtime.dev_model import DevRealtimeModelConfig
 from sglang_omni.serve.realtime.dev_server import serve_dev_realtime_model
@@ -422,6 +425,64 @@ async def _run_server(
 
     This is the async entry point.  For a blocking call use :func:`launch_server`.
     """
+    service_role = os.environ.get(
+        "SGLANG_OMNI_SERVICE_ROLE", "openai"
+    ).strip().lower()
+    if service_role not in {
+        "openai",
+        "task-classification",
+        "timeline-detection",
+        "decision-services",
+        "action-decision",
+    }:
+        raise ValueError(
+            "SGLANG_OMNI_SERVICE_ROLE must be openai, task-classification, "
+            "timeline-detection, decision-services, or action-decision"
+        )
+    if service_role in {"task-classification", "decision-services"}:
+        if not os.environ.get("SGLANG_OMNI_TASK_CLASSIFICATION_TOKEN", "").strip():
+            raise ValueError(
+                "SGLANG_OMNI_TASK_CLASSIFICATION_TOKEN is required for the "
+                f"{service_role} service role"
+            )
+    if service_role == "timeline-detection":
+        if not os.environ.get("SGLANG_OMNI_TIMELINE_DETECTION_TOKEN", "").strip():
+            raise ValueError(
+                "SGLANG_OMNI_TIMELINE_DETECTION_TOKEN is required for the "
+                f"{service_role} service role"
+            )
+    if service_role == "decision-services":
+        if not os.environ.get("SGLANG_OMNI_TASK_BRAIN_TOKEN", "").strip():
+            raise ValueError(
+                "SGLANG_OMNI_TASK_BRAIN_TOKEN is required for the "
+                "decision-services service role"
+            )
+    if service_role == "action-decision":
+        if not os.environ.get("SGLANG_OMNI_ACTION_DECISION_TOKEN", "").strip():
+            raise ValueError(
+                "SGLANG_OMNI_ACTION_DECISION_TOKEN is required for the "
+                "action-decision service role"
+            )
+    if service_role != "openai" and not os.environ.get(
+        "SGLANG_OMNI_MODEL_VERSION", ""
+    ).strip():
+        raise ValueError(
+            f"SGLANG_OMNI_MODEL_VERSION is required for the {service_role} "
+            "service role"
+        )
+    if service_role in {"task-classification", "timeline-detection"}:
+        release = validate_model_release_from_env(
+            service_role=service_role,
+            pipeline_config=pipeline_config,
+            model_name=model_name,
+        )
+        logger.info(
+            "[MODEL_RELEASE] validated role=%s model=%s version=%s artifacts=%d",
+            release.service_role,
+            release.model_id,
+            release.manifest_version,
+            release.artifact_count,
+        )
     embedded_tts_config = (
         EmbeddedTTSConfig(
             **EmbeddedTTSConfig.text_options_from_env(),
@@ -486,16 +547,17 @@ async def _run_server(
 
     # Validate the server-authoritative catalog before allocating model/GPU
     # resources. The import and load stay out of the development-only path.
-    global_action_catalog, prewarm_global_action_catalog = (
-        _load_production_action_catalog_support()
-    )
-    logger.info(
-        "[GLOBAL_ACTION_CATALOG] loaded version=%s hash=%s categories=%d actions=%d",
-        global_action_catalog.catalog_version,
-        global_action_catalog.catalog_hash,
-        len(global_action_catalog.categories),
-        global_action_catalog.candidate_count,
-    )
+    if service_role == "openai":
+        global_action_catalog, prewarm_global_action_catalog = (
+            _load_production_action_catalog_support()
+        )
+        logger.info(
+            "[GLOBAL_ACTION_CATALOG] loaded version=%s hash=%s categories=%d actions=%d",
+            global_action_catalog.catalog_version,
+            global_action_catalog.catalog_hash,
+            len(global_action_catalog.categories),
+            global_action_catalog.candidate_count,
+        )
 
     # Keep the production startup order: validate its authoritative catalog,
     # then check the port immediately before allocating model resources.
@@ -555,73 +617,261 @@ async def _run_server(
             backend="production",
             model=model_name or pipeline_config.name,
         )
-        warmup_enabled = os.environ.get(
-            "SGLANG_OMNI_ACTION_WARMUP", "1"
-        ).strip().lower() not in {"0", "false", "off", "no"}
-        if warmup_enabled:
-            warmup_results = {}
-            for prompt_language in ("en", "zh"):
-                warmup_results[prompt_language] = await client.warmup_action_score(
-                    model=model_name or pipeline_config.name,
-                    category_count=int(
-                        os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60")
+        if service_role == "task-classification":
+            from sglang_omni.serve.task_classification.client_model import (
+                SglangClientTaskClassificationModel,
+            )
+            from sglang_omni.serve.task_classification.pipeline import (
+                TaskClassificationPipeline,
+            )
+            from sglang_omni.serve.task_classification.service import (
+                create_task_classification_app,
+            )
+
+            token = os.environ.get(
+                "SGLANG_OMNI_TASK_CLASSIFICATION_TOKEN", ""
+            ).strip()
+            model_version = os.environ.get(
+                "SGLANG_OMNI_MODEL_VERSION", ""
+            ).strip()
+            app = create_task_classification_app(
+                TaskClassificationPipeline(
+                    SglangClientTaskClassificationModel(
+                        client,
+                        model_id=model_name or pipeline_config.name,
+                        model_version=model_version,
+                    )
+                ),
+                token=token,
+            )
+        elif service_role == "decision-services":
+            from sglang_omni.serve.task_classification.client_model import (
+                SglangClientTaskClassificationModel,
+            )
+            from sglang_omni.serve.task_classification.pipeline import (
+                TaskClassificationPipeline,
+            )
+            from sglang_omni.serve.task_classification.service import (
+                create_decision_services_app,
+                create_task_classification_app,
+            )
+            from sglang_omni.serve.task_brain.service import (
+                TaskBrainServiceConfig,
+                create_task_brain_app,
+            )
+
+            shared_model_version = os.environ.get(
+                "SGLANG_OMNI_MODEL_VERSION", ""
+            ).strip()
+            classifier_model_version = os.environ.get(
+                "SGLANG_OMNI_TASK_CLASSIFICATION_MODEL_VERSION",
+                shared_model_version,
+            ).strip()
+            brain_model_version = os.environ.get(
+                "SGLANG_OMNI_TASK_BRAIN_MODEL_VERSION",
+                shared_model_version,
+            ).strip()
+            classifier_app = create_task_classification_app(
+                TaskClassificationPipeline(
+                    SglangClientTaskClassificationModel(
+                        client,
+                        model_id=model_name or pipeline_config.name,
+                        model_version=classifier_model_version,
+                    )
+                ),
+                token=os.environ.get(
+                    "SGLANG_OMNI_TASK_CLASSIFICATION_TOKEN", ""
+                ).strip(),
+            )
+            brain_app = create_task_brain_app(
+                client,
+                config=TaskBrainServiceConfig(
+                    token=os.environ.get(
+                        "SGLANG_OMNI_TASK_BRAIN_TOKEN", ""
+                    ).strip(),
+                    model_id=model_name or pipeline_config.name,
+                    model_version=brain_model_version,
+                    max_concurrency=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_TASK_BRAIN_MAX_CONCURRENCY", "2"
+                        )
                     ),
-                    child_count=(
-                        global_action_catalog.candidate_count + 1
-                        if global_action_catalog.direct_action_selection
-                        else int(os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8"))
+                    max_waiting=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_TASK_BRAIN_MAX_WAITING", "32"
+                        )
                     ),
-                    selection_mode=(
-                        "flat_children"
-                        if global_action_catalog.direct_action_selection
-                        else os.environ.get(
-                            "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
-                        ).strip().lower()
+                    max_body_bytes=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_TASK_BRAIN_MAX_BODY_BYTES",
+                            str(64 * 1024 * 1024),
+                        )
                     ),
-                    timeout_s=float(
-                        os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
+                ),
+            )
+            app = create_decision_services_app(
+                classifier_app=classifier_app,
+                brain_app=brain_app,
+            )
+        elif service_role == "timeline-detection":
+            from sglang_omni.serve.timeline_detection.client_model import (
+                SglangClientTimelineDetectionModel,
+            )
+            from sglang_omni.serve.timeline_detection.service import (
+                create_timeline_detection_app,
+            )
+
+            token = os.environ.get(
+                "SGLANG_OMNI_TIMELINE_DETECTION_TOKEN", ""
+            ).strip()
+            model_version = os.environ.get(
+                "SGLANG_OMNI_TIMELINE_MODEL_VERSION",
+                os.environ.get("SGLANG_OMNI_MODEL_VERSION", ""),
+            ).strip()
+            app = create_timeline_detection_app(
+                lambda start: SglangClientTimelineDetectionModel(
+                    client,
+                    start,
+                    model_version=model_version,
+                    inference_interval_ms=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_TIMELINE_INFERENCE_INTERVAL_MS", "3000"
+                        )
                     ),
-                    audio_path=_resolve_action_warmup_audio_path(),
-                    language=prompt_language,
+                    window_ms=int(
+                        os.environ.get("SGLANG_OMNI_TIMELINE_WINDOW_MS", "10000")
+                    ),
+                    max_window_bytes=int(
+                        os.environ.get(
+                            "SGLANG_OMNI_TIMELINE_MAX_WINDOW_BYTES",
+                            str(32 * 1024 * 1024),
+                        )
+                    ),
+                ),
+                token=token,
+            )
+        elif service_role == "action-decision":
+            from sglang_omni.serve.action_decision.service import (
+                ActionDecisionConfig,
+                create_action_decision_app,
+            )
+
+            artifact_root = os.environ.get(
+                "SGLANG_OMNI_ACTION_ARTIFACT_ROOT",
+                "/data/xingmt/model_repo/action_prediction_model/assets",
+            ).strip()
+            action_config = ActionDecisionConfig(
+                token=os.environ.get(
+                    "SGLANG_OMNI_ACTION_DECISION_TOKEN", ""
+                ).strip(),
+                model_id=model_name or pipeline_config.name,
+                model_version=os.environ.get(
+                    "SGLANG_OMNI_MODEL_VERSION", ""
+                ).strip(),
+                mapping_path=os.environ.get(
+                    "SGLANG_OMNI_ACTION_MAPPING_PATH",
+                    os.path.join(artifact_root, "action_pair_token_map_current.json"),
+                ),
+                full_mapping_path=os.environ.get(
+                    "SGLANG_OMNI_ACTION_FULL_MAPPING_PATH",
+                    os.path.join(artifact_root, "action_pair_token_map_full.json"),
+                ),
+                product_catalog_path=os.environ.get(
+                    "SGLANG_OMNI_ACTION_CATALOG_PATH",
+                    os.path.join(artifact_root, "action_catalog.json"),
+                ),
+                agent_policy_path=os.environ.get(
+                    "SGLANG_OMNI_AGENT_ACTION_POLICY_PATH",
+                    os.path.join(artifact_root, "agent_action_policy.json"),
+                ),
+                max_body_bytes=int(
+                    os.environ.get(
+                        "SGLANG_OMNI_ACTION_DECISION_MAX_BODY_BYTES",
+                        str(128 * 1024 * 1024),
+                    )
+                ),
+                idempotency_cache_size=int(
+                    os.environ.get(
+                        "SGLANG_OMNI_ACTION_IDEMPOTENCY_CACHE_SIZE", "2048"
+                    )
+                ),
+            )
+            app = create_action_decision_app(client, config=action_config)
+            if os.environ.get(
+                "SGLANG_OMNI_ACTION_VERIFY_TOKENIZER", "1"
+            ).strip().lower() not in {"0", "false", "off", "no"}:
+                app.state.action_decision_engine.registry.verify_tokenizer(
+                    pipeline_config.model_path
                 )
-            logger.info("[ACTION_WARMUP] readiness=%s", warmup_results)
-        else:
-            logger.info("[ACTION_WARMUP] disabled by SGLANG_OMNI_ACTION_WARMUP")
-        global_action_prewarm = await prewarm_global_action_catalog(
-            client,
-            model=model_name or pipeline_config.name,
-            catalog=global_action_catalog,
-        )
-        app = create_app(
-            client,
-            model_name=model_name or pipeline_config.name,
-            requires_uploaded_voice_for_named_voice=(
-                pipeline_config.requires_uploaded_voice_for_named_voice()
-            ),
-            supports_uploaded_voice_references=(
-                pipeline_config.supports_uploaded_voice_references()
-            ),
-            required_speech_reference_count=(
-                pipeline_config.required_speech_reference_count
-            ),
-            speech_reference_text_required=(
-                pipeline_config.speech_reference_text_required
-            ),
-            additional_speech_languages=pipeline_config.additional_speech_languages,
-            enable_realtime=enable_realtime,
-            allowed_local_media_path=allowed_local_media_path,
-            allowed_media_domains=allowed_media_domains,
-            tts_batch_max_items=tts_batch_max_items,
-            architectures=[pipeline_config.architecture],
-            global_action_catalog=global_action_catalog,
-            global_action_prewarm=global_action_prewarm,
-            embedded_tts_config=embedded_tts_config,
-        )
+        elif service_role == "openai":
+            warmup_enabled = os.environ.get(
+                "SGLANG_OMNI_ACTION_WARMUP", "1"
+            ).strip().lower() not in {"0", "false", "off", "no"}
+            if warmup_enabled:
+                warmup_results = {}
+                for prompt_language in ("en", "zh"):
+                    warmup_results[prompt_language] = await client.warmup_action_score(
+                        model=model_name or pipeline_config.name,
+                        category_count=int(
+                            os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CATEGORY_COUNT", "60")
+                        ),
+                        child_count=(
+                            global_action_catalog.candidate_count + 1
+                            if global_action_catalog.direct_action_selection
+                            else int(os.environ.get("SGLANG_OMNI_ACTION_WARMUP_CHILD_COUNT", "8"))
+                        ),
+                        selection_mode=(
+                            "flat_children"
+                            if global_action_catalog.direct_action_selection
+                            else os.environ.get(
+                                "SGLANG_OMNI_ACTION_SELECTION_MODE", "hierarchical"
+                            ).strip().lower()
+                        ),
+                        timeout_s=float(
+                            os.environ.get("SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30")
+                        ),
+                        audio_path=_resolve_action_warmup_audio_path(),
+                        language=prompt_language,
+                    )
+                logger.info("[ACTION_WARMUP] readiness=%s", warmup_results)
+            else:
+                logger.info("[ACTION_WARMUP] disabled by SGLANG_OMNI_ACTION_WARMUP")
+            global_action_prewarm = await prewarm_global_action_catalog(
+                client,
+                model=model_name or pipeline_config.name,
+                catalog=global_action_catalog,
+            )
+            app = create_app(
+                client,
+                model_name=model_name or pipeline_config.name,
+                requires_uploaded_voice_for_named_voice=(
+                    pipeline_config.requires_uploaded_voice_for_named_voice()
+                ),
+                supports_uploaded_voice_references=(
+                    pipeline_config.supports_uploaded_voice_references()
+                ),
+                required_speech_reference_count=(
+                    pipeline_config.required_speech_reference_count
+                ),
+                speech_reference_text_required=(
+                    pipeline_config.speech_reference_text_required
+                ),
+                additional_speech_languages=pipeline_config.additional_speech_languages,
+                enable_realtime=enable_realtime,
+                allowed_local_media_path=allowed_local_media_path,
+                allowed_media_domains=allowed_media_domains,
+                tts_batch_max_items=tts_batch_max_items,
+                architectures=[pipeline_config.architecture],
+                global_action_catalog=global_action_catalog,
+                global_action_prewarm=global_action_prewarm,
+                embedded_tts_config=embedded_tts_config,
+            )
         emit_structured_log(
             "lifecycle",
             "api_app_ready",
             backend="production",
             realtime_enabled=enable_realtime,
+            service_role=service_role,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
         profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)

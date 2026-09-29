@@ -1,0 +1,99 @@
+{
+  "fixture_version": 2,
+  "task_classification": {
+    "request": {
+      "contract_version": 1,
+      "request_id": "request-contract-1",
+      "session_id": "session-contract-1",
+      "turn_id": "turn-contract-1",
+      "identity_epoch": 2,
+      "input_revision": 3,
+      "text": "帮我安排下一步",
+      "media": [],
+      "router_history": [],
+      "brain1_capabilities": "普通聊天、简单问答、计算、下游用户视频理解；不处理应用能力、曲库或媒体播放查询",
+      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、唱歌请求、歌曲播放与停止媒体播放",
+      "has_active_agent": false,
+      "pending_confirmation": false,
+      "follow_up_required": false
+    },
+    "response": {
+      "contract_version": 1,
+      "request_id": "request-contract-1",
+      "session_id": "session-contract-1",
+      "turn_id": "turn-contract-1",
+      "identity_epoch": 2,
+      "input_revision": 3,
+      "route_token": "delegate",
+      "route": "BRAIN2",
+      "model_id": "qwen3-omni-gpu3-decision-services",
+      "model_version": "omni-turn-router-prompt-v2"
+    }
+  },
+  "timeline_detection": {
+    "session_start": {
+      "type": "session.start",
+      "contract_version": 2,
+      "session_id": "session-contract-1",
+      "identity_epoch": 2,
+      "observer_epoch": 4,
+      "stream_epoch": 3,
+      "next_sequence": 1,
+      "audio_format": "pcm16/16000/mono",
+      "video_format": "jpeg",
+      "model_id": "qwen3-omni-gpu4-timeline"
+    },
+    "session_ready": {
+      "type": "session.ready",
+      "contract_version": 2,
+      "session_id": "session-contract-1",
+      "identity_epoch": 2,
+      "observer_epoch": 4,
+      "stream_epoch": 3,
+      "next_sequence": 1
+    },
+    "media_header": {
+      "type": "media",
+      "session_id": "session-contract-1",
+      "identity_epoch": 2,
+      "observer_epoch": 4,
+      "stream_epoch": 3,
+      "sequence": 1,
+      "kind": "video",
+      "start_ms": 100,
+      "end_ms": 200,
+      "encoding": "jpeg",
+      "payload_bytes": 10
+    },
+    "media_payload_base64": "anBlZy1mcmFtZQ==",
+    "media_ack": {
+      "type": "media.ack",
+      "observer_epoch": 4,
+      "sequence": 1
+    },
+    "observation": {
+      "type": "observation",
+      "contract_version": 2,
+      "observation_id": "observation-contract-1",
+      "session_id": "session-contract-1",
+      "identity_epoch": 2,
+      "observer_epoch": 4,
+      "stream_epoch": 3,
+      "event_type": "P1",
+      "summary": "入画",
+      "evidence_start_ms": 7000,
+      "evidence_end_ms": 10000,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "event-v1.20",
+      "evidence_mode": "video_only",
+      "audio_status": "missing"
+    },
+    "session_close": {
+      "type": "session.close"
+    },
+    "session_closed": {
+      "type": "session.closed",
+      "observer_epoch": 4
+    }
+  }
+}

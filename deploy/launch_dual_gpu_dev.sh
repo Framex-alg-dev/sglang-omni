@@ -48,24 +48,15 @@ done
 env \
     CUDA_VISIBLE_DEVICES=0 \
     SGLANG_OMNI_SERVICE_INSTANCE_ID=sglang-omni-GPU0_1-dev-gpu0 \
-    SGLANG_OMNI_TTS_CONNECTION_COUNT=2 \
-    SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S=30 \
-    SGLANG_OMNI_ACTION_DECISION_BATCH_MODE=enforce \
-    SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL=0 \
-    SGLANG_OMNI_ACTION_SINGLE_TOKEN_MODE=off \
-    SGLANG_OMNI_ACTION_DECISION_MIN_MARGIN=0.10 \
-    SGLANG_OMNI_AVATAR_IMAGE_ENCODER_PREFETCH=1 \
-    SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_URL=http://127.0.0.1:18005 \
-    SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_TASKS=session_reply,session_pure_action_reply,session_action_rejection,session_turn_intent,session_turn_intent_prewarm,session_memory_extract,session_visual_arithmetic_probe,session_visual_arithmetic_prewarm \
-    SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_SCORE_STAGES=reply_history_route,reply_speech_mode,pure_action_reply_validation \
-    SGLANG_OMNI_SPECULATIVE_REPLY_MODE=enforce \
+    SGLANG_OMNI_SERVICE_ROLE=action-decision \
+    SGLANG_OMNI_MODEL_VERSION=e43-ratio075 \
+    SGLANG_OMNI_ACTION_DECISION_TOKEN="${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:-${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:?set an internal service token}}}" \
+    SGLANG_OMNI_ACTION_ARTIFACT_ROOT=/data/xingmt/model_repo/action_prediction_model/assets \
     "$python_bin" -m sglang_omni.cli serve \
-        --config "$project_root/deploy/config_single_gpu.yaml" \
+        --config "$project_root/deploy/config_action_gpu.yaml" \
         --host 0.0.0.0 \
         --port 18004 \
-        --log-level info \
-        --realtime-tts-url ws://127.0.0.1:40001/api-ws/v1/realtime \
-        --realtime-tts-voice spk_691b97a24dcc &
+        --log-level info &
 gpu0_pid=$!
 
 wait -n "$gpu0_pid" "$gpu1_pid"

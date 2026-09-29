@@ -1,0 +1,33 @@
+# GPU4 is dedicated to continuous timeline observation. Do not colocate a
+# Turn-critical classifier, Brain, action, or reply workload on this pipeline.
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-gpu4-timeline
+model_path: /data/models/Qwen3-Omni-30B-A3B-FP8
+
+runtime_overrides:
+  thinker:
+    server_args_overrides:
+      chunked_prefill_size: 8192
+      max_running_requests: 4
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 60000
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 60000
+      resources:
+        total_gpu_memory_fraction: 0.78
