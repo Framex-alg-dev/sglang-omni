@@ -367,6 +367,11 @@ class VisualGestureGenerationComponent:
                 confidence.as_dict() if confidence is not None else None
             ),
             "visual_observation_label": observed_label,
+            "visual_observation_candidate_id": (
+                observed_candidate.candidate_id
+                if observed_candidate is not None
+                else None
+            ),
             "visual_observation_number": visual_gesture_number(observed_label),
             "visual_observation_accepted": observed_candidate is not None,
             "visual_execution_available": candidate is not None,
