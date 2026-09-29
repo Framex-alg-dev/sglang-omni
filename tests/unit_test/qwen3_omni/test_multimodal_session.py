@@ -3590,12 +3590,14 @@ async def start_numeric_reply_session(
     catalog: GlobalActionCatalog,
     *,
     outputs: list[str] | None = None,
+    locale: str = "zh-CN",
 ) -> object:
     if catalog.direct_action_selection:
         await session.dispatch(
             protocol_v1_session_start(
                 "numeric-reply-session",
                 outputs=outputs or ["text", "action"],
+                locale=locale,
                 diagnostics={"include_action_scores": True},
                 reply={
                     "instructions": "自然、简洁地回答用户问题。",
@@ -3618,6 +3620,7 @@ async def start_numeric_reply_session(
         protocol_v1_session_start(
             "numeric-reply-session",
             outputs=outputs or ["text", "action"],
+            locale=locale,
             diagnostics={"include_action_scores": True},
             reply={
                 "instructions": "自然、简洁地回答用户问题。",
@@ -3991,6 +3994,94 @@ async def test_enforced_greeting_reaction_allows_wave_with_no_explicit_body(
     )
     assert action_ready["action"]["candidate_id"] == "288"
     assert action_ready["action"]["execute"] is True
+
+
+@pytest.mark.asyncio
+async def test_intent_gate_block_is_not_reported_as_unsupported(monkeypatch):
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "0")
+
+    async def language_only_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        body_intent_future=None,
+        full_intent_start_event=None,
+    ):
+        if visual_scope_future is not None and not visual_scope_future.done():
+            visual_scope_future.set_result("")
+        if body_intent_future is not None and not body_intent_future.done():
+            body_intent_future.set_result(EarlyBodyIntent("none", ""))
+        assert full_intent_start_event is not None
+        await full_intent_start_event.wait()
+        return TurnIntent(
+            speech="generated",
+            text="正常回答",
+            body="",
+            body_mode="none",
+            face="",
+            history=False,
+        )
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", language_only_intent)
+
+    class LanguageOnlyDecisionClient(PerformanceMatrixClient):
+        async def score_action_suffixes(self, request):
+            self.score_requests.append(request)
+            winners = {"288", "IB1", "IF0", "IR0", "IC32", "IS0"}
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=item.candidate_id,
+                        token_count=1,
+                        mean_logprob=(
+                            -0.01 if item.candidate_id in winners else -10.0
+                        ),
+                        mean_nll=(
+                            0.01 if item.candidate_id in winners else 10.0
+                        ),
+                        ppl=(
+                            1.01 if item.candidate_id in winners else 22026.0
+                        ),
+                        token_scores=[],
+                    )
+                    for item in request.candidates
+                ],
+            )
+
+    catalog = load_runtime_action_catalog()
+    ws = FakeWebSocket()
+    session = make_session(
+        ws,
+        LanguageOnlyDecisionClient("P201", body_id="288"),
+        global_action_catalog=catalog,
+    )
+    await session.dispatch(
+        protocol_v1_session_start(
+            "intent-gate-not-required",
+            outputs=["text", "action"],
+            reply={"unsupported_action_text": "不应出现的动作拒绝"},
+            action={},
+        )
+    )
+    await session.handle_turn_start(user_turn_start("language-only"))
+    await session.handle_turn_commit(
+        user_turn_commit("language-only", text="介绍一下今天的话题")
+    )
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["action"]["execute"] is False
+    assert result["action"]["support_status"] == "not_required"
+    assert result["action"]["reason_code"] == "intent_gate_blocked"
+    assert result["reply"]["text"] != "不应出现的动作拒绝"
 
 
 @pytest.mark.asyncio
@@ -4841,6 +4932,134 @@ async def test_visual_reasoning_gesture_answer_output_mode_and_number(
 
 
 @pytest.mark.asyncio
+async def test_visual_arithmetic_withholds_speculative_action_until_numeric_gesture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_MODE", "enforce")
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_BATCH_VISUAL", "1")
+
+    async def infer_visual_answer_after_action_batch(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+        body_intent_future=None,
+        full_intent_start_event=None,
+    ):
+        assert visual_scope_future is not None
+        if not visual_scope_future.done():
+            visual_scope_future.set_result("VISUAL_ANSWER")
+        assert body_intent_future is not None
+        if not body_intent_future.done():
+            body_intent_future.set_result(EarlyBodyIntent("none", ""))
+        assert full_intent_start_event is not None
+        await full_intent_start_event.wait()
+        return TurnIntent(
+            speech="generated",
+            text="回答视觉算术问题",
+            body="",
+            body_mode="none",
+            face="",
+            history=False,
+            visual_answer_operation="add",
+            visual_answer_output="gesture_and_speech",
+            visual_scope_gate="VISUAL_ANSWER",
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        "infer_turn_intent",
+        infer_visual_answer_after_action_batch,
+    )
+
+    class SpeculativeActionClient(PureActionNumericReplyFusionClient):
+        async def score_action_suffixes(self, request):
+            if request.stage != "single":
+                return await super().score_action_suffixes(request)
+            self.score_requests.append(request)
+            winners = {
+                "230",
+                "IB1",
+                "IF1",
+                "IR0",
+                "IV00",
+                "IC29",
+                "IS0",
+            }
+            return ActionSuffixScoreResult(
+                request_id=request.request_id,
+                model=request.model,
+                prefix_cached=True,
+                scores=[
+                    CandidateScore(
+                        candidate_id=candidate.candidate_id,
+                        token_count=1,
+                        mean_logprob=(
+                            -0.01
+                            if candidate.candidate_id in winners
+                            else -10.0
+                        ),
+                        mean_nll=(
+                            0.01
+                            if candidate.candidate_id in winners
+                            else 10.0
+                        ),
+                        ppl=(
+                            1.01
+                            if candidate.candidate_id in winners
+                            else 22026.0
+                        ),
+                        token_scores=[],
+                    )
+                    for candidate in request.candidates
+                ],
+            )
+
+    catalog = load_runtime_action_catalog()
+    numeric = numeric_gesture_candidates_by_value(catalog)
+    client = SpeculativeActionClient(
+        category_id=catalog.categories[0].category_id,
+        numeric_candidate_id=numeric[5].candidate_id,
+        reply_chunks=["2,3"],
+    )
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    await start_numeric_reply_session(session, catalog)
+    turn_id = "visual-arithmetic-speculative-action"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text="这个加这个等于多少")
+    )
+
+    ready = [event for event in ws.events if event["type"] == "turn.action.ready"]
+    assert len(ready) == 1
+    assert ready[0]["action"]["candidate_id"] == numeric[5].candidate_id
+    assert ready[0]["action"]["execute"] is True
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    assert result["action"]["candidate_id"] == numeric[5].candidate_id
+    assert result["reply"]["text"] == "答案是数字5。"
+
+
+@pytest.mark.asyncio
 async def test_avatar_image_encoder_prefetch_starts_during_collection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5319,6 +5538,126 @@ async def test_visual_number_identification_reuses_action_observation_for_reply(
     assert context["visual_observation_number"] == expected_number
     assert context["visual_execution_available"] is expected_execution_available
     assert "错误回复" not in json.dumps(ws.events, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_output", "source_label"),
+    [
+        ("数字六", "数字六手势"),
+        ("两指捏合", "两指捏合"),
+    ],
+)
+async def test_visual_gesture_identification_localizes_public_reply_label(
+    monkeypatch: pytest.MonkeyPatch,
+    model_output: str,
+    source_label: str,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    catalog = load_global_action_catalog()
+    selected = next(
+        candidate
+        for candidate in catalog.candidate_by_id.values()
+        if candidate.source_label == source_label
+    )
+    structured_logs: list[tuple[str, str, dict[str, object]]] = []
+
+    class VisualGestureClient(SystemRouteFusionClient):
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            if request.metadata.get("task") != "session_visual_gesture_probe":
+                raise AssertionError(
+                    f"unexpected generation task: {request.metadata.get('task')}"
+                )
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text=model_output,
+                finish_reason="stop",
+                output_token_logprobs=[[-0.1, 11]],
+                output_top_logprobs=[[[-0.1, 11], [-0.8, 12]]],
+            )
+
+    async def identify_gesture_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result("COPY_HAND")
+        return TurnIntent(
+            speech="none",
+            text="",
+            body="这个手势",
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate="COPY_HAND",
+            visual_hand_mode="identify_gesture",
+            visual_answer_output="gesture_and_speech",
+        )
+
+    def capture_structured_log(log_type: str, event: str, **fields) -> bool:
+        structured_logs.append((log_type, event, fields))
+        return True
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", identify_gesture_intent)
+    monkeypatch.setattr(pipeline, "emit_structured_log", capture_structured_log)
+    client = VisualGestureClient(category_id="31", reply_chunks=["wrong reply"])
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.visual_gesture_generation_enabled = True
+    await start_numeric_reply_session(
+        session,
+        catalog,
+        outputs=["text", "action"],
+        locale="en-US",
+    )
+    turn_id = "visual-gesture-identification-en"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text="What gesture is this?")
+    )
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    public_label = selected.label_for("en-US")
+    assert result["reply"]["text"] == (
+        f"The recognized catalog gesture is {public_label}."
+    )
+    context = result["media_summary"]["action_context"]
+    assert context["visual_observation_candidate_id"] == selected.candidate_id
+    assert context["visual_observation_label"] == model_output
+    resolved_log = next(
+        fields
+        for log_type, event, fields in structured_logs
+        if log_type == "reply" and event == "visual_hand_public_reply_resolved"
+    )
+    assert resolved_log["visual_public_label"] == public_label
+    assert resolved_log["visual_public_label_locale"] == "en-US"
+    assert resolved_log["visual_public_label_source"] == (
+        "prompt_text_by_locale"
+    )
+    assert model_output not in result["reply"]["text"]
+    assert "wrong reply" not in json.dumps(ws.events, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -8298,6 +8637,45 @@ async def test_shared_generated_intent_without_action_is_rechecked() -> None:
 
 
 @pytest.mark.asyncio
+async def test_current_view_answer_keeps_language_without_speech_recheck() -> None:
+    client = ReplySpeechModeClient("S0")
+    session = make_session(FakeWebSocket(), client)
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-current-view-answer",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(user_turn_start("turn-current-view-answer"))
+    turn = session.active_turn
+    assert turn is not None
+    turn.phase = multimodal_module.TURN_PHASE_PROCESSING
+    turn.request_base = "request-current-view-answer"
+    turn.intent = TurnIntent(
+        speech="generated",
+        text="回答当前画面问题",
+        body="",
+        body_mode="none",
+        face="",
+        history=False,
+        elapsed_ms=12.5,
+        visual_scope_gate="VIEW_ANSWER",
+    )
+
+    route = await session._classify_reply_history_requirement(
+        turn,
+        ["audio-current"],
+    )
+
+    assert route.decision == "CURRENT_ONLY"
+    assert route.reply_mode == "LANGUAGE_REQUIRED"
+    assert route.stats == {"source": "shared_turn_intent"}
+    assert client.score_requests == []
+
+
+@pytest.mark.asyncio
 async def test_explicit_capability_intent_keeps_language_without_speech_recheck() -> None:
     client = ReplySpeechModeClient("S1")
     session = make_session(FakeWebSocket(), client)
@@ -10186,6 +10564,58 @@ async def test_user_turn_with_explicit_text_can_forward_reply_history() -> None:
     assert any(
         message.content == "历史回复" for message in request.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_current_view_reply_excludes_unrelated_context() -> None:
+    from types import SimpleNamespace
+
+    session = make_session(FakeWebSocket(), FakeClient())
+    await session.handle_session_start(
+        {
+            "type": "session.start",
+            "session_id": "session-current-view-context-isolation",
+            "language": "zh",
+            "modalities": ["text"],
+        }
+    )
+    await session.handle_turn_start(
+        user_turn_start("turn-current-view-context-isolation")
+    )
+    turn = session.active_turn
+    assert turn is not None
+    turn.text = "这是什么"
+    turn.reply_context = "播客话筒背景不得进入当前画面回答"
+    turn.knowledge_context = SimpleNamespace(
+        should_inject=True,
+    )
+    turn.intent = TurnIntent(
+        speech="generated",
+        text="回答当前画面问题",
+        body="",
+        body_mode="none",
+        face="",
+        history=False,
+        visual_scope_gate="VIEW_ANSWER",
+    )
+
+    request, forwarded_roles = session._build_reply_request(
+        turn,
+        ["audio-current"],
+        ["phone-image"],
+        ["user_camera"],
+        None,
+    )
+
+    assert forwarded_roles == ["user_camera"]
+    rendered = json.dumps(
+        [message.content for message in request.messages],
+        ensure_ascii=False,
+    )
+    assert "播客话筒背景" not in rendered
+    assert "External knowledge evidence" not in rendered
+    assert "当前画面问答" in rendered
+    assert "visual_scope_gate" in rendered and "VIEW_ANSWER" in rendered
 
 
 @pytest.mark.asyncio

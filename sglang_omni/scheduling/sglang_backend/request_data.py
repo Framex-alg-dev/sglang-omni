@@ -31,6 +31,11 @@ class SGLangARRequestData(ARRequestData):
     tts_pad_embed: Any = None
     tts_eos_embed: Any = None
     thinker_chunks_done: bool = True
+    # A small, allowlisted scheduling hint for latency-sensitive realtime
+    # requests.  The scheduler treats every limit in the plan as a hard bound;
+    # it is deliberately separate from SGLang's global request priority so a
+    # realtime hint cannot turn into unbounded starvation.
+    latency_priority_plan: Any = None
     # Action suffix scoring uses one prefix Req followed by candidate Reqs.
     action_scoring_role: str | None = None
     action_scoring_parent: Any = None

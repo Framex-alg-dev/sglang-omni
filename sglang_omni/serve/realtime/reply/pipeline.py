@@ -61,7 +61,10 @@ from sglang_omni.serve.realtime.reply.generation import ReplyGenerationComponent
 from sglang_omni.serve.realtime.reply.prompts import ReplyPromptComponent
 from sglang_omni.serve.realtime.reply.history import ReplyHistoryComponent
 from sglang_omni.serve.realtime.knowledge.prompt import render_knowledge_context
-from sglang_omni.serve.realtime.turn_intent import VISUAL_GESTURE_ANSWER_GATE
+from sglang_omni.serve.realtime.turn_intent import (
+    VISUAL_GENERAL_ANSWER_GATE,
+    VISUAL_GESTURE_ANSWER_GATE,
+)
 from sglang_omni.serve.realtime.visual_observation import (
     VISUAL_OBSERVATION_TOP_LOGPROBS,
 )
@@ -197,6 +200,13 @@ class ReplyPipeline:
         reply_images, reply_image_roles = self._select_reply_user_camera_images(
             images, image_roles
         )
+        visual_general_answer = bool(
+            turn.intent is not None
+            and turn.intent.visual_scope_gate == VISUAL_GENERAL_ANSWER_GATE
+        )
+        knowledge_context_for_reply = (
+            None if visual_general_answer else turn.knowledge_context
+        )
         reply_system_parts: list[str] = []
         if self.instructions.strip():
             reply_system_parts.append(self.instructions.strip())
@@ -292,7 +302,11 @@ class ReplyPipeline:
             parts.extend({"type": "image"} for _ in reply_image_roles)
         reply_context = (
             turn.reply_context.strip()
-            if isinstance(turn.reply_context, str) and turn.reply_context.strip()
+            if (
+                not visual_general_answer
+                and isinstance(turn.reply_context, str)
+                and turn.reply_context.strip()
+            )
             else None
         )
         podcast_context = bool(
@@ -310,9 +324,13 @@ class ReplyPipeline:
             # user message (below system authority), before the actual current
             # speech/text, and explicitly mark it as non-instructional data.
             parts.append({"type": "text", "text": session_memory_context.text})
-        if turn.knowledge_context is not None and turn.knowledge_context.should_inject:
+        if (
+            not visual_general_answer
+            and knowledge_context_for_reply is not None
+            and knowledge_context_for_reply.should_inject
+        ):
             knowledge_text = render_knowledge_context(
-                turn.knowledge_context, language=self.language
+                knowledge_context_for_reply, language=self.language
             )
             if knowledge_text:
                 parts.append({"type": "text", "text": knowledge_text})
@@ -368,7 +386,9 @@ class ReplyPipeline:
             turn.intent is not None
             and turn.intent.visual_scope_gate == VISUAL_GESTURE_ANSWER_GATE
         )
-        if reply_image_roles and not visual_gesture_answer:
+        if reply_image_roles and visual_general_answer:
+            parts.append(self._reply_current_view_answer_part())
+        elif reply_image_roles and not visual_gesture_answer:
             # Repeat only the decision boundary after the current speech/text.
             # The earlier label explains the image role; this final guard keeps
             # available camera frames from becoming the default reply topic.
@@ -454,18 +474,18 @@ class ReplyPipeline:
                 ),
                 "session_memory_enabled": self.session_memory_store is not None,
                 "knowledge_decision": (
-                    turn.knowledge_context.decision
-                    if turn.knowledge_context is not None
+                    knowledge_context_for_reply.decision
+                    if knowledge_context_for_reply is not None
                     else None
                 ),
                 "knowledge_result_id": (
-                    turn.knowledge_context.result_id
-                    if turn.knowledge_context is not None
+                    knowledge_context_for_reply.result_id
+                    if knowledge_context_for_reply is not None
                     else None
                 ),
                 "knowledge_evidence_count": (
-                    len(turn.knowledge_context.evidence)
-                    if turn.knowledge_context is not None
+                    len(knowledge_context_for_reply.evidence)
+                    if knowledge_context_for_reply is not None
                     else 0
                 ),
                 "session_memory_write_enabled": (

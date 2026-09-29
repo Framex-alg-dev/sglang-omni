@@ -51,6 +51,10 @@ ACTION_SCORE_STAGE = "action_score"
 ACTION_SCORE_TASK = "action_suffix_scoring"
 ENCODER_PREFETCH_STAGE = "encoder_prefetch_done"
 IMAGE_ENCODER_PREFETCH_TASK = "image_encoder_prefetch"
+TURN_INTENT_TASK = "session_turn_intent"
+VISUAL_PROBE_TASKS = frozenset(
+    {"session_visual_gesture_probe", "session_visual_arithmetic_probe"}
+)
 _ACTION_SELECTION_TOKEN_VALIDATION_LOCK = threading.Lock()
 _VALIDATED_ACTION_SELECTION_TOKEN_MAPS: set[tuple[int, str]] = set()
 
@@ -93,6 +97,48 @@ def is_image_encoder_prefetch_request(
         and isinstance(request.metadata, dict)
         and request.metadata.get("task") == IMAGE_ENCODER_PREFETCH_TASK
     )
+
+
+def realtime_latency_priority_plan(
+    request_or_payload: OmniRequest | StagePayload | None,
+) -> dict[str, Any] | None:
+    """Return bounded scheduler hints for trusted realtime request classes.
+
+    These hints affect admission order only; they do not alter prompts,
+    sampling, candidates, or model outputs.  Turn intent gets an eighteen-token
+    decode window: that covers the longest current visual-answer field and the
+    canonical COPY route plus its required body target.  Visual probes only
+    need prompt admission priority after that authoritative prefix selects the
+    visual route.
+    """
+
+    request = (
+        request_or_payload.request
+        if isinstance(request_or_payload, StagePayload)
+        else request_or_payload
+    )
+    metadata = getattr(request, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    task = metadata.get("task")
+    logical_request_id = metadata.get("logical_request_id")
+    if task == TURN_INTENT_TASK:
+        return {
+            "stage": "turn_intent_route",
+            "logical_request_id": logical_request_id,
+            "prefill_priority_s": 0.25,
+            "decode_protect_steps": 18,
+            "decode_protect_s": 0.20,
+        }
+    if task in VISUAL_PROBE_TASKS and metadata.get("private_output") is True:
+        return {
+            "stage": "visual_probe",
+            "logical_request_id": logical_request_id,
+            "prefill_priority_s": 0.25,
+            "decode_protect_steps": 0,
+            "decode_protect_s": 0.0,
+        }
+    return None
 
 
 def output_modalities(request: OmniRequest | None) -> set[str] | None:
@@ -1648,6 +1694,7 @@ def make_thinker_scheduler_adapters(
             thinker_config=thinker_config,
         )
         req_data.stage_payload = payload
+        req_data.latency_priority_plan = realtime_latency_priority_plan(payload)
         return req_data
 
     def result_adapter(data: SGLangARRequestData) -> StagePayload:

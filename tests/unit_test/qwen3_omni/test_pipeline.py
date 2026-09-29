@@ -43,6 +43,7 @@ from sglang_omni.models.qwen3_omni.request_builders import (
     project_preprocessing_to_mm_aggregate,
     project_talker_to_code2wav,
     project_thinker_to_decode,
+    realtime_latency_priority_plan,
     resolve_mm_aggregate_wait_sources,
     resolve_preprocessing_next_stages,
 )
@@ -58,6 +59,61 @@ from tests.unit_test.fixtures.qwen_fakes import (
     make_qwen_payload,
     make_qwen_state,
 )
+
+
+@pytest.mark.parametrize(
+    "metadata,expected",
+    [
+        (
+            {"task": "session_turn_intent", "logical_request_id": "turn-a"},
+            {
+                "stage": "turn_intent_route",
+                "logical_request_id": "turn-a",
+                "prefill_priority_s": 0.25,
+                "decode_protect_steps": 18,
+                "decode_protect_s": 0.20,
+            },
+        ),
+        (
+            {
+                "task": "session_visual_gesture_probe",
+                "logical_request_id": "turn-a",
+                "private_output": True,
+            },
+            {
+                "stage": "visual_probe",
+                "logical_request_id": "turn-a",
+                "prefill_priority_s": 0.25,
+                "decode_protect_steps": 0,
+                "decode_protect_s": 0.0,
+            },
+        ),
+        (
+            {
+                "task": "session_visual_arithmetic_probe",
+                "logical_request_id": "turn-a",
+                "private_output": True,
+            },
+            {
+                "stage": "visual_probe",
+                "logical_request_id": "turn-a",
+                "prefill_priority_s": 0.25,
+                "decode_protect_steps": 0,
+                "decode_protect_s": 0.0,
+            },
+        ),
+        (
+            {"task": "session_visual_gesture_probe", "private_output": False},
+            None,
+        ),
+        ({"task": "ordinary_generation"}, None),
+    ],
+)
+def test_realtime_latency_priority_plan_is_bounded_and_task_scoped(
+    metadata, expected
+):
+    request = OmniRequest(inputs=[], metadata=metadata)
+    assert realtime_latency_priority_plan(request) == expected
 
 
 def test_audio_encoder_batch_shares_identical_cache_key(

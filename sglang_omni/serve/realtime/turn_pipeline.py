@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sglang_omni.serve.realtime.turn_intent import (
     EarlyBodyIntent,
+    VISUAL_GENERAL_ANSWER_GATE,
     VISUAL_HAND_MODE_IDENTIFY_GESTURE,
     VISUAL_HAND_MODE_IDENTIFY_NUMBER,
     VISUAL_GESTURE_ANSWER_GATE,
@@ -1093,12 +1094,15 @@ class TurnPipeline:
 
             def visual_hand_public_reply_text(
                 observation_context: dict[str, Any],
-            ) -> str:
+            ) -> tuple[str, str | None, str]:
                 assert turn.intent is not None
                 if not turn.intent.speaks_visual_hand_answer():
-                    return ""
+                    return "", None, "not_applicable"
                 observed_label = observation_context.get(
                     "visual_observation_label"
+                )
+                observed_candidate_id = observation_context.get(
+                    "visual_observation_candidate_id"
                 )
                 observed_number = observation_context.get(
                     "visual_observation_number"
@@ -1116,27 +1120,67 @@ class TurnPipeline:
                         else self._prompt(
                             zh="我没看清这个数字手势。",
                             en="I couldn't clearly recognize the number gesture.",
-                        )
+                        ),
+                        None,
+                        "numeric_value",
                     )
                 if (
                     turn.intent.visual_hand_mode
                     == VISUAL_HAND_MODE_IDENTIFY_GESTURE
                 ):
+                    public_label = ""
+                    public_label_source = "missing"
+                    if isinstance(observed_candidate_id, str):
+                        catalog = self.global_action_catalog
+                        catalog_candidate = (
+                            catalog.candidate_by_id.get(observed_candidate_id)
+                            if catalog is not None
+                            else None
+                        )
+                        if catalog_candidate is not None:
+                            public_label = catalog_candidate.label_for(
+                                self.locale
+                            ).strip()
+                            public_label_source = (
+                                "prompt_text_by_locale"
+                                if public_label
+                                != catalog_candidate.source_label.strip()
+                                else "source_label_fallback"
+                            )
+                        else:
+                            session_candidate = self.candidate_by_id.get(
+                                observed_candidate_id
+                            )
+                            if session_candidate is not None:
+                                public_label = (
+                                    session_candidate.prompt_label
+                                    or session_candidate.source_label
+                                ).strip()
+                                public_label_source = (
+                                    "session_prompt_label"
+                                    if session_candidate.prompt_label.strip()
+                                    else "source_label_fallback"
+                                )
+                    if not public_label and isinstance(observed_label, str):
+                        public_label = observed_label.strip()
+                        public_label_source = "observation_label_fallback"
                     return (
                         self._prompt(
-                            zh=f"这是{observed_label}。",
+                            zh=f"这是{public_label}。",
                             en=(
                                 "The recognized catalog gesture is "
-                                f"{observed_label}."
+                                f"{public_label}."
                             ),
                         )
-                        if isinstance(observed_label, str) and observed_label
+                        if public_label
                         else self._prompt(
                             zh="我没看清这个手势。",
                             en="I couldn't clearly recognize the gesture.",
-                        )
+                        ),
+                        public_label or None,
+                        public_label_source,
                     )
-                return ""
+                return "", None, "not_applicable"
 
             async def send_expression_ready(value: dict[str, Any]) -> None:
                 nonlocal expression_ready_sent
@@ -1292,6 +1336,18 @@ class TurnPipeline:
                 # selected catalog action to the dedicated greeting action.
                 waited_for_unified_intent = False
                 category_decision = turn.action_category_decision
+                action_image_roles = (
+                    args[2]
+                    if len(args) > 2
+                    else kwargs.get("image_roles", [])
+                )
+                has_user_camera = IMAGE_ROLE_USER_CAMERA in action_image_roles
+                pending_visual_scope = ""
+                if (
+                    has_user_camera
+                    and visual_scope_future is not None
+                ):
+                    pending_visual_scope = await visual_scope_future
                 ambiguous_concrete_category = bool(
                     category_decision is not None
                     and category_decision.category_id is not None
@@ -1301,20 +1357,111 @@ class TurnPipeline:
                         getattr(self, "action_decision_min_margin", 0.10)
                     )
                 )
+                visual_publication_requires_intent = bool(
+                    pending_visual_scope
+                    or (
+                        use_batched_decision
+                        and decision.visual_scope
+                    )
+                )
                 should_wait_for_unified_intent = bool(
                     turn.turn_origin == TURN_ORIGIN_USER
                     and intent_task is not None
-                    and not action_is_terminal_without_execution
                     and (
-                        not use_batched_decision
-                        or decision.reaction_type != "none"
-                        or ambiguous_concrete_category
+                        visual_publication_requires_intent
+                        or (
+                            not action_is_terminal_without_execution
+                            and (
+                                not use_batched_decision
+                                or decision.reaction_type != "none"
+                                or ambiguous_concrete_category
+                            )
+                        )
                     )
                 )
                 if should_wait_for_unified_intent:
                     turn.intent = await intent_task
                     waited_for_unified_intent = True
                 intent = turn.intent
+
+                if (
+                    intent is not None
+                    and intent.visual_scope_gate == VISUAL_GENERAL_ANSWER_GATE
+                ):
+                    # A current-view question owns only the language channel.
+                    # Speculative action scoring may run in parallel for
+                    # latency, but its result is neither unsupported nor an
+                    # action failure: no body action was requested at all.
+                    result = (
+                        {
+                            "candidate_id": "body_not_requested",
+                            "action_id": "no_action",
+                            "execution_binding": {},
+                            "execute": False,
+                            "support_status": "not_required",
+                            "fallback_applied": False,
+                            "reason_code": "current_view_answer",
+                        },
+                        [],
+                        result[2],
+                        {
+                            **result[3],
+                            "selection_mode": "current_view_answer",
+                            "generic_action_scoring_discarded": True,
+                        },
+                    )
+                    scored_action = result[0]
+                    action_is_terminal_without_execution = True
+                    emit_structured_log(
+                        "action",
+                        "speculative_action_discarded_for_current_view_answer",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        model_request_added=False,
+                    )
+                elif (
+                    intent is not None
+                    and intent.visual_scope_gate in VISUAL_GESTURE_COPY_ROUTES
+                    and visual_gesture_probe_task is not None
+                ):
+                    # COPY_HAND/COPY_ACTION is defined by the pixels, not by
+                    # the speculative catalog score. Wait for the already
+                    # running bounded visual probe and make it authoritative.
+                    visual_result = await visual_gesture_probe_task
+                    if visual_result is not None:
+                        speculative_candidate_id = (
+                            scored_action.get("candidate_id")
+                            if scored_action is not None
+                            else None
+                        )
+                        result = visual_result
+                        scored_action = result[0]
+                        action_is_terminal_without_execution = bool(
+                            scored_action is not None
+                            and (
+                                not scored_action.get("execute")
+                                or scored_action.get("support_status")
+                                == "unsupported"
+                            )
+                        )
+                        emit_structured_log(
+                            "action",
+                            "speculative_action_reconciled_from_visual_probe",
+                            session_id=self.session_id,
+                            turn_id=turn_id,
+                            trace_id=turn.trace_id,
+                            speculative_candidate_id=(
+                                speculative_candidate_id
+                            ),
+                            selected_candidate_id=(
+                                scored_action.get("candidate_id")
+                                if scored_action is not None
+                                else None
+                            ),
+                            visual_scope_gate=intent.visual_scope_gate,
+                            model_request_added=False,
+                        )
 
                 reconciled_body_task = (
                     early_body_intent.body_task
@@ -1536,6 +1683,12 @@ class TurnPipeline:
                     # and low-confidence grouped outcomes remain fail-closed.
                     grouped_authoritative_allow = decision.allows_body
                     intent_allows_body = bool(grouped_authoritative_allow)
+                    if (
+                        intent is not None
+                        and intent.visual_scope_gate
+                        == VISUAL_GENERAL_ANSWER_GATE
+                    ):
+                        intent_allows_body = False
                     if early_body_intent is not None:
                         if early_body_intent.body_intent == "perform":
                             intent_allows_body = True
@@ -1657,7 +1810,7 @@ class TurnPipeline:
                     blocked = dict(result[0])
                     blocked.update(
                         execute=False,
-                        support_status="unsupported",
+                        support_status="not_required",
                         intent_gate_blocked=True,
                         reason_code="intent_gate_blocked",
                     )
@@ -1693,13 +1846,46 @@ class TurnPipeline:
                             unsafe_decision_disagreement
                         ),
                     )
-                if (
+                publish_action_independently = bool(
                     turn.turn_origin == TURN_ORIGIN_USER
                     and (
                         intent_allows_body
                         or action_is_terminal_without_execution
                     )
-                ):
+                )
+                withhold_for_visual_answer = bool(
+                    intent is not None
+                    and intent.visual_scope_gate
+                    == VISUAL_GESTURE_ANSWER_GATE
+                )
+                if publish_action_independently and withhold_for_visual_answer:
+                    # The speculative catalog result is not final for a visual
+                    # arithmetic answer.  A blocked/no-op result is normally safe
+                    # to publish early, but doing so consumes the turn's one-shot
+                    # action.ready slot before operand resolution can select the
+                    # concrete numeric gesture.
+                    emit_structured_log(
+                        "action",
+                        "speculative_action_withheld_for_visual_answer",
+                        session_id=self.session_id,
+                        turn_id=turn_id,
+                        trace_id=turn.trace_id,
+                        candidate_id=(
+                            result[0].get("candidate_id")
+                            if result[0] is not None
+                            else None
+                        ),
+                        execute=bool(
+                            result[0] is not None
+                            and result[0].get("execute")
+                        ),
+                        support_status=(
+                            result[0].get("support_status")
+                            if result[0] is not None
+                            else None
+                        ),
+                    )
+                elif publish_action_independently:
                     action = result[0]
                     independently_published_action = dict(action) if action else None
                     await send_action_ready()
@@ -1728,6 +1914,7 @@ class TurnPipeline:
                     and category_support_status == "unsupported"
                     and "expression" not in self.modalities
                     and not preserve_language_reply_on_unsupported_action
+                    and not visual_general_answer
                     and provisional_state is not None
                     and provisional_state.status == "pending"
                     and provisional_discard_task is None
@@ -1839,6 +2026,7 @@ class TurnPipeline:
             action_current_image_roles = current_image_roles
             visual_scope_code = ""
             visual_gesture_answer = False
+            visual_general_answer = False
             body_action_not_requested = False
             intent_supports_scope_future = False
             intent_detail_release: asyncio.Event | None = None
@@ -2157,6 +2345,11 @@ class TurnPipeline:
                     and turn.intent.visual_scope_gate
                     == VISUAL_GESTURE_ANSWER_GATE
                 )
+                visual_general_answer = bool(
+                    turn.intent is not None
+                    and turn.intent.visual_scope_gate
+                    == VISUAL_GENERAL_ANSWER_GATE
+                )
                 visual_copy_gesture = bool(
                     turn.intent is not None
                     and turn.intent.visual_scope_gate
@@ -2245,6 +2438,8 @@ class TurnPipeline:
                     and turn.intent.reaction_mode == "none"
                     and not visual_gesture_answer
                     and not (
+                        not visual_general_answer
+                        and
                         getattr(
                             self, "action_decision_batch_mode", "off"
                         )
@@ -2529,6 +2724,7 @@ class TurnPipeline:
                         await send_expression_ready(expression)
                 elif (
                     not visual_gesture_answer
+                    and not visual_general_answer
                     and ("expression" in self.modalities or turn.intent is None)
                 ):
                     performance_task = track_branch(
@@ -2554,6 +2750,7 @@ class TurnPipeline:
                 and self.provided_entity_context is not None
                 and not provided_reply
                 and turn.turn_origin == TURN_ORIGIN_USER
+                and not visual_general_answer
             ):
                 turn.knowledge_context = self.provided_entity_context
             knowledge_speculative_enabled = bool(
@@ -2760,7 +2957,11 @@ class TurnPipeline:
                             observation_context: dict[str, Any] = {}
                         else:
                             observation_context = visual_result[3]
-                        answer = visual_hand_public_reply_text(
+                        (
+                            answer,
+                            public_label,
+                            public_label_source,
+                        ) = visual_hand_public_reply_text(
                             observation_context
                         )
                         emit_structured_log(
@@ -2783,6 +2984,9 @@ class TurnPipeline:
                                     "visual_observation_number"
                                 )
                             ),
+                            visual_public_label=public_label,
+                            visual_public_label_locale=self.locale,
+                            visual_public_label_source=public_label_source,
                             output_text=answer,
                             model_request_added=False,
                             after_commit_ms=self._after_commit_ms(turn),

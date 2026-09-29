@@ -446,6 +446,74 @@ def test_model_facing_semantic_route_is_mapped_to_internal_compatibility_code():
 
 
 @pytest.mark.parametrize(
+    "route",
+    ["ANSWER_CURRENT_VIEW", "VIEW_ANSWER"],
+)
+def test_current_view_answer_is_a_generated_speech_only_route(route):
+    intent = TurnIntent.parse(
+        json.dumps(
+            payload(
+                visual_route=route,
+                speech="generated",
+                text="回答用户关于当前画面的提问",
+                body="",
+                body_mode="none",
+            ),
+            ensure_ascii=False,
+        ),
+        has_user_camera=True,
+    )
+
+    assert intent.visual_scope_gate == "VIEW_ANSWER"
+    assert intent.speech == "generated"
+    assert intent.body_mode == "none" and intent.body == "" and intent.face == ""
+    assert json.loads(intent.action_context("这是什么"))["visual_scope_gate"] == "VIEW_ANSWER"
+
+
+def test_current_view_answer_requires_camera_and_rejects_actions():
+    raw = json.dumps(
+        payload(
+            visual_route="ANSWER_CURRENT_VIEW",
+            speech="generated",
+            text="回答当前画面问题",
+            body="",
+            body_mode="none",
+        ),
+        ensure_ascii=False,
+    )
+    with pytest.raises(ValueError, match="requires a current user camera"):
+        TurnIntent.parse(raw, has_user_camera=False)
+
+    with pytest.raises(ValueError, match="cannot execute an action"):
+        TurnIntent.parse(
+            json.dumps(
+                payload(
+                    visual_route="ANSWER_CURRENT_VIEW",
+                    speech="generated",
+                    text="回答当前画面问题",
+                    body="这个物品交互",
+                    body_mode="perform",
+                ),
+                ensure_ascii=False,
+            ),
+            has_user_camera=True,
+        )
+
+
+def test_current_view_answer_route_is_available_from_complete_stream_prefix():
+    from sglang_omni.serve.realtime.turn_intent import (
+        _visual_route_from_partial_output,
+    )
+
+    raw = (
+        '{"visual":"ANSWER_CURRENT_VIEW","body_intent":"none",'
+        '"speech":"generated","reaction":"none"}'
+    )
+    assert _visual_route_from_partial_output(raw, has_user_camera=True) == "VIEW_ANSWER"
+    assert _visual_route_from_partial_output(raw, has_user_camera=False) == ""
+
+
+@pytest.mark.parametrize(
     "body_task",
     ["数字三手势", "数字六手势", "挥手", "双手比心"],
 )
