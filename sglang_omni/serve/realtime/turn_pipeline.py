@@ -1094,12 +1094,15 @@ class TurnPipeline:
 
             def visual_hand_public_reply_text(
                 observation_context: dict[str, Any],
-            ) -> str:
+            ) -> tuple[str, str | None, str]:
                 assert turn.intent is not None
                 if not turn.intent.speaks_visual_hand_answer():
-                    return ""
+                    return "", None, "not_applicable"
                 observed_label = observation_context.get(
                     "visual_observation_label"
+                )
+                observed_candidate_id = observation_context.get(
+                    "visual_observation_candidate_id"
                 )
                 observed_number = observation_context.get(
                     "visual_observation_number"
@@ -1117,27 +1120,67 @@ class TurnPipeline:
                         else self._prompt(
                             zh="我没看清这个数字手势。",
                             en="I couldn't clearly recognize the number gesture.",
-                        )
+                        ),
+                        None,
+                        "numeric_value",
                     )
                 if (
                     turn.intent.visual_hand_mode
                     == VISUAL_HAND_MODE_IDENTIFY_GESTURE
                 ):
+                    public_label = ""
+                    public_label_source = "missing"
+                    if isinstance(observed_candidate_id, str):
+                        catalog = self.global_action_catalog
+                        catalog_candidate = (
+                            catalog.candidate_by_id.get(observed_candidate_id)
+                            if catalog is not None
+                            else None
+                        )
+                        if catalog_candidate is not None:
+                            public_label = catalog_candidate.label_for(
+                                self.locale
+                            ).strip()
+                            public_label_source = (
+                                "prompt_text_by_locale"
+                                if public_label
+                                != catalog_candidate.source_label.strip()
+                                else "source_label_fallback"
+                            )
+                        else:
+                            session_candidate = self.candidate_by_id.get(
+                                observed_candidate_id
+                            )
+                            if session_candidate is not None:
+                                public_label = (
+                                    session_candidate.prompt_label
+                                    or session_candidate.source_label
+                                ).strip()
+                                public_label_source = (
+                                    "session_prompt_label"
+                                    if session_candidate.prompt_label.strip()
+                                    else "source_label_fallback"
+                                )
+                    if not public_label and isinstance(observed_label, str):
+                        public_label = observed_label.strip()
+                        public_label_source = "observation_label_fallback"
                     return (
                         self._prompt(
-                            zh=f"这是{observed_label}。",
+                            zh=f"这是{public_label}。",
                             en=(
                                 "The recognized catalog gesture is "
-                                f"{observed_label}."
+                                f"{public_label}."
                             ),
                         )
-                        if isinstance(observed_label, str) and observed_label
+                        if public_label
                         else self._prompt(
                             zh="我没看清这个手势。",
                             en="I couldn't clearly recognize the gesture.",
-                        )
+                        ),
+                        public_label or None,
+                        public_label_source,
                     )
-                return ""
+                return "", None, "not_applicable"
 
             async def send_expression_ready(value: dict[str, Any]) -> None:
                 nonlocal expression_ready_sent
@@ -2914,7 +2957,11 @@ class TurnPipeline:
                             observation_context: dict[str, Any] = {}
                         else:
                             observation_context = visual_result[3]
-                        answer = visual_hand_public_reply_text(
+                        (
+                            answer,
+                            public_label,
+                            public_label_source,
+                        ) = visual_hand_public_reply_text(
                             observation_context
                         )
                         emit_structured_log(
@@ -2937,6 +2984,9 @@ class TurnPipeline:
                                     "visual_observation_number"
                                 )
                             ),
+                            visual_public_label=public_label,
+                            visual_public_label_locale=self.locale,
+                            visual_public_label_source=public_label_source,
                             output_text=answer,
                             model_request_added=False,
                             after_commit_ms=self._after_commit_ms(turn),

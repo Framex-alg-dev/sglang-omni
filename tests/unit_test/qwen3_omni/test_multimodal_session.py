@@ -3590,12 +3590,14 @@ async def start_numeric_reply_session(
     catalog: GlobalActionCatalog,
     *,
     outputs: list[str] | None = None,
+    locale: str = "zh-CN",
 ) -> object:
     if catalog.direct_action_selection:
         await session.dispatch(
             protocol_v1_session_start(
                 "numeric-reply-session",
                 outputs=outputs or ["text", "action"],
+                locale=locale,
                 diagnostics={"include_action_scores": True},
                 reply={
                     "instructions": "自然、简洁地回答用户问题。",
@@ -3618,6 +3620,7 @@ async def start_numeric_reply_session(
         protocol_v1_session_start(
             "numeric-reply-session",
             outputs=outputs or ["text", "action"],
+            locale=locale,
             diagnostics={"include_action_scores": True},
             reply={
                 "instructions": "自然、简洁地回答用户问题。",
@@ -5535,6 +5538,126 @@ async def test_visual_number_identification_reuses_action_observation_for_reply(
     assert context["visual_observation_number"] == expected_number
     assert context["visual_execution_available"] is expected_execution_available
     assert "错误回复" not in json.dumps(ws.events, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_output", "source_label"),
+    [
+        ("数字六", "数字六手势"),
+        ("两指捏合", "两指捏合"),
+    ],
+)
+async def test_visual_gesture_identification_localizes_public_reply_label(
+    monkeypatch: pytest.MonkeyPatch,
+    model_output: str,
+    source_label: str,
+) -> None:
+    import sglang_omni.serve.realtime.turn_pipeline as pipeline
+
+    catalog = load_global_action_catalog()
+    selected = next(
+        candidate
+        for candidate in catalog.candidate_by_id.values()
+        if candidate.source_label == source_label
+    )
+    structured_logs: list[tuple[str, str, dict[str, object]]] = []
+
+    class VisualGestureClient(SystemRouteFusionClient):
+        async def completion_stream(self, request, *, request_id: str):
+            self.reply_requests.append(request)
+            if request.metadata.get("task") != "session_visual_gesture_probe":
+                raise AssertionError(
+                    f"unexpected generation task: {request.metadata.get('task')}"
+                )
+            yield CompletionStreamChunk(
+                request_id=request_id,
+                modality="text",
+                text=model_output,
+                finish_reason="stop",
+                output_token_logprobs=[[-0.1, 11]],
+                output_top_logprobs=[[[-0.1, 11], [-0.8, 12]]],
+            )
+
+    async def identify_gesture_intent(
+        session,
+        turn,
+        audios,
+        images=None,
+        image_roles=None,
+        visual_scope_future=None,
+    ):
+        assert visual_scope_future is not None
+        visual_scope_future.set_result("COPY_HAND")
+        return TurnIntent(
+            speech="none",
+            text="",
+            body="这个手势",
+            body_mode="perform",
+            face="",
+            history=False,
+            visual_scope_gate="COPY_HAND",
+            visual_hand_mode="identify_gesture",
+            visual_answer_output="gesture_and_speech",
+        )
+
+    def capture_structured_log(log_type: str, event: str, **fields) -> bool:
+        structured_logs.append((log_type, event, fields))
+        return True
+
+    monkeypatch.setattr(pipeline, "infer_turn_intent", identify_gesture_intent)
+    monkeypatch.setattr(pipeline, "emit_structured_log", capture_structured_log)
+    client = VisualGestureClient(category_id="31", reply_chunks=["wrong reply"])
+    ws = FakeWebSocket()
+    session = make_session(ws, client, global_action_catalog=catalog)
+    session.visual_gesture_generation_enabled = True
+    await start_numeric_reply_session(
+        session,
+        catalog,
+        outputs=["text", "action"],
+        locale="en-US",
+    )
+    turn_id = "visual-gesture-identification-en"
+    await session.handle_turn_start(user_turn_start(turn_id))
+    image = Image.new("RGB", (3, 2), color=(17, 34, 51))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    await session.handle_image_append(
+        {
+            "type": "input_image.append",
+            "turn_id": turn_id,
+            "seq": 1,
+            "timestamp_ms": 1,
+            "image_role": "user_camera",
+            "mime_type": "image/png",
+            "image": base64.b64encode(encoded.getvalue()).decode(),
+        }
+    )
+
+    await session.handle_turn_commit(
+        user_turn_commit(turn_id, text="What gesture is this?")
+    )
+
+    result = next(event for event in ws.events if event["type"] == "turn.result")
+    public_label = selected.label_for("en-US")
+    assert result["reply"]["text"] == (
+        f"The recognized catalog gesture is {public_label}."
+    )
+    context = result["media_summary"]["action_context"]
+    assert context["visual_observation_candidate_id"] == selected.candidate_id
+    assert context["visual_observation_label"] == model_output
+    resolved_log = next(
+        fields
+        for log_type, event, fields in structured_logs
+        if log_type == "reply" and event == "visual_hand_public_reply_resolved"
+    )
+    assert resolved_log["visual_public_label"] == public_label
+    assert resolved_log["visual_public_label_locale"] == "en-US"
+    assert resolved_log["visual_public_label_source"] == (
+        "prompt_text_by_locale"
+    )
+    assert model_output not in result["reply"]["text"]
+    assert "wrong reply" not in json.dumps(ws.events, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

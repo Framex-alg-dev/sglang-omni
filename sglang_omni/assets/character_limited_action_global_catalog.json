@@ -2,7 +2,7 @@
   "schema_version": 2,
   "catalog_version": "v3-numeric-category-ids-r1",
   "action_catalog_version": "v7-numeric-action-ids-r1",
-  "action_catalog_hash": "sha256:87fbb6ed7060fb4be6922fe280b03d1b54a4212ab44801835dadb4369d9443d6",
+  "action_catalog_hash": "sha256:9af4e32af7b35096111c509a8b108d7f26b8c4ece6e1adab3975ee9af7bdea7b",
   "categories": [
     {
       "category_id": "13",
@@ -25,9 +25,23 @@
               "user_reaction_expression": "Select only for natural breathing, quiet idling, or no expressive action; the chest rises slowly and evenly; never replace a specific action request.",
               "proactive_expression": "Select only when no expressive goal exists and a quiet idle is needed; maintain natural breathing; do not use for a concrete presentation or interaction."
             }
+          },
+          "source_label_en": "natural breathing movement",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "natural breathing movement",
+              "short_definition": "The chest rises and falls slowly and evenly with breathing."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "idle action",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "idle action",
+          "short_definition": "Use when there is no explicit expressive goal and only a natural state or small undirected adjustment is needed: breathing, gentle swaying, small seated hip adjustments, or chair rotation. Clear forward/backward torso leaning, reaching, or returning upright belongs to torso forward/backward movements. Distinguish from intentional gestures, emotional actions, and directional movement."
+        }
+      }
     },
     {
       "category_id": "14",
@@ -50,9 +64,23 @@
               "user_reaction_expression": "Select for continuous or repeated side-to-side head shaking; use an even repeated motion; not for a single brief denial.",
               "proactive_expression": "Use when the reply calls for sustained head shaking to express denial; do not use for a single response."
             }
+          },
+          "source_label_en": "continuous head shaking",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "continuous head shaking",
+              "short_definition": "The head swings side to side repeatedly at an even pace."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "head turning",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "head turning",
+          "short_definition": "Use repeated nodding or side-to-side head shaking for a sustained response. Distinguish from a single head raise/lower, head-and-eye turning, and whole-body swaying."
+        }
+      }
     },
     {
       "category_id": "15",
@@ -75,9 +103,23 @@
               "user_reaction_expression": "Select when the user asks to lower the head; bend the head forward and downward at the neck; not for merely looking down.",
               "proactive_expression": "Use when the reply or demonstration explicitly requires lowering the head; do not use when only the gaze moves downward."
             }
+          },
+          "source_label_en": "lowering head",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "lowering head",
+              "short_definition": "From facing forward, bend the head forward and downward at the neck."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "head nodding and tilting",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "head nodding and tilting",
+          "short_definition": "Use for simply raising or lowering the head. Requests such as seductively raising the head that also specify an emotional or social purpose belong to composite emotional actions."
+        }
+      }
     },
     {
       "category_id": "16",
@@ -100,6 +142,13 @@
               "user_reaction_expression": "Select when asked to look at the camera, viewer, or straight ahead; keep the head steady and adjust only the eyes; not for turning the head.",
               "proactive_expression": "Use when directly addressing or recording for the camera; keep the head upright and look forward."
             }
+          },
+          "source_label_en": "looking at camera",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "looking at camera",
+              "short_definition": "Keep the head upright without turning and adjust both eyes together."
+            }
           }
         },
         {
@@ -113,6 +162,13 @@
             "en-US": {
               "user_reaction_expression": "Select when asked to look downward with the eyes; keep the head mostly still; not for lowering the head or leaning forward.",
               "proactive_expression": "Use when the reply explicitly refers to or observes something below; do not use when the head must lower."
+            }
+          },
+          "source_label_en": "looking down",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "looking down",
+              "short_definition": "Turn the eyes downward to direct the gaze below."
             }
           }
         },
@@ -128,9 +184,23 @@
               "user_reaction_expression": "Select for side-to-side eye scanning or visual searching; move the gaze repeatedly; not for looking in one fixed direction.",
               "proactive_expression": "Use when the scene requires searching or surveying the surroundings with the eyes; not when a fixed target is known."
             }
+          },
+          "source_label_en": "scanning gaze",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "scanning gaze",
+              "short_definition": "Move the eyes quickly to scan from side to side."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "gaze",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "gaze",
+          "short_definition": "Use when only the eyes change direction and the head stays essentially still: looking at the camera or viewer, staring, or looking up, down, left, or right. Distinguish from turning the head and eyes together or rotating the body."
+        }
+      }
     },
     {
       "category_id": "19",
@@ -147,7 +217,20 @@
           "source_label": "严肃",
           "short_definition": "眉头收紧下压，嘴角平直收拢的庄重表情。",
           "proactive_expression": "适用于讲述重要信息、风险提示、严肃观点或专业内容时触发，例如“这件事情需要特别注意”",
-          "user_reaction_expression": "适用于用户讨论重大问题、投诉事件、严肃话题或需要专业回应时触发，例如“这个问题很严重”；适用于新闻播报、客服投诉、专业咨询、重要提醒等场景。"
+          "user_reaction_expression": "适用于用户讨论重大问题、投诉事件、严肃话题或需要专业回应时触发，例如“这个问题很严重”；适用于新闻播报、客服投诉、专业咨询、重要提醒等场景。",
+          "source_label_en": "serious expression",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "serious expression",
+              "short_definition": "Draw the brows inward and down; keep the mouth corners straight and closed for a solemn expression."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user discusses a major problem, complaint, serious topic, or need for a professional response, such as 'This is a serious problem'; suitable for news, customer complaints, professional consultation, and important reminders.",
+              "proactive_expression": "Use when presenting important information, risk warnings, serious views, or professional content, such as 'This needs special attention.'"
+            }
+          }
         },
         {
           "candidate_id": "157",
@@ -155,7 +238,20 @@
           "source_label": "惊讶",
           "short_definition": "眉毛快速上扬，双眼睁大嘴微张的意外表情。",
           "proactive_expression": "适用于讲述意外信息、制造悬念、分享令人惊奇的内容时触发，例如“天啊”“太令人震惊了”",
-          "user_reaction_expression": "适用于用户分享惊喜事件、突然消息或超出预期的信息时触发，用户爆出劲爆消息、反转经历、出人意料的爆料、重大突发趣事时常触发该动作，例如“我送你一束花”“我中奖了”“我升职了”“Wait till you hear what happened”；适用于情感互动、故事分享、娱乐聊天、惊喜反馈等场景。日常对话中听到反转八卦、意外见闻、突发好消息、匪夷所思的经历容易做出惊讶动作。"
+          "user_reaction_expression": "适用于用户分享惊喜事件、突然消息或超出预期的信息时触发，用户爆出劲爆消息、反转经历、出人意料的爆料、重大突发趣事时常触发该动作，例如“我送你一束花”“我中奖了”“我升职了”“Wait till you hear what happened”；适用于情感互动、故事分享、娱乐聊天、惊喜反馈等场景。日常对话中听到反转八卦、意外见闻、突发好消息、匪夷所思的经历容易做出惊讶动作。",
+          "source_label_en": "surprised",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "surprised",
+              "short_definition": "Quickly raise the eyebrows, widen the eyes, and slightly open the mouth in surprise."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for surprises, sudden news, or unexpected information, including dramatic revelations, twists, major unexpected anecdotes, and good news: 'I brought you flowers', 'I won a prize', 'I got promoted', or 'Wait till you hear what happened'. Suitable for emotional interaction, stories, entertainment, surprising gossip, and extraordinary experiences.",
+              "proactive_expression": "Use when revealing unexpected information, building suspense, or sharing something astonishing, such as 'Oh my gosh' or 'That is shocking.'"
+            }
+          }
         },
         {
           "candidate_id": "159",
@@ -163,7 +259,20 @@
           "source_label": "害怕",
           "short_definition": "双眼瞪大后缩，眉头上挑嘴角下拉的恐惧表情。",
           "proactive_expression": "适用于讲述恐怖故事、危险事件或提醒风险时触发，例如“这个故事可能有一点吓人”“竟然会发生这样的事”“恐怖的事”",
-          "user_reaction_expression": "用户描述危险经历、恐怖内容或表达害怕情绪时触发，例如“昨天差点出事故”“那里真的很可怕”“太吓人了”；适用于故事讲述、悬疑主题、安全提醒等场景。"
+          "user_reaction_expression": "用户描述危险经历、恐怖内容或表达害怕情绪时触发，例如“昨天差点出事故”“那里真的很可怕”“太吓人了”；适用于故事讲述、悬疑主题、安全提醒等场景。",
+          "source_label_en": "fearful",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "fearful",
+              "short_definition": "Widen the eyes and draw back, with raised brows and downturned mouth corners."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user describes danger, frightening content, or fear, such as 'I almost had an accident yesterday', 'That place is scary', or 'That is terrifying'; suitable for storytelling, suspense, and safety reminders.",
+              "proactive_expression": "Use for scary stories, dangerous events, or risk warnings, such as 'This story may be a little scary', 'I cannot believe that happened', or 'Something terrifying.'"
+            }
+          }
         },
         {
           "candidate_id": "160",
@@ -171,7 +280,20 @@
           "source_label": "委屈",
           "short_definition": "嘴角下撇，眉头微皱眼眶泛红的表情。",
           "proactive_expression": "适用于进行轻度撒娇、表达想被关注时触发，例如“你都好久没有陪我聊天了”“你理理我嘛”",
-          "user_reaction_expression": "适用于用户拒绝互动、责怪数字人或表达冷淡态度时触发，例如“我不跟你玩了”“我讨厌你”“我不喜欢你了”；适用于情感陪伴、亲密互动、撒娇交流等场景。"
+          "user_reaction_expression": "适用于用户拒绝互动、责怪数字人或表达冷淡态度时触发，例如“我不跟你玩了”“我讨厌你”“我不喜欢你了”；适用于情感陪伴、亲密互动、撒娇交流等场景。",
+          "source_label_en": "feeling wronged",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "feeling wronged",
+              "short_definition": "Turn down the mouth corners, slightly knit the brows, and redden the eyes."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user rejects interaction, blames the character, or acts coldly: 'I will not play with you', 'I hate you', or 'I do not like you anymore'; suitable for emotional companionship, intimate interaction, and playful affection.",
+              "proactive_expression": "Use for mild pouting or seeking attention, such as 'You have not chatted with me for so long' or 'Please pay attention to me.'"
+            }
+          }
         },
         {
           "candidate_id": "161",
@@ -179,7 +301,20 @@
           "source_label": "悲伤",
           "short_definition": "眉头内聚下垂，嘴角下拉眼神黯淡的表情。",
           "proactive_expression": "适用于讲述伤感故事、表达遗憾或回忆失落经历时触发，例如“我好难过”“我不开心”",
-          "user_reaction_expression": "用户表达伤心、失落、孤独或经历不好的事情时触发，用户倾诉失意遭遇、失去、委屈、沮丧难过的心事时常触发该动作，例如“我不想再理你了”“不要见了”“I feel so down”“我遭遇了一些不堪的事情”；适用于情感陪伴、安慰聊天、悲伤话题交流等场景。"
+          "user_reaction_expression": "用户表达伤心、失落、孤独或经历不好的事情时触发，用户倾诉失意遭遇、失去、委屈、沮丧难过的心事时常触发该动作，例如“我不想再理你了”“不要见了”“I feel so down”“我遭遇了一些不堪的事情”；适用于情感陪伴、安慰聊天、悲伤话题交流等场景。",
+          "source_label_en": "sad",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "sad",
+              "short_definition": "Draw the brows inward and down, lower the mouth corners, and dim the gaze."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user expresses sadness, disappointment, loneliness, loss, hurt, or difficult experiences: 'I do not want to talk to you anymore', 'Let us not meet again', 'I feel so down', or 'I went through something awful'; suitable for companionship, comfort, and sad topics.",
+              "proactive_expression": "Use for sad stories, regret, or memories of loss, such as 'I feel so sad' or 'I am unhappy.'"
+            }
+          }
         },
         {
           "candidate_id": "162",
@@ -187,7 +322,20 @@
           "source_label": "疑惑",
           "short_definition": "单眉上挑，嘴角微歪头部略侧的表情。",
           "proactive_expression": "适用于主动提出疑问、引导用户思考、发现矛盾信息时触发，例如“这个问题你有没有想过呢？”“听起来好像有一点不一样”",
-          "user_reaction_expression": "用户表达模糊、不完整、前后矛盾的信息，或提出需要进一步确认的问题时触发，例如“我该怎么办呢”“你觉得呢”；适用于多轮聊天、探索式交流、信息确认等需要表现疑问的场景。"
+          "user_reaction_expression": "用户表达模糊、不完整、前后矛盾的信息，或提出需要进一步确认的问题时触发，例如“我该怎么办呢”“你觉得呢”；适用于多轮聊天、探索式交流、信息确认等需要表现疑问的场景。",
+          "source_label_en": "confused",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "confused",
+              "short_definition": "Raise one eyebrow, slightly skew the mouth, and tilt the head a little."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for vague, incomplete, or contradictory information or questions needing clarification, such as 'What should I do?' or 'What do you think?'; suitable for exploratory conversation and checking information.",
+              "proactive_expression": "Use when raising a question, prompting thought, or noticing a contradiction: 'Have you thought about this?' or 'That sounds a little different.'"
+            }
+          }
         },
         {
           "candidate_id": "163",
@@ -195,7 +343,20 @@
           "source_label": "生气",
           "short_definition": "眉头紧锁下压，鼻翼微张嘴角绷紧的愤怒表情伴随瞪眼。",
           "proactive_expression": "适用于表达强烈立场、批判不合理行为或讨论愤怒事件时触发，例如“我真的生气了”“你竟然说出这种话”“这些人太坏了”",
-          "user_reaction_expression": "适用于用户描述被欺骗、不公平待遇、愤怒事件时触发，用户诉说遭遇不公、被冒犯、受委屈、宣泄怒火、吐槽恶劣行为时常触发该动作，例如“他们真的太过分了”“他们竟然欺负我”“That makes me furious”；适用于新闻评论、投诉反馈、情绪共鸣等场景。用户讲述被冒犯、遭遇不公对待、宣泄愤怒时会产生生气神态。"
+          "user_reaction_expression": "适用于用户描述被欺骗、不公平待遇、愤怒事件时触发，用户诉说遭遇不公、被冒犯、受委屈、宣泄怒火、吐槽恶劣行为时常触发该动作，例如“他们真的太过分了”“他们竟然欺负我”“That makes me furious”；适用于新闻评论、投诉反馈、情绪共鸣等场景。用户讲述被冒犯、遭遇不公对待、宣泄愤怒时会产生生气神态。",
+          "source_label_en": "angry",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "angry",
+              "short_definition": "Knit and lower the brows, slightly flare the nostrils, tense the mouth corners, and glare."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user describes deception, unfairness, offenses, grievances, anger, or bad behavior: 'They went too far', 'They actually bullied me', or 'That makes me furious'; suitable for news commentary, complaints, and emotional empathy.",
+              "proactive_expression": "Use to express a strong position, criticize unreasonable behavior, or discuss anger: 'I am really angry', 'How could you say that', or 'Those people are awful.'"
+            }
+          }
         },
         {
           "candidate_id": "164",
@@ -203,9 +364,29 @@
           "source_label": "装可怜（低头咬唇抬眼）",
           "short_definition": "用于明确要求装可怜、委屈或楚楚可怜；低头咬唇并抬眼，不等同于明确要求的卖萌动作。",
           "proactive_expression": "适用于希望拉近关系、请求用户继续互动时触发，例如“陪我聊一会儿嘛”“不要不理我嘛”",
-          "user_reaction_expression": "适用于用户长时间不回应、拒绝交流或表现疏远时触发，例如“我不想聊了”；适用于恋人型陪伴、亲密互动、轻度撒娇等场景。"
+          "user_reaction_expression": "适用于用户长时间不回应、拒绝交流或表现疏远时触发，例如“我不想聊了”；适用于恋人型陪伴、亲密互动、轻度撒娇等场景。",
+          "source_label_en": "acting pitiful",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "acting pitiful",
+              "short_definition": "Use for an explicit request to look pitiful or hurt: lower the head, bite the lip, and look up. This is not equivalent to an explicit request to act cute."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user has not responded for a long time, refuses conversation, or becomes distant, such as 'I do not want to chat'; suitable for romantic companionship, intimate interaction, and mild affectionate pouting.",
+              "proactive_expression": "Use to seek closeness or invite continued interaction, such as 'Keep me company for a while' or 'Please do not ignore me.'"
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "basic expressions",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "basic expressions",
+          "short_definition": "Use when a basic emotion is expressed only through the mouth, eyebrows, eyes, and cheeks. Explicit arm, hand, head-holding, face-covering, open-palm, or coordinated body requests belong to the corresponding composite emotional action."
+        }
+      }
     },
     {
       "category_id": "21",
@@ -225,12 +406,26 @@
           "proactive_expression": "回复需要靠近、探身或加强倾听感时选择；上身整体前倾；仅低头时不得选择。",
           "expressions_by_locale": {
             "en-US": {
-              "user_reaction_expression": "Select when asked to lean the upper body forward, reach closer, or approach the camera; hinge at the hips; not for lowering the head.",
+              "user_reaction_expression": "Select when asked to lean the upper body forward, reach closer, or approach the camera; hinge at the hips. This does not change seated/standing posture and cannot replace standing up, sitting down, stepping, or walking; it is also not for lowering the head.",
               "proactive_expression": "Use when the reply calls for leaning closer, reaching forward, or showing attentive listening; not for a head-only motion."
+            }
+          },
+          "source_label_en": "leaning forward",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "leaning forward",
+              "short_definition": "Tilt the upper body forward as a whole from the hips."
             }
           }
         }
-      ]
+      ],
+      "source_label_en": "torso front-back movements",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "torso front-back movements",
+          "short_definition": "Use when the upper body leans forward/backward from the hips, reaches toward the camera or frame edge, or returns upright, with shoulders and hips generally aligned and feet stationary. Includes moving the torso closer to the camera. This category cannot change seated/standing posture, stand up, sit down, step, or walk; treat those goals as unsupported if no category supports them. Small hip adjustments without clear forward/backward torso movement belong to idle movements. Distinguish from lateral leaning, segmented chest/waist twisting, ceremonial bowing, and a full weight shift."
+        }
+      }
     },
     {
       "category_id": "24",
@@ -253,9 +448,23 @@
               "user_reaction_expression": "Select for a slight courteous nod or acknowledgment; move the head and upper body forward slightly; not for continuous nodding or a full bow.",
               "proactive_expression": "Use for a light greeting, acknowledgment, or polite response; do not use for a formal bow."
             }
+          },
+          "source_label_en": "slight nod greeting",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "slight nod greeting",
+              "short_definition": "Incline the head and upper body forward together slightly in acknowledgment."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "bowing and etiquette",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "bowing and etiquette",
+          "short_definition": "Use a single small nod or a torso bow from the hips with a pause at the bottom and return for formal etiquette. Repeated nodding belongs to repeated head movements; joined palms, clasped-fist greetings, salutes, or bowing with joined hands belong to ceremonial gestures and thanks. Distinguish from free leaning and chest/waist twisting."
+        }
+      }
     },
     {
       "category_id": "25",
@@ -278,6 +487,13 @@
               "user_reaction_expression": "Select when one arm should extend horizontally forward; not for pointing at or touching a target.",
               "proactive_expression": "Use when demonstrating a forward arm extension without pointing or contact."
             }
+          },
+          "source_label_en": "one arm extending forward",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one arm extending forward",
+              "short_definition": "Start with one arm in front of the face and extend it horizontally forward with the elbow slightly bent."
+            }
           }
         },
         {
@@ -292,6 +508,13 @@
               "user_reaction_expression": "Select when one arm should extend toward the character's right; not for pointing at something on the right.",
               "proactive_expression": "Use when demonstrating a rightward horizontal arm extension; not for directional guidance."
             }
+          },
+          "source_label_en": "one arm extending right",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one arm extending right",
+              "short_definition": "Start with one arm in front of the face and extend it horizontally to the body's right."
+            }
           }
         },
         {
@@ -300,9 +523,29 @@
           "source_label": "单臂叉腰",
           "short_definition": "单臂从下至上插到腰部，单手置于腰侧的叉腰姿态。",
           "user_reaction_expression": "用户要求单手叉腰、摆出叉腰姿态或强调单侧手臂姿势时选择；单手由下向上置于腰侧，另一只手臂自然下垂。",
-          "proactive_expression": "表达自信、笃定或略带强调的态度时选择；单手置于腰侧、手肘向外，避免用于要求双手叉腰的场景。"
+          "proactive_expression": "表达自信、笃定或略带强调的态度时选择；单手置于腰侧、手肘向外，避免用于要求双手叉腰的场景。",
+          "source_label_en": "one hand on hip",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand on hip",
+              "short_definition": "Move one arm up from below and place the hand at the side of the waist."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when asked to place one hand on the hip; not for both hands on the hips or a full confidence performance.",
+              "proactive_expression": "Use when the reply needs a lightly confident one-hand-on-hip pose; not for a compound confidence performance."
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "single-arm raising",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "single-arm raising",
+          "short_definition": "Use when the main result is lifting, extending, curling, placing one arm akimbo, or bringing one arm to a target pose without a distinct pointing or object-operation meaning. Includes raising a hand, dumbbell curls, and an explicit request to reach out and pat a head. Directed fingers/palms belong to pointing; other touching or grooming of the head, face, or body belongs to body touch. Distinguish from paired arm movements and continuous arm waving."
+        }
+      }
     },
     {
       "category_id": "26",
@@ -319,9 +562,29 @@
           "source_label": "手臂交叠",
           "short_definition": "双臂屈肘交叠，手部交叠于小腹前。",
           "user_reaction_expression": "用户要求双臂交叠、双手在身前交握或保持端庄站姿时选择；双肘弯曲，双手交叠在小腹前。",
-          "proactive_expression": "需要安静聆听、正式等候或保持克制端庄姿态时选择；双手在小腹前交叠，不表达抱胸防御。"
+          "proactive_expression": "需要安静聆听、正式等候或保持克制端庄姿态时选择；双手在小腹前交叠，不表达抱胸防御。",
+          "source_label_en": "arms folded",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "arms folded",
+              "short_definition": "Bend and cross the arms, with the hands overlapping in front of the lower abdomen."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when the arms or hands should overlap in front of the lower torso; not for crossing the arms over the chest.",
+              "proactive_expression": "Use for a formal resting or quiet waiting posture with the hands folded in front."
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "both-arms raising",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "both-arms raising",
+          "short_definition": "Use paired simultaneous or alternating arm lifts, extensions, retractions, crossing, or hands on hips. Includes forward/side raises, raised hands, overhead lifts, folded arms, opening/closing arms, and two-arm curls. Distinguish from single-arm actions, continuous waving, and composite poses centered on emotion."
+        }
+      }
     },
     {
       "category_id": "28",
@@ -344,9 +607,23 @@
               "user_reaction_expression": "Select when asked to rest an elbow on a table or support the body with the forearm.",
               "proactive_expression": "Use when a table-side resting or supported pose is explicitly needed."
             }
+          },
+          "source_label_en": "elbow support posture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "elbow support posture",
+              "short_definition": "Rest the bent elbow on the desk and support the body with the forearm."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "elbow movements",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "elbow movements",
+          "short_definition": "Use when the elbow is the main joint for bending, extending, opening/closing, or supporting the forearm. Includes elbow support and reverse-hand support. Distinguish from shoulder-driven arm swings, fine finger movements, and torso leaning."
+        }
+      }
     },
     {
       "category_id": "29",
@@ -363,7 +640,20 @@
           "source_label": "指向前方",
           "short_definition": "单手食指伸出，手臂前伸指向的指示动作。",
           "proactive_expression": "适用于介绍前方事物时触发，例如“请看那边”",
-          "user_reaction_expression": "适用于询问前方事物，例如“前面那个是什么？”“指一下你的前方”"
+          "user_reaction_expression": "适用于询问前方事物，例如“前面那个是什么？”“指一下你的前方”",
+          "source_label_en": "pointing forward",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "pointing forward",
+              "short_definition": "Extend one index finger and reach the arm forward to point."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for questions about something ahead, such as 'What is that in front?' or 'Point in front of you.'",
+              "proactive_expression": "Use to introduce something ahead, such as 'Please look over there.'"
+            }
+          }
         },
         {
           "candidate_id": "228",
@@ -371,7 +661,20 @@
           "source_label": "指向上方",
           "short_definition": "单手食指伸出，手臂上举。",
           "proactive_expression": "适用于讲解上方内容、提示上方要点、引导视线向上观看时触发，例如“请看上方的文字”“上面这一点很关键”",
-          "user_reaction_expression": "适用于询问上方内容、要求指向上方目标、询问顶部信息时触发，例如“指一下上方”“请指向你的上方”"
+          "user_reaction_expression": "适用于询问上方内容、要求指向上方目标、询问顶部信息时触发，例如“指一下上方”“请指向你的上方”",
+          "source_label_en": "pointing up",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "pointing up",
+              "short_definition": "Extend one index finger and raise the arm upward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for questions about content above, requests to point upward, or information at the top: 'Point up' or 'Please point above you.'",
+              "proactive_expression": "Use to emphasize a point, side, event, or important subject, explain content above, highlight an upper point, or guide the gaze up: 'Look at the text above' or 'The point above is crucial.'"
+            }
+          }
         },
         {
           "candidate_id": "230",
@@ -379,7 +682,20 @@
           "source_label": "单手指向下方",
           "short_definition": "单手食指向下伸直，其余手指自然弯曲。",
           "proactive_expression": "适用于介绍下方内容、提示底部要点、引导视线向下查看时触发，例如“请看下面这条说明”“请点击下方内容”“请查看下方内容”",
-          "user_reaction_expression": "适用于询问下方事物、要求指向底部目标、询问下方信息时触发，例如“指一下下方”"
+          "user_reaction_expression": "适用于询问下方事物、要求指向底部目标、询问下方信息时触发，例如“指一下下方”",
+          "source_label_en": "one hand pointing down",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand pointing down",
+              "short_definition": "Extend one index finger downward while naturally curling the other fingers."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for questions about things below or requests to point at a lower target: 'Point down.'",
+              "proactive_expression": "Use to introduce lower content, highlight a point at the bottom, or guide the gaze down: 'Look at the note below', 'Click below', or 'Check the content below.'"
+            }
+          }
         },
         {
           "candidate_id": "234",
@@ -387,7 +703,20 @@
           "source_label": "双手手掌指向自己",
           "short_definition": "双手立掌，指尖朝向自身胸口，手肘向内收拢。",
           "proactive_expression": "适用于表达“轮到我”、邀请关注自身、表达自我承接、温和示意自己时触发，例如“我这边的想法是”",
-          "user_reaction_expression": "适用于询问谁来回答，例如“谁来讲这个？”“你怎么看？”"
+          "user_reaction_expression": "适用于询问谁来回答，例如“谁来讲这个？”“你怎么看？”",
+          "source_label_en": "both palms facing the body",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both palms facing the body",
+              "short_definition": "Hold both palms upright with fingertips toward one's own chest and elbows tucked inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for questions about who will answer, such as 'Who will explain this?' or 'What do you think?'",
+              "proactive_expression": "Use to express 'My turn', invite attention to oneself, take over a topic, or gently indicate oneself: 'My view is...'"
+            }
+          }
         },
         {
           "candidate_id": "236",
@@ -395,9 +724,29 @@
           "source_label": "指向黑板",
           "short_definition": "单手食指或中指伸出，书写位置。",
           "proactive_expression": "适用于授课讲解，主动引导视线看向黑板、讲解黑板上文字图表、标注黑板重点时触发，例如“大家看黑板上这道题”“黑板这里有个关键点”",
-          "user_reaction_expression": "适用于询问黑板内容、讲解黑板信息、要求指向黑板上内容时触发，例如“黑板写的什么？”"
+          "user_reaction_expression": "适用于询问黑板内容、讲解黑板信息、要求指向黑板上内容时触发，例如“黑板写的什么？”",
+          "source_label_en": "pointing at blackboard",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "pointing at blackboard",
+              "short_definition": "Extend one index or middle finger toward the writing position."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for questions about blackboard content, explanations of it, or requests to point at it: 'What is written on the blackboard?'",
+              "proactive_expression": "Use while teaching to direct attention to the blackboard, explain text/charts, or highlight a key point: 'Look at this problem on the board' or 'Here is a key point.'"
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "pointing",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "pointing",
+          "short_definition": "Use fingers or directed palms to point clearly and statically at one direction, location, object, or oneself. Includes one/two-hand directional pointing, pointing at a blackboard, self-pointing, and opposing-hand indication. Open-palm sweeps, circles, and spatial introductions belong to presentation gestures. Distinguish from displaying objects and repeated waving."
+        }
+      }
     },
     {
       "category_id": "30",
@@ -414,7 +763,20 @@
           "source_label": "单手摊开展示",
           "short_definition": "单手手掌自然张开，掌心向上完全摊平，保持姿态静止定格。",
           "user_reaction_expression": "用户要求单手摊开、掌心向上静态展示或做邀请展示手势时选择；单手平摊并保持不移动。",
-          "proactive_expression": "介绍单一内容、承接说明或邀请用户关注时选择；以单手掌心向上的静态摊掌完成展示。"
+          "proactive_expression": "介绍单一内容、承接说明或邀请用户关注时选择；以单手掌心向上的静态摊掌完成展示。",
+          "source_label_en": "one hand palming open for display",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand palming open for display",
+              "short_definition": "Open one hand naturally with the palm fully upward and flat; hold the pose still."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a stationary one-hand palm-up presenting gesture; keep the palm flat; not for receiving an object.",
+              "proactive_expression": "Use when introducing content with a static open-palm presentation; not for catching or supporting an object."
+            }
+          }
         },
         {
           "candidate_id": "242",
@@ -428,6 +790,13 @@
               "user_reaction_expression": "Select for a palm-up receiving, catching, or supporting gesture; keep the fingers open; not for presentation.",
               "proactive_expression": "Use when the reply involves receiving, supporting, or holding an object; not for introducing content."
             }
+          },
+          "source_label_en": "palm-up hand raise",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "palm-up hand raise",
+              "short_definition": "Turn one palm fully upward with the fingers naturally open and flat."
+            }
           }
         },
         {
@@ -436,7 +805,20 @@
           "source_label": "从左到右展示（手背朝上）",
           "short_definition": "单手手背朝上连续向右侧移动。",
           "user_reaction_expression": "用户要求用单手从左向右展示或横向带过内容时选择；手部保持平展并连续向右移动。",
-          "proactive_expression": "讲解内容需要按从左到右的顺序引导视线时选择；单手平稳横移，区别于静态摊掌。"
+          "proactive_expression": "讲解内容需要按从左到右的顺序引导视线时选择；单手平稳横移，区别于静态摊掌。",
+          "source_label_en": "hold your palms facing down and sweep your hands from left to right to display something.",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "hold your palms facing down and sweep your hands from left to right to display something.",
+              "short_definition": "Move one hand continuously to the right with its back facing upward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a left-to-right presentation with the back of the hand facing upward.",
+              "proactive_expression": "Use when demonstrating a left-to-right sweep with the back of the hand up; not for a palm-up presentation."
+            }
+          }
         },
         {
           "candidate_id": "248",
@@ -444,7 +826,20 @@
           "source_label": "从右到左展示（手背朝上）",
           "short_definition": "单手手背朝上，由右侧平稳滑向左侧做展示动作。",
           "user_reaction_expression": "用户要求用单手从右向左展示或反向横向带过内容时选择；手背朝上并连续向左移动。",
-          "proactive_expression": "讲解内容需要按从右到左的顺序引导视线时选择；单手平稳横移，区别于从左向右展示。"
+          "proactive_expression": "讲解内容需要按从右到左的顺序引导视线时选择；单手平稳横移，区别于从左向右展示。",
+          "source_label_en": "hold your palms facing down and sweep your hands from right to left to display something.",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "hold your palms facing down and sweep your hands from right to left to display something.",
+              "short_definition": "Slide one hand steadily from right to left with its back facing upward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a right-to-left presentation with the back of the hand facing upward.",
+              "proactive_expression": "Use when demonstrating a right-to-left sweep with the back of the hand up; not for the opposite direction."
+            }
+          }
         },
         {
           "candidate_id": "249",
@@ -452,7 +847,20 @@
           "source_label": "用手指向下画一圈",
           "short_definition": "单食指悬空，以向下为起点完整画圆形轨迹。",
           "user_reaction_expression": "用户要求用手指向下画圈、圈出下方区域或描画圆形时选择；单手食指从向下位置完成一周轨迹。",
-          "proactive_expression": "需要圈定下方重点、示意下方范围或提示循环关系时选择；用单手食指向下画完整圆圈。"
+          "proactive_expression": "需要圈定下方重点、示意下方范围或提示循环关系时选择；用单手食指向下画完整圆圈。",
+          "source_label_en": "drawing a circle downward with finger",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "drawing a circle downward with finger",
+              "short_definition": "Trace a full circle in the air with one index finger, starting downward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when the index finger should draw a complete circle beginning or pointing downward.",
+              "proactive_expression": "Use when explaining a circular path oriented toward the lower area."
+            }
+          }
         },
         {
           "candidate_id": "253",
@@ -460,7 +868,20 @@
           "source_label": "单手翻手",
           "short_definition": "单手依靠手腕平稳旋转，可由手背朝上翻转为掌心朝上。",
           "user_reaction_expression": "用户要求单手翻转、翻掌或展示手心手背变化时选择；仅一只手绕手腕平稳旋转。",
-          "proactive_expression": "说明正反变化、切换观点或用单手承接转折时选择；单手完成掌心与手背方向的翻转。"
+          "proactive_expression": "说明正反变化、切换观点或用单手承接转折时选择；单手完成掌心与手背方向的翻转。",
+          "source_label_en": "one hand flipping palm",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand flipping palm",
+              "short_definition": "Rotate one wrist smoothly, for example from back-of-hand up to palm up."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when one hand should rotate between palm-up and back-of-hand-up positions; not for both hands.",
+              "proactive_expression": "Use when demonstrating a one-handed wrist or palm flip; not for synchronized two-hand movement."
+            }
+          }
         },
         {
           "candidate_id": "254",
@@ -468,7 +889,20 @@
           "source_label": "双手翻手",
           "short_definition": "双手依靠手腕平稳旋转，可由手背朝上翻转为掌心朝上。",
           "user_reaction_expression": "用户要求双手同步翻转、翻掌或展示手心手背变化时选择；两只手同时绕手腕旋转。",
-          "proactive_expression": "强调双向变化、共同展开或用双手承接转折时选择；双手同步完成掌心与手背方向翻转。"
+          "proactive_expression": "强调双向变化、共同展开或用双手承接转折时选择；双手同步完成掌心与手背方向翻转。",
+          "source_label_en": "both hands flipping palms",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands flipping palms",
+              "short_definition": "Rotate both wrists smoothly, for example from backs-of-hands up to palms up."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when both hands should rotate together between palm-up and back-of-hand-up positions.",
+              "proactive_expression": "Use when demonstrating a synchronized two-handed wrist or palm flip; not for one hand only."
+            }
+          }
         },
         {
           "candidate_id": "255",
@@ -482,9 +916,23 @@
               "user_reaction_expression": "Select when both hands should open facing each other, with spread fingers or matching fingertips.",
               "proactive_expression": "Use when demonstrating the fixed pose of two open hands facing each other; not for a generic palm display."
             }
+          },
+          "source_label_en": "steepled hands",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "steepled hands",
+              "short_definition": "Spread all fingers on both hands, palms facing each other and corresponding fingertips touching."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "presentation",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "presentation",
+          "short_definition": "Use empty open palms, spreading, horizontal sweeps, palm rotations, circles, or size gestures to present a region, direction, or spatial relationship. The goal is an area or a presentation process rather than static pointing at one target. Do not operate an object or use this category for a distinct emotion such as helplessness or surprise."
+        }
+      }
     },
     {
       "category_id": "31",
@@ -504,7 +952,20 @@
           "user_reaction_expression": "用户明确要求比划、展示或做出数字一手势时触发，例如“比个1”“用手表示数字一”。",
           "reaction_sources": [
             "user_camera"
-          ]
+          ],
+          "source_label_en": "number one gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number one gesture",
+              "short_definition": "Extend one index finger and curl the other four fingers inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 1 hand sign, such as 'Show 1' or 'Show the number 1 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 1, or that explicitly states a count of 1, with the number 1 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "259",
@@ -512,7 +973,20 @@
           "source_label": "数字二手势",
           "short_definition": "单手食指和中指伸直，其余三指弯曲收拢。",
           "proactive_expression": "数字人回复的主要答案为整数2，或明确播报数量为2时，用数字二手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字二手势时触发，例如“比个2”“用手表示数字二”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字二手势时触发，例如“比个2”“用手表示数字二”。",
+          "source_label_en": "number two gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number two gesture",
+              "short_definition": "Extend the index and middle fingers of one hand and curl the other three inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 2 hand sign, such as 'Show 2' or 'Show the number 2 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 2, or that explicitly states a count of 2, with the number 2 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "260",
@@ -523,7 +997,20 @@
           "user_reaction_expression": "用户明确要求比划、展示或做出数字三手势时触发，例如“比个3”“用手表示数字三”。",
           "reaction_sources": [
             "user_camera"
-          ]
+          ],
+          "source_label_en": "number three gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number three gesture",
+              "short_definition": "Extend the index, middle, and ring fingers of one hand and curl the thumb and little finger inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 3 hand sign, such as 'Show 3' or 'Show the number 3 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 3, or that explicitly states a count of 3, with the number 3 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "261",
@@ -531,7 +1018,20 @@
           "source_label": "数字四手势",
           "short_definition": "单手食指、中指、无名指和小指并拢伸直，拇指弯曲内扣。",
           "proactive_expression": "数字人回复的主要答案为整数4，或明确播报数量为4时，用数字四手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字四手势时触发，例如“比个4”“用手表示数字四”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字四手势时触发，例如“比个4”“用手表示数字四”。",
+          "source_label_en": "number four gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number four gesture",
+              "short_definition": "Extend the index, middle, ring, and little fingers together and fold the thumb inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 4 hand sign, such as 'Show 4' or 'Show the number 4 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 4, or that explicitly states a count of 4, with the number 4 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "262",
@@ -539,7 +1039,20 @@
           "source_label": "数字五手势",
           "short_definition": "单手五指全部伸直并张开。",
           "proactive_expression": "数字人回复的主要答案为整数5，或明确播报数量为5时，用数字五手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字五手势时触发，例如“比个5”“用手表示数字五”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字五手势时触发，例如“比个5”“用手表示数字五”。",
+          "source_label_en": "number five gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number five gesture",
+              "short_definition": "Extend and spread all five fingers of one hand."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 5 hand sign, such as 'Show 5' or 'Show the number 5 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 5, or that explicitly states a count of 5, with the number 5 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "263",
@@ -550,7 +1063,20 @@
           "user_reaction_expression": "用户明确要求比划、展示或做出数字六手势时触发，例如“比个6”“用手表示数字六”。",
           "reaction_sources": [
             "user_camera"
-          ]
+          ],
+          "source_label_en": "number six gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number six gesture",
+              "short_definition": "Extend the thumb and little finger of one hand and curl the other three inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 6 hand sign, such as 'Show 6' or 'Show the number 6 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 6, or that explicitly states a count of 6, with the number 6 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "264",
@@ -558,7 +1084,20 @@
           "source_label": "数字七手势",
           "short_definition": "单手拇指、食指和中指的指尖捏合，无名指和小指弯曲收拢。",
           "proactive_expression": "数字人回复的主要答案为整数7，或明确播报数量为7时，用数字七手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字七手势时触发，例如“比个7”“用手表示数字七”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字七手势时触发，例如“比个7”“用手表示数字七”。",
+          "source_label_en": "number seven gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number seven gesture",
+              "short_definition": "Pinch the thumb, index, and middle fingertips together and curl the ring and little fingers inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 7 hand sign, such as 'Show 7' or 'Show the number 7 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 7, or that explicitly states a count of 7, with the number 7 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "265",
@@ -566,7 +1105,20 @@
           "source_label": "数字八手势",
           "short_definition": "单手拇指和食指伸直形成 L 形，中指、无名指和小指弯曲收拢。",
           "proactive_expression": "数字人回复的主要答案为整数8，或明确播报数量为8时，用数字八手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字八手势时触发，例如“比个8”“用手表示数字八”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字八手势时触发，例如“比个8”“用手表示数字八”。",
+          "source_label_en": "number eight gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number eight gesture",
+              "short_definition": "Extend the thumb and index finger in an L shape and curl the middle, ring, and little fingers inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 8 hand sign, such as 'Show 8' or 'Show the number 8 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 8, or that explicitly states a count of 8, with the number 8 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "266",
@@ -574,7 +1126,20 @@
           "source_label": "数字九手势",
           "short_definition": "单手食指弯曲成钩状，中指、无名指和小指收拢，拇指内扣贴于掌心。",
           "proactive_expression": "数字人回复的主要答案为整数9，或明确播报数量为9时，用数字九手势伴随。",
-          "user_reaction_expression": "用户明确要求比划、展示或做出数字九手势时触发，例如“比个9”“用手表示数字九”。"
+          "user_reaction_expression": "用户明确要求比划、展示或做出数字九手势时触发，例如“比个9”“用手表示数字九”。",
+          "source_label_en": "number nine gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "number nine gesture",
+              "short_definition": "Bend one index finger into a hook, curl the middle, ring, and little fingers inward, and fold the thumb against the palm."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user explicitly asks to form, show, or make the number 9 hand sign, such as 'Show 9' or 'Show the number 9 with your hand'.",
+              "proactive_expression": "Accompany a reply whose main answer is the integer 9, or that explicitly states a count of 9, with the number 9 hand sign."
+            }
+          }
         },
         {
           "candidate_id": "270",
@@ -582,7 +1147,20 @@
           "source_label": "点赞",
           "short_definition": "手握空拳，拇指单独竖起向前的手势。",
           "proactive_expression": "适用于表达认可、夸奖、肯定内容、赞许用户观点时触发，例如“这个想法很棒”、“太棒了”",
-          "user_reaction_expression": "适用于分享成果、表达观点、期待得到肯定，或者要求点赞时触发，例如“你觉得我做得怎么样？”"
+          "user_reaction_expression": "适用于分享成果、表达观点、期待得到肯定，或者要求点赞时触发，例如“你觉得我做得怎么样？”",
+          "source_label_en": "thumbs up",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "thumbs up",
+              "short_definition": "Loosely close one hand into a fist and extend the thumb upward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user shares an achievement or opinion, seeks approval, or requests a thumbs-up, such as 'How do you think I did?'",
+              "proactive_expression": "Use to express approval, praise, affirmation, or agreement with the user's view, such as 'That is a great idea' or 'Excellent'."
+            }
+          }
         },
         {
           "candidate_id": "271",
@@ -590,7 +1168,20 @@
           "source_label": "双手点赞",
           "short_definition": "双手握拳，拇指同步竖起向前的点赞手势。",
           "proactive_expression": "适用于着重表达强烈认可、高度赞赏、大力肯定用户成果时触发，例如“非常厉害，值得肯定！”",
-          "user_reaction_expression": "适用于分享重大成就、希望获得强烈赞许，要求双手点赞时触发，例如“快给我一个大大的赞”"
+          "user_reaction_expression": "适用于分享重大成就、希望获得强烈赞许，要求双手点赞时触发，例如“快给我一个大大的赞”",
+          "source_label_en": "both hands thumbs up",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands thumbs up",
+              "short_definition": "Loosely close both hands into fists and extend both thumbs upward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user shares a major achievement, seeks strong praise, or requests two thumbs-up, such as 'Give me a big thumbs-up'.",
+              "proactive_expression": "Use to emphasize strong approval, high praise, or firm affirmation of the user's achievement, such as 'Very impressive, well deserved!'."
+            }
+          }
         },
         {
           "candidate_id": "274",
@@ -598,7 +1189,20 @@
           "source_label": "单手比耶",
           "short_definition": "食指中指伸出成V，其余手指收拢的比耶手势。",
           "proactive_expression": "适用于表达开心、庆祝、胜利、传递轻松愉快氛围时触发，例如“太棒啦”、“成功啦”、“比个耶”",
-          "user_reaction_expression": "适用于分享喜事、庆祝胜利、要求比耶手势互动时触发，例如“帮我比个耶”、“比个耶”"
+          "user_reaction_expression": "适用于分享喜事、庆祝胜利、要求比耶手势互动时触发，例如“帮我比个耶”、“比个耶”",
+          "source_label_en": "one hand peace sign",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand peace sign",
+              "short_definition": "Extend the index and middle fingers in a V and curl the other fingers inward."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for happy news, celebrating victory, or a request for a peace sign, such as 'Give me a peace sign.'",
+              "proactive_expression": "Use to express happiness, celebration, victory, or a relaxed cheerful mood: 'Awesome', 'We did it', or 'Peace!'"
+            }
+          }
         },
         {
           "candidate_id": "277",
@@ -606,7 +1210,20 @@
           "source_label": "双手脸旁比耶",
           "short_definition": "双手比出V字，分置脸颊两侧的比耶手势。",
           "proactive_expression": "适用于拍照互动、着重卖萌、营造活泼可爱的强氛围感时触发，例如“准备好拍照咯”、“双手在脸庞比个耶”",
-          "user_reaction_expression": "适用于提议合影、想要可爱互动手势，要求双手在脸颊两侧比耶时触发，例如“两边都比耶拍照”、“双手在脸庞比个耶”"
+          "user_reaction_expression": "适用于提议合影、想要可爱互动手势，要求双手在脸颊两侧比耶时触发，例如“两边都比耶拍照”、“双手在脸庞比个耶”",
+          "source_label_en": "double peace sign beside the face",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "double peace sign beside the face",
+              "short_definition": "Form a V with each hand and place them on either side of the cheeks."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for a photo, a cute interactive gesture, or a request for peace signs beside both cheeks: 'Peace signs on both sides for the photo.'",
+              "proactive_expression": "Use for photo interaction, emphatic cuteness, or a lively cute atmosphere: 'Ready for the photo' or 'Peace signs beside both cheeks.'"
+            }
+          }
         },
         {
           "candidate_id": "278",
@@ -614,7 +1231,20 @@
           "source_label": "比耶轻摆",
           "short_definition": "手指比出V字，手腕小幅左右摆动。",
           "proactive_expression": "适用于轻松俏皮互动、欢快打招呼、拍照时动态卖萌时触发，例如“嗨，看这里”",
-          "user_reaction_expression": "适用于想要动态可爱手势互动、拍照互动，要求摆动比耶手势时触发，例如“晃动一下耶的手势”"
+          "user_reaction_expression": "适用于想要动态可爱手势互动、拍照互动，要求摆动比耶手势时触发，例如“晃动一下耶的手势”",
+          "source_label_en": "gently waving a peace sign",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "gently waving a peace sign",
+              "short_definition": "Form a V with the fingers and gently sway the wrist side to side."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for a dynamic cute gesture, photo interaction, or a request to sway a peace sign: 'Wiggle your peace sign.'",
+              "proactive_expression": "Use for playful interaction, a cheerful greeting, or animated cuteness in a photo: 'Hi, look here.'"
+            }
+          }
         },
         {
           "candidate_id": "279",
@@ -622,7 +1252,20 @@
           "source_label": "比兔子手势",
           "short_definition": "双手置于头部两侧，拇指与食指并拢竖起模拟兔耳。",
           "proactive_expression": "适用于卖萌、角色扮演、可爱趣味互动、讲故事扮演小动物时触发，例如“看，小兔子来啦”",
-          "user_reaction_expression": "适用于想要可爱动物手势互动、要求比兔子耳朵、玩角色扮演时触发，例如“比个小兔子耳朵”"
+          "user_reaction_expression": "适用于想要可爱动物手势互动、要求比兔子耳朵、玩角色扮演时触发，例如“比个小兔子耳朵”",
+          "source_label_en": "rabbit ears gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "rabbit ears gesture",
+              "short_definition": "Place both hands beside the head, holding each thumb and index finger together upright to imitate rabbit ears."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for cute animal gestures, a request for bunny ears, or roleplay: 'Make bunny ears.'",
+              "proactive_expression": "Use for cuteness, roleplay, playful interaction, or acting as a small animal in a story: 'Look, here comes a bunny.'"
+            }
+          }
         },
         {
           "candidate_id": "285",
@@ -630,7 +1273,20 @@
           "source_label": "双手比心",
           "short_definition": "双手弯曲相扣，比出完整爱心形状的比心手势。",
           "proactive_expression": "适用于表达喜爱、传递好感、表达感谢、送出祝福时触发，例如“送给你一颗小心心”、“给你我的爱”、“爱你哦”",
-          "user_reaction_expression": "适用于期待收到爱心、表达喜欢，要求比爱心手势时触发，例如“给我比个爱心”、“双手比个心”"
+          "user_reaction_expression": "适用于期待收到爱心、表达喜欢，要求比爱心手势时触发，例如“给我比个爱心”、“双手比个心”",
+          "source_label_en": "heart hands",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "heart hands",
+              "short_definition": "Curve and join both hands to form a complete heart shape."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when the user wants a heart, expresses affection, or asks for a heart gesture: 'Make a heart for me' or 'Make a heart with both hands.'",
+              "proactive_expression": "Use to express affection, fondness, thanks, or good wishes: 'Here is a little heart for you', 'Here is my love', or 'Love you.'"
+            }
+          }
         },
         {
           "candidate_id": "287",
@@ -638,9 +1294,29 @@
           "source_label": "单手飞吻",
           "short_definition": "指尖轻触唇边，随即向前扬手抛出的飞吻动作。",
           "proactive_expression": "适用于表达亲昵、送出甜蜜祝福、温柔道别时触发，例如“送你一个飞吻”、“爱你哦”",
-          "user_reaction_expression": "适用于索要飞吻、期待亲昵互动，要求做飞吻动作时触发，例如“给我一个飞吻吧”、“给我飞吻”"
+          "user_reaction_expression": "适用于索要飞吻、期待亲昵互动，要求做飞吻动作时触发，例如“给我一个飞吻吧”、“给我飞吻”",
+          "source_label_en": "one hand flying kiss",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand flying kiss",
+              "short_definition": "Lightly touch the lips with the fingertips, then flick the hand forward to send a kiss."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use when asked for a blown kiss or affectionate interaction: 'Blow me a kiss.'",
+              "proactive_expression": "Use to express affection, send sweet wishes, or say a gentle farewell: 'Sending you a kiss' or 'Love you.'"
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "symbolic gestures",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "symbolic gestures",
+          "short_definition": "Use finger configurations to form numbers, letters, shapes, or conventional signs. Blowing or sending a kiss belongs to category 31; direct kissing, kissing the camera, or leaning in for a kiss belongs to category 47. Distinguish from ordinary pointing, presentation, and other composite emotional poses."
+        }
+      }
     },
     {
       "category_id": "32",
@@ -671,9 +1347,29 @@
           "reaction_sources": [
             "language",
             "user_camera"
-          ]
+          ],
+          "source_label_en": "one hand waving",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand waving",
+              "short_definition": "Raise one hand in front of the body or higher, palm outward, and wave it side to side in greeting."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Use for greetings, farewells, or requests to wave back: 'Hi', 'Bye', or 'Hello.'",
+              "proactive_expression": "Use to greet the user, open a conversation, say farewell, or return a greeting: 'Hello, welcome to my livestream' or 'Goodbye.'"
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "greeting and farewell",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "greeting and farewell",
+          "short_definition": "Use small steady side-to-side waves with outward-facing palms to greet, say farewell, respond, introduce oneself, explain identity, or establish a first connection. Includes one/two-hand waves. Distinguish from beckoning someone closer, large arm swings, and simple action demonstrations."
+        }
+      }
     },
     {
       "category_id": "33",
@@ -696,6 +1392,13 @@
               "user_reaction_expression": "Select for a short one-hand downward palm motion that emphasizes a point; not for cheering or signaling stop.",
               "proactive_expression": "Use when the reply needs a downward hand motion to reinforce a point; not for encouragement or prevention."
             }
+          },
+          "source_label_en": "one hand pressing down for emphasis",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand pressing down for emphasis",
+              "short_definition": "With one palm downward, make a brief downward press and pause."
+            }
           }
         },
         {
@@ -704,7 +1407,20 @@
           "source_label": "拳头轻握强调",
           "short_definition": "五指收拢握拳，短促轻晃示意的强调动作。",
           "user_reaction_expression": "用户要求轻握拳、握拳短促晃动或用拳头加强语气时选择；单手握拳并做一次短促有力的轻晃。",
-          "proactive_expression": "表达决心、加油或对重点作轻度强调时选择；用单手握拳短促轻晃，区别于静态握拳。"
+          "proactive_expression": "表达决心、加油或对重点作轻度强调时选择；用单手握拳短促轻晃，区别于静态握拳。",
+          "source_label_en": "light fist clench for emphasis",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "light fist clench for emphasis",
+              "short_definition": "Close the fingers into a fist and give a short gentle shake for emphasis."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a lightly clenched fist that briefly moves to emphasize a point; not for cheering or a static fist.",
+              "proactive_expression": "Use when the reply needs mild stance emphasis with a lightly moving fist; not for encouragement."
+            }
+          }
         },
         {
           "candidate_id": "293",
@@ -717,6 +1433,13 @@
             "en-US": {
               "user_reaction_expression": "Select only for a requested one-hand table slap used for emphasis; a physical table must be available or specified.",
               "proactive_expression": "Use only when a table is available and the reply requires strong one-handed emphasis."
+            }
+          },
+          "source_label_en": "one hand slapping desk for emphasis",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand slapping desk for emphasis",
+              "short_definition": "Lift one hand and strike a physical table downward briefly, once or repeatedly."
             }
           }
         },
@@ -732,6 +1455,13 @@
               "user_reaction_expression": "Select only for a requested two-hand table slap used for emphasis; a physical table must be available or specified.",
               "proactive_expression": "Use only when a table is available and the reply requires stronger two-handed emphasis."
             }
+          },
+          "source_label_en": "both hands slapping desk for emphasis",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands slapping desk for emphasis",
+              "short_definition": "Lift both hands and strike a physical table downward briefly, once or repeatedly."
+            }
           }
         },
         {
@@ -746,6 +1476,13 @@
               "user_reaction_expression": "Select when both palms should face each other and rotate or sway together; the wrists rotate in sync.",
               "proactive_expression": "Use when explicitly demonstrating synchronized rotation of two facing hands."
             }
+          },
+          "source_label_en": "both hands rotating and shaking toward each other",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands rotating and shaking toward each other",
+              "short_definition": "Hold the palms facing each other in front of the chest and rotate the wrists together."
+            }
           }
         },
         {
@@ -754,9 +1491,29 @@
           "source_label": "手掌前推表示停止",
           "short_definition": "单手立掌向前推出，随后短暂停住。",
           "user_reaction_expression": "用户要求做停止、暂停或拒绝的手势时选择；单手立掌向前推出并短暂停住。",
-          "proactive_expression": "需要明确提醒停止、暂停当前行为或划出边界时选择；以掌心向前的单手前推动作表达。"
+          "proactive_expression": "需要明确提醒停止、暂停当前行为或划出边界时选择；以掌心向前的单手前推动作表达。",
+          "source_label_en": "palm forward push for stop",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "palm forward push for stop",
+              "short_definition": "Push one upright palm forward and hold briefly."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a forward open-palm gesture meaning stop, refuse, or keep away; push one palm forward and pause.",
+              "proactive_expression": "Use when the reply clearly expresses stopping, refusal, or prevention with a forward palm."
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "emphasis",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "emphasis",
+          "short_definition": "Use brief downward presses, fists, slaps, finger counting, palm pushes, or crossed-arm rejection to emphasize speech, explanation, stopping, or denial. Fist/finger actions belong here when their core purpose is strengthening speech. Finger operations without an expressive purpose belong to fine finger movements; cheering belongs to encouragement and celebration."
+        }
+      }
     },
     {
       "category_id": "34",
@@ -779,9 +1536,23 @@
               "user_reaction_expression": "Select for encouragement, support, or cheering with one short fist pump; not for ordinary emphasis.",
               "proactive_expression": "Use when encouraging the user or expressing support with a short one-fist pump; not for general emphasis."
             }
+          },
+          "source_label_en": "fist pump for cheer",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "fist pump for cheer",
+              "short_definition": "Raise one fist forward and pump the arm briefly and firmly to encourage."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "encouragement and celebration",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "encouragement and celebration",
+          "short_definition": "Use a main hand gesture such as clapping, fist pumping, arm waving, or high-fiving to encourage, cheer, or celebrate. If feet, head, facial expression, and hands form a complete sequential emotional performance, choose composite emotional actions. Distinguish from emphasis, invitations, and non-emotional arm lifts."
+        }
+      }
     },
     {
       "category_id": "35",
@@ -798,7 +1569,20 @@
           "source_label": "单手招手靠近",
           "short_definition": "单手掌心向上，手指连续向自身方向勾动。",
           "user_reaction_expression": "用户要求招手让人靠近、示意过来或用手指向内勾动时选择；单手掌心向上，手指连续勾向自己。",
-          "proactive_expression": "邀请用户靠近、加入或继续向前时选择；用单手连续内勾表达靠近，区别于挥手问候。"
+          "proactive_expression": "邀请用户靠近、加入或继续向前时选择；用单手连续内勾表达靠近，区别于挥手问候。",
+          "source_label_en": "one hand beckoning closer",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand beckoning closer",
+              "short_definition": "Hold one palm upward and repeatedly curl the fingers toward oneself."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a one-hand gesture inviting someone to come closer; curl the fingers inward; not for waving hello.",
+              "proactive_expression": "Use when inviting the user or another target to approach with one hand; not for greeting or farewell."
+            }
+          }
         },
         {
           "candidate_id": "311",
@@ -812,9 +1596,23 @@
               "user_reaction_expression": "Select for a two-hand gesture strongly inviting someone to come closer; not for waving goodbye.",
               "proactive_expression": "Use when a stronger or more enthusiastic two-hand invitation to approach is needed."
             }
+          },
+          "source_label_en": "both hands beckoning closer",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands beckoning closer",
+              "short_definition": "Hold both palms upward and repeatedly beckon toward oneself with both hands together."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "request and guidance",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "request and guidance",
+          "short_definition": "Use inward beckoning palms or lateral indications to request approach, invite, summon, or ask someone to follow. Includes one/two-hand beckoning. Distinguish from greeting/farewell, pointing at a single target, and ceremonial gestures."
+        }
+      }
     },
     {
       "category_id": "37",
@@ -831,7 +1629,20 @@
           "source_label": "摸鼻子",
           "short_definition": "单手指尖轻触鼻尖缓慢摩挲。",
           "user_reaction_expression": "用户要求摸鼻子、轻触鼻尖或摩挲鼻尖时选择；单手食指接触鼻尖并缓慢摩擦。",
-          "proactive_expression": "表达短暂思索、迟疑或轻微不自在且需要细小动作时选择；仅以指尖轻触并摩挲鼻尖。"
+          "proactive_expression": "表达短暂思索、迟疑或轻微不自在且需要细小动作时选择；仅以指尖轻触并摩挲鼻尖。",
+          "source_label_en": "touching nose",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "touching nose",
+              "short_definition": "Lightly touch and slowly rub the tip of the nose with one hand's fingertips."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when asked to touch or rub the nose with the fingertips; not for covering the mouth or touching the whole face.",
+              "proactive_expression": "Use only when the scene explicitly requires touching or rubbing the nose."
+            }
+          }
         },
         {
           "candidate_id": "324",
@@ -839,7 +1650,20 @@
           "source_label": "摸耳后",
           "short_definition": "单侧手臂抬起，使用手指在耳廓后方及周边区域进行反复摩擦或抓挠。",
           "user_reaction_expression": "用户要求摸耳后、挠耳后或触碰耳廓后方时选择；单手抬起并在耳后区域反复摩擦。",
-          "proactive_expression": "表达轻微尴尬、拘谨或若有所思时选择；以单手摩擦耳后完成，不替代整理头发动作。"
+          "proactive_expression": "表达轻微尴尬、拘谨或若有所思时选择；以单手摩擦耳后完成，不替代整理头发动作。",
+          "source_label_en": "touching behind ear",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "touching behind ear",
+              "short_definition": "Raise one arm and repeatedly rub or scratch behind and around the outer ear with the fingers."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when asked to touch, rub, or scratch behind the ear; not for touching the outer ear or earlobe.",
+              "proactive_expression": "Use when the scene explicitly requires adjusting or touching the area behind the ear."
+            }
+          }
         },
         {
           "candidate_id": "335",
@@ -847,7 +1671,20 @@
           "source_label": "单手摸脸",
           "short_definition": "单手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
           "user_reaction_expression": "用户要求单手摸脸、托住一侧脸颊或让手掌贴脸时选择；一只手掌贴合脸颊，手指自然展开。",
-          "proactive_expression": "表达温柔、害羞或沉思并需要单侧触脸动作时选择；仅一只手掌贴住脸颊。"
+          "proactive_expression": "表达温柔、害羞或沉思并需要单侧触脸动作时选择；仅一只手掌贴住脸颊。",
+          "source_label_en": "one hand touching face",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand touching face",
+              "short_definition": "Rest one palm against the cheek or face with fingers naturally spread to touch the face."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when one hand should touch the cheek or face; not for covering the face or supporting the cheek.",
+              "proactive_expression": "Use when the scene explicitly requires a gentle one-hand touch to the face."
+            }
+          }
         },
         {
           "candidate_id": "336",
@@ -855,7 +1692,20 @@
           "source_label": "双手摸脸",
           "short_definition": "双手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
           "user_reaction_expression": "用户要求双手摸脸、双手捧住脸颊或让两掌贴脸时选择；两只手掌同时贴合两侧脸颊。",
-          "proactive_expression": "表达惊喜、可爱或害羞并需要双侧触脸动作时选择；双手同时贴住脸颊，区别于单手摸脸。"
+          "proactive_expression": "表达惊喜、可爱或害羞并需要双侧触脸动作时选择；双手同时贴住脸颊，区别于单手摸脸。",
+          "source_label_en": "both hands touching face",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands touching face",
+              "short_definition": "Rest both palms against the cheeks or face with fingers naturally spread."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when both hands should touch both cheeks; not for supporting the cheeks or performing a face-covering reaction.",
+              "proactive_expression": "Use when the scene explicitly requires both palms against the face."
+            }
+          }
         },
         {
           "candidate_id": "342",
@@ -863,7 +1713,20 @@
           "source_label": "单手放后脑勺",
           "short_definition": "单手交叉垫于后脑下方，手肘向外舒展的放松姿态。",
           "user_reaction_expression": "用户要求把单手放到后脑勺、枕住后脑或摆出放松姿态时选择；单手置于脑后，手肘向外展开。",
-          "proactive_expression": "表达放松、随意或略带不好意思时选择；以单手垫在后脑勺并向外展开手肘形成姿态。"
+          "proactive_expression": "表达放松、随意或略带不好意思时选择；以单手垫在后脑勺并向外展开手肘形成姿态。",
+          "source_label_en": "one hand on back of head",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand on back of head",
+              "short_definition": "Place one hand behind the lower back of the head with the elbow extended outward in a relaxed pose."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when one hand should rest behind the head; not for patting the head or adjusting hair.",
+              "proactive_expression": "Use for a relaxed, awkward, or resting pose with one hand behind the head."
+            }
+          }
         },
         {
           "candidate_id": "346",
@@ -877,6 +1740,13 @@
               "user_reaction_expression": "Select when asked to touch or adjust a shoulder strap or bag strap; not for touching the shoulder itself.",
               "proactive_expression": "Use when clothing or bag interaction explicitly requires adjusting a shoulder strap; a relevant strap must exist."
             }
+          },
+          "source_label_en": "touching shoulder strap",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "touching shoulder strap",
+              "short_definition": "Rest one hand on a shoulder or bag strap and lightly lift or adjust it with the fingers."
+            }
           }
         },
         {
@@ -885,7 +1755,20 @@
           "source_label": "双手托腮",
           "short_definition": "双手屈肘抬起，掌心分托脸颊两侧。",
           "user_reaction_expression": "用户要求双手托腮、两掌托住脸颊或摆出托脸姿势时选择；双肘抬起，手掌分置脸颊两侧。",
-          "proactive_expression": "表达专注倾听、期待或可爱亲近感时选择；双手稳定托住两侧脸颊，区别于双手摸脸。"
+          "proactive_expression": "表达专注倾听、期待或可爱亲近感时选择；双手稳定托住两侧脸颊，区别于双手摸脸。",
+          "source_label_en": "both hands cradling cheeks",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands cradling cheeks",
+              "short_definition": "Raise both bent arms and support each cheek with a palm."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when both cheeks should rest on both hands; not for simply touching both cheeks.",
+              "proactive_expression": "Use for a cute, waiting, or thoughtful two-hand cheek-support pose."
+            }
+          }
         },
         {
           "candidate_id": "356",
@@ -899,9 +1782,23 @@
               "user_reaction_expression": "Select when both hands should be placed over the chest; not for a one-hand chest touch or chest pat.",
               "proactive_expression": "Use when strong emotion, surprise, or being deeply moved calls for both hands over the chest."
             }
+          },
+          "source_label_en": "both hands on chest",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands on chest",
+              "short_definition": "Bend and raise both arms and press both palms against one's own chest."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "body touching",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "body touching",
+          "short_definition": "Use direct hand contact with one's skin, hair, or body, or explicit requests for fixed local actions in this category such as tongue licking, shushing, a seductive gesture, or cupping an ear to listen. Includes touching, rubbing, scratching, supporting, covering, hair brushing, and chest patting. Clothing/accessories as the direct target belong to clothing and accessories. Complete sequential performances coordinating face, gestures, and torso belong to composite emotional actions."
+        }
+      }
     },
     {
       "category_id": "38",
@@ -924,6 +1821,13 @@
               "user_reaction_expression": "Select when both hands should spread all fingers; not for a palm presentation or number gesture.",
               "proactive_expression": "Use when demonstrating both hands opening their fingers without presentation or number meaning."
             }
+          },
+          "source_label_en": "both hands fingers spread",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "both hands fingers spread",
+              "short_definition": "Spread all five fingers of each hand from a closed-together position."
+            }
           }
         },
         {
@@ -938,6 +1842,13 @@
               "user_reaction_expression": "Select when a fingertip should tap lightly on an object or in the air; not for pressing a physical button.",
               "proactive_expression": "Use when demonstrating tapping, selecting, or lightly indicating a position; not for a firm button press."
             }
+          },
+          "source_label_en": "fingers tapping lightly",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "fingers tapping lightly",
+              "short_definition": "Lightly tap an object or gesture in the air with one index or middle fingertip."
+            }
           }
         },
         {
@@ -946,7 +1857,20 @@
           "source_label": "两指捏合",
           "short_definition": "单手的拇指与食指相对，捏合成钳状。",
           "user_reaction_expression": "用户要求用拇指和食指捏合、表示一点点或做精细夹取手势时选择；两指指尖相触形成钳状。",
-          "proactive_expression": "说明很小、很少或强调精细程度时选择；以单手拇指和食指捏合表达，避免用于实际拿取物品。"
+          "proactive_expression": "说明很小、很少或强调精细程度时选择；以单手拇指和食指捏合表达，避免用于实际拿取物品。",
+          "source_label_en": "two fingers pinching",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "two fingers pinching",
+              "short_definition": "Bring one thumb and index finger together in a pincer shape."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when the thumb and index finger should pinch together; not for a heart or number gesture.",
+              "proactive_expression": "Use when representing something small, picking up a small item, or demonstrating pinching."
+            }
+          }
         },
         {
           "candidate_id": "364",
@@ -960,6 +1884,13 @@
               "user_reaction_expression": "Select when a finger should slide continuously along a surface; not for tapping or pressing a physical button.",
               "proactive_expression": "Use when demonstrating sliding, dragging, or swiping; not for a single tap."
             }
+          },
+          "source_label_en": "fingers swiping",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "fingers swiping",
+              "short_definition": "Keep one hand's fingers against a surface and slide them slowly."
+            }
           }
         },
         {
@@ -968,7 +1899,20 @@
           "source_label": "单手握拳",
           "short_definition": "单侧手五指向内收紧，攥成紧实拳头的静态手势。",
           "user_reaction_expression": "用户要求单手握拳、攥紧拳头或保持拳头姿势时选择；单手五指向内收紧并静态保持。",
-          "proactive_expression": "表达克制的决心、紧张或蓄力感时选择；使用单手静态握拳，区别于带晃动的拳头强调。"
+          "proactive_expression": "表达克制的决心、紧张或蓄力感时选择；使用单手静态握拳，区别于带晃动的拳头强调。",
+          "source_label_en": "one hand fist",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand fist",
+              "short_definition": "Tightly curl all five fingers of one hand inward into a static fist."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a static one-hand fist; not for cheering, emphasis, or punching.",
+              "proactive_expression": "Use when demonstrating a fist shape without encouragement or emphasis; keep the fist static."
+            }
+          }
         },
         {
           "candidate_id": "369",
@@ -981,6 +1925,13 @@
             "en-US": {
               "user_reaction_expression": "Select when asked for air quotes, quotation marks, or a quoting gesture using both hands.",
               "proactive_expression": "Use when quoting a marked phrase or expressing verbal irony with air quotes."
+            }
+          },
+          "source_label_en": "air quotes gesture",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "air quotes gesture",
+              "short_definition": "Raise both arms to either side in front of the body, with both palms clearly facing forward."
             }
           }
         },
@@ -996,9 +1947,23 @@
               "user_reaction_expression": "Select when asked for a wrist flourish or rotating flower-hand gesture; the wrist is the main motion.",
               "proactive_expression": "Use when dance, presentation, or playful expression calls for a one-hand wrist flourish."
             }
+          },
+          "source_label_en": "flower-hand",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "flower-hand",
+              "short_definition": "Throw one arm forward with the wrist as the pivot."
+            }
           }
         }
-      ]
+      ],
+      "source_label_en": "fine finger movements",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "fine finger movements",
+          "short_definition": "Use local finger/hand closing, spreading, pinching, sliding, flicking, clasping, tapping, or simulated playing without contact with the body, a physical object, or a real instrument. Conventional numeric/shape signs belong to symbolic gestures; speech reinforcement belongs to emphasis; actual instrument operation belongs to stage performance."
+        }
+      }
     },
     {
       "category_id": "44",
@@ -1015,9 +1980,29 @@
           "source_label": "引导看向左侧",
           "short_definition": "头部转向左侧，单侧手臂同步抬起指引的引导动作。",
           "user_reaction_expression": "用户要求引导看向左侧、同时转头并抬手介绍左边内容时选择；头部与单臂同步朝向左侧。",
-          "proactive_expression": "介绍左侧人物、区域或内容并引导用户视线时选择；转头与抬臂协同完成，不只是单手指向。"
+          "proactive_expression": "介绍左侧人物、区域或内容并引导用户视线时选择；转头与抬臂协同完成，不只是单手指向。",
+          "source_label_en": "guiding gaze left",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "guiding gaze left",
+              "short_definition": "Turn the head left and simultaneously raise one arm to guide attention."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select when the head and arm should jointly guide attention toward the character's left; not for simple pointing.",
+              "proactive_expression": "Use when introducing a target, entrance, or area on the character's left."
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "welcome and guidance",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "welcome and guidance",
+          "short_definition": "Use at least two coordinated regions among head, arms, and torso, with gaze and hand directed toward the same target to welcome or introduce. Includes guiding left/right/forward and introducing spatial locations. Distinguish from isolated pointing, single-region actions, and stage choreography."
+        }
+      }
     },
     {
       "category_id": "47",
@@ -1034,7 +2019,20 @@
           "source_label": "娇羞（低头双手捂脸，身体左右轻晃）",
           "short_definition": "低头双手捂脸，身体左右轻轻晃动。",
           "user_reaction_expression": "用户要求表现娇羞、害羞捂脸或低头左右轻晃时选择；低头、双手捂脸并让身体轻轻左右摆动。",
-          "proactive_expression": "对暧昧夸奖、亲密互动或令人害羞的话题作娇羞回应时选择；使用捂脸与身体轻晃的复合表达。"
+          "proactive_expression": "对暧昧夸奖、亲密互动或令人害羞的话题作娇羞回应时选择；使用捂脸与身体轻晃的复合表达。",
+          "source_label_en": "head bowed, hands covering face, body swaying gently side‑to‑side to show bashfulness.",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "head bowed, hands covering face, body swaying gently side‑to‑side to show bashfulness.",
+              "short_definition": "Lower the head, cover the face with both hands, and gently sway side to side."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a shy performance with the head lowered, both hands covering the face, and the body gently swaying.",
+              "proactive_expression": "Use when the reply requires a complete shy or bashful performance."
+            }
+          }
         },
         {
           "candidate_id": "449",
@@ -1042,7 +2040,20 @@
           "source_label": "打哈欠（单手捂嘴身体后仰）",
           "short_definition": "单手捂嘴，身体随张口向后微仰。",
           "user_reaction_expression": "用户要求打哈欠、捂嘴犯困或身体随哈欠后仰时选择；单手捂嘴并让上身轻微后仰。",
-          "proactive_expression": "表达困倦、疲惫或长时间等待后的自然反应时选择；用单手捂嘴配合轻微后仰表现哈欠。"
+          "proactive_expression": "表达困倦、疲惫或长时间等待后的自然反应时选择；用单手捂嘴配合轻微后仰表现哈欠。",
+          "source_label_en": "yawning",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "yawning",
+              "short_definition": "Cover the mouth with one hand and lean the body slightly backward as the mouth opens."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a yawn with one hand covering the mouth and the body leaning slightly backward; not for coughing or laughing.",
+              "proactive_expression": "Use when tiredness or sleepiness explicitly calls for a yawning action."
+            }
+          }
         },
         {
           "candidate_id": "450",
@@ -1056,6 +2067,13 @@
               "user_reaction_expression": "Select when asked to hold the head and show headache discomfort; not for simply touching the forehead.",
               "proactive_expression": "Use when the reply or performance explicitly expresses a headache."
             }
+          },
+          "source_label_en": "headache",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "headache",
+              "short_definition": "Hold the head with a hand and tightly knit the brows in pain."
+            }
           }
         },
         {
@@ -1064,7 +2082,20 @@
           "source_label": "单手捂脸无奈",
           "short_definition": "单手掌心覆面，头部微低的无奈动作。",
           "user_reaction_expression": "用户要求捂脸、扶额式无奈或低头遮住面部时选择；头部微低并由单手掌心覆盖面部。",
-          "proactive_expression": "回应令人无语、尴尬或无奈的内容时选择；以单手捂脸和轻微低头表达，不用于害羞的双手捂脸。"
+          "proactive_expression": "回应令人无语、尴尬或无奈的内容时选择；以单手捂脸和轻微低头表达，不用于害羞的双手捂脸。",
+          "source_label_en": "one hand covering face in helplessness",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "one hand covering face in helplessness",
+              "short_definition": "Cover the face with one palm and slightly lower the head in helplessness."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a one-hand facepalm expressing helplessness, embarrassment, or disbelief; not for simply touching the face.",
+              "proactive_expression": "Use when the reply calls for a clear helpless or embarrassed reaction."
+            }
+          }
         },
         {
           "candidate_id": "468",
@@ -1072,9 +2103,29 @@
           "source_label": "咳嗽",
           "short_definition": "单手手背朝上握拳同时向上抬起轻置于嘴巴处或鼻子下方。",
           "user_reaction_expression": "用户要求咳嗽、捂嘴轻咳或用拳头遮住口鼻时选择；单手握拳抬至嘴边并伴随轻微身体震动。",
-          "proactive_expression": "需要表现轻咳、清嗓或对烟尘刺激作自然反应时选择；以拳头遮住嘴部完成咳嗽动作。"
+          "proactive_expression": "需要表现轻咳、清嗓或对烟尘刺激作自然反应时选择；以拳头遮住嘴部完成咳嗽动作。",
+          "source_label_en": "coughing",
+          "prompt_text_by_locale": {
+            "en-US": {
+              "label": "coughing",
+              "short_definition": "Make a fist with the back of the hand upward and raise it gently to the mouth or just below the nose."
+            }
+          },
+          "expressions_by_locale": {
+            "en-US": {
+              "user_reaction_expression": "Select for a cough gesture with a fist raised near the mouth; not for covered-mouth laughter or yawning.",
+              "proactive_expression": "Use when the performance calls for coughing or a cough-like pause."
+            }
+          }
         }
-      ]
+      ],
+      "source_label_en": "emotional actions",
+      "prompt_text_by_locale": {
+        "en-US": {
+          "label": "emotional actions",
+          "short_definition": "Use at least two coordinated regions among face, head, hands, torso, or legs, or a sequence forming a complete emotional, affectionate, thinking, or reaction performance. Includes acting cute, coy affection, surprise with hands on head, helpless open palms, composite cheering, chin-stroking thought, kissing, and composite seductive performances. A single facial change, encouragement gesture, or catalogued local body action belongs to its corresponding basic category."
+        }
+      }
     }
   ]
 }
