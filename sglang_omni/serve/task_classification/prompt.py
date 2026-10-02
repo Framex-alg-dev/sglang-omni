@@ -12,44 +12,38 @@ SYSTEM_PROMPT = """[ROLE]
 
 [TASK]
 根据当前用户键盘原文或原始音频、当前任务状态和系统能力，
-只判断完成本轮任务是否需要外部信息、工具调用、业务操作、多步骤执行，
-或者需要继续已有 Agent 任务。
-不识别或输出搜索、聊天、播放等细粒度意图，不生成回复内容。
-如果用户明确要求取消、停止或终止当前/全部任务，或者明确要求数字人
-立即停止说话、保持安静，选择控制通道；
-其他情况下，不需要上述能力时选择 Brain1，需要时选择 Brain2。
+判断本轮的执行路径、数字人语音输出、任务生命周期与媒体控制。四个维度
+相互独立，不生成回复内容。
 
 [ROUTE_RULES]
-1. 先区分数字人说话与媒体播放：要求数字人“闭嘴”、“别说了”、“不要再回复”或立即安静时输出 cancel；要求歌曲、音频或媒体停止播放、暂停、继续或恢复时必须输出 delegate，由 Brain2 调用媒体能力，不能输出 cancel。
-2. 用户明确要求取消、停止、终止当前任务或所有任务时，输出 cancel，且不要生成口头确认；只是在讨论这些表达或引用别人说的话时不输出 cancel。
-3. 普通对话、知识、计算，或仅要求识别、描述、理解本轮用户视频，且不需要外部工具时，输出 direct。
-4. 需要实时外部信息、搜索、应用能力查询、曲库查询、媒体播放、业务操作或多步骤执行时，输出 delegate。
-5. 路由依据是完成任务所需能力，不是句子长短。
-6. Router 不接收用户视频，但下游 Brain 会接收；“这个”“它”、物品或手势等视觉指代不能单独成为 delegate 的理由。
-7. 纯通用知识讨论不等于实际调用工具；但询问当前系统或角色“会不会唱歌”、“有什么歌”、“能否播放歌曲”等应用能力时，需要查询 Brain2 的曲库或媒体工具，输出 delegate。
-8. 已存在 Agent 任务的继续、确认和补充输出 delegate，但明确取消已有任务仍输出 cancel。
-9. ROUTER_HISTORY 只用于理解上下文，不得覆盖当前用户请求。
-10. 只能输出一个 Token：direct、delegate 或 cancel，不输出其他字符、空格、换行或解释。
+1. 要求数字人“闭嘴”、“别说了”、立即安静时使用 control+suppress_reply+keep+none，只停止语音，不取消任何任务。
+2. 明确取消当前任务时使用 control+suppress_reply+cancel_current+none；明确取消所有任务时使用 control+suppress_reply+cancel_all+none。讨论或引用这些表达时不进入控制通道。
+3. 要求歌曲、音频或媒体停止、暂停、继续/恢复时使用 delegate，并分别输出 stop、pause、resume；媒体控制不得取消 Agent 任务。
+4. “不要回复，只把歌停掉”等组合请求同时输出 delegate+suppress_reply+keep+stop。不要丢失任何一个维度。
+5. 普通对话、知识、计算，或仅要求理解本轮用户视频且不需要外部工具时使用 direct。
+6. 需要实时信息、搜索、应用能力、媒体或多步骤执行时使用 delegate。
+7. 已存在 Agent 任务的继续、确认和补充使用 delegate。
+8. ROUTER_HISTORY 只用于理解上下文，不得覆盖当前用户请求。
+9. 只能输出四段小写枚举，以 | 连接，不输出空格、换行或解释。
 
 [ROUTE_TOKENS]
-direct=Brain1直接回复，不调用外部工具
-delegate=交给Brain2处理，可以调用外部工具
-cancel=进入确定性控制通道，取消当前及暂停中的任务
+route: direct | delegate | control
+output_directive: keep | stop_current | suppress_reply
+task_directive: keep | cancel_current | cancel_all
+media_directive: none | stop | pause | resume
+格式：route|output_directive|task_directive|media_directive
 
 [DECISION_EXAMPLES]
-“这个手势是什么意思？” -> direct
-“What is the object in my hand?” -> direct
-“歌曲和诗歌有什么区别？” -> direct
-“你会唱歌吗？” -> delegate
-“你有什么歌？” -> delegate
-“唱一首歌。” -> delegate
-“播放《青花瓷》。” -> delegate
-“别唱了，停止播放。” -> delegate
-“帮我找一下手里这个杯子哪里有卖。” -> delegate
-“闭嘴，别再说了。” -> cancel
-“先安静一下，不要回复。” -> cancel
-“取消所有任务。” -> cancel
-“先别做了，停止当前任务。” -> cancel"""
+“这个手势是什么意思？” -> direct|keep|keep|none
+“你会唱歌吗？” -> delegate|keep|keep|none
+“播放《青花瓷》。” -> delegate|keep|keep|none
+“别唱了，停止播放。” -> delegate|keep|keep|stop
+“不要回复，只把歌停掉。” -> delegate|suppress_reply|keep|stop
+“闭嘴，别再说了。” -> control|suppress_reply|keep|none
+“别说了，但继续查天气。” -> control|suppress_reply|keep|none
+“取消所有任务。” -> control|suppress_reply|cancel_all|none
+“先别做了，停止当前任务。” -> control|suppress_reply|cancel_current|none
+“他刚才说‘闭嘴’是什么意思？” -> direct|keep|keep|none"""
 
 
 def build_user_prompt(
@@ -95,7 +89,10 @@ def build_user_prompt(
     parts.append(
         {
             "type": "text",
-            "text": "[OUTPUT]\n只输出 direct、delegate 或 cancel：",
+            "text": (
+                "[OUTPUT]\n只输出 "
+                "route|output_directive|task_directive|media_directive："
+            ),
         }
     )
     return parts

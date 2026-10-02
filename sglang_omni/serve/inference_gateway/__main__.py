@@ -129,6 +129,12 @@ def main() -> None:
                 "120",
             )
         ),
+        plain_reply_segment_max_delay_ms=float(
+            os.environ.get(
+                "SGLANG_OMNI_GATEWAY_PLAIN_SEGMENT_MAX_DELAY_MS",
+                "160",
+            )
+        ),
     )
     app = create_inference_gateway_app(config)
     uvicorn.run(

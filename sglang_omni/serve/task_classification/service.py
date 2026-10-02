@@ -34,7 +34,7 @@ def create_task_classification_app(
         raise ValueError("task-classification service token is required")
     if max_body_bytes <= 0:
         raise ValueError("max_body_bytes must be positive")
-    app = FastAPI(title="sglang-omni-turn-router", version="1")
+    app = FastAPI(title="sglang-omni-turn-router", version="2")
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
@@ -46,7 +46,7 @@ def create_task_classification_app(
     async def health(request: Request) -> JSONResponse:
         authenticate(request)
         return JSONResponse(
-            {"ok": True, "contract": "turn-router.v1", "contract_version": 1}
+            {"ok": True, "contract": "turn-router.v2", "contract_version": 2}
         )
 
     @app.post("/v1/task-classification")
@@ -121,6 +121,9 @@ async def _classify_payload(
         "input_revision": result.input_revision,
         "route_token": result.route_token.value,
         "route": result.route.value,
+        "output_directive": result.output_directive.value,
+        "task_directive": result.task_directive.value,
+        "media_directive": result.media_directive.value,
         "model_id": result.model_id,
         "model_version": result.model_version,
     }

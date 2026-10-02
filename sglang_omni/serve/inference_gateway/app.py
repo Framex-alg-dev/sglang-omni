@@ -57,6 +57,7 @@ class InferenceGatewayConfig:
     max_session_speculative_audio_bytes: int = 64 * 1024 * 1024
     adaptive_plain_reply_speech: bool = False
     plain_reply_segment_max_chars: int = 120
+    plain_reply_segment_max_delay_ms: float = 160.0
 
     def __post_init__(self) -> None:
         if set(self.stages) != _STAGES:
@@ -73,6 +74,10 @@ class InferenceGatewayConfig:
             raise ValueError("gateway media limits must be positive")
         if type(self.adaptive_plain_reply_speech) is not bool:
             raise TypeError("adaptive_plain_reply_speech must be boolean")
+        if not 120.0 <= self.plain_reply_segment_max_delay_ms <= 200.0:
+            raise ValueError(
+                "plain_reply_segment_max_delay_ms must be between 120 and 200"
+            )
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,7 @@ class _Session:
         self.speech_speculations: dict[str, _SpeechSpeculation] = {}
         self.reserved_request_ids: set[str] = set()
         self.speculative_buffered_bytes = 0
+        self.segment_flush_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def run(self) -> None:
         await self.websocket.accept()
@@ -181,6 +187,12 @@ class _Session:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        flush_tasks = tuple(self.segment_flush_tasks.values())
+        for task in flush_tasks:
+            task.cancel()
+        if flush_tasks:
+            await asyncio.gather(*flush_tasks, return_exceptions=True)
+        self.segment_flush_tasks.clear()
         self.speech_speculations.clear()
         self.reserved_request_ids.clear()
         self.media.clear()
@@ -536,7 +548,8 @@ class _Session:
         output_epoch: int,
         text_mode: str,
     ) -> None:
-        if self.reply_speech is None or not text.strip():
+        text = text.strip()
+        if self.reply_speech is None or not text:
             return
         if request_id not in self.reserved_request_ids:
             return
@@ -1090,6 +1103,10 @@ class _Session:
                 }
             )
         finally:
+            flush_task = self.segment_flush_tasks.pop(request_id, None)
+            if flush_task is not None:
+                flush_task.cancel()
+                await asyncio.gather(flush_task, return_exceptions=True)
             if speech_speculation is not None:
                 self.reserved_request_ids.discard(speech_speculation[0])
                 state = self.speech_speculations.get(speech_speculation[0])
@@ -1215,6 +1232,27 @@ class _Session:
                 )
                 for segment in segments:
                     await state.text_queue.put(segment)
+                flush_task = self.segment_flush_tasks.get(request_id)
+                if speech_segmenter is None or not speech_segmenter.has_pending:
+                    if flush_task is not None:
+                        flush_task.cancel()
+                        self.segment_flush_tasks.pop(request_id, None)
+                        await asyncio.gather(flush_task, return_exceptions=True)
+                    return
+                if flush_task is None or flush_task.done():
+                    async def flush_after_deadline() -> None:
+                        await asyncio.sleep(
+                            self.config.plain_reply_segment_max_delay_ms / 1000.0
+                        )
+                        segment = speech_segmenter.flush()
+                        current = self.speech_speculations.get(speculation_id)
+                        if segment and current is not None:
+                            await current.text_queue.put(segment)
+
+                    self.segment_flush_tasks[request_id] = asyncio.create_task(
+                        flush_after_deadline(),
+                        name=f"reply-speech-segment-flush:{request_id}",
+                    )
 
             while True:
                 event = _json_object(await socket.recv())
@@ -1286,9 +1324,17 @@ class _Session:
                         state = self.speech_speculations.get(speculation_id)
                         if state is not None:
                             if speech_segmenter is not None:
+                                flush_task = self.segment_flush_tasks.pop(
+                                    request_id, None
+                                )
+                                if flush_task is not None:
+                                    flush_task.cancel()
+                                    await asyncio.gather(
+                                        flush_task, return_exceptions=True
+                                    )
                                 for segment in speech_segmenter.finish():
                                     await state.text_queue.put(segment)
-                            state.text = "".join(state.text_parts)
+                            state.text = "".join(state.text_parts).strip()
                             state.text_hash = _speculative_speech_hash(
                                 text=state.text,
                                 voice=state.voice,
@@ -1525,6 +1571,18 @@ class _ReplySpeechSegmenter:
                 segments.append(segment)
         return tuple(segments)
 
+    @property
+    def has_pending(self) -> bool:
+        return bool(self._buffer.strip())
+
+    def flush(self) -> str | None:
+        if not self._buffer.strip():
+            self._buffer = ""
+            return None
+        segment = self._buffer
+        self._buffer = ""
+        return segment
+
     def finish(self) -> tuple[str, ...]:
         if not self._buffer:
             return ()
@@ -1541,6 +1599,7 @@ def _speculative_speech_hash(
     generation_id: str,
     output_epoch: int,
 ) -> str:
+    text = text.strip()
     text_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
     payload = json.dumps(
         {

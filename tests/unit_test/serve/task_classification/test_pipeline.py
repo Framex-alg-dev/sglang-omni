@@ -4,8 +4,11 @@ import pytest
 
 from sglang_omni.serve.task_classification.contracts import (
     BrainRoute,
+    MediaDirective,
+    OutputDirective,
     RouteToken,
     TaskClassificationRequest,
+    TaskDirective,
 )
 from sglang_omni.serve.task_classification.pipeline import (
     InvalidRouteOutput,
@@ -39,25 +42,61 @@ def _request() -> TaskClassificationRequest:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("raw", "token", "route"),
+    ("raw", "token", "route", "output", "task", "media"),
     [
-        ("direct", RouteToken.DIRECT, BrainRoute.BRAIN1),
-        ("delegate", RouteToken.DELEGATE, BrainRoute.BRAIN2),
-        ("cancel", RouteToken.CANCEL, BrainRoute.CONTROL),
+        (
+            "direct|keep|keep|none",
+            RouteToken.DIRECT,
+            BrainRoute.BRAIN1,
+            OutputDirective.KEEP,
+            TaskDirective.KEEP,
+            MediaDirective.NONE,
+        ),
+        (
+            "delegate|suppress_reply|keep|stop",
+            RouteToken.DELEGATE,
+            BrainRoute.BRAIN2,
+            OutputDirective.SUPPRESS_REPLY,
+            TaskDirective.KEEP,
+            MediaDirective.STOP,
+        ),
+        (
+            "control|suppress_reply|cancel_all|none",
+            RouteToken.CONTROL,
+            BrainRoute.CONTROL,
+            OutputDirective.SUPPRESS_REPLY,
+            TaskDirective.CANCEL_ALL,
+            MediaDirective.NONE,
+        ),
     ],
 )
-async def test_accepts_only_closed_router_vocabulary(raw, token, route) -> None:
+async def test_accepts_only_closed_router_vocabulary(
+    raw, token, route, output, task, media
+) -> None:
     result = await TaskClassificationPipeline(_Model(raw)).classify(_request())
     assert result.route_token is token
     assert result.route is route
+    assert result.output_directive is output
+    assert result.task_directive is task
+    assert result.media_directive is media
     assert result.input_revision == 4
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("raw", [" delegate\n", "Delegate", "delegate because tools"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        " delegate|keep|keep|none",
+        "Delegate|keep|keep|none",
+        "delegate because tools",
+        "control|keep|keep|none",
+        "direct|keep|cancel_all|none",
+        "control|suppress_reply|keep|stop",
+    ],
+)
 async def test_rejects_whitespace_case_or_explanation(raw: str) -> None:
     with pytest.raises(
         InvalidRouteOutput,
-        match="exactly direct, delegate, or cancel",
+        match=r"route\|output_directive\|task_directive\|media_directive",
     ):
         await TaskClassificationPipeline(_Model(raw)).classify(_request())

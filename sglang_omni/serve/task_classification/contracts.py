@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 DEFAULT_BRAIN1_CAPABILITIES = (
     "普通聊天、简单问答、计算、下游用户视频理解；"
     "不处理应用能力、曲库或媒体播放查询"
@@ -30,7 +30,26 @@ def _required(name: str, value: str) -> str:
 class RouteToken(str, Enum):
     DIRECT = "direct"
     DELEGATE = "delegate"
-    CANCEL = "cancel"
+    CONTROL = "control"
+
+
+class OutputDirective(str, Enum):
+    KEEP = "keep"
+    STOP_CURRENT = "stop_current"
+    SUPPRESS_REPLY = "suppress_reply"
+
+
+class TaskDirective(str, Enum):
+    KEEP = "keep"
+    CANCEL_CURRENT = "cancel_current"
+    CANCEL_ALL = "cancel_all"
+
+
+class MediaDirective(str, Enum):
+    NONE = "none"
+    STOP = "stop"
+    PAUSE = "pause"
+    RESUME = "resume"
 
 
 class BrainRoute(str, Enum):
@@ -42,7 +61,7 @@ class BrainRoute(str, Enum):
 ROUTE_BY_TOKEN = {
     RouteToken.DIRECT: BrainRoute.BRAIN1,
     RouteToken.DELEGATE: BrainRoute.BRAIN2,
-    RouteToken.CANCEL: BrainRoute.CONTROL,
+    RouteToken.CONTROL: BrainRoute.CONTROL,
 }
 
 
@@ -120,6 +139,9 @@ class TaskClassificationResult:
     input_revision: int
     route_token: RouteToken
     route: BrainRoute
+    output_directive: OutputDirective
+    task_directive: TaskDirective
+    media_directive: MediaDirective
     model_id: str
     model_version: str
     contract_version: int = CONTRACT_VERSION
@@ -135,3 +157,19 @@ class TaskClassificationResult:
             _required(name, value)
         if ROUTE_BY_TOKEN[self.route_token] is not self.route:
             raise ValueError("turn-router token and Brain route disagree")
+        if (
+            self.task_directive is not TaskDirective.KEEP
+            and self.route_token is not RouteToken.CONTROL
+        ):
+            raise ValueError("task cancellation requires the control route")
+        if (
+            self.media_directive is not MediaDirective.NONE
+            and self.route_token is not RouteToken.DELEGATE
+        ):
+            raise ValueError("media control requires the delegated route")
+        if (
+            self.route_token is RouteToken.CONTROL
+            and self.task_directive is TaskDirective.KEEP
+            and self.output_directive is OutputDirective.KEEP
+        ):
+            raise ValueError("control route requires an output or task directive")

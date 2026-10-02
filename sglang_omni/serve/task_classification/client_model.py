@@ -71,11 +71,11 @@ class SglangClientTaskClassificationModel:
                 sampling=SamplingParams(
                     temperature=0.0,
                     top_p=1.0,
-                    max_new_tokens=1,
+                    max_new_tokens=32,
                     stop=["\n"],
                 ),
                 stream=False,
-                max_tokens=1,
+                max_tokens=32,
                 output_modalities=["text"],
                 metadata=metadata,
             ),

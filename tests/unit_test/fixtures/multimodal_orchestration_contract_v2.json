@@ -2,7 +2,7 @@
   "fixture_version": 2,
   "task_classification": {
     "request": {
-      "contract_version": 1,
+      "contract_version": 2,
       "request_id": "request-contract-1",
       "session_id": "session-contract-1",
       "turn_id": "turn-contract-1",
@@ -18,7 +18,7 @@
       "follow_up_required": false
     },
     "response": {
-      "contract_version": 1,
+      "contract_version": 2,
       "request_id": "request-contract-1",
       "session_id": "session-contract-1",
       "turn_id": "turn-contract-1",
@@ -26,8 +26,11 @@
       "input_revision": 3,
       "route_token": "delegate",
       "route": "BRAIN2",
+      "output_directive": "keep",
+      "task_directive": "keep",
+      "media_directive": "none",
       "model_id": "qwen3-omni-gpu3-decision-services",
-      "model_version": "omni-turn-router-prompt-v2"
+      "model_version": "omni-turn-router-prompt-v3"
     }
   },
   "inference_session": {

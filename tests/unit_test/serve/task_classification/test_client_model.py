@@ -16,7 +16,7 @@ from sglang_omni.serve.task_classification.prompt import SYSTEM_PROMPT
 
 
 class _Client:
-    def __init__(self, output: str = "direct") -> None:
+    def __init__(self, output: str = "direct|keep|keep|none") -> None:
         self.calls = []
         self.output = output
 
@@ -58,7 +58,7 @@ async def test_presents_text_with_exact_router_prompt_and_sampling() -> None:
         )
     )
 
-    assert output == "direct"
+    assert output == "direct|keep|keep|none"
     request = client.calls[0][0]
     assert request.messages[0].content == SYSTEM_PROMPT
     assert request.messages[1].content[1] == {
@@ -67,20 +67,20 @@ async def test_presents_text_with_exact_router_prompt_and_sampling() -> None:
     }
     assert request.sampling.temperature == 0.0
     assert request.sampling.top_p == 1.0
-    assert request.sampling.max_new_tokens == 1
+    assert request.sampling.max_new_tokens == 32
     assert request.sampling.stop == ["\n"]
     assert request.metadata["task"] == "turn_router"
     assert request.metadata["logical_request_id"] == "turn-1"
     assert "取消所有任务" in SYSTEM_PROMPT
     assert request.messages[1].content[-1]["text"].endswith(
-        "direct、delegate 或 cancel："
+        "route|output_directive|task_directive|media_directive："
     )
 
 
 @pytest.mark.asyncio
 async def test_presents_original_audio_with_music_route_contract_without_asr_text(
 ) -> None:
-    client = _Client("delegate")
+    client = _Client("delegate|keep|keep|none")
     model = SglangClientTaskClassificationModel(
         client,
         model_id="shared-base",
@@ -99,7 +99,7 @@ async def test_presents_original_audio_with_music_route_contract_without_asr_tex
         )
     )
 
-    assert output == "delegate"
+    assert output == "delegate|keep|keep|none"
     request = client.calls[0][0]
     assert request.messages[0].content == SYSTEM_PROMPT
     assert request.messages[1].content[1] == {"type": "audio"}
@@ -112,12 +112,10 @@ async def test_presents_original_audio_with_music_route_contract_without_asr_tex
 @pytest.mark.parametrize(
     ("utterance", "route"),
     [
-        ("歌曲和诗歌有什么区别？", "direct"),
-        ("你会唱歌吗？", "delegate"),
-        ("你有什么歌？", "delegate"),
-        ("唱一首歌。", "delegate"),
-        ("播放《青花瓷》。", "delegate"),
-        ("别唱了，停止播放。", "delegate"),
+        ("这个手势是什么意思？", "direct|keep|keep|none"),
+        ("你会唱歌吗？", "delegate|keep|keep|none"),
+        ("播放《青花瓷》。", "delegate|keep|keep|none"),
+        ("别唱了，停止播放。", "delegate|keep|keep|stop"),
     ],
 )
 def test_music_route_minimal_pairs_are_part_of_prompt_contract(
@@ -129,15 +127,29 @@ def test_music_route_minimal_pairs_are_part_of_prompt_contract(
 
 @pytest.mark.parametrize(
     "utterance",
-    ("闭嘴，别再说了。", "先安静一下，不要回复。"),
+    ("闭嘴，别再说了。", "别说了，但继续查天气。"),
 )
 def test_silence_controls_are_part_of_prompt_contract(utterance: str) -> None:
-    assert f"“{utterance}” -> cancel" in SYSTEM_PROMPT
+    assert f"“{utterance}” -> control|suppress_reply|keep|none" in SYSTEM_PROMPT
 
 
 def test_media_stop_takes_delegate_precedence_over_silence_control() -> None:
-    assert "媒体停止播放、暂停、继续或恢复时必须输出 delegate" in SYSTEM_PROMPT
-    assert "“别唱了，停止播放。” -> delegate" in SYSTEM_PROMPT
+    assert "媒体停止、暂停、继续/恢复时使用 delegate" in SYSTEM_PROMPT
+    assert "“别唱了，停止播放。” -> delegate|keep|keep|stop" in SYSTEM_PROMPT
+
+
+def test_combined_silence_and_media_control_keeps_task() -> None:
+    assert (
+        "“不要回复，只把歌停掉。” -> delegate|suppress_reply|keep|stop"
+        in SYSTEM_PROMPT
+    )
+
+
+def test_quoted_silence_is_not_a_control() -> None:
+    assert (
+        "“他刚才说‘闭嘴’是什么意思？” -> direct|keep|keep|none"
+        in SYSTEM_PROMPT
+    )
 
 
 def test_rejects_visual_media() -> None:

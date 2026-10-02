@@ -132,6 +132,26 @@ def test_reply_speech_segmenter_keeps_short_text_whole() -> None:
     assert segmenter.finish() == ("你好，很高兴认识你",)
 
 
+def test_reply_speech_segmenter_can_flush_pending_text_on_latency_budget() -> None:
+    segmenter = gateway_module._ReplySpeechSegmenter(max_chars=120)
+
+    assert segmenter.feed("正在生成一段没有标点的回复") == ()
+    assert segmenter.has_pending is True
+    assert segmenter.flush() == "正在生成一段没有标点的回复"
+    assert segmenter.has_pending is False
+    assert segmenter.finish() == ()
+
+
+def test_reply_speech_segment_delay_is_bounded_to_product_budget() -> None:
+    for value in (119.0, 201.0):
+        try:
+            _config(plain_reply_segment_max_delay_ms=value)
+        except ValueError as exc:
+            assert "between 120 and 200" in str(exc)
+        else:
+            raise AssertionError("out-of-range segment delay was accepted")
+
+
 def test_reply_speech_segmenter_releases_natural_sentences_after_long_budget() -> None:
     segmenter = gateway_module._ReplySpeechSegmenter(max_chars=8)
 

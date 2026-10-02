@@ -21,13 +21,17 @@ class _Model:
     model_version = "prompt-v1"
 
     async def classify(self, request):
-        return "delegate" if request.text == "book a ticket" else "direct"
+        return (
+            "delegate|keep|keep|none"
+            if request.text == "book a ticket"
+            else "direct|keep|keep|none"
+        )
 
 
 def _body(text: str) -> bytes:
     return msgpack.packb(
         {
-            "contract_version": 1,
+            "contract_version": 2,
             "request_id": "request-1",
             "session_id": "session-1",
             "turn_id": "turn-1",
@@ -75,7 +79,7 @@ def test_websocket_streams_binary_media_before_classification() -> None:
         async def classify(self, request):
             assert request.text is None
             assert request.media[0].payload == raw_media
-            return "delegate"
+            return "delegate|keep|keep|none"
 
     raw_media = b"\x01\x00" * 160
     app = create_task_classification_app(
