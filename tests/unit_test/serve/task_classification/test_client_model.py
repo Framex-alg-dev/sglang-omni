@@ -113,6 +113,9 @@ async def test_presents_original_audio_with_music_route_contract_without_asr_tex
     ("utterance", "route"),
     [
         ("这个手势是什么意思？", "direct|keep|keep|none"),
+        ("这是什么手势？", "direct|keep|keep|none"),
+        ("看看我这个动作是什么意思。", "direct|keep|keep|none"),
+        ("搜索一下这个手势的含义。", "delegate|keep|keep|none"),
         ("你会唱歌吗？", "delegate|keep|keep|none"),
         ("播放《青花瓷》。", "delegate|keep|keep|none"),
         ("别唱了，停止播放。", "delegate|keep|keep|stop"),
