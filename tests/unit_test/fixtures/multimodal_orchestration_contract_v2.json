@@ -12,7 +12,7 @@
       "media": [],
       "router_history": [],
       "brain1_capabilities": "普通聊天、简单问答、计算、下游用户视频理解；不处理应用能力、曲库或媒体播放查询",
-      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、唱歌请求，以及歌曲播放、暂停、继续/恢复与停止",
+      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、所有立即唱歌和选歌请求，以及歌曲播放、暂停、继续/恢复与停止；唱歌请求不是普通对话或纯动作",
       "has_active_agent": false,
       "pending_confirmation": false,
       "follow_up_required": false

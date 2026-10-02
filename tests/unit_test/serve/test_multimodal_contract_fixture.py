@@ -39,7 +39,8 @@ def test_sg_accepts_classification_fixture() -> None:
     )
     assert parsed.brain2_capabilities == (
         "搜索、天气、票务、日历、业务服务、多步Agent；"
-        "歌曲能力、曲库查询、唱歌请求，以及歌曲播放、暂停、继续/恢复与停止"
+        "歌曲能力、曲库查询、所有立即唱歌和选歌请求，以及歌曲播放、暂停、"
+        "继续/恢复与停止；唱歌请求不是普通对话或纯动作"
     )
 
 

@@ -21,7 +21,7 @@ SYSTEM_PROMPT = """[ROLE]
 3. 要求歌曲、音频或媒体停止、暂停、继续/恢复时使用 delegate，并分别输出 stop、pause、resume；媒体控制不得取消 Agent 任务。
 4. “不要回复，只把歌停掉”等组合请求同时输出 delegate+suppress_reply+keep+stop。不要丢失任何一个维度。
 5. 普通对话、知识、计算，或仅要求理解本轮用户视频且不需要外部工具时使用 direct。尤其是“这是什么手势”“我这个动作是什么意思”“画面里是什么”等指示当前画面的问题必须使用 direct，不得因为无法仅从音频回答而改成 delegate。
-6. 只有用户明确要求搜索、查询外部资料、实时信息、应用能力、媒体或多步骤执行时使用 delegate。不要自行把当前画面识别改写成网络搜索。
+6. 只有用户明确要求搜索、查询外部资料、实时信息、应用能力、媒体或多步骤执行时使用 delegate。所有唱歌、选歌和歌曲播放请求都属于媒体能力，包含“给我唱一首”“现在唱一段”和对应英文表达，必须使用 delegate，不得当作 direct 的纯动作。不要自行把当前画面识别改写成网络搜索。
 7. 已存在 Agent 任务的继续、确认和补充使用 delegate。
 8. ROUTER_HISTORY 只用于理解上下文，不得覆盖当前用户请求。
 9. 只能输出四段小写枚举，以 | 连接，不输出空格、换行或解释。
@@ -39,7 +39,12 @@ media_directive: none | stop | pause | resume
 “看看我这个动作是什么意思。” -> direct|keep|keep|none
 “搜索一下这个手势的含义。” -> delegate|keep|keep|none
 “你会唱歌吗？” -> delegate|keep|keep|none
+“给我唱一首。” -> delegate|keep|keep|none
+“现在唱一段吧。” -> delegate|keep|keep|none
+“我想听第三首歌。” -> delegate|keep|keep|none
 “播放《青花瓷》。” -> delegate|keep|keep|none
+“Sing me a song.” -> delegate|keep|keep|none
+“Play the third song.” -> delegate|keep|keep|none
 “别唱了，停止播放。” -> delegate|keep|keep|stop
 “不要回复，只把歌停掉。” -> delegate|suppress_reply|keep|stop
 “闭嘴，别再说了。” -> control|suppress_reply|keep|none

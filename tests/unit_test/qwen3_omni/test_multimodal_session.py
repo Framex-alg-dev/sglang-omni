@@ -8524,7 +8524,7 @@ def test_joint_reply_route_prompt_defines_complete_decision_boundaries() -> None
     assert "动作是否受支持以及选择哪个具体动作，不属于本分类任务" in prompt
     assert "必须通过语言完成的独立意图" in prompt
     assert "可观察的身体行为、姿势变化、物体操作、对象呈现" in prompt
-    assert "立即进行唱歌等声音表演" in prompt
+    assert "唱歌由外部曲库与媒体能力执行" in prompt
     assert "提供信息、识别对象、解释含义、描述内容、评价、比较" in prompt
     assert "同时要求执行动作和完成独立语言任务" in prompt
     assert "不得根据‘看看’‘展示’‘介绍’等单个词分类" in prompt
@@ -8573,7 +8573,8 @@ def test_joint_reply_route_prompt_defines_complete_decision_boundaries() -> None
     assert "“能挥挥手吗”→R2" in prompt
     assert "“你可以给我打个招呼吗”“给我打个招呼”“挥挥手”→R2" in prompt
     assert "“可以转一圈给我看吗”→R2" in prompt
-    assert "“给我唱一首”“现在唱一段吧”→R2" in prompt
+    assert "“给我唱一首”→R0" in prompt
+    assert "“现在唱一段吧”→R0" in prompt
     assert "“再做一次刚才那个动作”" in prompt
     assert "“换成上一个动作”→R3" in prompt
 
@@ -8593,8 +8594,8 @@ def test_joint_reply_route_prompt_has_equivalent_english_history_boundaries() ->
     assert "'Can you sing?'" in prompt
     assert "'Can you tell me a story?'" in prompt
     assert "'Sure', 'Okay, start'" in prompt
-    assert "immediate vocal performance such as singing" in prompt
-    assert "'Sing me a song' and 'Sing something now' -> R2" in prompt
+    assert "external song-catalog and media capability" in prompt
+    assert "'Sing me a song', 'Sing something now'" in prompt
     assert "'Can you greet me?'" in prompt
     assert "'Give me a greeting'" in prompt
     assert "'Wave to me'" in prompt
@@ -8621,8 +8622,9 @@ def test_reply_speech_mode_prompt_distinguishes_polite_action_requests() -> None
     assert "‘你可以撒个娇吗’→S1" in prompt
     assert "‘能挥挥手吗’→S1" in prompt
     assert "‘你可以给我打个招呼吗’‘给我打个招呼’‘挥挥手’→S1" in prompt
-    assert "‘给我唱一首’→S1" in prompt
-    assert "立即进行唱歌等声音表演" in prompt
+    assert "‘给我唱一首’→S0" in prompt
+    assert "‘现在唱一段吧’→S0" in prompt
+    assert "唱歌由外部曲库与媒体能力执行" in prompt
 
 
 def test_reply_route_prompts_have_equivalent_english_question_boundary() -> None:
