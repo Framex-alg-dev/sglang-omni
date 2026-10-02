@@ -268,6 +268,33 @@ def calculate_stage_load_delta_bytes(
     return int((pre_model_load_memory_gib - post_model_load_memory_gib) * (1024**3))
 
 
+def cap_stage_budget_by_global_free_memory(
+    *,
+    stage_budget_available_bytes: int,
+    global_free_memory_bytes: int,
+    runtime_reserve_bytes: int,
+) -> int:
+    """Cap a process-scoped KV budget by real device headroom.
+
+    Process accounting prevents colocated Omni stages from charging each
+    other's weights to the current stage.  Global free memory is still the
+    hard allocation limit, including foreign processes, so retain an explicit
+    runtime reserve before returning KV-cache capacity.
+    """
+    if stage_budget_available_bytes <= 0:
+        raise ValueError("stage_budget_available_bytes must be positive")
+    if global_free_memory_bytes < 0 or runtime_reserve_bytes < 0:
+        raise ValueError("global free memory and runtime reserve must be non-negative")
+    globally_available = global_free_memory_bytes - runtime_reserve_bytes
+    if globally_available <= 0:
+        raise RuntimeError(
+            "GPU runtime reserve leaves no KV-cache headroom: "
+            f"global_free={format_bytes_gib(global_free_memory_bytes)}, "
+            f"runtime_reserve={format_bytes_gib(runtime_reserve_bytes)}"
+        )
+    return min(stage_budget_available_bytes, globally_available)
+
+
 def get_gpu_startup_lock_path(
     logical_gpu_id: int,
     *,
@@ -294,7 +321,15 @@ def gpu_startup_lock(logical_gpu_id: int):
 
     lock_path = get_gpu_startup_lock_path(logical_gpu_id)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a+") as lock_file:
+    try:
+        lock_file = open(lock_path, "a+")
+    except PermissionError:
+        # The lock lives in a host-wide temporary directory and may have been
+        # created by another service account. flock(2) only needs an open file
+        # descriptor, so a readable pre-existing lock can still safely
+        # serialize startup without granting this process write access.
+        lock_file = open(lock_path, "r")
+    with lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield lock_path

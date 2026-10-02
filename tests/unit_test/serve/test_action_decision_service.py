@@ -190,6 +190,17 @@ def test_model_request_has_exact_constraint_and_audio_plus_multiple_images() -> 
     ]
 
 
+def test_model_may_return_canonical_candidate_id_for_control_token() -> None:
+    async def run():
+        engine = ActionDecisionEngine(_FakeClient("IB0"), config=_config())
+        return await engine.decide(_request(DecisionChannel.BODY))
+
+    result = asyncio.run(run())
+
+    assert result.outcome == "no_action"
+    assert result.candidate_id == "IB0"
+
+
 def test_completed_request_is_idempotent() -> None:
     async def run():
         client = _FakeClient()
@@ -276,6 +287,21 @@ def test_websocket_service_accepts_text_request() -> None:
         response = socket.receive_json()
     assert response["type"] == "response.completed"
     assert response["response"]["channel"] == "body"
+
+
+def test_action_service_mounts_authenticated_performance_control() -> None:
+    app = create_action_decision_app(
+        _FakeClient(),
+        config=_config(),
+        performance_token="performance-secret",
+    )
+
+    assert "/v1/performance-control" in app.openapi()["paths"]
+    with TestClient(app).websocket_connect(
+        "/v1/performance-control/realtime",
+        headers={"Authorization": "Bearer performance-secret"},
+    ):
+        pass
 
 
 def test_sampling_params_carry_server_side_constraints() -> None:

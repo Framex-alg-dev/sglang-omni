@@ -796,7 +796,16 @@ async def _run_server(
                     )
                 ),
             )
-            app = create_action_decision_app(client, config=action_config)
+            app = create_action_decision_app(
+                client,
+                config=action_config,
+                performance_token=(
+                    os.environ.get(
+                        "SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN", ""
+                    ).strip()
+                    or action_config.token
+                ),
+            )
             if os.environ.get(
                 "SGLANG_OMNI_ACTION_VERIFY_TOKENIZER", "1"
             ).strip().lower() not in {"0", "false", "off", "no"}:

@@ -51,6 +51,7 @@ env \
     SGLANG_OMNI_SERVICE_ROLE=action-decision \
     SGLANG_OMNI_MODEL_VERSION=e43-ratio075 \
     SGLANG_OMNI_ACTION_DECISION_TOKEN="${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:-${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:?set an internal service token}}}" \
+    SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN="${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:-${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:?set an internal service token}}}" \
     SGLANG_OMNI_ACTION_ARTIFACT_ROOT=/data/xingmt/model_repo/action_prediction_model/assets \
     "$python_bin" -m sglang_omni.cli serve \
         --config "$project_root/deploy/config_action_gpu.yaml" \

@@ -9,7 +9,7 @@ import hmac
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import websockets
@@ -21,10 +21,17 @@ from sglang_omni.serve.inference_gateway.speech_synthesis import (
     GatewaySpeechError,
     GatewaySpeechSynthesizer,
 )
+from sglang_omni.serve.realtime.embedded_tts import (
+    EmbeddedTTSConfig,
+    EmbeddedTTSConnection,
+    EmbeddedTTSError,
+)
 
 
 logger = logging.getLogger(__name__)
-_STAGES = frozenset({"classifier", "brain", "reply", "body", "expression"})
+_STAGES = frozenset(
+    {"classifier", "brain", "reply", "body", "expression", "performance"}
+)
 
 
 @dataclass(frozen=True)
@@ -41,19 +48,31 @@ class UpstreamStage:
 class InferenceGatewayConfig:
     stages: dict[str, UpstreamStage]
     reply_speech: GatewaySpeechConfig | None = None
+    reply_streaming_speech: EmbeddedTTSConfig | None = None
     request_timeout_seconds: float = 60.0
     receive_idle_timeout_seconds: float = 30.0
     max_media_items: int = 64
     max_media_bytes: int = 128 * 1024 * 1024
     max_item_bytes: int = 32 * 1024 * 1024
+    max_session_speculative_audio_bytes: int = 64 * 1024 * 1024
+    adaptive_plain_reply_speech: bool = False
+    plain_reply_segment_max_chars: int = 120
 
     def __post_init__(self) -> None:
         if set(self.stages) != _STAGES:
-            raise ValueError("gateway requires exactly the five model stages")
+            raise ValueError("gateway requires exactly the six model stages")
         if self.request_timeout_seconds <= 0 or self.receive_idle_timeout_seconds <= 0:
             raise ValueError("gateway timeouts must be positive")
-        if min(self.max_media_items, self.max_media_bytes, self.max_item_bytes) <= 0:
+        if min(
+            self.max_media_items,
+            self.max_media_bytes,
+            self.max_item_bytes,
+            self.max_session_speculative_audio_bytes,
+            self.plain_reply_segment_max_chars,
+        ) <= 0:
             raise ValueError("gateway media limits must be positive")
+        if type(self.adaptive_plain_reply_speech) is not bool:
+            raise TypeError("adaptive_plain_reply_speech must be boolean")
 
 
 @dataclass(frozen=True)
@@ -65,6 +84,30 @@ class _Media:
     encoding: str
     checksum: str
     payload: bytes
+
+
+@dataclass
+class _SpeechSpeculation:
+    request_id: str
+    source_request_id: str
+    voice: str
+    instruction: str
+    generation_id: str
+    output_epoch: int
+    text_mode: str
+    synthesis_mode: str = "whole_text"
+    text: str = ""
+    text_hash: str = ""
+    text_parts: list[str] = field(default_factory=list)
+    text_queue: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
+    instruction_event: asyncio.Event = field(default_factory=asyncio.Event)
+    text_completed: asyncio.Event = field(default_factory=asyncio.Event)
+    chunks: list[bytes] = field(default_factory=list)
+    buffered_bytes: int = 0
+    next_seq: int = 0
+    committed: bool = False
+    commit_event: asyncio.Event = field(default_factory=asyncio.Event)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class _Session:
@@ -79,6 +122,10 @@ class _Session:
         self.send_lock = asyncio.Lock()
         self.closed = False
         self.reply_speech: GatewaySpeechSynthesizer | None = None
+        self.streaming_reply_speech: EmbeddedTTSConnection | None = None
+        self.speech_speculations: dict[str, _SpeechSpeculation] = {}
+        self.reserved_request_ids: set[str] = set()
+        self.speculative_buffered_bytes = 0
 
     async def run(self) -> None:
         await self.websocket.accept()
@@ -89,6 +136,11 @@ class _Session:
         if self.config.reply_speech is not None:
             self.reply_speech = GatewaySpeechSynthesizer(
                 self.config.reply_speech,
+            )
+        if self.config.reply_streaming_speech is not None:
+            self.streaming_reply_speech = EmbeddedTTSConnection(
+                self.config.reply_streaming_speech,
+                session_id=self.session_id,
             )
         await self.send(
             {
@@ -106,6 +158,12 @@ class _Session:
                 await self._start_stage(message)
             elif message_type == "speech.request":
                 await self._start_speech(message)
+            elif message_type == "speech.commit":
+                await self._commit_speech(message)
+            elif message_type == "speech.configure":
+                await self._configure_speech(message)
+            elif message_type == "speech.cancel":
+                await self._cancel_stage(_string(message, "request_id"))
             elif message_type in {"stage.cancel", "request.cancel"}:
                 await self._cancel_stage(_string(message, "request_id"))
             elif message_type == "session.close":
@@ -123,11 +181,15 @@ class _Session:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        self.speech_speculations.clear()
+        self.reserved_request_ids.clear()
         self.media.clear()
         self.media_refcounts.clear()
         self.media_bytes = 0
         if self.reply_speech is not None:
             await self.reply_speech.close()
+        if self.streaming_reply_speech is not None:
+            await self.streaming_reply_speech.close()
 
     async def send(self, payload: dict[str, Any]) -> None:
         async with self.send_lock:
@@ -184,13 +246,16 @@ class _Session:
 
     async def _start_stage(self, message: dict[str, Any]) -> None:
         request_id = _string(message, "request_id")
-        if request_id in self.tasks:
+        if request_id in self.tasks or request_id in self.reserved_request_ids:
             raise ValueError("gateway request_id is already active")
         stage = _one_of(message, "stage", _STAGES)
         payload = message.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("gateway stage payload must be an object")
         payload = dict(payload)
+        speech_speculation = self._speech_speculation_request(message, stage)
+        if speech_speculation is not None and speech_speculation[0] == request_id:
+            raise ValueError("speech speculation request_id must differ from reply request_id")
         if stage in {"body", "expression"}:
             declared_channel = payload.get("channel")
             if declared_channel not in (None, stage):
@@ -215,8 +280,31 @@ class _Session:
             return
         for media_id in media_refs:
             self.media_refcounts[media_id] += 1
+        if speech_speculation is not None:
+            self.reserved_request_ids.add(speech_speculation[0])
+            if (
+                self.config.adaptive_plain_reply_speech
+                and speech_speculation[5]
+                in {"plain", "plain_with_user_turn_v1"}
+                and self.reply_speech is not None
+            ):
+                self._open_adaptive_speculation(
+                    source_request_id=request_id,
+                    metadata=speech_speculation,
+                )
+            elif self.streaming_reply_speech is not None:
+                self._open_streaming_speculation(
+                    source_request_id=request_id,
+                    metadata=speech_speculation,
+                )
         task = asyncio.create_task(
-            self._run_stage(request_id, stage, payload, tuple(media_refs)),
+            self._run_stage(
+                request_id,
+                stage,
+                payload,
+                tuple(media_refs),
+                speech_speculation,
+            ),
             name=f"inference-gateway:{self.session_id}:{stage}:{request_id}",
         )
         self.tasks[request_id] = task
@@ -225,9 +313,112 @@ class _Session:
             {"type": "stage.accepted", "request_id": request_id, "stage": stage}
         )
 
+    def _speech_speculation_request(
+        self,
+        message: dict[str, Any],
+        stage: str,
+    ) -> tuple[str, str, str, str, int, str] | None:
+        raw = message.get("speech_speculation")
+        if raw is None:
+            return None
+        if stage != "reply" or not isinstance(raw, dict):
+            raise ValueError("speech speculation is only valid for reply stages")
+        request_id = _string(raw, "request_id")
+        voice = _string(raw, "voice")
+        instruction = _string(raw, "instruction")
+        generation_id = _string(raw, "generation_id")
+        output_epoch = int(_string(raw, "output_epoch"))
+        if output_epoch < 0:
+            raise ValueError("speech speculation output_epoch is invalid")
+        text_mode = str(raw.get("text_mode") or "plain")
+        if text_mode not in {
+            "plain",
+            "reply_envelope_v1",
+            "plain_with_user_turn_v1",
+        }:
+            raise ValueError("speech speculation text_mode is unsupported")
+        if (
+            request_id in self.tasks
+            or request_id in self.speech_speculations
+            or request_id in self.reserved_request_ids
+        ):
+            raise ValueError("speech speculation request_id is already active")
+        if len(voice) > 256 or len(instruction) > 1_000:
+            raise ValueError("speech speculation metadata exceeds its size limit")
+        return request_id, voice, instruction, generation_id, output_epoch, text_mode
+
+    def _open_streaming_speculation(
+        self,
+        *,
+        source_request_id: str,
+        metadata: tuple[str, str, str, str, int, str],
+    ) -> None:
+        request_id, voice, instruction, generation_id, output_epoch, text_mode = metadata
+        self.reserved_request_ids.discard(request_id)
+        state = _SpeechSpeculation(
+            request_id=request_id,
+            source_request_id=source_request_id,
+            voice=voice,
+            instruction=instruction,
+            generation_id=generation_id,
+            output_epoch=output_epoch,
+            text_mode=text_mode,
+            synthesis_mode="incremental",
+        )
+        self.speech_speculations[request_id] = state
+        task = asyncio.create_task(
+            self._run_streaming_speculative_speech(state),
+            name=(
+                f"inference-gateway:{self.session_id}:"
+                f"streaming-speech-speculation:{request_id}"
+            ),
+        )
+        self.tasks[request_id] = task
+        task.add_done_callback(lambda done, key=request_id: self._task_done(key, done))
+
+    def _open_adaptive_speculation(
+        self,
+        *,
+        source_request_id: str,
+        metadata: tuple[str, str, str, str, int, str],
+    ) -> None:
+        request_id, voice, instruction, generation_id, output_epoch, text_mode = metadata
+        self.reserved_request_ids.discard(request_id)
+        state = _SpeechSpeculation(
+            request_id=request_id,
+            source_request_id=source_request_id,
+            voice=voice,
+            instruction=instruction,
+            generation_id=generation_id,
+            output_epoch=output_epoch,
+            text_mode=text_mode,
+            synthesis_mode="adaptive_whole_or_sentence",
+        )
+        self.speech_speculations[request_id] = state
+        task = asyncio.create_task(
+            self._run_adaptive_speculative_speech(state),
+            name=(
+                f"inference-gateway:{self.session_id}:"
+                f"adaptive-speech-speculation:{request_id}"
+            ),
+        )
+        self.tasks[request_id] = task
+        task.add_done_callback(lambda done, key=request_id: self._task_done(key, done))
+
+    def _disable_speech_speculation(self, request_id: str, *, reason: str) -> None:
+        """Abandon optional speech work without failing the owning reply stage."""
+        self.reserved_request_ids.discard(request_id)
+        task = self.tasks.get(request_id)
+        if task is not None:
+            task.cancel()
+        logger.warning(
+            "inference gateway disabled reply speech speculation",
+            extra={"request_id": request_id, "reason": reason},
+        )
+
     async def _start_speech(self, message: dict[str, Any]) -> None:
         request_id = _string(message, "request_id")
-        if request_id in self.tasks:
+        if request_id in self.tasks or request_id in self.reserved_request_ids:
             raise ValueError("gateway request_id is already active")
         text = _string(message, "text")
         voice = _string(message, "voice")
@@ -333,14 +524,524 @@ class _Session:
                 }
             )
 
+    async def _start_speculative_speech(
+        self,
+        *,
+        source_request_id: str,
+        request_id: str,
+        text: str,
+        voice: str,
+        instruction: str,
+        generation_id: str,
+        output_epoch: int,
+        text_mode: str,
+    ) -> None:
+        if self.reply_speech is None or not text.strip():
+            return
+        if request_id not in self.reserved_request_ids:
+            return
+        self.reserved_request_ids.remove(request_id)
+        text_hash = _speculative_speech_hash(
+            text=text,
+            voice=voice,
+            instruction=instruction,
+            generation_id=generation_id,
+            output_epoch=output_epoch,
+        )
+        state = _SpeechSpeculation(
+            request_id=request_id,
+            source_request_id=source_request_id,
+            voice=voice,
+            instruction=instruction,
+            generation_id=generation_id,
+            output_epoch=output_epoch,
+            text_mode=text_mode,
+            text=text,
+            text_hash=text_hash,
+        )
+        state.instruction_event.set()
+        state.text_completed.set()
+        self.speech_speculations[request_id] = state
+        task = asyncio.create_task(
+            self._run_speculative_speech(state),
+            name=f"inference-gateway:{self.session_id}:speech-speculation:{request_id}",
+        )
+        self.tasks[request_id] = task
+        task.add_done_callback(lambda done, key=request_id: self._task_done(key, done))
+
+    async def _run_speculative_speech(self, state: _SpeechSpeculation) -> None:
+        assert self.reply_speech is not None
+
+        async def send_chunk(chunk: bytes) -> None:
+            await self.send(
+                {
+                    "type": "speech.audio.delta",
+                    "request_id": state.request_id,
+                    "seq": state.next_seq,
+                    "delta": base64.b64encode(chunk).decode("ascii"),
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24_000,
+                        "channels": 1,
+                    },
+                }
+            )
+            state.next_seq += 1
+
+        async def audio_sink(chunk: bytes) -> None:
+            if not chunk:
+                return
+            async with state.lock:
+                if state.committed:
+                    await send_chunk(chunk)
+                    return
+                state.buffered_bytes += len(chunk)
+                self.speculative_buffered_bytes += len(chunk)
+                if state.buffered_bytes > self.config.reply_speech.max_audio_bytes:
+                    raise GatewaySpeechError(
+                        "speculative speech exceeded its audio budget",
+                        phase="protocol",
+                        retryable=False,
+                    )
+                if (
+                    self.speculative_buffered_bytes
+                    > self.config.max_session_speculative_audio_bytes
+                ):
+                    raise GatewaySpeechError(
+                        "session speculative speech exceeded its audio budget",
+                        phase="protocol",
+                        retryable=False,
+                    )
+                state.chunks.append(chunk)
+
+        try:
+            result = await self.reply_speech.synthesize(
+                text=state.text,
+                voice=state.voice,
+                instruction=state.instruction,
+                audio_sink=audio_sink,
+            )
+            await asyncio.wait_for(
+                state.commit_event.wait(),
+                timeout=self.config.request_timeout_seconds,
+            )
+            await self.send(
+                {
+                    "type": "speech.audio.done",
+                    "request_id": state.request_id,
+                    "seq": state.next_seq - 1,
+                    "audio_bytes": result.audio_bytes,
+                    "chunk_count": result.chunk_count,
+                    "provider_response_id": result.provider_response_id,
+                    "speculative": True,
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24_000,
+                        "channels": 1,
+                    },
+                }
+            )
+        except asyncio.CancelledError:
+            await self.send(
+                {"type": "speech.cancelled", "request_id": state.request_id}
+            )
+            raise
+        except Exception as exc:
+            logger.exception("inference gateway speculative speech failed")
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": state.request_id,
+                    "code": "tts_failed",
+                    "detail": "speculative speech synthesis failed",
+                    "retryable": isinstance(exc, (asyncio.TimeoutError, GatewaySpeechError))
+                    and getattr(exc, "retryable", True),
+                }
+            )
+        finally:
+            self.speculative_buffered_bytes = max(
+                0,
+                self.speculative_buffered_bytes - state.buffered_bytes,
+            )
+            self.speech_speculations.pop(state.request_id, None)
+
+    async def _run_streaming_speculative_speech(
+        self,
+        state: _SpeechSpeculation,
+    ) -> None:
+        assert self.streaming_reply_speech is not None
+
+        async def text_chunks():
+            while True:
+                chunk = await state.text_queue.get()
+                if chunk is None:
+                    return
+                if chunk:
+                    yield chunk
+
+        async def instruction() -> str:
+            await state.instruction_event.wait()
+            return state.instruction
+
+        async def send_chunk(chunk: bytes) -> None:
+            await self.send(
+                {
+                    "type": "speech.audio.delta",
+                    "request_id": state.request_id,
+                    "seq": state.next_seq,
+                    "delta": base64.b64encode(chunk).decode("ascii"),
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24_000,
+                        "channels": 1,
+                    },
+                }
+            )
+            state.next_seq += 1
+
+        async def audio_sink(chunk: bytes) -> None:
+            if not chunk:
+                return
+            async with state.lock:
+                if state.committed:
+                    await send_chunk(chunk)
+                    return
+                state.buffered_bytes += len(chunk)
+                self.speculative_buffered_bytes += len(chunk)
+                if (
+                    state.buffered_bytes
+                    > self.config.reply_streaming_speech.provisional_audio_max_bytes
+                    or self.speculative_buffered_bytes
+                    > self.config.max_session_speculative_audio_bytes
+                ):
+                    raise EmbeddedTTSError(
+                        "speculative audio budget exceeded",
+                        phase="protocol",
+                    )
+                state.chunks.append(chunk)
+
+        try:
+            result = await self.streaming_reply_speech.synthesize_streaming(
+                turn_id=state.request_id,
+                text_chunks=text_chunks(),
+                audio_sink=audio_sink,
+                voice=state.voice,
+                instruct=instruction(),
+            )
+            await asyncio.wait_for(
+                state.commit_event.wait(),
+                timeout=self.config.request_timeout_seconds,
+            )
+            await self.send(
+                {
+                    "type": "speech.audio.done",
+                    "request_id": state.request_id,
+                    "seq": state.next_seq - 1,
+                    "audio_bytes": result.audio_bytes,
+                    "chunk_count": result.chunk_count,
+                    "provider_response_id": result.provider_response_id,
+                    "speculative": True,
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24_000,
+                        "channels": 1,
+                    },
+                }
+            )
+        except asyncio.CancelledError:
+            await self.send(
+                {"type": "speech.cancelled", "request_id": state.request_id}
+            )
+            raise
+        except Exception as exc:
+            logger.exception("inference gateway streaming speculation failed")
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": state.request_id,
+                    "code": "tts_failed",
+                    "detail": "streaming speculative speech synthesis failed",
+                    "retryable": isinstance(exc, (asyncio.TimeoutError, EmbeddedTTSError)),
+                }
+            )
+        finally:
+            self.speculative_buffered_bytes = max(
+                0,
+                self.speculative_buffered_bytes - state.buffered_bytes,
+            )
+            self.speech_speculations.pop(state.request_id, None)
+
+    async def _run_adaptive_speculative_speech(
+        self,
+        state: _SpeechSpeculation,
+    ) -> None:
+        assert self.reply_speech is not None
+
+        async def send_chunk(chunk: bytes) -> None:
+            await self.send(
+                {
+                    "type": "speech.audio.delta",
+                    "request_id": state.request_id,
+                    "seq": state.next_seq,
+                    "delta": base64.b64encode(chunk).decode("ascii"),
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24_000,
+                        "channels": 1,
+                    },
+                }
+            )
+            state.next_seq += 1
+
+        async def audio_sink(chunk: bytes) -> None:
+            if not chunk:
+                return
+            async with state.lock:
+                if state.committed:
+                    await send_chunk(chunk)
+                    return
+                state.buffered_bytes += len(chunk)
+                self.speculative_buffered_bytes += len(chunk)
+                if state.buffered_bytes > self.config.reply_speech.max_audio_bytes:
+                    raise GatewaySpeechError(
+                        "speculative speech exceeded its audio budget",
+                        phase="protocol",
+                        retryable=False,
+                    )
+                if (
+                    self.speculative_buffered_bytes
+                    > self.config.max_session_speculative_audio_bytes
+                ):
+                    raise GatewaySpeechError(
+                        "session speculative speech exceeded its audio budget",
+                        phase="protocol",
+                        retryable=False,
+                    )
+                state.chunks.append(chunk)
+
+        audio_bytes = 0
+        chunk_count = 0
+        provider_response_id = ""
+        try:
+            while True:
+                segment = await state.text_queue.get()
+                if segment is None:
+                    break
+                if not segment.strip():
+                    continue
+                state.instruction_event.set()
+                result = await self.reply_speech.synthesize(
+                    text=segment,
+                    voice=state.voice,
+                    instruction=state.instruction,
+                    audio_sink=audio_sink,
+                )
+                audio_bytes += result.audio_bytes
+                chunk_count += result.chunk_count
+                provider_response_id = result.provider_response_id
+            await asyncio.wait_for(
+                state.commit_event.wait(),
+                timeout=self.config.request_timeout_seconds,
+            )
+            await self.send(
+                {
+                    "type": "speech.audio.done",
+                    "request_id": state.request_id,
+                    "seq": state.next_seq - 1,
+                    "audio_bytes": audio_bytes,
+                    "chunk_count": chunk_count,
+                    "provider_response_id": provider_response_id,
+                    "speculative": True,
+                    "audio": {
+                        "format": "pcm16le",
+                        "sample_rate_hz": 24_000,
+                        "channels": 1,
+                    },
+                }
+            )
+        except asyncio.CancelledError:
+            await self.send(
+                {"type": "speech.cancelled", "request_id": state.request_id}
+            )
+            raise
+        except Exception as exc:
+            logger.exception("inference gateway adaptive speech speculation failed")
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": state.request_id,
+                    "code": "tts_failed",
+                    "detail": "adaptive speculative speech synthesis failed",
+                    "retryable": isinstance(
+                        exc,
+                        (asyncio.TimeoutError, GatewaySpeechError),
+                    )
+                    and getattr(exc, "retryable", True),
+                }
+            )
+        finally:
+            self.speculative_buffered_bytes = max(
+                0,
+                self.speculative_buffered_bytes - state.buffered_bytes,
+            )
+            self.speech_speculations.pop(state.request_id, None)
+
+    async def _configure_speech(self, message: dict[str, Any]) -> None:
+        request_id = _string(message, "request_id")
+        state = self.speech_speculations.get(request_id)
+        if state is None:
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": request_id,
+                    "code": "speculation_unavailable",
+                    "detail": "speculative speech is not available",
+                    "retryable": True,
+                }
+            )
+            return
+        generation_id = _string(message, "generation_id")
+        output_epoch = _integer(message, "output_epoch")
+        instruction = _string(message, "instruction")
+        if generation_id != state.generation_id or output_epoch != state.output_epoch:
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": request_id,
+                    "code": "speculation_mismatch",
+                    "detail": "speculative speech generation fence does not match",
+                    "retryable": True,
+                }
+            )
+            return
+        if state.instruction_event.is_set() and instruction != state.instruction:
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": request_id,
+                    "code": "speculation_mismatch",
+                    "detail": "speculative speech instruction changed",
+                    "retryable": True,
+                }
+            )
+            return
+        state.instruction = instruction
+        state.instruction_event.set()
+        if state.text_completed.is_set():
+            state.text_hash = _speculative_speech_hash(
+                text=state.text,
+                voice=state.voice,
+                instruction=state.instruction,
+                generation_id=state.generation_id,
+                output_epoch=state.output_epoch,
+            )
+        await self.send(
+            {
+                "type": "speech.configured",
+                "request_id": request_id,
+                "generation_id": generation_id,
+                "output_epoch": output_epoch,
+            }
+        )
+
+    async def _commit_speech(self, message: dict[str, Any]) -> None:
+        request_id = _string(message, "request_id")
+        state = self.speech_speculations.get(request_id)
+        if state is None:
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": request_id,
+                    "code": "speculation_unavailable",
+                    "detail": "speculative speech is not available",
+                    "retryable": True,
+                }
+            )
+            return
+        text_hash = _string(message, "text_hash")
+        voice = _string(message, "voice")
+        instruction = _string(message, "instruction")
+        generation_id = _string(message, "generation_id")
+        output_epoch = _integer(message, "output_epoch")
+        if not state.text_completed.is_set():
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": request_id,
+                    "code": "speculation_unavailable",
+                    "detail": "speculative reply text is not complete",
+                    "retryable": True,
+                }
+            )
+            return
+        if (
+            not hmac.compare_digest(text_hash, state.text_hash)
+            or voice != state.voice
+            or instruction != state.instruction
+            or generation_id != state.generation_id
+            or output_epoch != state.output_epoch
+        ):
+            await self.send(
+                {
+                    "type": "speech.error",
+                    "request_id": request_id,
+                    "code": "speculation_mismatch",
+                    "detail": "speculative speech metadata does not match",
+                    "retryable": True,
+                }
+            )
+            task = self.tasks.get(request_id)
+            if task is not None:
+                task.cancel()
+            return
+        await self.send(
+            {
+                "type": "speech.accepted",
+                "request_id": request_id,
+                "speculative": True,
+            }
+        )
+        async with state.lock:
+            state.committed = True
+            chunks = tuple(state.chunks)
+            state.chunks.clear()
+            self.speculative_buffered_bytes = max(
+                0,
+                self.speculative_buffered_bytes - state.buffered_bytes,
+            )
+            state.buffered_bytes = 0
+            for chunk in chunks:
+                await self.send(
+                    {
+                        "type": "speech.audio.delta",
+                        "request_id": request_id,
+                        "seq": state.next_seq,
+                        "delta": base64.b64encode(chunk).decode("ascii"),
+                        "audio": {
+                            "format": "pcm16le",
+                            "sample_rate_hz": 24_000,
+                            "channels": 1,
+                        },
+                    }
+                )
+                state.next_seq += 1
+        state.commit_event.set()
+
     def _task_done(self, request_id: str, task: asyncio.Task[None]) -> None:
         self.tasks.pop(request_id, None)
+        state = self.speech_speculations.pop(request_id, None)
+        if state is not None:
+            self.speculative_buffered_bytes = max(
+                0,
+                self.speculative_buffered_bytes - state.buffered_bytes,
+            )
         if not task.cancelled():
             task.exception()
 
     async def _cancel_stage(self, request_id: str) -> None:
         task = self.tasks.get(request_id)
         if task is None:
+            self.reserved_request_ids.discard(request_id)
             await self.send({"type": "request.cancelled", "request_id": request_id})
             return
         task.cancel()
@@ -351,10 +1052,17 @@ class _Session:
         stage: str,
         payload: dict[str, Any],
         media_refs: tuple[str, ...],
+        speech_speculation: tuple[str, str, str, str, int, str] | None,
     ) -> None:
         try:
             await asyncio.wait_for(
-                self._forward_stage(request_id, stage, payload, media_refs),
+                self._forward_stage(
+                    request_id,
+                    stage,
+                    payload,
+                    media_refs,
+                    speech_speculation,
+                ),
                 timeout=self.config.request_timeout_seconds,
             )
         except asyncio.CancelledError:
@@ -382,6 +1090,13 @@ class _Session:
                 }
             )
         finally:
+            if speech_speculation is not None:
+                self.reserved_request_ids.discard(speech_speculation[0])
+                state = self.speech_speculations.get(speech_speculation[0])
+                if state is not None and not state.text_completed.is_set():
+                    speculation_task = self.tasks.get(state.request_id)
+                    if speculation_task is not None:
+                        speculation_task.cancel()
             for media_id in media_refs:
                 if media_id in self.media_refcounts:
                     self.media_refcounts[media_id] = max(
@@ -407,12 +1122,14 @@ class _Session:
             self.media_refcounts.pop(victim, None)
             self.media_bytes -= len(removed.payload)
             await self.send({"type": "media.evicted", "media_id": victim})
+
     async def _forward_stage(
         self,
         request_id: str,
         stage: str,
         payload: dict[str, Any],
         media_refs: tuple[str, ...],
+        speech_speculation: tuple[str, str, str, str, int, str] | None,
     ) -> None:
         upstream = self.config.stages[stage]
         headers = (
@@ -469,10 +1186,59 @@ class _Session:
                     separators=(",", ":"),
                 )
             )
+            reply_text_parts: list[str] = []
+            speech_text = (
+                _ReplySpeechTextExtractor(speech_speculation[5])
+                if speech_speculation is not None
+                else None
+            )
+            speech_segmenter = (
+                _ReplySpeechSegmenter(
+                    max_chars=self.config.plain_reply_segment_max_chars
+                )
+                if speech_speculation is not None
+                and self.config.adaptive_plain_reply_speech
+                and speech_speculation[5] in {"plain", "plain_with_user_turn_v1"}
+                and self.reply_speech is not None
+                else None
+            )
+
+            async def queue_spoken_delta(speculation_id: str, delta: str) -> None:
+                state = self.speech_speculations.get(speculation_id)
+                if state is None:
+                    return
+                state.text_parts.append(delta)
+                segments = (
+                    speech_segmenter.feed(delta)
+                    if speech_segmenter is not None
+                    else ((delta,) if delta else ())
+                )
+                for segment in segments:
+                    await state.text_queue.put(segment)
+
             while True:
                 event = _json_object(await socket.recv())
                 event_type = event.get("type")
                 if event_type == "response.delta":
+                    if speech_speculation is not None:
+                        delta = _reply_delta_text(event.get("response"))
+                        if delta and speech_text is not None:
+                            try:
+                                spoken_deltas = speech_text.feed(delta)
+                            except ValueError:
+                                self._disable_speech_speculation(
+                                    speech_speculation[0],
+                                    reason="reply_text_parse_failed",
+                                )
+                                speech_text = None
+                                speech_speculation = None
+                            else:
+                                for spoken_delta in spoken_deltas:
+                                    reply_text_parts.append(spoken_delta)
+                                    await queue_spoken_delta(
+                                        speech_speculation[0],
+                                        spoken_delta,
+                                    )
                     await self.send(
                         {
                             "type": "stage.delta",
@@ -482,6 +1248,67 @@ class _Session:
                     )
                     continue
                 if event_type == "response.completed":
+                    if speech_speculation is not None:
+                        (
+                            speculation_id,
+                            voice,
+                            instruction,
+                            generation_id,
+                            output_epoch,
+                            text_mode,
+                        ) = speech_speculation
+                        if speech_text is not None:
+                            try:
+                                spoken_deltas = speech_text.finish()
+                            except ValueError:
+                                self._disable_speech_speculation(
+                                    speculation_id,
+                                    reason="reply_text_parse_failed",
+                                )
+                                speech_text = None
+                                speech_speculation = None
+                            else:
+                                for spoken_delta in spoken_deltas:
+                                    reply_text_parts.append(spoken_delta)
+                                    await queue_spoken_delta(
+                                        speculation_id,
+                                        spoken_delta,
+                                    )
+                        if speech_speculation is None:
+                            await self.send(
+                                {
+                                    "type": "stage.completed",
+                                    "request_id": request_id,
+                                    "response": event.get("response", {}),
+                                }
+                            )
+                            return
+                        state = self.speech_speculations.get(speculation_id)
+                        if state is not None:
+                            if speech_segmenter is not None:
+                                for segment in speech_segmenter.finish():
+                                    await state.text_queue.put(segment)
+                            state.text = "".join(state.text_parts)
+                            state.text_hash = _speculative_speech_hash(
+                                text=state.text,
+                                voice=state.voice,
+                                instruction=state.instruction,
+                                generation_id=state.generation_id,
+                                output_epoch=state.output_epoch,
+                            )
+                            await state.text_queue.put(None)
+                            state.text_completed.set()
+                        else:
+                            await self._start_speculative_speech(
+                                source_request_id=request_id,
+                                request_id=speculation_id,
+                                text="".join(reply_text_parts),
+                                voice=voice,
+                                instruction=instruction,
+                                generation_id=generation_id,
+                                output_epoch=output_epoch,
+                                text_mode=text_mode,
+                            )
                     await self.send(
                         {
                             "type": "stage.completed",
@@ -513,6 +1340,7 @@ def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
             "ok": True,
             "contract": "inference-session-v2",
             "reply_speech": config.reply_speech is not None,
+            "reply_streaming_speech": config.reply_streaming_speech is not None,
         }
 
     @app.websocket("/v1/inference-session")
@@ -576,3 +1404,154 @@ def _one_of(value: dict[str, Any], key: str, allowed: set[str] | frozenset[str])
     if item not in allowed:
         raise ValueError(f"{key} is unsupported")
     return item
+
+
+def _reply_delta_text(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    choices = value.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        return ""
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return ""
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    content = delta.get("content")
+    return content if isinstance(content, str) else ""
+
+
+class _ReplySpeechTextExtractor:
+    def __init__(self, mode: str) -> None:
+        self._mode = mode
+        self._buffer = ""
+        self._started = mode in {"plain", "plain_with_user_turn_v1"}
+        self._stopped = False
+
+    def feed(self, delta: str) -> tuple[str, ...]:
+        if self._mode == "plain_with_user_turn_v1":
+            return self._feed_visible_before_metadata(delta)
+        if self._started:
+            return (delta,) if delta else ()
+        self._buffer += delta
+        marker = "<<TEXT>>"
+        marker_index = self._buffer.find(marker)
+        if marker_index >= 0:
+            self._started = True
+            text = self._buffer[marker_index + len(marker):].lstrip("\r\n")
+            self._buffer = ""
+            return (text,) if text else ()
+        if "\n" not in self._buffer:
+            return ()
+        _plan, remainder = self._buffer.split("\n", 1)
+        normalized = remainder.lstrip("\r\n")
+        if len(normalized) < len(marker):
+            return ()
+        if not normalized.startswith(marker):
+            raise ValueError("reply speech envelope marker is invalid")
+        self._started = True
+        self._buffer = ""
+        text = normalized[len(marker):].lstrip("\r\n")
+        return (text,) if text else ()
+
+    def finish(self) -> tuple[str, ...]:
+        if self._mode == "reply_envelope_v1" and not self._started:
+            raise ValueError("reply speech envelope did not contain a text marker")
+        if self._mode == "plain_with_user_turn_v1" and self._stopped:
+            return ()
+        if self._started and self._buffer:
+            value = self._buffer
+            self._buffer = ""
+            return (value,)
+        return ()
+
+    def _feed_visible_before_metadata(self, delta: str) -> tuple[str, ...]:
+        if self._stopped or not delta:
+            return ()
+        marker = "<<USER_TURN_TEXT>>"
+        self._buffer += delta
+        marker_index = self._buffer.find(marker)
+        if marker_index >= 0:
+            visible = self._buffer[:marker_index].rstrip("\r\n")
+            self._buffer = ""
+            self._stopped = True
+            return (visible,) if visible else ()
+        retained = _marker_prefix_suffix_length(self._buffer, marker)
+        emit_length = len(self._buffer) - retained
+        while emit_length > 0 and self._buffer[emit_length - 1].isspace():
+            emit_length -= 1
+        if emit_length <= 0:
+            return ()
+        visible = self._buffer[:emit_length]
+        self._buffer = self._buffer[emit_length:]
+        return (visible,)
+
+
+def _marker_prefix_suffix_length(value: str, marker: str) -> int:
+    maximum = min(len(value), len(marker) - 1)
+    for length in range(maximum, 0, -1):
+        if value.endswith(marker[:length]):
+            return length
+    return 0
+
+
+class _ReplySpeechSegmenter:
+    """Release natural sentences while bounding punctuation-free buffering."""
+
+    _BOUNDARY = re.compile(r".*?(?:[。！？!?；;]+|\n+)", re.DOTALL)
+
+    def __init__(self, *, max_chars: int) -> None:
+        self._max_chars = max_chars
+        self._buffer = ""
+
+    def feed(self, delta: str) -> tuple[str, ...]:
+        self._buffer += delta
+        segments: list[str] = []
+        while match := self._BOUNDARY.match(self._buffer):
+            segment = match.group(0)
+            self._buffer = self._buffer[len(segment):]
+            if segment.strip():
+                segments.append(segment)
+        if len(self._buffer) > self._max_chars:
+            split_at = max(
+                self._buffer.rfind(mark, 0, self._max_chars + 1)
+                for mark in ("，", ",", "：", ":", " ")
+            )
+            split_at = split_at + 1 if split_at >= 0 else self._max_chars
+            segment = self._buffer[:split_at]
+            self._buffer = self._buffer[split_at:]
+            if segment.strip():
+                segments.append(segment)
+        return tuple(segments)
+
+    def finish(self) -> tuple[str, ...]:
+        if not self._buffer:
+            return ()
+        segment = self._buffer
+        self._buffer = ""
+        return (segment,) if segment.strip() else ()
+
+
+def _speculative_speech_hash(
+    *,
+    text: str,
+    voice: str,
+    instruction: str,
+    generation_id: str,
+    output_epoch: int,
+) -> str:
+    text_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    payload = json.dumps(
+        {
+            "text_hash": text_hash,
+            "voice": voice,
+            "instruction": instruction,
+            "generation_id": generation_id,
+            "output_epoch": output_epoch,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()

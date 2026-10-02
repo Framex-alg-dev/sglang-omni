@@ -22,6 +22,7 @@ Environment=SGLANG_OMNI_REALTIME_LOG_TIMEZONE=Asia/Shanghai
 Environment=SGLANG_OMNI_REALTIME_LOG_MAX_FILE_MB=128
 Environment=SGLANG_OMNI_STRICT_PORT=1
 Environment=SGLANG_OMNI_SCOPED_RADIX_CACHE=1
+Environment=SGLANG_OMNI_GPU_RUNTIME_RESERVE_GIB=1.0
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni-dev/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/data/fanshide/sglang-omni-dev/deploy/realtime-knowledge.env

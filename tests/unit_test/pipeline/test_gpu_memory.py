@@ -318,6 +318,25 @@ def test_calculate_stage_load_delta_bytes_uses_free_memory_samples() -> None:
     ) == int(59.5 * 1024**3)
 
 
+def test_global_free_memory_caps_process_scoped_stage_budget() -> None:
+    available = gpu_memory.cap_stage_budget_by_global_free_memory(
+        stage_budget_available_bytes=2 * 1024**3,
+        global_free_memory_bytes=int(1.8 * 1024**3),
+        runtime_reserve_bytes=1 * 1024**3,
+    )
+
+    assert available == int(0.8 * 1024**3)
+
+
+def test_global_free_memory_fails_before_runtime_reserve_is_consumed() -> None:
+    with pytest.raises(RuntimeError, match="runtime reserve"):
+        gpu_memory.cap_stage_budget_by_global_free_memory(
+            stage_budget_available_bytes=2 * 1024**3,
+            global_free_memory_bytes=int(0.88 * 1024**3),
+            runtime_reserve_bytes=1 * 1024**3,
+        )
+
+
 def test_calculate_stage_load_delta_bytes_rejects_memory_growth() -> None:
     with pytest.raises(RuntimeError, match="delta is negative"):
         gpu_memory.calculate_stage_load_delta_bytes(
@@ -354,6 +373,20 @@ def test_gpu_startup_lock_releases_after_exception(
     with open(lock_path, "a+") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def test_gpu_startup_lock_accepts_read_only_lock_created_by_another_account(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setattr(gpu_memory.tempfile, "gettempdir", lambda: str(tmp_path))
+    lock_path = gpu_memory.get_gpu_startup_lock_path(0, base_dir=tmp_path)
+    lock_path.touch(mode=0o444)
+    lock_path.chmod(0o444)
+
+    with gpu_memory.gpu_startup_lock(0) as acquired_path:
+        assert acquired_path == lock_path
 
 
 def test_get_gpu_device_info_reports_name_and_total_memory(

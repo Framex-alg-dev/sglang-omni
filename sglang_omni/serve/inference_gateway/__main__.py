@@ -21,6 +21,18 @@ def _bearer(name: str, *, fallback: str | tuple[str, ...] | None = None) -> str:
     return f"Bearer {value}" if value else ""
 
 
+def _boolean(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
 def main() -> None:
     speech_url = os.environ.get(
         "SGLANG_OMNI_GATEWAY_SPEECH_URL",
@@ -74,6 +86,19 @@ def main() -> None:
                     ),
                 ),
             ),
+            "performance": UpstreamStage(
+                os.environ.get(
+                    "SGLANG_OMNI_GATEWAY_PERFORMANCE_URL",
+                    "ws://127.0.0.1:18004/v1/performance-control/realtime",
+                ),
+                _bearer(
+                    "SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN",
+                    fallback=(
+                        "SGLANG_OMNI_ACTION_DECISION_TOKEN",
+                        "SGLANG_OMNI_INTERNAL_MODEL_TOKEN",
+                    ),
+                ),
+            ),
         },
         request_timeout_seconds=float(
             os.environ.get("SGLANG_OMNI_GATEWAY_REQUEST_TIMEOUT_SECONDS", "60")
@@ -93,6 +118,16 @@ def main() -> None:
             )
             if speech_url
             else None
+        ),
+        adaptive_plain_reply_speech=_boolean(
+            "SGLANG_OMNI_GATEWAY_ADAPTIVE_PLAIN_SPEECH",
+            True,
+        ),
+        plain_reply_segment_max_chars=int(
+            os.environ.get(
+                "SGLANG_OMNI_GATEWAY_PLAIN_SEGMENT_MAX_CHARS",
+                "120",
+            )
         ),
     )
     app = create_inference_gateway_app(config)

@@ -261,7 +261,10 @@ class ActionDecisionEngine:
             request_id=request.request_id,
         )
         code = str(result.text)
-        entry = catalog.by_code.get(code)
+        # Constrained backends normally return the assigned two-token code, but
+        # some deployments decode control tokens to their canonical candidate
+        # ID (for example ``IB0``). Both identify the same catalog entry.
+        entry = catalog.by_code.get(code) or catalog.by_candidate_id.get(code)
         if entry is None:
             raise RuntimeError(f"action model returned code outside constrained catalog: {code!r}")
         usage = result.usage.to_dict() if result.usage is not None else None
@@ -331,6 +334,7 @@ def create_action_decision_app(
     client: CompletionClient,
     *,
     config: ActionDecisionConfig,
+    performance_token: str | None = None,
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
     app = FastAPI(title="sglang-omni-action-decision", version="1")
@@ -418,6 +422,17 @@ def create_action_decision_app(
                 {"type": "error", "code": "model_error", "detail": str(exc)}
             )
             await websocket.close(code=1011)
+
+    if performance_token is not None:
+        normalized_performance_token = performance_token.strip()
+        if not normalized_performance_token:
+            raise ValueError("performance control token must not be empty")
+        from sglang_omni.serve.realtime.performance.service import (
+            register_performance_control,
+        )
+
+        app.state.client = client
+        register_performance_control(app, token=normalized_performance_token)
 
     return app
 

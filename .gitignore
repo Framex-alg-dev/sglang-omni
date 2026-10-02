@@ -67,3 +67,4 @@ deploy/gpu4-timeline-model-release.json
 
 runtime/*
 !runtime/.gitkeep
+:memory:.ses

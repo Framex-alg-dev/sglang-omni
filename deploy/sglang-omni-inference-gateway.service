@@ -13,7 +13,10 @@ Environment=PYTHONUNBUFFERED=1
 Environment=SGLANG_OMNI_GATEWAY_HOST=127.0.0.1
 Environment=SGLANG_OMNI_GATEWAY_PORT=18003
 Environment=SGLANG_OMNI_GATEWAY_SPEECH_URL=http://127.0.0.1:50001/v1/tts/stream
+Environment=SGLANG_OMNI_GATEWAY_PERFORMANCE_URL=ws://127.0.0.1:18004/v1/performance-control/realtime
 Environment=SGLANG_OMNI_GATEWAY_SPEECH_TIMEOUT_SECONDS=60
+Environment=SGLANG_OMNI_GATEWAY_ADAPTIVE_PLAIN_SPEECH=1
+Environment=SGLANG_OMNI_GATEWAY_PLAIN_SEGMENT_MAX_CHARS=120
 Environment=PATH=/data/fanshide/sglang-omni-dev/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/data/fanshide/sglang-omni-dev/deploy/realtime-executors.env
 EnvironmentFile=/data/fanshide/sglang-omni-dev/deploy/gpu3-decision-services.env

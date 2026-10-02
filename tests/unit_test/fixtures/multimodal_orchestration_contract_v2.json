@@ -12,7 +12,7 @@
       "media": [],
       "router_history": [],
       "brain1_capabilities": "普通聊天、简单问答、计算、下游用户视频理解；不处理应用能力、曲库或媒体播放查询",
-      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、唱歌请求、歌曲播放与停止媒体播放",
+      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、唱歌请求，以及歌曲播放、暂停、继续/恢复与停止",
       "has_active_agent": false,
       "pending_confirmation": false,
       "follow_up_required": false
@@ -28,6 +28,44 @@
       "route": "BRAIN2",
       "model_id": "qwen3-omni-gpu3-decision-services",
       "model_version": "omni-turn-router-prompt-v2"
+    }
+  },
+  "inference_session": {
+    "session_open": {
+      "type": "session.open",
+      "contract_version": 2,
+      "session_id": "session-contract-1"
+    },
+    "reply_stage_request": {
+      "type": "stage.request",
+      "request_id": "response-contract-1:reply",
+      "stage": "reply",
+      "payload": {"stream": true},
+      "media_refs": [],
+      "speech_speculation": {
+        "request_id": "response-contract-1:speech-speculation",
+        "voice": "voice-1",
+        "instruction": "自然地说",
+        "generation_id": "generation-1",
+        "output_epoch": "3",
+        "text_mode": "reply_envelope_v1"
+      }
+    },
+    "speech_configure": {
+      "type": "speech.configure",
+      "request_id": "response-contract-1:speech-speculation",
+      "instruction": "温暖地说",
+      "generation_id": "generation-1",
+      "output_epoch": 3
+    },
+    "speech_commit": {
+      "type": "speech.commit",
+      "request_id": "response-contract-1:speech-speculation",
+      "text_hash": "sha256:519fd9f133d16a1272014bba8b9695cd712d7f7a921fa109dc11161a3d51215d",
+      "voice": "voice-1",
+      "instruction": "温暖地说",
+      "generation_id": "generation-1",
+      "output_epoch": 3
     }
   },
   "timeline_detection": {

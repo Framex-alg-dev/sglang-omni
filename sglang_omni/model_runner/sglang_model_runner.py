@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,7 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.server_args import PortArgs, ServerArgs
 
 from sglang_omni.utils.gpu_memory import (
+    cap_stage_budget_by_global_free_memory,
     calculate_stage_budget_available_bytes,
     calculate_stage_load_delta_bytes,
     format_bytes_gib,
@@ -71,6 +73,23 @@ class _OmniKVCacheConfigurator(KVCacheConfigurator):
                 self, pre_model_load_memory
             )
 
+        from sglang.srt.distributed.parallel_state import get_world_group
+        from sglang.srt.utils.common import get_available_gpu_memory
+
+        world_group = get_world_group()
+        global_free_memory_gib = get_available_gpu_memory(
+            self.device,
+            self.gpu_id,
+            distributed=world_group.world_size > 1,
+            cpu_group=world_group.cpu_group,
+        )
+        global_free_memory_bytes = int(global_free_memory_gib * (1024**3))
+        runtime_reserve_gib = float(
+            os.environ.get("SGLANG_OMNI_GPU_RUNTIME_RESERVE_GIB", "1.0")
+        )
+        if runtime_reserve_gib < 0:
+            raise ValueError("SGLANG_OMNI_GPU_RUNTIME_RESERVE_GIB must be non-negative")
+        runtime_reserve_bytes = int(runtime_reserve_gib * (1024**3))
         process_memory = get_process_gpu_memory_bytes(self.gpu_id)
         device_info = get_gpu_device_info(self.gpu_id)
         total_memory = device_info.total_memory_bytes
@@ -86,29 +105,25 @@ class _OmniKVCacheConfigurator(KVCacheConfigurator):
             return self._profile_available_bytes_from_stage_load_delta(
                 pre_model_load_memory,
                 total_memory,
+                global_free_memory_gib,
+                runtime_reserve_bytes,
             )
 
         return self._profile_available_bytes_from_process_memory(
             total_memory,
             process_memory,
+            global_free_memory_bytes,
+            runtime_reserve_bytes,
         )
 
     def _profile_available_bytes_from_stage_load_delta(
         self,
         pre_model_load_memory: float,
         total_memory: int,
+        post_model_load_memory: float,
+        runtime_reserve_bytes: int,
     ) -> int:
         """Profile colocated KV headroom from this stage's load-time delta."""
-        from sglang.srt.distributed.parallel_state import get_world_group
-        from sglang.srt.utils.common import get_available_gpu_memory
-
-        world_group = get_world_group()
-        post_model_load_memory = get_available_gpu_memory(
-            self.device,
-            self.gpu_id,
-            distributed=world_group.world_size > 1,
-            cpu_group=world_group.cpu_group,
-        )
         stage_load_bytes = calculate_stage_load_delta_bytes(
             pre_model_load_memory_gib=pre_model_load_memory,
             post_model_load_memory_gib=post_model_load_memory,
@@ -119,6 +134,11 @@ class _OmniKVCacheConfigurator(KVCacheConfigurator):
             memory_fraction=self.total_gpu_memory_fraction,
             accounted_memory_label="stage_load_used",
         )
+        available_bytes = cap_stage_budget_by_global_free_memory(
+            stage_budget_available_bytes=available_bytes,
+            global_free_memory_bytes=int(post_model_load_memory * (1024**3)),
+            runtime_reserve_bytes=runtime_reserve_bytes,
+        )
         logger.info(
             f"SGLang AR memory profile: gpu_mem_accounting=stage_load_fallback "
             f"gpu_id={self.gpu_id} "
@@ -126,6 +146,8 @@ class _OmniKVCacheConfigurator(KVCacheConfigurator):
             f"mem_fraction_static={self.server_args.mem_fraction_static:.3f} "
             f"total={format_bytes_gib(total_memory)} "
             f"stage_load_used={format_bytes_gib(stage_load_bytes)} "
+            f"global_free={post_model_load_memory:.2f}GiB "
+            f"runtime_reserve={format_bytes_gib(runtime_reserve_bytes)} "
             f"available_for_kv={format_bytes_gib(available_bytes)}"
         )
         return available_bytes
@@ -134,12 +156,19 @@ class _OmniKVCacheConfigurator(KVCacheConfigurator):
         self,
         total_memory: int,
         process_memory: int,
+        global_free_memory_bytes: int,
+        runtime_reserve_bytes: int,
     ) -> int:
         available_bytes = calculate_stage_budget_available_bytes(
             total_memory_bytes=total_memory,
             accounted_memory_bytes=process_memory,
             memory_fraction=self.total_gpu_memory_fraction,
             accounted_memory_label="process_used",
+        )
+        available_bytes = cap_stage_budget_by_global_free_memory(
+            stage_budget_available_bytes=available_bytes,
+            global_free_memory_bytes=global_free_memory_bytes,
+            runtime_reserve_bytes=runtime_reserve_bytes,
         )
         logger.info(
             f"SGLang AR memory profile: gpu_mem_accounting=nvml_process "
@@ -148,6 +177,8 @@ class _OmniKVCacheConfigurator(KVCacheConfigurator):
             f"mem_fraction_static={self.server_args.mem_fraction_static:.3f} "
             f"total={format_bytes_gib(total_memory)} "
             f"process_used={format_bytes_gib(process_memory)} "
+            f"global_free={format_bytes_gib(global_free_memory_bytes)} "
+            f"runtime_reserve={format_bytes_gib(runtime_reserve_bytes)} "
             f"available_for_kv={format_bytes_gib(available_bytes)}"
         )
         return available_bytes

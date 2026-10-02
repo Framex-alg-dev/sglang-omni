@@ -45,6 +45,10 @@ class ResolvedCatalog:
     def by_code(self) -> dict[str, ActionEntry]:
         return {entry.code: entry for entry in self.entries}
 
+    @property
+    def by_candidate_id(self) -> dict[str, ActionEntry]:
+        return {entry.candidate_id: entry for entry in self.entries}
+
 
 class ActionCatalogRegistry:
     """Validated product catalog plus registered orchestrator extensions."""

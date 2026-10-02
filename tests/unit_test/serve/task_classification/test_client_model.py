@@ -127,6 +127,19 @@ def test_music_route_minimal_pairs_are_part_of_prompt_contract(
     assert f"“{utterance}” -> {route}" in SYSTEM_PROMPT
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    ("闭嘴，别再说了。", "先安静一下，不要回复。"),
+)
+def test_silence_controls_are_part_of_prompt_contract(utterance: str) -> None:
+    assert f"“{utterance}” -> cancel" in SYSTEM_PROMPT
+
+
+def test_media_stop_takes_delegate_precedence_over_silence_control() -> None:
+    assert "媒体停止播放、暂停、继续或恢复时必须输出 delegate" in SYSTEM_PROMPT
+    assert "“别唱了，停止播放。” -> delegate" in SYSTEM_PROMPT
+
+
 def test_rejects_visual_media() -> None:
     payload = b"image"
     with pytest.raises(ValueError, match="original user audio"):
