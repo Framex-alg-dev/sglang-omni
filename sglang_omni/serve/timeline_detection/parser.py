@@ -16,15 +16,21 @@ _EVENT_ORDER = {event_id: index for index, event_id in enumerate(EVENT_IDS)}
 
 
 def normalize_event_ids(events: set[str]) -> list[str]:
-    """Apply the deterministic ontology conflicts from event-v1.20."""
+    """Apply deterministic conflicts for the 43-event product catalog."""
 
     normalized = set(events)
-    if normalized & {"P1", "P2"}:
-        normalized.difference_update({"D1", "D2"})
-    if "B3" in normalized:
-        normalized.difference_update({"D1", "D2"})
-    if "P2" in normalized:
-        normalized.discard("B3")
+    if "E10" in normalized:
+        normalized.discard("E09")
+    if normalized & {"E32", "E33"}:
+        normalized.difference_update({"E24", "E25", "E26", "E29"})
+    if "E33" in normalized:
+        normalized.discard("E08")
+    if "E16" in normalized:
+        normalized.difference_update({"E24", "E35"})
+    if "E44" in normalized:
+        normalized.discard("E11")
+    if normalized & {"E27", "E31"}:
+        normalized.discard("E30")
     return sorted(normalized, key=_EVENT_ORDER.__getitem__)
 
 
