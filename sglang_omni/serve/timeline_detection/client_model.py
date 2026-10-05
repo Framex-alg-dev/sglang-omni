@@ -74,8 +74,10 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline model_version is required")
         if max_attempts <= 0:
             raise ValueError("timeline max_attempts must be positive")
-        if inference_interval_ms != 3_000 or window_ms != 10_000:
-            raise ValueError("event-v1.20 requires a 3s cadence and 10s H/C window")
+        if inference_interval_ms not in {1_000, 3_000} or window_ms != 10_000:
+            raise ValueError(
+                "event-v1.20 requires a 1s or 3s cadence and 10s H/C window"
+            )
         if max_window_bytes <= 0:
             raise ValueError("timeline max_window_bytes must be positive")
         self._client = client
@@ -86,6 +88,9 @@ class SglangClientTimelineDetectionModel:
         self._max_attempts = max_attempts
         self._assembler = EventWindowAssembler(
             audio_format=start.audio_format,
+            current_duration_ms=3_000,
+            history_duration_ms=window_ms - 3_000,
+            window_stride_ms=inference_interval_ms,
             max_buffer_bytes=max_window_bytes,
         )
         self._windows: asyncio.Queue[_WindowWork] = asyncio.Queue(maxsize=1)

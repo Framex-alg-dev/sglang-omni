@@ -42,7 +42,7 @@ class EventDetectionWindow:
 
 
 class EventWindowAssembler:
-    """Own fixed 3-second decisions over a bounded 10-second media history."""
+    """Own sliding 3-second decisions over a bounded 10-second media history."""
 
     def __init__(
         self,
@@ -50,22 +50,28 @@ class EventWindowAssembler:
         audio_format: str,
         current_duration_ms: int = 3_000,
         history_duration_ms: int = 7_000,
+        window_stride_ms: int | None = None,
         current_frame_count: int = 7,
         audio_grace_ms: int = 350,
         max_buffer_bytes: int = 32 * 1024 * 1024,
     ) -> None:
+        stride_ms = current_duration_ms if window_stride_ms is None else window_stride_ms
         if min(
             current_duration_ms,
             history_duration_ms,
+            stride_ms,
             current_frame_count,
             max_buffer_bytes,
         ) <= 0:
             raise ValueError("event window limits must be positive")
+        if stride_ms > current_duration_ms:
+            raise ValueError("event window stride cannot exceed current duration")
         if audio_grace_ms < 0:
             raise ValueError("event audio grace must be non-negative")
         self._sample_rate, self._channels = _parse_audio_format(audio_format)
         self._current_duration_ms = current_duration_ms
         self._history_duration_ms = history_duration_ms
+        self._window_stride_ms = stride_ms
         self._current_frame_count = current_frame_count
         self._audio_grace_ms = audio_grace_ms
         self._max_buffer_bytes = max_buffer_bytes
@@ -99,7 +105,7 @@ class EventWindowAssembler:
             assert self._next_end_ms is not None
             self._window_attempts += 1
             window = self._build_window(self._next_end_ms)
-            self._next_end_ms += self._current_duration_ms
+            self._next_end_ms += self._window_stride_ms
             self._last_diagnostic_progress_ms = self._media_progress_ms()
             if window is not None:
                 ready.append(window)
@@ -257,7 +263,7 @@ class EventWindowAssembler:
 
     def _log_waiting_if_due(self) -> None:
         progress_ms = self._media_progress_ms()
-        if progress_ms - self._last_diagnostic_progress_ms < self._current_duration_ms:
+        if progress_ms - self._last_diagnostic_progress_ms < self._window_stride_ms:
             return
         if self._origin_ms is None or not self._video:
             reason = "no_video"
