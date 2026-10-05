@@ -10,27 +10,32 @@ from transformers.utils.hub import cached_file
 
 
 def load_chat_template(model_path: str, *, local_files_only: bool = True) -> str | None:
-    """Load chat_template.json through the HF cache."""
-    try:
-        path = cached_file(
-            model_path, "chat_template.json", local_files_only=local_files_only
-        )
-    except (OSError, ValueError):
-        return None
-
-    if path is None:
-        return None
-
-    try:
-        with open(path, encoding="utf-8") as f:
-            payload = json.load(f)
-    except (OSError, TypeError, json.JSONDecodeError):
-        return None
-
-    if not isinstance(payload, Mapping):
-        return None
-    template = payload.get("chat_template")
-    return template if isinstance(template, str) and template else None
+    """Load a JSON or Jinja chat template through the HF cache."""
+    for filename in ("chat_template.json", "chat_template.jinja"):
+        try:
+            path = cached_file(
+                model_path, filename, local_files_only=local_files_only
+            )
+        except (OSError, ValueError):
+            continue
+        if path is None:
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                if filename.endswith(".jinja"):
+                    template = f.read()
+                else:
+                    payload = json.load(f)
+                    template = (
+                        payload.get("chat_template")
+                        if isinstance(payload, Mapping)
+                        else None
+                    )
+        except (OSError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(template, str) and template:
+            return template
+    return None
 
 
 def ensure_chat_template(

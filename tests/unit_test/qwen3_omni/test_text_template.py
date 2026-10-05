@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sglang_omni.preprocessing.text import ensure_chat_template
+from sglang_omni.preprocessing.text import ensure_chat_template, load_chat_template
+
+
+def test_load_chat_template_accepts_jinja_file(tmp_path) -> None:
+    template = "{% for message in messages %}{{ message.content }}{% endfor %}"
+    (tmp_path / "chat_template.jinja").write_text(template, encoding="utf-8")
+
+    assert load_chat_template(str(tmp_path)) == template
 
 
 def test_ensure_chat_template_uses_remote_fallback(monkeypatch) -> None:

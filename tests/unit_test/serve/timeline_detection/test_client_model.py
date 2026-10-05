@@ -150,8 +150,18 @@ async def test_retries_invalid_output_with_retry_prompt() -> None:
     await model.close()
 
 
+def test_accepts_one_second_sliding_cadence() -> None:
+    model = SglangClientTimelineDetectionModel(
+        Client([]),
+        start(),
+        model_version=PROMPT_VERSION,
+        inference_interval_ms=1_000,
+    )
+    assert model.prompt_version == PROMPT_VERSION
+
+
 def test_rejects_non_event_window_timing() -> None:
-    with pytest.raises(ValueError, match="3s cadence"):
+    with pytest.raises(ValueError, match="1s or 3s cadence"):
         SglangClientTimelineDetectionModel(
             Client([]),
             start(),

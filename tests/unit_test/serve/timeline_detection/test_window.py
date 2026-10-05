@@ -185,6 +185,23 @@ def test_window_cadence_is_anchored_to_first_real_video_frame() -> None:
     assert windows[0].end_ms == 3_137
 
 
+def test_one_second_stride_keeps_three_second_current_window() -> None:
+    assembler = EventWindowAssembler(
+        audio_format="pcm_s16le/16000/1",
+        window_stride_ms=1_000,
+    )
+    assembler.append(_audio(0, 6_000, 1))
+    windows = []
+    for index, at_ms in enumerate(range(0, 5_001, 500), start=2):
+        windows.extend(assembler.append(_frame(at_ms, index)))
+
+    assert [item.end_ms for item in windows] == [3_000, 4_000, 5_000]
+    assert [item.current_start_ms for item in windows] == [0, 1_000, 2_000]
+    assert all(item.end_ms - item.current_start_ms == 3_000 for item in windows)
+    assert windows[-1].start_ms == 0
+    assert windows[-1].history_duration_ms == 2_000
+
+
 def test_rejects_an_oversized_retained_window() -> None:
     assembler = EventWindowAssembler(
         audio_format="pcm_s16le/16000/1",
