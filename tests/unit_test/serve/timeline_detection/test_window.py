@@ -128,6 +128,27 @@ def test_gapped_audio_falls_back_to_video_only() -> None:
     assert windows[0].audio_status is AudioEvidenceStatus.GAPPED
 
 
+def test_history_gap_keeps_complete_current_audio() -> None:
+    assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
+    windows = []
+    sequence = 1
+    for start_ms, end_ms in ((0, 4_000), (5_000, 12_000)):
+        windows.extend(assembler.append(_audio(start_ms, end_ms, sequence)))
+        sequence += 1
+    for at_ms in range(0, 12_501, 500):
+        windows.extend(assembler.append(_frame(at_ms, sequence)))
+        sequence += 1
+
+    recovered = next(item for item in windows if item.end_ms == 12_000)
+    assert recovered.start_ms == 2_000
+    assert recovered.current_start_ms == 9_000
+    assert recovered.audio_status is AudioEvidenceStatus.COMPLETE
+    assert recovered.audio_start_ms == 9_000
+    assert recovered.audio_wav is not None
+    with wave.open(BytesIO(recovered.audio_wav), "rb") as source:
+        assert source.getnframes() == 48_000
+
+
 def test_late_audio_falls_back_after_video_grace() -> None:
     assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
     assembler.append(_audio(0, 2_500, 1))
