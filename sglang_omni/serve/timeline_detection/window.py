@@ -31,6 +31,7 @@ class EventDetectionWindow:
     current_frames: tuple[TimelineMediaChunk, ...]
     audio_wav: bytes | None
     audio_status: AudioEvidenceStatus
+    audio_start_ms: int | None = None
 
     @property
     def evidence_mode(self) -> str:
@@ -148,6 +149,11 @@ class EventWindowAssembler:
         )
         if self._audio_status(start_ms, self._next_end_ms) is AudioEvidenceStatus.COMPLETE:
             return True
+        if (
+            self._audio_status(current_start_ms, self._next_end_ms)
+            is AudioEvidenceStatus.COMPLETE
+        ):
+            return True
         return self._video[-1].start_ms >= self._next_end_ms + self._audio_grace_ms
 
     def _build_window(self, end_ms: int) -> EventDetectionWindow | None:
@@ -202,16 +208,27 @@ class EventWindowAssembler:
             )
             return None
         audio_status = self._audio_status(start_ms, end_ms)
+        audio_start_ms: int | None = None
+        if audio_status is AudioEvidenceStatus.COMPLETE:
+            audio_start_ms = start_ms
+        else:
+            current_audio_status = self._audio_status(current_start_ms, end_ms)
+            if current_audio_status is AudioEvidenceStatus.COMPLETE:
+                audio_status = AudioEvidenceStatus.COMPLETE
+                audio_start_ms = current_start_ms
+            else:
+                audio_status = current_audio_status
         audio_wav = (
-            self._wav_between(start_ms, end_ms)
-            if audio_status is AudioEvidenceStatus.COMPLETE
+            self._wav_between(audio_start_ms, end_ms)
+            if audio_start_ms is not None
             else None
         )
         self._window_built += 1
         logger.info(
             "timeline window ready session_id=%s end_ms=%s current_candidates=%s "
             "current_selected=%s history_candidates=%s history_selected=%s "
-            "evidence_mode=%s audio_status=%s built_total=%s attempted_total=%s",
+            "evidence_mode=%s audio_status=%s audio_scope=%s "
+            "built_total=%s attempted_total=%s",
             self._session_id,
             end_ms,
             len(current_candidates),
@@ -220,6 +237,13 @@ class EventWindowAssembler:
             len(history_frames),
             "audio_video" if audio_wav is not None else "video_only",
             audio_status.value,
+            (
+                "history_current"
+                if audio_start_ms == start_ms
+                else "current_only"
+                if audio_start_ms == current_start_ms
+                else "none"
+            ),
             self._window_built,
             self._window_attempts,
         )
@@ -231,6 +255,7 @@ class EventWindowAssembler:
             current_frames=current_frames,
             audio_wav=audio_wav,
             audio_status=audio_status,
+            audio_start_ms=audio_start_ms,
         )
 
     def _log_discarded_window(

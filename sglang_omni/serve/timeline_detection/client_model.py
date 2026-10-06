@@ -247,11 +247,19 @@ def _generate_request(
     total_seconds = (window.end_ms - window.start_ms) / 1_000
     mode = "冷启动" if window.history_duration_ms < 7_000 else "标准稳态"
     audio_status = window.audio_status.value
-    audio_description = (
-        f"完整覆盖{total_seconds:g}秒"
-        if window.audio_wav is not None
-        else f"{audio_status}，本次为纯视觉判断"
+    audio_start_ms = window.audio_start_ms
+    audio_duration_seconds = (
+        (window.end_ms - audio_start_ms) / 1_000
+        if audio_start_ms is not None
+        else 0
     )
+    full_audio = audio_start_ms == window.start_ms
+    if window.audio_wav is None:
+        audio_description = f"{audio_status}，本次为纯视觉判断"
+    elif full_audio:
+        audio_description = f"完整覆盖H+C共{total_seconds:g}秒"
+    else:
+        audio_description = f"完整覆盖C共{audio_duration_seconds:g}秒，H无音频"
     user_prompt = (
         f"本次为{mode}窗口：H={history_seconds:g}秒/"
         f"{len(window.history_frames)}张图片，C=3秒/"
@@ -289,14 +297,20 @@ def _generate_request(
         },
     ]
     if window.audio_wav is not None:
+        audio_boundary = (
+            f"0-{history_seconds:g}秒为H，"
+            f"{history_seconds:g}-{total_seconds:g}秒为C；"
+            "使用完整H+C音频取证"
+            if full_audio
+            else "仅覆盖CURRENT C；H只有图片，不得推测H内声音"
+        )
         content.extend(
             (
                 {
                     "type": "text",
                     "text": (
-                        f"【同步音频完整覆盖{total_seconds:g}秒："
-                        f"0-{history_seconds:g}秒为H，"
-                        f"{history_seconds:g}-{total_seconds:g}秒为C；"
+                        f"【同步音频完整覆盖{audio_duration_seconds:g}秒："
+                        f"{audio_boundary}，"
                         "只用C音频辅助判事件】"
                     ),
                 },
@@ -325,6 +339,13 @@ def _generate_request(
         "prompt_version": PROMPT_VERSION,
         "evidence_mode": window.evidence_mode,
         "audio_status": audio_status,
+        "audio_scope": (
+            "history_current"
+            if full_audio
+            else "current_only"
+            if window.audio_wav is not None
+            else "none"
+        ),
         "images": [_data_url("image/jpeg", frame.payload) for frame in frames],
     }
     if window.audio_wav is not None:
