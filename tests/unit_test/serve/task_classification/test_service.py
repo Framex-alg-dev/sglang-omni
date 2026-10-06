@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import msgpack
 from fastapi.testclient import TestClient
 
 from sglang_omni.serve.task_classification.contracts import (
+    CONTRACT_VERSION,
     DEFAULT_BRAIN1_CAPABILITIES,
     DEFAULT_BRAIN2_CAPABILITIES,
 )
@@ -21,17 +23,32 @@ class _Model:
     model_version = "prompt-v1"
 
     async def classify(self, request):
-        return (
-            "delegate|keep|keep|none"
-            if request.text == "book a ticket"
-            else "direct|keep|keep|none"
+        delegated = request.text == "book a ticket"
+        return json.dumps(
+            {
+                "route_token": "delegate" if delegated else "direct",
+                "output_directive": "keep",
+                "task_directive": "keep",
+                "media_directive": "none",
+                "response_locale": "en-US" if delegated else "zh-CN",
+                "request_cue": (
+                    {
+                        "verb": "book",
+                        "object": "a ticket",
+                        "language": "en-US",
+                    }
+                    if delegated
+                    else None
+                ),
+            },
+            separators=(",", ":"),
         )
 
 
 def _body(text: str) -> bytes:
     return msgpack.packb(
         {
-            "contract_version": 2,
+            "contract_version": CONTRACT_VERSION,
             "request_id": "request-1",
             "session_id": "session-1",
             "turn_id": "turn-1",
@@ -40,17 +57,30 @@ def _body(text: str) -> bytes:
             "text": text,
             "media": [],
             "router_history": [],
+            "brain1_capabilities": DEFAULT_BRAIN1_CAPABILITIES,
+            "brain2_capabilities": DEFAULT_BRAIN2_CAPABILITIES,
+            "has_active_agent": False,
+            "pending_confirmation": False,
+            "follow_up_required": False,
         },
         use_bin_type=True,
     )
 
 
-def test_missing_capability_fields_use_music_aware_defaults() -> None:
-    parsed = _request_from_json(msgpack.unpackb(_body("你会唱歌吗"), raw=False))
+def test_requires_the_exact_request_contract() -> None:
+    raw = msgpack.unpackb(_body("你会唱歌吗"), raw=False)
+    parsed = _request_from_json(raw)
 
     assert parsed.brain1_capabilities == DEFAULT_BRAIN1_CAPABILITIES
     assert parsed.brain2_capabilities == DEFAULT_BRAIN2_CAPABILITIES
     assert "曲库查询" in parsed.brain2_capabilities
+    raw.pop("brain2_capabilities")
+    try:
+        _request_from_json(raw)
+    except ValueError as exc:
+        assert str(exc) == "turn-router request fields are invalid"
+    else:
+        raise AssertionError("missing request fields must be rejected")
 
 
 def test_authenticated_turn_router_contract() -> None:
@@ -72,6 +102,12 @@ def test_authenticated_turn_router_contract() -> None:
     assert response.json()["route_token"] == "delegate"
     assert response.json()["route"] == "BRAIN2"
     assert response.json()["input_revision"] == 4
+    assert response.json()["contract_version"] == CONTRACT_VERSION
+    assert response.json()["request_cue"] == {
+        "verb": "book",
+        "object": "a ticket",
+        "language": "en-US",
+    }
 
 
 def test_websocket_streams_binary_media_before_classification() -> None:
@@ -79,7 +115,21 @@ def test_websocket_streams_binary_media_before_classification() -> None:
         async def classify(self, request):
             assert request.text is None
             assert request.media[0].payload == raw_media
-            return "delegate|keep|keep|none"
+            return json.dumps(
+                {
+                    "route_token": "delegate",
+                    "output_directive": "keep",
+                    "task_directive": "keep",
+                    "media_directive": "none",
+                    "response_locale": "en-US",
+                    "request_cue": {
+                        "verb": "handle",
+                        "object": "that request",
+                        "language": "en-US",
+                    },
+                },
+                separators=(",", ":"),
+            )
 
     raw_media = b"\x01\x00" * 160
     app = create_task_classification_app(

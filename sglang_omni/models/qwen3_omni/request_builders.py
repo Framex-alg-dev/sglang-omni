@@ -723,6 +723,7 @@ def build_sglang_thinker_request(
     min_new_tokens = params.get("min_new_tokens", 0)
     ignore_eos = params.get("ignore_eos", False)
     regex = params.get("regex")
+    json_schema = params.get("json_schema")
     seed = _resolve_seed(params)
 
     # Build SGLang SamplingParams and normalize
@@ -738,6 +739,7 @@ def build_sglang_thinker_request(
         min_new_tokens=min_new_tokens,
         ignore_eos=ignore_eos,
         regex=regex,
+        json_schema=json_schema,
         sampling_seed=seed,
     )
     sampling_params.normalize(tokenizer)

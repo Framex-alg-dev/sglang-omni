@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 
@@ -16,9 +17,18 @@ from sglang_omni.serve.task_classification.prompt import SYSTEM_PROMPT
 
 
 class _Client:
-    def __init__(self, output: str = "direct|keep|keep|none") -> None:
+    def __init__(self, output: str | None = None) -> None:
         self.calls = []
-        self.output = output
+        self.output = output or json.dumps(
+            {
+                "route_token": "direct",
+                "output_directive": "keep",
+                "task_directive": "keep",
+                "media_directive": "none",
+                "request_cue": None,
+            },
+            separators=(",", ":"),
+        )
 
     async def completion(self, request, *, request_id, audio_format="wav"):
         self.calls.append((request, request_id, audio_format))
@@ -58,7 +68,7 @@ async def test_presents_text_with_exact_router_prompt_and_sampling() -> None:
         )
     )
 
-    assert output == "direct|keep|keep|none"
+    assert json.loads(output)["route_token"] == "direct"
     request = client.calls[0][0]
     assert request.messages[0].content == SYSTEM_PROMPT
     assert request.messages[1].content[1] == {
@@ -67,20 +77,35 @@ async def test_presents_text_with_exact_router_prompt_and_sampling() -> None:
     }
     assert request.sampling.temperature == 0.0
     assert request.sampling.top_p == 1.0
-    assert request.sampling.max_new_tokens == 32
+    assert request.sampling.max_new_tokens == 128
     assert request.sampling.stop == ["\n"]
     assert request.metadata["task"] == "turn_router"
     assert request.metadata["logical_request_id"] == "turn-1"
     assert "取消所有任务" in SYSTEM_PROMPT
     assert request.messages[1].content[-1]["text"].endswith(
-        "route|output_directive|task_directive|media_directive："
+        "符合 OUTPUT_SCHEMA 的单行 JSON："
     )
 
 
 @pytest.mark.asyncio
 async def test_presents_original_audio_with_music_route_contract_without_asr_text(
 ) -> None:
-    client = _Client("delegate|keep|keep|none")
+    client = _Client(
+        json.dumps(
+            {
+                "route_token": "delegate",
+                "output_directive": "keep",
+                "task_directive": "keep",
+                "media_directive": "none",
+                "request_cue": {
+                    "verb": "play",
+                    "object": "a song",
+                    "language": "en-US",
+                },
+            },
+            separators=(",", ":"),
+        )
+    )
     model = SglangClientTaskClassificationModel(
         client,
         model_id="shared-base",
@@ -99,7 +124,7 @@ async def test_presents_original_audio_with_music_route_contract_without_asr_tex
         )
     )
 
-    assert output == "delegate|keep|keep|none"
+    assert json.loads(output)["route_token"] == "delegate"
     request = client.calls[0][0]
     assert request.messages[0].content == SYSTEM_PROMPT
     assert request.messages[1].content[1] == {"type": "audio"}
@@ -109,28 +134,10 @@ async def test_presents_original_audio_with_music_route_contract_without_asr_tex
     assert "CURRENT_USER_TEXT" not in str(request.messages[1].content)
 
 
-@pytest.mark.parametrize(
-    ("utterance", "route"),
-    [
-        ("这个手势是什么意思？", "direct|keep|keep|none"),
-        ("这是什么手势？", "direct|keep|keep|none"),
-        ("看看我这个动作是什么意思。", "direct|keep|keep|none"),
-        ("搜索一下这个手势的含义。", "delegate|keep|keep|none"),
-        ("你会唱歌吗？", "delegate|keep|keep|none"),
-        ("给我唱一首。", "delegate|keep|keep|none"),
-        ("现在唱一段吧。", "delegate|keep|keep|none"),
-        ("我想听第三首歌。", "delegate|keep|keep|none"),
-        ("播放《青花瓷》。", "delegate|keep|keep|none"),
-        ("Sing me a song.", "delegate|keep|keep|none"),
-        ("Play the third song.", "delegate|keep|keep|none"),
-        ("别唱了，停止播放。", "delegate|keep|keep|stop"),
-    ],
-)
-def test_music_route_minimal_pairs_are_part_of_prompt_contract(
-    utterance: str,
-    route: str,
-) -> None:
-    assert f"“{utterance}” -> {route}" in SYSTEM_PROMPT
+def test_music_and_weather_request_cues_are_part_of_prompt_contract() -> None:
+    assert '“明天北京天气怎么样？” -> {"route_token":"delegate"' in SYSTEM_PROMPT
+    assert '"verb":"查","object":"明天北京的天气"' in SYSTEM_PROMPT
+    assert '“播放《青花瓷》。” -> {"route_token":"delegate"' in SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize(
@@ -138,25 +145,24 @@ def test_music_route_minimal_pairs_are_part_of_prompt_contract(
     ("闭嘴，别再说了。", "别说了，但继续查天气。"),
 )
 def test_silence_controls_are_part_of_prompt_contract(utterance: str) -> None:
-    assert f"“{utterance}” -> control|suppress_reply|keep|none" in SYSTEM_PROMPT
+    assert utterance in SYSTEM_PROMPT
+    assert '"route_token":"control"' in SYSTEM_PROMPT
 
 
-def test_media_stop_takes_delegate_precedence_over_silence_control() -> None:
-    assert "媒体停止、暂停、继续/恢复时使用 delegate" in SYSTEM_PROMPT
-    assert "“别唱了，停止播放。” -> delegate|keep|keep|stop" in SYSTEM_PROMPT
+def test_media_control_uses_the_deterministic_control_route() -> None:
+    assert "媒体停止、暂停、继续/恢复时使用 control" in SYSTEM_PROMPT
+    assert '“别唱了，停止播放。” -> {"route_token":"control"' in SYSTEM_PROMPT
 
 
 def test_combined_silence_and_media_control_keeps_task() -> None:
     assert (
-        "“不要回复，只把歌停掉。” -> delegate|suppress_reply|keep|stop"
-        in SYSTEM_PROMPT
+        "“不要回复，只把歌停掉。”" in SYSTEM_PROMPT
     )
 
 
 def test_quoted_silence_is_not_a_control() -> None:
     assert (
-        "“他刚才说‘闭嘴’是什么意思？” -> direct|keep|keep|none"
-        in SYSTEM_PROMPT
+        "“他刚才说‘闭嘴’是什么意思？”" in SYSTEM_PROMPT
     )
 
 

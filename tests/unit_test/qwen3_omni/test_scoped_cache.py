@@ -114,3 +114,35 @@ def test_verified_session_prefix_with_private_media_and_no_public_catalog():
     positions[0, 7] += 1
     assert _verified_scope_boundaries(metadata, positions, 8) is None
     assert _verified_scope_boundaries(metadata, None, 8) is None
+
+
+def test_scope_transition_inside_page_has_distinct_child_identity():
+    cache = ScopedRadixCache(CacheInitParams(False, None, None, 4))
+    tokens = array('q', range(12))
+    first = RadixKey(
+        tokens,
+        PrefixScopes('model', 1, 8, 'session-a', 'request-a').encode(),
+    )
+    second = RadixKey(
+        tokens,
+        PrefixScopes('model', 3, 8, 'session-b', 'request-b').encode(),
+    )
+
+    cache.insert(InsertParams(key=first))
+    cache.insert(InsertParams(key=second))
+
+    assert len(cache.root_node.children) == 2
+    assert all(len(node.key) >= cache.page_size for node in cache.root_node.children.values())
+
+
+def test_scoped_child_key_rejects_empty_or_partial_pages():
+    cache = ScopedRadixCache(CacheInitParams(False, None, None, 4))
+    scoped = cache._scope_key(
+        RadixKey(
+            array('q', range(3)),
+            PrefixScopes('model', 0, 0, 'session-a', 'request-a').encode(),
+        )
+    )
+
+    with pytest.raises(ValueError, match='complete page'):
+        scoped.child_key(cache.page_size)

@@ -56,6 +56,7 @@ class ChatCompletionRequest(BaseModel):
     max_completion_tokens: int | None = None
     stop: str | list[str] | None = None
     seed: int | None = None
+    response_format: dict[str, Any] | None = None
 
     # Streaming
     stream: bool = False

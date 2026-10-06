@@ -53,7 +53,13 @@ class ScopedRadixKey(RadixKey):
         return ScopedRadixKey(self.token_ids[start:stop], self.scopes, self.offset + start)
 
     def child_key(self, page_size=1):
-        return (self.scopes.scope(self.offset), super().child_key(page_size))
+        if len(self) < page_size:
+            raise ValueError("scoped radix child key requires one complete page")
+        scope_page = tuple(
+            self.scopes.scope(self.offset + position)
+            for position in range(page_size)
+        )
+        return (scope_page, super().child_key(page_size))
 
     def match(self, other, page_size=1):
         if not isinstance(other, ScopedRadixKey) or self.extra_key != other.extra_key:
@@ -151,6 +157,24 @@ class ScopedRadixCache(RadixCache):
             return ScopedRadixKey(key.token_ids, scopes, limit=key.limit)
         except (TypeError, ValueError):
             return key
+
+    def _split_node(self, key, child, split_len):
+        if split_len <= 0 or split_len >= len(child.key):
+            raise RuntimeError(
+                "scoped radix invariant violated: split must preserve non-empty nodes"
+            )
+        if split_len % self.page_size:
+            raise RuntimeError(
+                "scoped radix invariant violated: split must be page aligned"
+            )
+        return super()._split_node(key, child, split_len)
+
+    def _delete_leaf(self, node):
+        if node is self.root_node or len(node.key) < self.page_size:
+            raise RuntimeError(
+                "scoped radix invariant violated: cannot delete empty/partial node"
+            )
+        return super()._delete_leaf(node)
 
     def match_prefix(self, params):
         return super().match_prefix(replace(params, key=self._scope_key(params.key)))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 from typing import Any
 
 import pytest
@@ -1199,6 +1200,46 @@ def test_chat_request_does_not_mark_null_sampling_params_explicit() -> None:
     assert gen_req.sampling.top_p == 1.0
     assert gen_req.sampling.top_k == -1
     assert EXPLICIT_GENERATION_PARAMS_KEY not in gen_req.metadata
+
+
+def test_chat_request_propagates_strict_json_schema_to_sampling() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    req = ChatCompletionRequest(
+        model="qwen3-omni",
+        messages=[{"role": "user", "content": "hello"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "strict": True,
+                "schema": schema,
+            },
+        },
+    )
+
+    gen_req = _build_chat_generate_request(req)
+
+    assert json.loads(gen_req.sampling.json_schema) == schema
+    assert (
+        gen_req.sampling.to_dict()["json_schema"]
+        == gen_req.sampling.json_schema
+    )
+
+
+def test_chat_request_rejects_unsupported_response_format() -> None:
+    req = ChatCompletionRequest(
+        model="qwen3-omni",
+        messages=[{"role": "user", "content": "hello"}],
+        response_format={"type": "text"},
+    )
+
+    with pytest.raises(ValueError, match="unsupported response_format"):
+        _build_chat_generate_request(req)
 
 
 def test_speech_stream_defaults_to_raw_pcm() -> None:

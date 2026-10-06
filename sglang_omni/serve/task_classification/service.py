@@ -16,8 +16,7 @@ from sglang_omni.serve.streaming_request import (
 )
 
 from .contracts import (
-    DEFAULT_BRAIN1_CAPABILITIES,
-    DEFAULT_BRAIN2_CAPABILITIES,
+    CONTRACT_VERSION,
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
@@ -34,7 +33,7 @@ def create_task_classification_app(
         raise ValueError("task-classification service token is required")
     if max_body_bytes <= 0:
         raise ValueError("max_body_bytes must be positive")
-    app = FastAPI(title="sglang-omni-turn-router", version="2")
+    app = FastAPI(title="sglang-omni-turn-router", version="5")
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
@@ -46,7 +45,11 @@ def create_task_classification_app(
     async def health(request: Request) -> JSONResponse:
         authenticate(request)
         return JSONResponse(
-            {"ok": True, "contract": "turn-router.v2", "contract_version": 2}
+            {
+                "ok": True,
+                "contract": f"turn-router.v{CONTRACT_VERSION}",
+                "contract_version": CONTRACT_VERSION,
+            }
         )
 
     @app.post("/v1/task-classification")
@@ -124,6 +127,16 @@ async def _classify_payload(
         "output_directive": result.output_directive.value,
         "task_directive": result.task_directive.value,
         "media_directive": result.media_directive.value,
+        "response_locale": result.response_locale,
+        "request_cue": (
+            {
+                "verb": result.request_cue.verb,
+                "object": result.request_cue.object,
+                "language": result.request_cue.language,
+            }
+            if result.request_cue is not None
+            else None
+        ),
         "model_id": result.model_id,
         "model_version": result.model_version,
     }
@@ -165,10 +178,28 @@ async def _read_envelope(
 
 
 def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
-    media_raw = raw.get("media", [])
+    required_fields = {
+        "contract_version",
+        "request_id",
+        "session_id",
+        "turn_id",
+        "identity_epoch",
+        "input_revision",
+        "text",
+        "media",
+        "router_history",
+        "brain1_capabilities",
+        "brain2_capabilities",
+        "has_active_agent",
+        "pending_confirmation",
+        "follow_up_required",
+    }
+    if set(raw) != required_fields:
+        raise ValueError("turn-router request fields are invalid")
+    media_raw = raw["media"]
     if not isinstance(media_raw, list):
         raise ValueError("media must be an array")
-    history = raw.get("router_history", [])
+    history = raw["router_history"]
     if not isinstance(history, list) or not all(
         isinstance(item, dict) for item in history
     ):
@@ -182,15 +213,11 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         text=_optional_string(raw, "text"),
         media=tuple(_media_ref(item) for item in media_raw),
         router_history=tuple(dict(item) for item in history),
-        brain1_capabilities=_optional_string(
-            raw, "brain1_capabilities"
-        ) or DEFAULT_BRAIN1_CAPABILITIES,
-        brain2_capabilities=_optional_string(
-            raw, "brain2_capabilities"
-        ) or DEFAULT_BRAIN2_CAPABILITIES,
-        has_active_agent=_boolean(raw, "has_active_agent", default=False),
-        pending_confirmation=_boolean(raw, "pending_confirmation", default=False),
-        follow_up_required=_boolean(raw, "follow_up_required", default=False),
+        brain1_capabilities=_string(raw, "brain1_capabilities"),
+        brain2_capabilities=_string(raw, "brain2_capabilities"),
+        has_active_agent=_boolean(raw, "has_active_agent"),
+        pending_confirmation=_boolean(raw, "pending_confirmation"),
+        follow_up_required=_boolean(raw, "follow_up_required"),
         contract_version=_integer(raw, "contract_version"),
     )
 
@@ -230,8 +257,8 @@ def _integer(raw: dict[str, Any], key: str) -> int:
     return value
 
 
-def _boolean(raw: dict[str, Any], key: str, *, default: bool) -> bool:
-    value = raw.get(key, default)
+def _boolean(raw: dict[str, Any], key: str) -> bool:
+    value = raw.get(key)
     if type(value) is not bool:
         raise ValueError(f"{key} must be a boolean")
     return value

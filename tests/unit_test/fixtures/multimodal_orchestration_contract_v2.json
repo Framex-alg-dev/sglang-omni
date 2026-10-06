@@ -2,7 +2,7 @@
   "fixture_version": 2,
   "task_classification": {
     "request": {
-      "contract_version": 2,
+      "contract_version": 5,
       "request_id": "request-contract-1",
       "session_id": "session-contract-1",
       "turn_id": "turn-contract-1",
@@ -12,13 +12,13 @@
       "media": [],
       "router_history": [],
       "brain1_capabilities": "普通聊天、简单问答、计算、下游用户视频理解；不处理应用能力、曲库或媒体播放查询",
-      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、所有立即唱歌和选歌请求，以及歌曲播放、暂停、继续/恢复与停止；唱歌请求不是普通对话或纯动作",
+      "brain2_capabilities": "搜索、天气、票务、日历、业务服务、多步Agent；歌曲能力、曲库查询、所有立即唱歌和选歌请求，以及歌曲播放；唱歌请求不是普通对话或纯动作，媒体控制由确定性控制通道处理",
       "has_active_agent": false,
       "pending_confirmation": false,
       "follow_up_required": false
     },
     "response": {
-      "contract_version": 2,
+      "contract_version": 5,
       "request_id": "request-contract-1",
       "session_id": "session-contract-1",
       "turn_id": "turn-contract-1",
@@ -29,8 +29,14 @@
       "output_directive": "keep",
       "task_directive": "keep",
       "media_directive": "none",
+      "response_locale": "zh-CN",
+      "request_cue": {
+        "verb": "安排",
+        "object": "下一步",
+        "language": "zh-CN"
+      },
       "model_id": "qwen3-omni-gpu3-decision-services",
-      "model_version": "omni-turn-router-prompt-v3"
+      "model_version": "omni-turn-router-prompt-v5"
     }
   },
   "inference_session": {

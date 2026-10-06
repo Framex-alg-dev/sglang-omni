@@ -9,14 +9,14 @@ from enum import Enum
 from typing import Any
 
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 5
 DEFAULT_BRAIN1_CAPABILITIES = (
     "普通聊天、简单问答、计算、下游用户视频理解；"
     "不处理应用能力、曲库或媒体播放查询"
 )
 DEFAULT_BRAIN2_CAPABILITIES = (
     "搜索、天气、票务、日历、业务服务、多步Agent；"
-    "歌曲能力、曲库查询、所有立即唱歌和选歌请求、歌曲播放与停止媒体播放；"
+    "歌曲能力、曲库查询、所有立即唱歌和选歌请求、歌曲播放；"
     "唱歌请求不是普通对话或纯动作"
 )
 
@@ -64,6 +64,60 @@ ROUTE_BY_TOKEN = {
     RouteToken.DELEGATE: BrainRoute.BRAIN2,
     RouteToken.CONTROL: BrainRoute.CONTROL,
 }
+
+
+_ZH_CUE_QUESTION = re.compile(
+    r"(?:[？?]|什么|哪些|哪种|怎么|如何|为什么|为何|谁|哪里|哪儿|多少|吗|么)$"
+    r"|(?:什么|哪些|哪种|怎么|如何|为什么|为何|谁|哪里|哪儿|多少)"
+)
+_ZH_CUE_REQUEST_PREFIX = re.compile(
+    r"^(?:你会|你能|你可以|您会|您能|您可以|我想|我要|我需要|帮我|请帮我|给我)"
+)
+_EN_CUE_QUESTION_PREFIX = re.compile(
+    r"^(?:what|which|who|where|when|why|how|can\s+you|could\s+you|"
+    r"would\s+you|will\s+you|do\s+you|are\s+you)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_request_cue_object(*, verb: str, value: str, language: str) -> None:
+    if value.casefold().startswith(verb.casefold()):
+        raise ValueError("request cue object must not repeat its verb")
+    if language == "zh-CN" and (
+        _ZH_CUE_QUESTION.search(value) is not None
+        or _ZH_CUE_REQUEST_PREFIX.search(value) is not None
+    ):
+        raise ValueError("request cue object must be a normalized noun phrase")
+    if language == "en-US" and (
+        "?" in value or _EN_CUE_QUESTION_PREFIX.search(value) is not None
+    ):
+        raise ValueError("request cue object must be a normalized noun phrase")
+
+
+@dataclass(frozen=True)
+class RequestCuePlan:
+    """Grounded request acknowledgement prepared by the fast turn router."""
+
+    verb: str
+    object: str
+    language: str
+
+    def __post_init__(self) -> None:
+        verb = _required("request cue verb", self.verb)
+        object_text = _required("request cue object", self.object)
+        if len(verb) > 24 or len(object_text) > 120:
+            raise ValueError("request cue verb or object is too long")
+        if any(char in verb or char in object_text for char in "\r\n{}"):
+            raise ValueError("request cue verb and object must be plain text")
+        if self.language not in {"zh-CN", "en-US"}:
+            raise ValueError("request cue language is unsupported")
+        _validate_request_cue_object(
+            verb=verb,
+            value=object_text,
+            language=self.language,
+        )
+        object.__setattr__(self, "verb", verb)
+        object.__setattr__(self, "object", object_text)
 
 
 @dataclass(frozen=True)
@@ -143,6 +197,8 @@ class TaskClassificationResult:
     output_directive: OutputDirective
     task_directive: TaskDirective
     media_directive: MediaDirective
+    response_locale: str
+    request_cue: RequestCuePlan | None
     model_id: str
     model_version: str
     contract_version: int = CONTRACT_VERSION
@@ -158,6 +214,8 @@ class TaskClassificationResult:
             _required(name, value)
         if ROUTE_BY_TOKEN[self.route_token] is not self.route:
             raise ValueError("turn-router token and Brain route disagree")
+        if self.response_locale not in {"zh-CN", "en-US"}:
+            raise ValueError("turn-router response locale is unsupported")
         if (
             self.task_directive is not TaskDirective.KEEP
             and self.route_token is not RouteToken.CONTROL
@@ -165,12 +223,19 @@ class TaskClassificationResult:
             raise ValueError("task cancellation requires the control route")
         if (
             self.media_directive is not MediaDirective.NONE
-            and self.route_token is not RouteToken.DELEGATE
+            and self.route_token is not RouteToken.CONTROL
         ):
-            raise ValueError("media control requires the delegated route")
+            raise ValueError("media control requires the control route")
         if (
             self.route_token is RouteToken.CONTROL
             and self.task_directive is TaskDirective.KEEP
             and self.output_directive is OutputDirective.KEEP
+            and self.media_directive is MediaDirective.NONE
         ):
-            raise ValueError("control route requires an output or task directive")
+            raise ValueError(
+                "control route requires an output, task, or media directive"
+            )
+        if self.route_token is RouteToken.DELEGATE and self.request_cue is None:
+            raise ValueError("delegated route requires a request cue")
+        if self.route_token is not RouteToken.DELEGATE and self.request_cue is not None:
+            raise ValueError("only delegated routes may contain a request cue")

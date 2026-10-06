@@ -74,6 +74,7 @@ class SamplingParams:
     min_new_tokens: int = 0
     ignore_eos: bool = False
     regex: str | None = None
+    json_schema: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +90,7 @@ class SamplingParams:
             "min_new_tokens": self.min_new_tokens,
             "ignore_eos": self.ignore_eos,
             "regex": self.regex,
+            "json_schema": self.json_schema,
         }
 
 

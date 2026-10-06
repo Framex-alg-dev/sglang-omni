@@ -132,12 +132,16 @@ class _Session:
         self.reserved_request_ids: set[str] = set()
         self.speculative_buffered_bytes = 0
         self.segment_flush_tasks: dict[str, asyncio.Task[None]] = {}
+        self.stage_available = {stage: True for stage in _STAGES}
+        self.availability_epoch = 0
+        self.availability_probes: dict[str, asyncio.Task[None]] = {}
 
     async def run(self) -> None:
         await self.websocket.accept()
         first = await self._receive_json()
-        if first.get("type") != "session.open" or first.get("contract_version") != 2:
-            raise ValueError("first gateway message must be session.open v2")
+        contract_version = first.get("contract_version")
+        if first.get("type") != "session.open" or contract_version not in {2, 3}:
+            raise ValueError("first gateway message must be session.open v3")
         self.session_id = _string(first, "session_id")
         if self.config.reply_speech is not None:
             self.reply_speech = GatewaySpeechSynthesizer(
@@ -148,13 +152,17 @@ class _Session:
                 self.config.reply_streaming_speech,
                 session_id=self.session_id,
             )
-        await self.send(
-            {
-                "type": "session.ready",
-                "contract_version": 2,
-                "session_id": self.session_id,
-            }
-        )
+        ready = {
+            "type": "session.ready",
+            "contract_version": contract_version,
+            "session_id": self.session_id,
+        }
+        if contract_version == 3:
+            ready.update(
+                availability_epoch=self.availability_epoch,
+                stages=dict(sorted(self.stage_available.items())),
+            )
+        await self.send(ready)
         while True:
             message = await self._receive_json()
             message_type = message.get("type")
@@ -193,6 +201,12 @@ class _Session:
         if flush_tasks:
             await asyncio.gather(*flush_tasks, return_exceptions=True)
         self.segment_flush_tasks.clear()
+        probes = tuple(self.availability_probes.values())
+        for task in probes:
+            task.cancel()
+        if probes:
+            await asyncio.gather(*probes, return_exceptions=True)
+        self.availability_probes.clear()
         self.speech_speculations.clear()
         self.reserved_request_ids.clear()
         self.media.clear()
@@ -469,9 +483,10 @@ class _Session:
     ) -> None:
         assert self.reply_speech is not None
         next_seq = 0
+        sent_bytes = 0
 
         async def audio_sink(chunk: bytes) -> None:
-            nonlocal next_seq
+            nonlocal next_seq, sent_bytes
             if not chunk:
                 return
             await self.send(
@@ -487,6 +502,7 @@ class _Session:
                     },
                 }
             )
+            sent_bytes += len(chunk)
             next_seq += 1
 
         try:
@@ -522,6 +538,9 @@ class _Session:
                     "code": "tts_failed",
                     "detail": f"speech synthesis failed during {exc.phase}",
                     "retryable": exc.retryable,
+                    "phase": exc.phase,
+                    "audio_bytes": sent_bytes,
+                    "chunk_count": next_seq,
                 }
             )
         except Exception:
@@ -533,6 +552,9 @@ class _Session:
                     "code": "tts_failed",
                     "detail": "speech synthesis failed",
                     "retryable": False,
+                    "phase": "provider_callback",
+                    "audio_bytes": sent_bytes,
+                    "chunk_count": next_seq,
                 }
             )
 
@@ -1078,6 +1100,7 @@ class _Session:
                 ),
                 timeout=self.config.request_timeout_seconds,
             )
+            await self._set_stage_availability(stage, True, "request_succeeded")
         except asyncio.CancelledError:
             await self.send({"type": "stage.cancelled", "request_id": request_id})
             raise
@@ -1093,13 +1116,17 @@ class _Session:
             )
         except Exception as exc:
             logger.exception("inference gateway stage failed", extra={"stage": stage})
+            code, retryable = _classify_stage_failure(exc)
+            if code == "provider_unavailable":
+                await self._set_stage_availability(stage, False, type(exc).__name__)
             await self.send(
                 {
                     "type": "stage.error",
                     "request_id": request_id,
-                    "code": "upstream_unavailable",
+                    "code": code,
                     "detail": str(exc),
-                    "retryable": True,
+                    "retryable": retryable,
+                    "availability_epoch": self.availability_epoch,
                 }
             )
         finally:
@@ -1119,6 +1146,61 @@ class _Session:
                     self.media_refcounts[media_id] = max(
                         0, self.media_refcounts[media_id] - 1
                     )
+
+    async def _set_stage_availability(
+        self,
+        stage: str,
+        available: bool,
+        reason: str,
+    ) -> None:
+        if self.stage_available.get(stage) is available:
+            return
+        self.stage_available[stage] = available
+        self.availability_epoch += 1
+        await self.send(
+            {
+                "type": "stage.availability",
+                "stage": stage,
+                "available": available,
+                "availability_epoch": self.availability_epoch,
+                "reason": reason,
+            }
+        )
+        if not available and stage not in self.availability_probes:
+            task = asyncio.create_task(
+                self._probe_stage_until_available(stage),
+                name=f"inference-gateway-stage-probe:{self.session_id}:{stage}",
+            )
+            self.availability_probes[stage] = task
+            task.add_done_callback(
+                lambda completed, stage=stage: self.availability_probes.pop(
+                    stage, None
+                )
+            )
+
+    async def _probe_stage_until_available(self, stage: str) -> None:
+        upstream = self.config.stages[stage]
+        headers = (
+            {"Authorization": upstream.authorization}
+            if upstream.authorization
+            else None
+        )
+        while not self.closed and not self.stage_available.get(stage, False):
+            try:
+                async with asyncio.timeout(2.0):
+                    async with websockets.connect(
+                        upstream.url,
+                        additional_headers=headers,
+                        max_size=16 * 1024 * 1024,
+                        proxy=None,
+                    ):
+                        pass
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(1.0)
+                continue
+            await self._set_stage_availability(stage, True, "probe_succeeded")
 
     async def _evict_for(self, incoming_bytes: int) -> None:
         while (
@@ -1378,16 +1460,25 @@ class _Session:
 
 
 def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
-    app = FastAPI(title="sglang-omni-inference-gateway", version="1")
+    app = FastAPI(title="sglang-omni-inference-gateway", version="3")
 
-    @app.get("/health")
-    async def health() -> dict[str, object]:
+    @app.get("/live")
+    async def live() -> dict[str, object]:
+        return {"ok": True, "contract": "inference-session-v3"}
+
+    @app.get("/ready")
+    async def ready() -> dict[str, object]:
         return {
             "ok": True,
-            "contract": "inference-session-v2",
+            "contract": "inference-session-v3",
+            "stages": {stage: True for stage in sorted(config.stages)},
             "reply_speech": config.reply_speech is not None,
             "reply_streaming_speech": config.reply_streaming_speech is not None,
         }
+
+    @app.get("/health")
+    async def health() -> dict[str, object]:
+        return await ready()
 
     @app.websocket("/v1/inference-session")
     async def inference_session(websocket: WebSocket) -> None:
@@ -1410,6 +1501,22 @@ def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
             await session.close()
 
     return app
+
+
+def _classify_stage_failure(exc: Exception) -> tuple[str, bool]:
+    if isinstance(
+        exc,
+        (
+            ConnectionError,
+            OSError,
+            asyncio.TimeoutError,
+            websockets.exceptions.ConnectionClosed,
+        ),
+    ):
+        return "provider_unavailable", True
+    if isinstance(exc, (ValueError, json.JSONDecodeError)):
+        return "upstream_protocol_error", False
+    return "stage_execution_failed", False
 
 
 async def _close_with_error(

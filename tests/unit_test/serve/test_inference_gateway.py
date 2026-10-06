@@ -92,6 +92,21 @@ def _config(**kwargs) -> InferenceGatewayConfig:
     )
 
 
+def test_stage_failures_are_classified_by_recovery_semantics() -> None:
+    assert gateway_module._classify_stage_failure(ConnectionError("down")) == (
+        "provider_unavailable",
+        True,
+    )
+    assert gateway_module._classify_stage_failure(ValueError("bad event")) == (
+        "upstream_protocol_error",
+        False,
+    )
+    assert gateway_module._classify_stage_failure(RuntimeError("bug")) == (
+        "stage_execution_failed",
+        False,
+    )
+
+
 def test_bearer_uses_first_configured_fallback(monkeypatch) -> None:
     monkeypatch.delenv("SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN", raising=False)
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_TOKEN", "action-token")
@@ -459,10 +474,22 @@ def test_speech_request_uses_one_whole_text_synthesis(monkeypatch) -> None:
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 3, "session_id": "s1"}
         )
         ready = socket.receive_json()
-        assert ready["contract_version"] == 2
+        assert ready["contract_version"] == 3
+        assert ready["availability_epoch"] == 0
+        assert ready["stages"] == {
+            stage: True
+            for stage in (
+                "body",
+                "brain",
+                "classifier",
+                "expression",
+                "performance",
+                "reply",
+            )
+        }
         socket.send_json(
             {
                 "type": "speech.request",
