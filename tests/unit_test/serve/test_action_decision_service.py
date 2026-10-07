@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +16,7 @@ from sglang_omni.serve.action_decision.contracts import (
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
 from sglang_omni.serve.action_decision.prompt import (
+    E57A_REFERENCE_SYSTEM_PROMPT_PATH,
     build_system_prompt,
     build_user_prompt,
 )
@@ -192,10 +192,7 @@ def test_e57_reference_profile_uses_exact_training_prompts_without_asr() -> None
         runtime_context={"prompt_profile": "e57a_eval"},
     )
     catalog = _registry().resolve(request)
-    expected_system = Path(
-        "/data/xingmt/action_omni_experiments/synthetic_increment_20261006/"
-        "CURRENT_SYSTEM_PROMPT.txt"
-    ).read_text(encoding="utf-8")
+    expected_system = E57A_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     assert build_system_prompt(request, catalog) == expected_system
     user_prompt = build_user_prompt(request, catalog)
     assert "capture_mode=ptt_utterance" in user_prompt
