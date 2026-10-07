@@ -27,7 +27,11 @@ from sglang_omni.utils.structured_logs import emit_structured_log
 
 from .catalog import ActionCatalogRegistry, ActionEntry, ResolvedCatalog
 from .contracts import ActionDecision, ActionDecisionRequest, DecisionChannel
-from .prompt import build_system_prompt, build_user_prompt
+from .prompt import (
+    build_system_prompt,
+    build_user_prompt,
+    uses_e57a_reference_prompt,
+)
 
 
 class CompletionClient(Protocol):
@@ -210,15 +214,21 @@ class ActionDecisionEngine:
                 reason_code="required_action_binding",
             )
 
-        content: list[dict[str, str]] = [
-            {"type": "text", "text": build_user_prompt(request, catalog)}
+        user_prompt = {"type": "text", "text": build_user_prompt(request, catalog)}
+        media_content = [
+            {"type": "audio" if item.kind == "audio" else "image"}
+            for item in request.media
         ]
-        for item in request.media:
-            content.append({"type": "audio" if item.kind == "audio" else "image"})
+        content: list[dict[str, str]] = (
+            [*media_content, user_prompt]
+            if uses_e57a_reference_prompt(request)
+            else [user_prompt, *media_content]
+        )
         metadata: dict[str, Any] = {
-            "task": "action_decision",
+            "task": "action_direct",
             "task_role": request.channel.value,
             "logical_request_id": request.decision_point_id,
+            "session_instance_id": request.session_id,
             "contract_version": 1,
             "session_id": request.session_id,
             "turn_id": request.turn_id,

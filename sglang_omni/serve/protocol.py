@@ -98,6 +98,16 @@ class ChatCompletionRequest(BaseModel):
     # Misc
     request_id: str | None = None
     user: str | None = None
+    # Internal cache namespace supplied by the authenticated inference gateway.
+    # It is deliberately separate from ``user`` so application callers cannot
+    # accidentally couple cache ownership to an end-user controlled label.
+    session_instance_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        exclude=True,
+    )
 
     @property
     def effective_max_tokens(self) -> int | None:

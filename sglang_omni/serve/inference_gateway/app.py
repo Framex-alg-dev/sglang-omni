@@ -287,6 +287,11 @@ class _Session:
             if declared_channel not in (None, stage):
                 raise ValueError("action stage and payload channel do not match")
             payload["channel"] = stage
+        elif stage == "reply":
+            # The OpenAI-compatible reply worker uses this stable, gateway-owned
+            # namespace for its private radix cache.  Always overwrite a caller
+            # value so two browser sessions cannot opt into the same cache owner.
+            payload["session_instance_id"] = self.session_id
         media_refs = message.get("media_refs", [])
         if not isinstance(media_refs, list) or not all(
             isinstance(item, str) and item for item in media_refs

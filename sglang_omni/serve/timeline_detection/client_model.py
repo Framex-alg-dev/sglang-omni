@@ -1,4 +1,4 @@
-"""event-v1.20 timeline detector backed by the shared local Omni client."""
+"""Prompt-only 43-event timeline detector backed by the shared Omni client."""
 
 from __future__ import annotations
 
@@ -56,6 +56,42 @@ class _ModelFailure:
 _ModelOutput = tuple[ObservationEvent, ...] | _ModelFailure
 
 
+class _EventEdgeLatch:
+    """Publish one rising edge and require stable absence before re-arming."""
+
+    def __init__(self, *, rearm_absent_windows: int) -> None:
+        if rearm_absent_windows <= 0:
+            raise ValueError("event rearm window count must be positive")
+        self._rearm_absent_windows = rearm_absent_windows
+        self._latched: set[str] = set()
+        self._absent_streaks: dict[str, int] = {}
+
+    def accept(self, event_ids: list[str]) -> tuple[str, ...]:
+        present = set(event_ids)
+        for event_id in tuple(self._latched):
+            if event_id in present:
+                self._absent_streaks[event_id] = 0
+                continue
+            streak = self._absent_streaks.get(event_id, 0) + 1
+            if streak >= self._rearm_absent_windows:
+                self._latched.remove(event_id)
+                self._absent_streaks.pop(event_id, None)
+            else:
+                self._absent_streaks[event_id] = streak
+
+        accepted = tuple(
+            event_id for event_id in event_ids if event_id not in self._latched
+        )
+        for event_id in present:
+            self._latched.add(event_id)
+            self._absent_streaks[event_id] = 0
+        return accepted
+
+    def clear(self) -> None:
+        self._latched.clear()
+        self._absent_streaks.clear()
+
+
 class SglangClientTimelineDetectionModel:
     """Ingest continuously and coalesce event inference to the latest window."""
 
@@ -76,7 +112,7 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline max_attempts must be positive")
         if inference_interval_ms not in {1_000, 3_000} or window_ms != 10_000:
             raise ValueError(
-                "event-v1.20 requires a 1s or 3s cadence and 10s H/C window"
+                "the 43-event detector requires a 1s or 3s cadence and 10s H/C window"
             )
         if max_window_bytes <= 0:
             raise ValueError("timeline max_window_bytes must be positive")
@@ -85,6 +121,7 @@ class SglangClientTimelineDetectionModel:
         self.model_id = start.model_id
         self.model_version = model_version
         self.prompt_version = PROMPT_VERSION
+        self._attribution_duration_ms = inference_interval_ms
         self._max_attempts = max_attempts
         self._assembler = EventWindowAssembler(
             audio_format=start.audio_format,
@@ -92,6 +129,12 @@ class SglangClientTimelineDetectionModel:
             history_duration_ms=window_ms - 3_000,
             window_stride_ms=inference_interval_ms,
             max_buffer_bytes=max_window_bytes,
+        )
+        self._event_edges = _EventEdgeLatch(
+            rearm_absent_windows=max(
+                2,
+                (3_000 + inference_interval_ms - 1) // inference_interval_ms,
+            )
         )
         self._windows: asyncio.Queue[_WindowWork] = asyncio.Queue(maxsize=1)
         self._outputs: asyncio.Queue[_ModelOutput] = asyncio.Queue(maxsize=1)
@@ -131,6 +174,7 @@ class SglangClientTimelineDetectionModel:
     async def discontinuity(self, event: TimelineDiscontinuity) -> None:
         self._generation += 1
         self._assembler.clear()
+        self._event_edges.clear()
         _drain(self._windows)
         _drain(self._outputs)
 
@@ -198,6 +242,7 @@ class SglangClientTimelineDetectionModel:
                 contract_version=self._start.contract_version,
                 observer_epoch=self._start.observer_epoch,
                 stream_epoch=work.stream_epoch,
+                attribution_duration_ms=self._attribution_duration_ms,
             )
             result = await self._client.completion(
                 request,
@@ -216,6 +261,7 @@ class SglangClientTimelineDetectionModel:
                     exc,
                 )
                 continue
+            accepted_event_ids = self._event_edges.accept(event_ids)
             return tuple(
                 _observation(
                     event_id,
@@ -225,7 +271,7 @@ class SglangClientTimelineDetectionModel:
                     model_id=self.model_id,
                     model_version=self.model_version,
                 )
-                for event_id in event_ids
+                for event_id in accepted_event_ids
             )
         raise ModelOutputError(
             f"model did not return usable event JSON after {self._max_attempts} "
@@ -242,11 +288,24 @@ def _generate_request(
     contract_version: int,
     observer_epoch: int,
     stream_epoch: int,
+    attribution_duration_ms: int,
 ) -> GenerateRequest:
     history_seconds = window.history_duration_ms / 1_000
     total_seconds = (window.end_ms - window.start_ms) / 1_000
     mode = "冷启动" if window.history_duration_ms < 7_000 else "标准稳态"
     audio_status = window.audio_status.value
+    attribution_seconds = attribution_duration_ms / 1_000
+    attribution_start_ms = window.end_ms - attribution_duration_ms
+    current_context_frames = tuple(
+        frame
+        for frame in window.current_frames
+        if frame.start_ms < attribution_start_ms
+    )
+    attribution_frames = tuple(
+        frame
+        for frame in window.current_frames
+        if frame.start_ms >= attribution_start_ms
+    )
     audio_start_ms = window.audio_start_ms
     audio_duration_seconds = (
         (window.end_ms - audio_start_ms) / 1_000
@@ -263,7 +322,8 @@ def _generate_request(
     user_prompt = (
         f"本次为{mode}窗口：H={history_seconds:g}秒/"
         f"{len(window.history_frames)}张图片，C=3秒/"
-        f"{len(window.current_frames)}张图片，音频状态={audio_description}。\n"
+        f"{len(window.current_frames)}张图片，A=窗口最后{attribution_seconds:g}秒，"
+        f"音频状态={audio_description}。\n"
         f"{USER_PROMPT}"
     )
     if retry:
@@ -279,21 +339,34 @@ def _generate_request(
         *({"type": "image"} for _ in window.history_frames),
         {
             "type": "text",
-            "text": "【HISTORY H结束｜以下是CURRENT C，不得把H中的动作带入C】",
+            "text": "【HISTORY H结束｜以下是CURRENT C；H仍可用于完整H+C取证】",
         },
         {
             "type": "text",
             "text": (
-                "【CURRENT C｜唯一事件判定区｜后3秒｜"
-                f"{len(window.current_frames)}张图片开始】"
+                "【CURRENT C前段｜只作取证、不可归属本轮｜"
+                f"{len(current_context_frames)}张图片开始】"
             ),
         },
-        *({"type": "image"} for _ in window.current_frames),
+        *({"type": "image"} for _ in current_context_frames),
         {
             "type": "text",
             "text": (
-                "【CURRENT C结束｜后续媒体状态见下一段说明】"
+                "【CURRENT C前段结束｜以下图片才是ATTRIBUTION A】"
             ),
+        },
+        {
+            "type": "text",
+            "text": (
+                f"【ATTRIBUTION A｜窗口最后{attribution_seconds:g}秒｜"
+                "只有首次确认点落在以下图片对应时段的事件才可输出｜"
+                f"{len(attribution_frames)}张图片开始】"
+            ),
+        },
+        *({"type": "image"} for _ in attribution_frames),
+        {
+            "type": "text",
+            "text": "【ATTRIBUTION A结束｜此前已成立的事件不得重复输出】",
         },
     ]
     if window.audio_wav is not None:
@@ -311,7 +384,7 @@ def _generate_request(
                     "text": (
                         f"【同步音频完整覆盖{audio_duration_seconds:g}秒："
                         f"{audio_boundary}，"
-                        "只用C音频辅助判事件】"
+                        "但只把确认点落入A的事件归给本轮】"
                     ),
                 },
                 {"type": "audio"},
@@ -346,6 +419,9 @@ def _generate_request(
             if window.audio_wav is not None
             else "none"
         ),
+        "attribution_duration_ms": attribution_duration_ms,
+        "current_context_image_count": len(current_context_frames),
+        "attribution_image_count": len(attribution_frames),
         "images": [_data_url("image/jpeg", frame.payload) for frame in frames],
     }
     if window.audio_wav is not None:
@@ -360,10 +436,10 @@ def _generate_request(
             temperature=0.0,
             top_p=1.0,
             seed=0,
-            max_new_tokens=64,
+            max_new_tokens=128,
         ),
         stream=False,
-        max_tokens=64,
+        max_tokens=128,
         output_modalities=["text"],
         metadata=metadata,
     )
@@ -392,7 +468,7 @@ def _observation(
         stream_epoch=stream_epoch,
         event_type=event_id,
         summary=EVENT_SUMMARIES[event_id],
-        evidence_start_ms=window.current_start_ms,
+        evidence_start_ms=window.start_ms,
         evidence_end_ms=window.end_ms,
         model_id=model_id,
         model_version=model_version,

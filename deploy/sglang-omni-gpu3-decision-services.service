@@ -16,6 +16,7 @@ Environment=SGLANG_OMNI_SERVICE_ROLE=decision-services
 Environment=SGLANG_OMNI_SERVICE_INSTANCE_ID=sglang-omni-gpu3-decision-services
 Environment=SGLANG_OMNI_STRICT_PORT=1
 Environment=SGLANG_OMNI_ACTION_WARMUP=0
+Environment=SGLANG_OMNI_SCOPED_RADIX_CACHE=1
 Environment=PYTHONPATH=/data/fanshide/sglang-omni-dev
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni-dev/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

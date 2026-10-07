@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +16,10 @@ from sglang_omni.serve.action_decision.contracts import (
     DecisionChannel,
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
-from sglang_omni.serve.action_decision.prompt import build_system_prompt
+from sglang_omni.serve.action_decision.prompt import (
+    build_system_prompt,
+    build_user_prompt,
+)
 from sglang_omni.serve.action_decision.service import (
     ActionDecisionConfig,
     ActionDecisionEngine,
@@ -137,6 +141,69 @@ def test_character_prompt_accepts_d_stage_response_budget() -> None:
     assert "角" * 32_000 in prompt
 
 
+def test_e57_prompt_contract_preserves_production_channel_and_catalog() -> None:
+    request = _request(
+        DecisionChannel.BODY,
+        character_prompt="角色提示",
+        session_prompt="会话提示",
+        runtime_context={"turn_origin": "user"},
+    )
+    catalog = _registry().resolve(request)
+    prompt = build_system_prompt(request, catalog)
+    assert "[SELECTION_RULES]" in prompt
+    assert "[ACTIVE_CHANNEL]" in prompt
+    assert "本次只决定身体动作通道" in prompt
+    assert "[CHARACTER_PROMPT]\n角色提示" in prompt
+    assert "[SESSION_PROMPT]\n会话提示" in prompt
+    assert f"candidate_count={len(catalog.entries)}" in prompt
+    assert "[FINAL_TASK_CONSTRAINTS]" in prompt
+    assert "结果映射：1=_x_b，2=_x_c" in prompt
+
+
+def test_e57_reference_profile_uses_exact_training_prompts_without_asr() -> None:
+    audio_payload = b"\0\0"
+    image_payload = b"jpeg"
+    media = tuple(
+        StreamedMedia(
+            f"i{index}",
+            "image",
+            index * 100,
+            index * 100 + 50,
+            "image/jpeg",
+            "sha256:" + hashlib.sha256(image_payload).hexdigest(),
+            image_payload,
+        )
+        for index in range(5)
+    ) + (
+        StreamedMedia(
+            "a1",
+            "audio",
+            0,
+            100,
+            "pcm16",
+            "sha256:" + hashlib.sha256(audio_payload).hexdigest(),
+            audio_payload,
+        ),
+    )
+    request = _request(
+        DecisionChannel.BODY,
+        text="这个 ASR 文本不得进入音频模式提示词",
+        media=media,
+        runtime_context={"prompt_profile": "e57a_eval"},
+    )
+    catalog = _registry().resolve(request)
+    expected_system = Path(
+        "/data/xingmt/action_omni_experiments/synthetic_increment_20261006/"
+        "CURRENT_SYSTEM_PROMPT.txt"
+    ).read_text(encoding="utf-8")
+    assert build_system_prompt(request, catalog) == expected_system
+    user_prompt = build_user_prompt(request, catalog)
+    assert "capture_mode=ptt_utterance" in user_prompt
+    assert "input_frame_count=5" in user_prompt
+    assert "trigger=user_input" in user_prompt
+    assert "ASR" not in user_prompt
+
+
 def test_character_prompt_rejects_only_above_d_stage_response_budget() -> None:
     request = _request(DecisionChannel.BODY, character_prompt="角" * 32_001)
     with pytest.raises(ValueError, match="exceeds 32000 characters"):
@@ -182,11 +249,46 @@ def test_model_request_has_exact_constraint_and_audio_plus_multiple_images() -> 
     assert request.sampling.ignore_eos is True and "_ctrl_b" in request.sampling.regex
     assert len(request.metadata["audios"]) == 1
     assert len(request.metadata["images"]) == 2
+    assert request.metadata["task"] == "action_direct"
+    assert request.metadata["session_instance_id"] == "s1"
     assert [part["type"] for part in request.messages[-1].content] == [
         "text",
         "audio",
         "image",
         "image",
+    ]
+
+
+def test_e57_reference_request_places_five_images_and_audio_before_text() -> None:
+    audio_payload = b"\0\0"
+    image_payload = b"jpeg"
+    images = tuple(
+        StreamedMedia(
+            f"i{index}", "image", index, index + 1, "image/jpeg",
+            "sha256:" + hashlib.sha256(image_payload).hexdigest(), image_payload,
+        )
+        for index in range(5)
+    )
+    audio = StreamedMedia(
+        "a1", "audio", 0, 100, "pcm16",
+        "sha256:" + hashlib.sha256(audio_payload).hexdigest(), audio_payload,
+    )
+
+    async def run():
+        client = _FakeClient("_ctrl_b")
+        engine = ActionDecisionEngine(client, config=_config())
+        await engine.decide(
+            _request(
+                DecisionChannel.BODY,
+                media=(*images, audio),
+                runtime_context={"prompt_profile": "e57a_eval"},
+            )
+        )
+        return client.requests[0][1]
+
+    request = asyncio.run(run())
+    assert [part["type"] for part in request.messages[-1].content] == [
+        "image", "image", "image", "image", "image", "audio", "text"
     ]
 
 

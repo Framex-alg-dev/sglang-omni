@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hmac
+import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 import msgpack
@@ -23,6 +25,9 @@ from .contracts import (
 from .pipeline import InvalidRouteOutput, TaskClassificationPipeline
 
 
+logger = logging.getLogger(__name__)
+
+
 def create_task_classification_app(
     pipeline: TaskClassificationPipeline,
     *,
@@ -33,7 +38,22 @@ def create_task_classification_app(
         raise ValueError("task-classification service token is required")
     if max_body_bytes <= 0:
         raise ValueError("max_body_bytes must be positive")
-    app = FastAPI(title="sglang-omni-turn-router", version="5")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            await pipeline.prewarm()
+        except Exception:
+            # Warmup is an optimization. Keep the service available and let the
+            # first live request populate the cache if the model was not ready.
+            logger.warning("turn-router prefix prewarm failed", exc_info=True)
+        yield
+
+    app = FastAPI(
+        title="sglang-omni-turn-router",
+        version="5",
+        lifespan=lifespan,
+    )
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
@@ -149,7 +169,19 @@ def create_decision_services_app(
 ) -> FastAPI:
     """Expose both task contracts while classifier and Brain share one runtime."""
 
-    app = FastAPI(title="sglang-omni-decision-services", version="1")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Starlette does not run mounted sub-application lifespans. Enter the
+        # classifier lifespan explicitly so its immutable route prefix is warm
+        # before the combined decision service accepts traffic.
+        async with classifier_app.router.lifespan_context(classifier_app):
+            yield
+
+    app = FastAPI(
+        title="sglang-omni-decision-services",
+        version="1",
+        lifespan=lifespan,
+    )
     app.mount("/classifier", classifier_app)
     app.mount("/brain", brain_app)
     return app

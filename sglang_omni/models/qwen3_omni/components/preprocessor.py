@@ -560,11 +560,20 @@ class Qwen3OmniPreprocessor:
         """
         if not messages_mm:
             return None
-        if payload.request.metadata.get("task") != "action_suffix_scoring":
+        cache_task = payload.request.metadata.get("task")
+        if cache_task not in {"action_suffix_scoring", "action_direct"}:
             return None
-        action_spec = payload.request.params.get("action_scoring")
-        if not isinstance(action_spec, dict):
-            return None
+        if cache_task == "action_direct":
+            # Direct action generation shares only the exact rendered system
+            # boundary. Current-turn text and media remain request-private.
+            action_spec = {
+                "cache_static_system_only": True,
+                "history_message_count": 0,
+            }
+        else:
+            action_spec = payload.request.params.get("action_scoring")
+            if not isinstance(action_spec, dict):
+                return None
         session_instruction = action_spec.get("session_instruction")
         if (
             action_spec.get("cache_static_system_only") is not True
@@ -687,9 +696,14 @@ class Qwen3OmniPreprocessor:
             from sglang_omni.models.qwen3_omni.public_prefix import PublicPrefixVerifier
             if not hasattr(self, "_public_prefix_verifier"):
                 self._public_prefix_verifier = PublicPrefixVerifier(self.tokenizer, self.processor)
-            spec = payload.request.params.get("action_scoring", {})
-            public_end = self._public_prefix_verifier.boundary(
-                spec.get("static_system_prompt"), input_ids.tolist())
+            if payload.request.metadata.get("task") == "action_direct":
+                public_end = int(
+                    action_cache_metadata.get("cache_prefix_token_count", 0)
+                )
+            else:
+                spec = payload.request.params.get("action_scoring", {})
+                public_end = self._public_prefix_verifier.boundary(
+                    spec.get("static_system_prompt"), input_ids.tolist())
             action_cache_metadata = dict(action_cache_metadata)
             action_cache_metadata.update(
                 public_prefix_token_count=public_end,

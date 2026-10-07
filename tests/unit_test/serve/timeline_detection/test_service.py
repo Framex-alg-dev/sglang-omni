@@ -30,7 +30,7 @@ class _Model:
                 identity_epoch=chunk.identity_epoch,
                 observer_epoch=chunk.observer_epoch,
                 stream_epoch=chunk.stream_epoch,
-                event_type="P1",
+                event_type="E32",
                 summary="入画",
                 evidence_start_ms=chunk.start_ms,
                 evidence_end_ms=chunk.end_ms,

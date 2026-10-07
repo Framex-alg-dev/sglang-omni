@@ -36,6 +36,11 @@ class TaskClassificationPipeline:
     def __init__(self, model: TaskClassificationModel) -> None:
         self._model = model
 
+    async def prewarm(self) -> None:
+        prewarm = getattr(self._model, "prewarm", None)
+        if callable(prewarm):
+            await prewarm()
+
     async def classify(
         self,
         request: TaskClassificationRequest,

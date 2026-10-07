@@ -1,4 +1,4 @@
-"""Build aligned event-v1.20 H/C windows from continuous media chunks."""
+"""Build aligned H7+C3 windows from continuous media chunks."""
 
 from __future__ import annotations
 

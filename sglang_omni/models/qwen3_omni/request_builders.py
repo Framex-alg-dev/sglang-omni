@@ -7,6 +7,7 @@ import copy
 import functools
 import hashlib
 import logging
+import os
 import threading
 import time
 from array import array
@@ -789,6 +790,39 @@ def build_sglang_thinker_request(
             mm_inputs.mrope_positions = mrope_positions
             mm_inputs.mrope_position_delta = mrope_position_delta
             req.multimodal_inputs = mm_inputs
+
+    # Ordinary action generation opts into the same verified scoped radix
+    # cache as suffix scoring. Only the rendered system-message boundary is
+    # public; current text, media and generated tokens remain request-private.
+    prompt_cache = prompt.get("action_scoring_cache")
+    if (
+        os.environ.get("SGLANG_OMNI_SCOPED_RADIX_CACHE") == "1"
+        and isinstance(prompt_cache, dict)
+        and not getattr(req, "lora_id", None)
+    ):
+        positions = getattr(
+            getattr(req, "multimodal_inputs", None),
+            "mrope_positions",
+            None,
+        )
+        scope_boundaries = _verified_scope_boundaries(
+            prompt_cache,
+            positions,
+            len(input_ids_list),
+        )
+        if scope_boundaries is not None:
+            from sglang_omni.scheduling.sglang_backend.scoped_cache import (
+                PrefixScopes,
+            )
+
+            public_end, session_end = scope_boundaries
+            req.extra_key = PrefixScopes(
+                family=prompt_cache["scope_family"],
+                public_end=public_end,
+                session_end=session_end,
+                session=prompt_cache["scope_session"],
+                request=prompt_cache["scope_request"],
+            ).encode()
 
     req.omni_model_inputs = model_inputs if model_inputs else None
     req._omni_consumed = None

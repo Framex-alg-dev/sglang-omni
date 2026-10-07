@@ -1164,6 +1164,18 @@ def test_chat_request_omits_explicit_params_when_sampling_omitted() -> None:
     assert EXPLICIT_GENERATION_PARAMS_KEY not in gen_req.metadata
 
 
+def test_chat_request_propagates_internal_session_cache_owner() -> None:
+    req = ChatCompletionRequest(
+        model="qwen3-omni",
+        messages=[{"role": "user", "content": "hello"}],
+        session_instance_id="session-1",
+    )
+
+    gen_req = _build_chat_generate_request(req)
+
+    assert gen_req.metadata["session_instance_id"] == "session-1"
+
+
 def test_chat_request_preserves_explicit_default_sampling_values() -> None:
     req = ChatCompletionRequest(
         model="OpenMOSS-Team/MOSS-Transcribe-Diarize",

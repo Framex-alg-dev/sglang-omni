@@ -1311,6 +1311,8 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         metadata["video_max_pixels"] = req.video_max_pixels
     if req.video_total_pixels is not None:
         metadata["video_total_pixels"] = req.video_total_pixels
+    if req.session_instance_id is not None:
+        metadata["session_instance_id"] = req.session_instance_id
     _record_explicit_generation_params(
         metadata,
         _explicit_generation_params(req),

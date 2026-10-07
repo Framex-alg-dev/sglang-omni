@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from sglang_omni.serve.timeline_detection.client_model import (
+    _EventEdgeLatch,
     SglangClientTimelineDetectionModel,
 )
 from sglang_omni.serve.timeline_detection.contracts import (
@@ -78,19 +79,20 @@ async def feed_first_video_only_window(
 
 
 @pytest.mark.asyncio
-async def test_builds_event_v120_audio_video_payload_and_observations() -> None:
-    client = Client(['{"e":["O2","X1"]}'])
+async def test_builds_43_event_audio_video_payload_and_observations() -> None:
+    client = Client(['{"e":["E31","E17"]}'])
     model = SglangClientTimelineDetectionModel(
         client,
         start(),
         model_version=PROMPT_VERSION,
+        inference_interval_ms=1_000,
     )
     await model.start(start())
     await feed_first_window(model)
 
     events = await model.next_observations()
 
-    assert [item.event_type for item in events] == ["O2", "X1"]
+    assert [item.event_type for item in events] == ["E17", "E31"]
     assert all(item.evidence_start_ms == 0 for item in events)
     assert all(item.evidence_end_ms == 3_000 for item in events)
     assert all(item.evidence_mode == "audio_video" for item in events)
@@ -98,17 +100,28 @@ async def test_builds_event_v120_audio_video_payload_and_observations() -> None:
     request = client.calls[0][0]
     assert request.messages[0].content == SYSTEM_PROMPT
     assert request.metadata["prompt_version"] == PROMPT_VERSION
+    assert request.metadata["attribution_duration_ms"] == 1_000
+    assert request.metadata["current_context_image_count"] == 4
+    assert request.metadata["attribution_image_count"] == 3
     assert len(request.metadata["images"]) == 7
     assert request.metadata["audios"][0].startswith("data:audio/wav;base64,")
     assert request.sampling.seed == 0
-    assert request.max_tokens == 64
+    assert request.max_tokens == 128
     assert [part["type"] for part in request.messages[1].content].count("image") == 7
+    assert "A=窗口最后1秒" in request.messages[1].content[-1]["text"]
+    boundary_text = "\n".join(
+        part["text"]
+        for part in request.messages[1].content
+        if part["type"] == "text"
+    )
+    assert "CURRENT C前段｜只作取证、不可归属本轮" in boundary_text
+    assert "ATTRIBUTION A｜窗口最后1秒" in boundary_text
     await model.close()
 
 
 @pytest.mark.asyncio
 async def test_builds_video_only_request_without_audio_placeholder() -> None:
-    client = Client(['{"e":["P2"]}'])
+    client = Client(['{"e":["E33"]}'])
     model = SglangClientTimelineDetectionModel(
         client,
         start(),
@@ -119,7 +132,7 @@ async def test_builds_video_only_request_without_audio_placeholder() -> None:
 
     events = await model.next_observations()
 
-    assert [item.event_type for item in events] == ["P2"]
+    assert [item.event_type for item in events] == ["E33"]
     assert events[0].evidence_mode == "video_only"
     assert events[0].audio_status == "missing"
     request = client.calls[0][0]
@@ -168,3 +181,24 @@ def test_rejects_non_event_window_timing() -> None:
             model_version=PROMPT_VERSION,
             inference_interval_ms=500,
         )
+
+
+def test_event_edge_latch_suppresses_repeated_overlapping_windows() -> None:
+    latch = _EventEdgeLatch(rearm_absent_windows=3)
+
+    assert latch.accept(["E06"]) == ("E06",)
+    assert latch.accept(["E06"]) == ()
+    assert latch.accept(["E06", "E14"]) == ("E14",)
+    assert latch.accept([]) == ()
+    assert latch.accept([]) == ()
+    assert latch.accept([]) == ()
+    assert latch.accept(["E06"]) == ("E06",)
+
+
+def test_event_edge_latch_resets_on_discontinuity_boundary() -> None:
+    latch = _EventEdgeLatch(rearm_absent_windows=3)
+
+    assert latch.accept(["E06"]) == ("E06",)
+    assert latch.accept(["E06"]) == ()
+    latch.clear()
+    assert latch.accept(["E06"]) == ("E06",)

@@ -280,7 +280,7 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         "allowed_candidate_ids", "excluded_candidate_ids", "knowledge_state",
         "entity_state", "script_state", "agent_event", "agent_task", "agent_phase",
         "tool_name", "tool_status", "display_state", "required_action_candidate_id",
-        "required_action_semantics", "expression_priority",
+        "required_action_semantics", "expression_priority", "prompt_profile",
     }
     unknown = sorted(set(value) - allowed)
     if unknown:

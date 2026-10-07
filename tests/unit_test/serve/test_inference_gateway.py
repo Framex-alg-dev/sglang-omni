@@ -327,6 +327,40 @@ def test_action_stage_injects_its_channel(monkeypatch) -> None:
     assert request_start["payload"]["channel"] == "body"
 
 
+def test_reply_stage_overwrites_cache_owner_with_gateway_session(monkeypatch) -> None:
+    upstreams = []
+
+    def connect(*_args, **_kwargs):
+        upstream = _Upstream()
+        upstreams.append(upstream)
+        return upstream
+
+    monkeypatch.setattr(gateway_module.websockets, "connect", connect)
+    client = TestClient(create_inference_gateway_app(_config()))
+    with client.websocket_connect("/v1/inference-session") as socket:
+        socket.send_json(
+            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+        )
+        socket.receive_json()
+        socket.send_json(
+            {
+                "type": "stage.request",
+                "request_id": "reply-1",
+                "stage": "reply",
+                "payload": {
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "session_instance_id": "caller-controlled",
+                },
+                "media_refs": [],
+            }
+        )
+        assert socket.receive_json()["type"] == "stage.accepted"
+        assert socket.receive_json()["type"] == "stage.completed"
+
+    request_start = json.loads(upstreams[0].sent[0])
+    assert request_start["payload"]["session_instance_id"] == "s1"
+
+
 def test_reply_reserves_speculation_id_until_stage_finishes(monkeypatch) -> None:
     class BlockingUpstream(_Upstream):
         async def send(self, value):

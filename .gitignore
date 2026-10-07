@@ -31,6 +31,7 @@ htmlcov/
 *.log
 *.txt
 !examples/runtime_prompts/*.txt
+!sglang_omni/serve/action_decision/e57a_system_prompt.txt
 output.wav
 
 # OS
@@ -54,6 +55,7 @@ tests/data/actions/
 logs/*
 !logs/.gitkeep
 .test-logs/
+.deploy-backups/
 
 deploy/sglang-omni-18001.service
 deploy/realtime-knowledge.env
