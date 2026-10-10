@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 _STAGES = frozenset(
     {"classifier", "brain", "reply", "body", "expression", "performance"}
 )
+_EVIDENCE_ROLES = frozenset({"user_audio", "user_camera", "avatar_state"})
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,19 @@ class _Media:
     encoding: str
     checksum: str
     payload: bytes
+    evidence_role: str
+
+    def header(self) -> dict[str, object]:
+        return {
+            "media_id": self.media_id,
+            "kind": self.kind,
+            "start_ms": self.start_ms,
+            "end_ms": self.end_ms,
+            "encoding": self.encoding,
+            "checksum": self.checksum,
+            "payload_bytes": len(self.payload),
+            "evidence_role": self.evidence_role,
+        }
 
 
 @dataclass
@@ -113,6 +127,22 @@ class _SpeechSpeculation:
     committed: bool = False
     commit_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _validate_evidence_role(item: _Media) -> None:
+    allowed = {
+        "audio": {"user_audio"},
+        "video": {"user_camera"},
+        "image": {"user_camera", "avatar_state"},
+    }
+    if item.evidence_role not in allowed[item.kind]:
+        raise ValueError("gateway media kind and evidence_role are inconsistent")
+    if item.evidence_role == "avatar_state" and item.encoding.strip().lower() not in {
+        "jpeg",
+        "jpg",
+        "image/jpeg",
+    }:
+        raise ValueError("gateway avatar_state evidence must be a JPEG image")
 
 
 class _Session:
@@ -140,8 +170,8 @@ class _Session:
         await self.websocket.accept()
         first = await self._receive_json()
         contract_version = first.get("contract_version")
-        if first.get("type") != "session.open" or contract_version not in {2, 3}:
-            raise ValueError("first gateway message must be session.open v3")
+        if first.get("type") != "session.open" or contract_version != 4:
+            raise ValueError("first gateway message must be session.open v4")
         self.session_id = _string(first, "session_id")
         if self.config.reply_speech is not None:
             self.reply_speech = GatewaySpeechSynthesizer(
@@ -157,11 +187,10 @@ class _Session:
             "contract_version": contract_version,
             "session_id": self.session_id,
         }
-        if contract_version == 3:
-            ready.update(
-                availability_epoch=self.availability_epoch,
-                stages=dict(sorted(self.stage_available.items())),
-            )
+        ready.update(
+            availability_epoch=self.availability_epoch,
+            stages=dict(sorted(self.stage_available.items())),
+        )
         await self.send(ready)
         while True:
             message = await self._receive_json()
@@ -249,9 +278,25 @@ class _Session:
             raise ValueError("gateway media checksum mismatch")
         existing = self.media.get(media_id)
         if existing is not None:
-            if existing.checksum != checksum:
-                raise ValueError("gateway media_id was reused with different content")
-            await self.send({"type": "media.ack", "media_id": media_id})
+            candidate_header = {
+                "media_id": media_id,
+                "kind": _one_of(message, "kind", {"audio", "image", "video"}),
+                "start_ms": _integer(message, "start_ms"),
+                "end_ms": _integer(message, "end_ms"),
+                "encoding": _string(message, "encoding"),
+                "checksum": checksum,
+                "payload_bytes": payload_bytes,
+                "evidence_role": _one_of(
+                    message, "evidence_role", _EVIDENCE_ROLES
+                ),
+            }
+            if existing.header() != candidate_header or existing.payload != raw:
+                raise ValueError(
+                    "gateway media_id was reused with different media identity"
+                )
+            await self.send(
+                {"type": "media.ack", **existing.header(), "duplicate": True}
+            )
             return
         await self._evict_for(payload_bytes)
         item = _Media(
@@ -262,13 +307,17 @@ class _Session:
             encoding=_string(message, "encoding"),
             checksum=checksum,
             payload=raw,
+            evidence_role=_one_of(message, "evidence_role", _EVIDENCE_ROLES),
         )
         if item.start_ms < 0 or item.end_ms <= item.start_ms:
             raise ValueError("gateway media range is invalid")
+        _validate_evidence_role(item)
         self.media[media_id] = item
         self.media_refcounts[media_id] = 0
         self.media_bytes += payload_bytes
-        await self.send({"type": "media.ack", "media_id": media_id})
+        await self.send(
+            {"type": "media.ack", **item.header(), "duplicate": False}
+        )
 
     async def _start_stage(self, message: dict[str, Any]) -> None:
         request_id = _string(message, "request_id")
@@ -1251,7 +1300,7 @@ class _Session:
                 json.dumps(
                     {
                         "type": "request.start",
-                        "contract_version": 1,
+                        "contract_version": 2,
                         "request_id": request_id,
                         "payload": payload,
                     },
@@ -1260,7 +1309,11 @@ class _Session:
                 )
             )
             ready = _json_object(await socket.recv())
-            if ready.get("type") != "request.ready":
+            if (
+                ready.get("type") != "request.ready"
+                or ready.get("request_id") != request_id
+                or ready.get("contract_version") != 2
+            ):
                 raise RuntimeError("model stage rejected request.start")
             for media_id in media_refs:
                 item = self.media[media_id]
@@ -1276,13 +1329,19 @@ class _Session:
                             "encoding": item.encoding,
                             "checksum": item.checksum,
                             "payload_bytes": len(item.payload),
+                            "evidence_role": item.evidence_role,
                         },
                         separators=(",", ":"),
                     )
                 )
                 await socket.send(item.payload)
                 ack = _json_object(await socket.recv())
-                if ack.get("type") != "input.media.ack" or ack.get("media_id") != media_id:
+                expected_ack = {
+                    "type": "input.media.ack",
+                    "request_id": request_id,
+                    **item.header(),
+                }
+                if ack != expected_ack:
                     raise RuntimeError("model stage returned invalid media acknowledgement")
             await socket.send(
                 json.dumps(
@@ -1465,17 +1524,17 @@ class _Session:
 
 
 def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
-    app = FastAPI(title="sglang-omni-inference-gateway", version="3")
+    app = FastAPI(title="sglang-omni-inference-gateway", version="4")
 
     @app.get("/live")
     async def live() -> dict[str, object]:
-        return {"ok": True, "contract": "inference-session-v3"}
+        return {"ok": True, "contract": "inference-session-v4"}
 
     @app.get("/ready")
     async def ready() -> dict[str, object]:
         return {
             "ok": True,
-            "contract": "inference-session-v3",
+            "contract": "inference-session-v4",
             "stages": {stage: True for stage in sorted(config.stages)},
             "reply_speech": config.reply_speech is not None,
             "reply_streaming_speech": config.reply_streaming_speech is not None,

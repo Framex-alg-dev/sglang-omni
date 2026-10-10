@@ -43,10 +43,9 @@ Environment=SGLANG_OMNI_REALTIME_REPLY_EXECUTOR_SCORE_STAGES=reply_history_route
 Environment=SGLANG_OMNI_SPECULATIVE_REPLY_MODE=enforce
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/data/fanshide/sglang-omni/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-EnvironmentFile=/data/fanshide/sglang-omni/deploy/realtime-knowledge.env
 EnvironmentFile=/data/fanshide/sglang-omni/deploy/realtime-executors.env
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
-ExecStart=/data/fanshide/sglang-omni/.venv/bin/sgl-omni serve --config /data/fanshide/sglang-omni/deploy/config_single_gpu.yaml --host 0.0.0.0 --port 18004 --log-level info --realtime-tts-url ws://127.0.0.1:40001/api-ws/v1/realtime --realtime-tts-voice spk_691b97a24dcc
+ExecStart=/data/fanshide/sglang-omni/.venv/bin/sgl-omni serve --config /data/fanshide/sglang-omni/deploy/config_single_gpu.yaml --host 0.0.0.0 --port 18004 --log-level info
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=infinity

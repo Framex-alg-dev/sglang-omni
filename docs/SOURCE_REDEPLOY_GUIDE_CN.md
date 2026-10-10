@@ -107,18 +107,11 @@ export TOKENIZERS_PARALLELISM=false
 
 文件：
 
-```text
-scripts/realtime_tts_manual_test.html
-```
+原 18010 Session Realtime 手工 TTS 页面已经随独立服务边界删除；请使用当前 Speech/TTS
+服务和 Inference Gateway 的健康检查与自动化测试。
 
-当前调整包括：
-
-- WebSocket 默认地址改为 `ws://127.0.0.1:18180/v1/session/realtime`；
-- 页面说明改为真实 Qwen3-Omni + 真实 TTS；
-- 等待事件超时由 10 秒增加到 30 秒；
-- 默认输入改为简短中文测试文本。
-
-这里的 `18180` 是 Windows 本地 SSH 隧道端口，不是服务器模型服务实际端口。
+当前发布验证只覆盖Speech/TTS与Inference Gateway；不再配置或转发退役的
+`/v1/session/realtime` 页面。
 
 ## 5. 原生方式启动验证
 
@@ -142,14 +135,12 @@ sgl-omni serve \
   --host 127.0.0.1 \
   --port 18101 \
   --mem-fraction-static 0.82 \
-  --realtime-tts-url ws://127.0.0.1:40001/api-ws/v1/realtime \
-  --realtime-tts-voice spk_691b97a24dcc \
   --log-level info
 ```
 
 关键参数说明：
 
-- `--text-only`：模型负责文本回复，音频交给外部真实 TTS；
+- `--text-only`：模型只启用文本能力；Speech/TTS 由当前拆分服务部署管理；
 - `--mem-fraction-static 0.82`：适配当前 72GB GPU；
 - `HF_HUB_OFFLINE=1` 和 `TRANSFORMERS_OFFLINE=1`：只使用服务器本地模型；
 - `SGLANG_OMNI_QWEN3_CHAT_TEMPLATE_MODEL`：指定 Instruct 模型中的模板资源；
@@ -273,17 +264,10 @@ ssh -N `
 
 浏览器访问：
 
-```text
-http://127.0.0.1:18102/realtime_tts_manual_test.html
-```
+旧手工页面地址已退役，不再作为发布验证入口。
 
-如果服务器模型服务使用 18101，只需把 PowerShell 第一条转发改为：
-
-```powershell
--L 18180:127.0.0.1:18101
-```
-
-网页中的 WebSocket 地址仍保持 `ws://127.0.0.1:18180/v1/session/realtime`。
+如需远程验证，请只转发当前待测服务的实际HTTP/WebSocket端口，并使用该服务现有的
+health或Inference Gateway测试客户端；不要恢复旧Session Realtime URL。
 
 ## 9. 停止服务
 
@@ -318,7 +302,7 @@ ss -lntp | grep -E ':(18001|18101|18102)\b' || true
 - CUDA Graph 捕获完成；
 - 全部 pipeline stages 启动；
 - `/health` 返回 healthy；
-- `/v1/session/realtime` 网页测试通过；
+- Inference Gateway与Speech/TTS自动化测试通过；
 - 真实 TTS 连接和语音播放通过。
 
 启动日志中的以下现象不是启动失败：

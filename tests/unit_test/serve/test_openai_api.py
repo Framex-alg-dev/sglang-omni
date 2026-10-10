@@ -532,6 +532,14 @@ class AdminClient:
         return {"success": True, "message": "ok", "results": []}
 
 
+def test_manual_session_realtime_route_is_retired() -> None:
+    app = create_app(SuccessfulSpeechClient(), model_name="qwen3-omni")
+
+    assert "/v1/session/realtime" not in {
+        getattr(route, "path", None) for route in app.routes
+    }
+
+
 @pytest.mark.parametrize("model_name", MODEL_FAMILIES)
 def test_non_streaming_http_faults_return_500(model_name: str) -> None:
     client = TestClient(create_app(_fault_client(model_name), model_name=model_name))
@@ -802,7 +810,7 @@ def test_chat_websocket_accepts_binary_media_then_commits() -> None:
         socket.send_json(
             {
                 "type": "request.start",
-                "contract_version": 1,
+                "contract_version": 2,
                 "request_id": "request-1",
                 "payload": {
                     "model": "qwen3-omni",
@@ -822,6 +830,7 @@ def test_chat_websocket_accepts_binary_media_then_commits() -> None:
                 "encoding": "image/jpeg",
                 "checksum": "sha256:" + hashlib.sha256(raw_image).hexdigest(),
                 "payload_bytes": len(raw_image),
+                "evidence_role": "user_camera",
             }
         )
         socket.send_bytes(raw_image)
@@ -848,7 +857,7 @@ def test_chat_websocket_streams_output_deltas() -> None:
         socket.send_json(
             {
                 "type": "request.start",
-                "contract_version": 1,
+                "contract_version": 2,
                 "request_id": "request-stream",
                 "payload": {
                     "model": "qwen3-omni",

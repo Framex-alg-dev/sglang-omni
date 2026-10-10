@@ -109,19 +109,11 @@ def test_register_resource_monitor_uses_router_lifecycle(monkeypatch) -> None:
     app = FastAPI()
     app.state.client = SimpleNamespace()
     app.state.model_name = "test-model"
-    manager = SimpleNamespace(
-        resource_sample_requester=None,
-        set_resource_sample_requester=lambda requester: setattr(
-            manager, "resource_sample_requester", requester
-        ),
-    )
-    app.state.multimodal_realtime_manager = manager
     monkeypatch.setattr(openai_api, "resource_log_interval_s", lambda: 1.0)
 
     openai_api._register_resource_monitor(app)
 
     assert app.state.resource_monitor is not None
-    assert manager.resource_sample_requester == app.state.resource_monitor.request_sample
     assert len(app.router.on_startup) == 1
     assert len(app.router.on_shutdown) == 1
 

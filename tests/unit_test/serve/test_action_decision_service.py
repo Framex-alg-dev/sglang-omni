@@ -172,6 +172,7 @@ def test_e57_reference_profile_uses_exact_training_prompts_without_asr() -> None
             "image/jpeg",
             "sha256:" + hashlib.sha256(image_payload).hexdigest(),
             image_payload,
+            "user_camera",
         )
         for index in range(5)
     ) + (
@@ -183,6 +184,7 @@ def test_e57_reference_profile_uses_exact_training_prompts_without_asr() -> None
             "pcm16",
             "sha256:" + hashlib.sha256(audio_payload).hexdigest(),
             audio_payload,
+            "user_audio",
         ),
     )
     request = _request(
@@ -217,6 +219,7 @@ def test_model_request_has_exact_constraint_and_audio_plus_multiple_images() -> 
         "pcm16",
         "sha256:" + hashlib.sha256(audio_payload).hexdigest(),
         audio_payload,
+        "user_audio",
     )
     images = tuple(
         StreamedMedia(
@@ -227,6 +230,7 @@ def test_model_request_has_exact_constraint_and_audio_plus_multiple_images() -> 
             "image/jpeg",
             "sha256:" + hashlib.sha256(payload).hexdigest(),
             payload,
+            "user_camera",
         )
         for index, payload in enumerate((b"jpeg-one", b"jpeg-two"), 1)
     )
@@ -263,12 +267,14 @@ def test_e57_reference_request_places_five_images_and_audio_before_text() -> Non
         StreamedMedia(
             f"i{index}", "image", index, index + 1, "image/jpeg",
             "sha256:" + hashlib.sha256(image_payload).hexdigest(), image_payload,
+            "user_camera",
         )
         for index in range(5)
     )
     audio = StreamedMedia(
         "a1", "audio", 0, 100, "pcm16",
         "sha256:" + hashlib.sha256(audio_payload).hexdigest(), audio_payload,
+        "user_audio",
     )
 
     async def run():
@@ -369,7 +375,7 @@ def test_websocket_service_accepts_text_request() -> None:
         socket.send_json(
             {
                 "type": "request.start",
-                "contract_version": 1,
+                "contract_version": 2,
                 "request_id": "r1",
                 "payload": {
                     "request_id": "r1",

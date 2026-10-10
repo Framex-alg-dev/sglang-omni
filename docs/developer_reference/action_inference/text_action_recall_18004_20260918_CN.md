@@ -137,6 +137,6 @@
 
 - 用例：`tests/unit_test/fixtures/realtime_text_action_recall_cases.json`
 - 用例生成器：`scripts/generate_text_action_recall_cases.py`
-- 在线评测器：`scripts/evaluate_text_action_recall.py`
+- 在线评测器：原 18010 驱动脚本已退役；后续评测应从当前 Inference Gateway 发起
 - 主评测原始结果：`reports/text_action_recall_18004_20260918.json`
 - 表情补充结果：`reports/text_action_recall_18004_expression_20260918.json`

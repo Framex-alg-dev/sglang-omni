@@ -245,6 +245,11 @@ class ActionDecisionEngine:
             metadata["audios"] = audios
         if images:
             metadata["images"] = images
+            metadata["image_roles"] = [
+                item.evidence_role
+                for item in request.media
+                if item.kind in {"image", "video"}
+            ]
         legal_codes = tuple(entry.code for entry in catalog.entries)
         grammar = "(?:" + "|".join(re.escape(code) for code in legal_codes) + ")"
         result = await self._client.completion(
@@ -534,6 +539,7 @@ def _request_digest(request: ActionDecisionRequest) -> str:
                 "checksum": item.checksum,
                 "start_ms": item.start_ms,
                 "end_ms": item.end_ms,
+                "evidence_role": item.evidence_role,
             }
             for item in request.media
         ],

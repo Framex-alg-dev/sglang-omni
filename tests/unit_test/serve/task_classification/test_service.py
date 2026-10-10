@@ -147,7 +147,7 @@ def test_websocket_streams_binary_media_before_classification() -> None:
             socket.send_json(
                 {
                     "type": "request.start",
-                    "contract_version": 1,
+                    "contract_version": 2,
                     "request_id": "request-1",
                     "payload": start_payload,
                 }
@@ -155,7 +155,7 @@ def test_websocket_streams_binary_media_before_classification() -> None:
             assert socket.receive_json() == {
                 "type": "request.ready",
                 "request_id": "request-1",
-                "contract_version": 1,
+                "contract_version": 2,
             }
             socket.send_json(
                 {
@@ -168,6 +168,7 @@ def test_websocket_streams_binary_media_before_classification() -> None:
                     "encoding": "pcm_s16le",
                     "checksum": "sha256:" + hashlib.sha256(raw_media).hexdigest(),
                     "payload_bytes": len(raw_media),
+                    "evidence_role": "user_audio",
                 }
             )
             socket.send_bytes(raw_media)

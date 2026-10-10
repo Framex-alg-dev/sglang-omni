@@ -1,4 +1,8 @@
-"""Multimodal realtime Session lifecycle and top-level orchestration."""
+"""Internal multimodal session primitives retained by split inference services.
+
+The retired standalone FastAPI transport boundary is not registered from
+this module or from :mod:`sglang_omni.serve.openai_api`.
+"""
 
 from __future__ import annotations
 
@@ -160,9 +164,9 @@ from sglang_omni.serve.realtime.performance import PerformancePipeline
 class MultimodalSession:
     """Manual-turn, multimodal session for audio chunks and image frames.
 
-    This session owns the ``/v1/session/realtime`` protocol, including
-    explicit ``turn.start``/``turn.commit`` boundaries and the fixed
-    scheme-B action catalog.
+    This internal composition retains explicit ``turn.start``/``turn.commit``
+    primitives and the fixed scheme-B action catalog for split services. The
+    former standalone FastAPI/WebSocket route is intentionally not registered.
     """
 
     def __init__(

@@ -39,8 +39,9 @@ class _Upstream:
             await self.events.put(
                 json.dumps(
                     {
+                        **self.media_header,
                         "type": "input.media.ack",
-                        "media_id": self.media_header["media_id"],
+                        "request_id": self.request_id,
                     }
                 )
             )
@@ -48,7 +49,16 @@ class _Upstream:
         message = json.loads(value)
         if message["type"] == "request.start":
             self.request_payload = message.get("payload")
-            await self.events.put(json.dumps({"type": "request.ready"}))
+            self.request_id = message["request_id"]
+            await self.events.put(
+                json.dumps(
+                    {
+                        "type": "request.ready",
+                        "request_id": self.request_id,
+                        "contract_version": 2,
+                    }
+                )
+            )
         elif message["type"] == "input.media":
             self.media_header = message
         elif message["type"] == "request.commit":
@@ -218,7 +228,7 @@ def test_invalid_reply_speech_envelope_does_not_fail_reply_stage(monkeypatch) ->
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -260,7 +270,7 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         assert socket.receive_json()["type"] == "session.ready"
         socket.send_json(
@@ -273,10 +283,22 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
                 "encoding": "image/jpeg",
                 "checksum": checksum,
                 "payload_bytes": len(raw),
+                "evidence_role": "user_camera",
             }
         )
         socket.send_bytes(raw)
-        assert socket.receive_json() == {"type": "media.ack", "media_id": "frame-1"}
+        assert socket.receive_json() == {
+            "type": "media.ack",
+            "media_id": "frame-1",
+            "kind": "image",
+            "start_ms": 0,
+            "end_ms": 100,
+            "encoding": "image/jpeg",
+            "checksum": checksum,
+            "payload_bytes": len(raw),
+            "evidence_role": "user_camera",
+            "duplicate": False,
+        }
         for request_id, stage in (("r1", "classifier"), ("r2", "brain")):
             socket.send_json(
                 {
@@ -294,6 +316,15 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
 
     assert len(upstreams) == 2
     assert all(sum(isinstance(item, bytes) for item in upstream.sent) == 1 for upstream in upstreams)
+    for upstream in upstreams:
+        request_start = json.loads(upstream.sent[0])
+        media_header = next(
+            json.loads(item)
+            for item in upstream.sent
+            if isinstance(item, str) and json.loads(item)["type"] == "input.media"
+        )
+        assert request_start["contract_version"] == 2
+        assert media_header["evidence_role"] == "user_camera"
 
 
 def test_action_stage_injects_its_channel(monkeypatch) -> None:
@@ -308,7 +339,7 @@ def test_action_stage_injects_its_channel(monkeypatch) -> None:
     client = TestClient(create_inference_gateway_app(_config()))
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -339,7 +370,7 @@ def test_reply_stage_overwrites_cache_owner_with_gateway_session(monkeypatch) ->
     client = TestClient(create_inference_gateway_app(_config()))
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -369,7 +400,15 @@ def test_reply_reserves_speculation_id_until_stage_finishes(monkeypatch) -> None
                 return
             message = json.loads(value)
             if message["type"] == "request.start":
-                await self.events.put(json.dumps({"type": "request.ready"}))
+                await self.events.put(
+                    json.dumps(
+                        {
+                            "type": "request.ready",
+                            "request_id": message["request_id"],
+                            "contract_version": 2,
+                        }
+                    )
+                )
 
     monkeypatch.setattr(
         gateway_module.websockets,
@@ -379,7 +418,7 @@ def test_reply_reserves_speculation_id_until_stage_finishes(monkeypatch) -> None
     client = TestClient(create_inference_gateway_app(_config()))
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         request = {
@@ -414,7 +453,7 @@ def test_unknown_media_ref_is_rejected_without_upstream(monkeypatch) -> None:
     client = TestClient(create_inference_gateway_app(_config()))
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -437,7 +476,7 @@ def test_inactive_media_is_evicted_before_session_limit() -> None:
     )
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         for index in (1, 2):
@@ -452,6 +491,7 @@ def test_inactive_media_is_evicted_before_session_limit() -> None:
                     "encoding": "image/jpeg",
                     "checksum": "sha256:" + hashlib.sha256(raw).hexdigest(),
                     "payload_bytes": len(raw),
+                    "evidence_role": "user_camera",
                 }
             )
             socket.send_bytes(raw)
@@ -463,6 +503,14 @@ def test_inactive_media_is_evicted_before_session_limit() -> None:
             assert socket.receive_json() == {
                 "type": "media.ack",
                 "media_id": f"frame-{index}",
+                "kind": "image",
+                "start_ms": index * 100,
+                "end_ms": index * 100 + 50,
+                "encoding": "image/jpeg",
+                "checksum": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "payload_bytes": len(raw),
+                "evidence_role": "user_camera",
+                "duplicate": False,
             }
 
 
@@ -508,10 +556,10 @@ def test_speech_request_uses_one_whole_text_synthesis(monkeypatch) -> None:
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 3, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         ready = socket.receive_json()
-        assert ready["contract_version"] == 3
+        assert ready["contract_version"] == 4
         assert ready["availability_epoch"] == 0
         assert ready["stages"] == {
             stage: True
@@ -590,7 +638,7 @@ def test_reply_speculation_buffers_until_matching_commit(monkeypatch) -> None:
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -697,7 +745,7 @@ def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -793,7 +841,7 @@ def test_streaming_reply_speculation_starts_from_delta_and_waits_for_commit(
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -885,7 +933,7 @@ def test_streaming_speculation_mismatch_is_rejected_and_cancelled(monkeypatch) -
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(
@@ -976,7 +1024,7 @@ def test_streaming_speculation_session_budget_fails_closed(monkeypatch) -> None:
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
         )
         socket.receive_json()
         socket.send_json(

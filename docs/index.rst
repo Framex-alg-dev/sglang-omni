@@ -125,7 +125,6 @@ Supported Models
    developer_reference/reference_encode_service.md
    developer_reference/profiler.md
    developer_reference/rl_admin_control.md
-   developer_reference/realtime_external_knowledge_CN.md
 
 .. toctree::
    :maxdepth: 1
@@ -137,7 +136,6 @@ Supported Models
    developer_reference/action_inference/action_suffix_scoring.md
    developer_reference/action_inference/action_token_mapping.md
    developer_reference/action_inference/action_hierarchical_optimization.md
-   developer_reference/action_inference/action_batch_benchmark.md
    developer_reference/action_inference/action_latency_history.md
    developer_reference/action_inference/reply_action_quality_cases.md
    developer_reference/action_inference/action_inference_change_history.md

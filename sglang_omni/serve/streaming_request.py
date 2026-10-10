@@ -28,6 +28,19 @@ class StreamedMedia:
     encoding: str
     checksum: str
     payload: bytes
+    evidence_role: str
+
+    def header(self) -> dict[str, object]:
+        return {
+            "media_id": self.media_id,
+            "kind": self.kind,
+            "start_ms": self.start_ms,
+            "end_ms": self.end_ms,
+            "encoding": self.encoding,
+            "checksum": self.checksum,
+            "payload_bytes": len(self.payload),
+            "evidence_role": self.evidence_role,
+        }
 
 
 @dataclass(frozen=True)
@@ -94,12 +107,12 @@ async def receive_streamed_request(
     first = _object(await websocket.receive_json(), "request.start")
     if first.get("type") != "request.start":
         raise ValueError("first message must be request.start")
-    if _integer(first, "contract_version") != 1:
+    if _integer(first, "contract_version") != 2:
         raise ValueError("unsupported stream request contract_version")
     request_id = _string(first, "request_id")
     payload = _object(first.get("payload"), "request payload")
     await websocket.send_json(
-        {"type": "request.ready", "request_id": request_id, "contract_version": 1}
+        {"type": "request.ready", "request_id": request_id, "contract_version": 2}
     )
     media: list[StreamedMedia] = []
     media_ids: set[str] = set()
@@ -129,6 +142,11 @@ async def receive_streamed_request(
                 encoding=_string(message, "encoding"),
                 checksum=_string(message, "checksum"),
                 payload=raw,
+                evidence_role=_one_of(
+                    message,
+                    "evidence_role",
+                    {"user_audio", "user_camera", "avatar_state"},
+                ),
             )
             if item.media_id in media_ids:
                 raise ValueError("stream media_id must be unique")
@@ -139,13 +157,14 @@ async def receive_streamed_request(
             actual_checksum = "sha256:" + hashlib.sha256(raw).hexdigest()
             if not hmac.compare_digest(actual_checksum, item.checksum):
                 raise ValueError("stream media checksum does not match payload")
+            _validate_evidence_role(item)
             media.append(item)
             media_ids.add(item.media_id)
             await websocket.send_json(
                 {
                     "type": "input.media.ack",
                     "request_id": request_id,
-                    "media_id": item.media_id,
+                    **item.header(),
                 }
             )
             continue
@@ -200,6 +219,22 @@ def inject_openai_media(
     if image_urls:
         result["images"] = [*(result.get("images") or []), *image_urls]
     return result
+
+
+def _validate_evidence_role(item: StreamedMedia) -> None:
+    allowed = {
+        "audio": {"user_audio"},
+        "video": {"user_camera"},
+        "image": {"user_camera", "avatar_state"},
+    }
+    if item.evidence_role not in allowed[item.kind]:
+        raise ValueError("stream media kind and evidence_role are inconsistent")
+    if item.evidence_role == "avatar_state" and item.encoding.strip().lower() not in {
+        "jpeg",
+        "jpg",
+        "image/jpeg",
+    }:
+        raise ValueError("avatar_state stream media must be a JPEG image")
 
 
 def media_data_uri(item: StreamedMedia) -> str:

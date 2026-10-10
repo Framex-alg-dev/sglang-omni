@@ -71,6 +71,62 @@ def test_authenticated_openai_contract_sets_task_metadata() -> None:
     assert "queue;dur=" in response.headers["server-timing"]
 
 
+def test_strict_json_schema_is_forwarded_to_constrained_decoding() -> None:
+    model = _Client()
+    schema = {
+        "type": "object",
+        "properties": {"kind": {"const": "complete"}},
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+    payload = {
+        **_payload(),
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "task_decision",
+                "strict": True,
+                "schema": schema,
+            },
+        },
+    }
+
+    with TestClient(_app(model)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer brain-secret"},
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    request, _, _ = model.requests[0]
+    assert request.sampling.json_schema == (
+        '{"type":"object","properties":{"kind":{"const":"complete"}},'
+        '"required":["kind"],"additionalProperties":false}'
+    )
+
+
+def test_malformed_json_schema_is_rejected_before_inference() -> None:
+    model = _Client()
+    payload = {
+        **_payload(),
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "task_decision", "schema": "not-an-object"},
+        },
+    }
+
+    with TestClient(_app(model)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer brain-secret"},
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert model.requests == []
+
+
 def test_realtime_carries_one_audio_and_multiple_images_to_model_metadata() -> None:
     model = _Client()
     audio = b"\x00\x00" * 160
@@ -84,7 +140,7 @@ def test_realtime_carries_one_audio_and_multiple_images_to_model_metadata() -> N
             socket.send_json(
                 {
                     "type": "request.start",
-                    "contract_version": 1,
+                    "contract_version": 2,
                     "request_id": "request-multimodal",
                     "payload": _payload(),
                 }
@@ -105,6 +161,9 @@ def test_realtime_carries_one_audio_and_multiple_images_to_model_metadata() -> N
                         "encoding": encoding,
                         "checksum": "sha256:" + hashlib.sha256(payload).hexdigest(),
                         "payload_bytes": len(payload),
+                        "evidence_role": (
+                            "user_audio" if kind == "audio" else "user_camera"
+                        ),
                     }
                 )
                 socket.send_bytes(payload)

@@ -104,6 +104,7 @@ def create_task_classification_app(
                     "encoding": item.encoding,
                     "checksum": item.checksum,
                     "payload": item.payload,
+                    "evidence_role": item.evidence_role,
                 }
                 for item in streamed.media
             ]

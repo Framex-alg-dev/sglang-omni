@@ -212,9 +212,7 @@ Omni 与业务端均走 loopback；systemd 单元明确清除了所有 HTTP/HTTP
   --config /data/fanshide/sglang-omni-xmt/deploy/config_single_gpu.yaml \
   --host 0.0.0.0 \
   --port 18008 \
-  --log-level info \
-  --realtime-tts-url ws://127.0.0.1:40001/api-ws/v1/realtime \
-  --realtime-tts-voice benchmark_qwen_cherry_zh
+  --log-level info
 ```
 
 常用运维命令：
@@ -233,33 +231,8 @@ tail -f /data/fanshide/sglang-omni-xmt/logs/sglang-omni-gpu6.log
 
 ## 5. 文字 + 视频直连 Case
 
-仓库提供独立脚本：
-
-```bash
-cd /data/fanshide/sglang-omni-xmt
-.venv/bin/python scripts/session_realtime_text_video_smoke.py \
-  --url ws://127.0.0.1:18008/v1/session/realtime \
-  --video tests/data/draw.mp4 \
-  --text '请简要描述视频中发生了什么。' \
-  --max-frames 4 \
-  --frame-interval 0.5
-```
-
-该脚本执行：
-
-```text
-session.start outputs=[text]
-turn.start
-input.text.set
-input.image.append × N（从 MP4 抽 JPEG 帧）
-turn.commit
-等待 response.text.delta 和 turn.result
-```
-
-它直接连接 18008，显式设置 `proxy=None`，不经过 30070，不启用 action、performance、
-expression 或 TTS，适合 Infra 测纯 text+video 的首 token 基线。再与上面的真实四模态
-Turn（TTFT 1,306 ms）比较，即可定位额外延迟来自基础 generation prefill，还是业务并发
-分支。
+该旧 Session Realtime 直连脚本已经随 18010 边界退役。当前文字/视频联调必须通过
+`:18003/v1/inference-session` 和阶段级自动化测试完成；本节其余数据只作为历史记录。
 
 ## 6. 其他已知问题（避免混淆）
 

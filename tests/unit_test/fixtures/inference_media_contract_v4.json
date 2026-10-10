@@ -1,0 +1,28 @@
+{
+  "contract": "character-inference-media",
+  "outer_contract_version": 4,
+  "inner_contract_version": 2,
+  "media_identity_fields": [
+    "media_id",
+    "kind",
+    "mime_type",
+    "evidence_role",
+    "byte_length",
+    "sha256"
+  ],
+  "evidence_roles": {
+    "audio": ["user_audio"],
+    "image": ["user_camera", "avatar_state"]
+  },
+  "ack_rules": {
+    "outer": "echo_complete_media_identity_and_duplicate",
+    "inner": "echo_request_id_and_complete_media_identity"
+  },
+  "renderer_submission_receipt": {
+    "event_kind": "audio.delta",
+    "success_event": "event_ack",
+    "correlation_fields": ["renderer_attempt_generation", "event_id", "kind"],
+    "send_completion_is_acceptance": false,
+    "unknown_is_replayable": false
+  }
+}

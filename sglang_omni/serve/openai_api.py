@@ -14,7 +14,6 @@ Provides the following endpoints:
 - GET  /v1/fs/file           — Download a file
 - GET  /health               — Health check
 - WS   /v1/realtime          — OpenAI-compatible Realtime API (when enabled)
-- WS   /v1/session/realtime  — manual-turn multimodal session API
 """
 
 from __future__ import annotations
@@ -64,8 +63,6 @@ from sglang_omni.client.types import (
 
 if TYPE_CHECKING:
     from sglang_omni.client.client import Client
-    from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
-    from sglang_omni.serve.realtime.knowledge import RealtimeKnowledgeConfig
 
 from sglang_omni.client.audio import (
     DEFAULT_SAMPLE_RATE,
@@ -123,6 +120,7 @@ from sglang_omni.serve.protocol import (
     VoiceListResponse,
     WeightsCheckerRequest,
 )
+from sglang_omni.serve.structured_output import response_json_schema
 from sglang_omni.serve.realtime.runtime_prompt_overrides import (
     prompt_slot_payloads as realtime_prompt_slot_payloads,
     write_runtime_prompt as write_realtime_prompt,
@@ -272,9 +270,6 @@ def create_app(
     global_action_catalog: GlobalActionCatalog | None = None,
     global_action_prewarm: GlobalActionCatalogPrewarmStatus | None = None,
     enable_resource_monitor: bool = True,
-    allow_unregistered_protocol_actions: bool = False,
-    embedded_tts_config: EmbeddedTTSConfig | None = None,
-    realtime_knowledge_config: RealtimeKnowledgeConfig | None = None,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -300,9 +295,6 @@ def create_app(
             ``/v1/audio/speech/batch``.
         enable_resource_monitor: Whether to register process/GPU resource
             telemetry lifecycle hooks. Development substitutes disable it.
-        allow_unregistered_protocol_actions: Allow protocol-v1 action
-            whitelists without the production catalog. Development only.
-
     Returns:
         Configured FastAPI application.
     """
@@ -329,8 +321,6 @@ def create_app(
     app.state.global_action_prewarm = (
         global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
     )
-    app.state.embedded_tts_config = embedded_tts_config
-    app.state.realtime_knowledge_config = realtime_knowledge_config
     app.state.speaker_sample_store = SpeakerSampleStore()
     app.state.speech_service = SpeechRequestValidator(
         default_model=app.state.model_name,
@@ -369,13 +359,6 @@ def create_app(
     _register_transcriptions(app)
     if enable_realtime:
         _register_realtime(app)
-    # The manual-turn multimodal session API is part of the service contract
-    # and must not depend on the legacy OpenAI Realtime switch.
-    _register_multimodal_realtime(
-        app,
-        allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
-        knowledge_config=realtime_knowledge_config,
-    )
     if enable_resource_monitor:
         _register_resource_monitor(app)
 
@@ -564,12 +547,6 @@ def _register_resource_monitor(app: FastAPI) -> None:
         return
 
     def application_snapshot() -> dict[str, Any]:
-        manager = getattr(app.state, "multimodal_realtime_manager", None)
-        session_load = (
-            manager.load_snapshot()
-            if manager is not None and hasattr(manager, "load_snapshot")
-            else {}
-        )
         client: Client = app.state.client
         action_load = (
             client.action_scoring_load()
@@ -578,7 +555,6 @@ def _register_resource_monitor(app: FastAPI) -> None:
         )
         return {
             "model": app.state.model_name,
-            "session_realtime": session_load,
             "action_scoring": action_load,
             "structured_log_writer": get_structured_log_writer().health(),
         }
@@ -588,16 +564,10 @@ def _register_resource_monitor(app: FastAPI) -> None:
         application_snapshot=application_snapshot,
     )
     app.state.resource_monitor = monitor
-    manager = getattr(app.state, "multimodal_realtime_manager", None)
-    if manager is not None and hasattr(manager, "set_resource_sample_requester"):
-        manager.set_resource_sample_requester(monitor.request_sample)
-
     async def start_resource_monitor() -> None:
         monitor.start()
 
     async def stop_resource_monitor() -> None:
-        if manager is not None and hasattr(manager, "set_resource_sample_requester"):
-            manager.set_resource_sample_requester(None)
         await monitor.stop()
 
     # FastAPI 0.141 removed application-level lifecycle compatibility methods.
@@ -1262,7 +1232,7 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         stop=stop,
         seed=req.seed,
         max_new_tokens=req.effective_max_tokens,
-        json_schema=_response_json_schema(req.response_format),
+        json_schema=response_json_schema(req.response_format),
     )
 
     # Convert messages
@@ -1341,49 +1311,6 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         output_modalities=output_modalities,
         metadata=metadata,
     )
-
-
-def _response_json_schema(response_format: dict[str, Any] | None) -> str | None:
-    """Translate the OpenAI response-format envelope into SGLang constraints."""
-
-    if response_format is None:
-        return None
-    if not isinstance(response_format, dict):
-        raise ValueError("response_format must be an object")
-    response_type = response_format.get("type")
-    if response_type == "json_object":
-        if set(response_format) != {"type"}:
-            raise ValueError(
-                "json_object response_format contains unsupported fields"
-            )
-        schema: dict[str, Any] = {"type": "object"}
-    elif response_type == "json_schema":
-        if set(response_format) != {"type", "json_schema"}:
-            raise ValueError(
-                "json_schema response_format contains unsupported fields"
-            )
-        envelope = response_format.get("json_schema")
-        if not isinstance(envelope, dict):
-            raise ValueError("response_format.json_schema must be an object")
-        if set(envelope).difference({"name", "description", "strict", "schema"}):
-            raise ValueError(
-                "response_format.json_schema contains unsupported fields"
-            )
-        name = envelope.get("name")
-        if name is not None and (not isinstance(name, str) or not name.strip()):
-            raise ValueError("response_format.json_schema.name must be non-empty")
-        strict = envelope.get("strict")
-        if strict is not None and type(strict) is not bool:
-            raise ValueError("response_format.json_schema.strict must be boolean")
-        schema = envelope.get("schema")
-        if not isinstance(schema, dict):
-            raise ValueError("response_format.json_schema.schema must be an object")
-    else:
-        raise ValueError("unsupported response_format type")
-    try:
-        return json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("response_format JSON schema is not serializable") from exc
 
 
 def _register_generate(app: FastAPI) -> None:
@@ -1588,54 +1515,6 @@ def _register_realtime(app: FastAPI) -> None:
             await session.run()
         finally:
             await manager.close(session.session_id)
-
-
-def _register_multimodal_realtime(
-    app: FastAPI,
-    *,
-    allow_unregistered_protocol_actions: bool = False,
-    knowledge_config: RealtimeKnowledgeConfig | None = None,
-) -> None:
-    """Mount the manual-turn multimodal session WebSocket."""
-    from sglang_omni.serve.realtime.multimodal import MultimodalSessionManager
-
-    from sglang_omni.client.realtime_executor import build_realtime_model_client
-
-    client: Client = build_realtime_model_client(app.state.client)
-    app.state.multimodal_realtime_client = client
-    model_name: str = app.state.model_name
-    manager = MultimodalSessionManager(
-        client=client,
-        model_name=model_name,
-        global_action_catalog=app.state.global_action_catalog,
-        global_action_prewarm=app.state.global_action_prewarm,
-        allow_unregistered_protocol_actions=allow_unregistered_protocol_actions,
-        embedded_tts_config=app.state.embedded_tts_config,
-        knowledge_config=knowledge_config,
-    )
-    app.state.multimodal_realtime_manager = manager
-    app.router.add_event_handler("shutdown", manager.close)
-    close_client = getattr(client, "aclose", None)
-    if client is not app.state.client and callable(close_client):
-        app.router.add_event_handler("shutdown", close_client)
-
-    @app.websocket("/v1/session/realtime")
-    async def multimodal_realtime(websocket: WebSocket) -> None:
-        emit_structured_log(
-            "lifecycle",
-            "ws_upgrade_received",
-            backend="production",
-            route="/v1/session/realtime",
-        )
-        await websocket.accept()
-        emit_structured_log(
-            "lifecycle",
-            "ws_accepted",
-            backend="production",
-            route="/v1/session/realtime",
-        )
-        session = manager.create(websocket)
-        await session.run()
 
 
 def _register_speech(app: FastAPI) -> None:

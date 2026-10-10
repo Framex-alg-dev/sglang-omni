@@ -22,7 +22,7 @@ class _ChinesePrompt(ReplyPromptComponent):
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("session", type=Path)
-    parser.add_argument("--endpoint", default="http://127.0.0.1:18010")
+    parser.add_argument("--endpoint", default="http://127.0.0.1:18005")
     return parser.parse_args()
 
 

@@ -12,7 +12,6 @@
 - [动作 suffix 评分](action_suffix_scoring.md)
 - [部署 tokenizer 单-token ID 映射](action_token_mapping.md)
 - [动作耗时演进](action_latency_history.md)
-- [micro-batch 性能验证](action_batch_benchmark.md)
 - [Realtime 外部接入协议](multimodal_session_realtime.md)
 
 ## 1. 当前 hierarchical 链路

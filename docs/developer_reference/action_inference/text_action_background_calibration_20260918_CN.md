@@ -131,7 +131,7 @@ calibrated_i = raw_i - alpha_i * centered_bias_i
 
 ## 产物
 
-- 全分数评测器：`scripts/evaluate_text_action_recall.py`
+- 全分数评测器：原 18010 驱动脚本已退役；保留以下离线结果作为历史基线
 - 离线校准脚本：`scripts/calibrate_text_action_scores.py`
 - neutral 门控用例：`tests/unit_test/fixtures/realtime_text_action_neutral_baseline_cases.json`
 - 全候选原始分数：`reports/text_action_recall_18004_full_scores.json`

@@ -240,7 +240,11 @@ def register_performance_control(
             ]
             payload["audios"] = audios
             payload["images"] = images
-            payload["image_roles"] = ["user_camera"] * len(images)
+            payload["image_roles"] = [
+                item.evidence_role
+                for item in streamed.media
+                if item.kind in {"image", "video"}
+            ]
             request = PerformanceControlRequest.model_validate(payload)
             response = await run_until_websocket_disconnect(
                 websocket,

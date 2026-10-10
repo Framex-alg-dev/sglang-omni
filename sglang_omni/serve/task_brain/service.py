@@ -22,6 +22,7 @@ from sglang_omni.serve.streaming_request import (
     receive_streamed_request,
     run_until_websocket_disconnect,
 )
+from sglang_omni.serve.structured_output import response_json_schema
 
 
 class CompletionClient(Protocol):
@@ -278,11 +279,13 @@ def _validate_request(request: TaskBrainCompletionRequest) -> None:
         raise HTTPException(status_code=422, detail="task brain does not stream")
     if request.modalities not in (None, ["text"]):
         raise HTTPException(status_code=422, detail="task brain returns text only")
-    if request.response_format not in (None, {"type": "json_object"}):
+    try:
+        response_json_schema(request.response_format)
+    except ValueError as exc:
         raise HTTPException(
             status_code=422,
-            detail="task brain requires response_format=json_object",
-        )
+            detail=str(exc),
+        ) from exc
     if request.reasoning_effort not in (None, "none"):
         raise HTTPException(
             status_code=422,
@@ -322,6 +325,7 @@ def _generate_request(
             stop=stop,
             seed=request.seed,
             max_new_tokens=request.effective_max_tokens,
+            json_schema=response_json_schema(request.response_format),
         ),
         stream=False,
         max_tokens=request.effective_max_tokens,

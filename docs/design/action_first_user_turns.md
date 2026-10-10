@@ -79,10 +79,9 @@ candidate/body-task pair for 30 seconds (at most 32 entries). It skips only the
 speculative attempt: normal category scoring, state filters and unsupported
 validation still execute. No cross-session action decisions are cached.
 
-`scripts/evaluate_action_priority_latency.py` runs the same ordered inputs with
-one and two sessions, records workload hashes, cold/repeat iteration numbers,
-event latencies and action timing breakdowns. Its default profile is synthetic,
-not the production character. Use `--session` and `--cases` for role-specific
+The former standalone Session Realtime latency evaluator was retired with the
+18010 boundary. Measure this path through the current Inference Gateway and
+stage-specific telemetry instead.
 replay. The reported metric is client commit-send to event-receive, not playback
 or server-only time. Small-sample P95 uses nearest rank and is not a load SLO.
 
