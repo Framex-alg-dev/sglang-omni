@@ -930,3 +930,47 @@ async def test_hard_deadline_still_bounds_continuous_audio():
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_first_chunk_configuration_changes_and_resets_on_reused_connection():
+    script = [_event('session.created', session={'id': 'provider'})]
+    for target in (334, None):
+        script.append(_event('session.updated', session={} if target is None else {'first_chunk_ms': target}))
+        script.extend(_successful_events()[1:])
+    connector = FakeConnector([script])
+    manager = _manager(connector)
+    async def sink(_):
+        pass
+    try:
+        for target in (334, None):
+            await manager.synthesize_streaming(turn_id=f'turn-{target}', text_chunks=_chunks('hello'), audio_sink=sink, first_chunk_ms=target)
+    finally:
+        await manager.close()
+    assert len(connector.contexts) == 1
+    updates = [e for e in connector.contexts[0].websocket.sent if e['type'] == 'session.update']
+    assert updates == [
+        {'type': 'session.update', 'session': {'first_chunk_ms': 334}},
+        {'type': 'session.update', 'session': {'first_chunk_ms': None}},
+    ]
+    sent = connector.contexts[0].websocket.sent
+    assert sent[0] == updates[0]
+    assert sent[3] == updates[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ack", [None, 334.0, "334", True])
+async def test_first_chunk_configuration_requires_provider_ack_before_text(ack):
+    connector = FakeConnector([[
+        _event('session.created', session={'id': 'provider'}),
+        _event('session.updated', session={} if ack is None else {'first_chunk_ms': ack}),
+    ]])
+    manager = _manager(connector)
+    async def sink(_):
+        raise AssertionError('no audio should be delivered')
+    try:
+        with pytest.raises(EmbeddedTTSError, match='not acknowledged'):
+            await manager.synthesize_streaming(turn_id='turn', text_chunks=_chunks('hello'), audio_sink=sink, first_chunk_ms=334)
+    finally:
+        await manager.close()
+    assert not any(e['type'] == 'input_text_buffer.append' for e in connector.contexts[0].websocket.sent)

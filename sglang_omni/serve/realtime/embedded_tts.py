@@ -209,6 +209,7 @@ class EmbeddedTTSConnection:
         self._connection_context: Any | None = None
         self._websocket: Any | None = None
         self._connection_voice: str | None = None
+        self._connection_first_chunk_ms: int | None = None
         self._active_owner: asyncio.Task[Any] | None = None
         self._active_turn_id: str | None = None
         self._broken = False
@@ -235,7 +236,12 @@ class EmbeddedTTSConnection:
         audio_sink: AudioSink,
         voice: str | None = None,
         instruct: str | Awaitable[str] | None = None,
+        first_chunk_ms: int | None = None,
     ) -> EmbeddedTTSResult:
+        if first_chunk_ms is not None and (
+            type(first_chunk_ms) is not int or not 40 <= first_chunk_ms <= 1000
+        ):
+            raise ValueError("first_chunk_ms must be an integer between 40 and 1000")
         if not turn_id.strip():
             raise ValueError("TTS turn_id must be non-empty")
         selected_voice = (voice or self._config.voice).strip()
@@ -266,11 +272,12 @@ class EmbeddedTTSConnection:
                         and (self._standby_task is None or self._standby_task.done())
                         and self._standby.connected and self._standby._connection_voice == selected_voice):
                     await self._discard_connection()
-                    for name in ("_connection_context", "_websocket", "_connection_voice", "_broken"):
+                    for name in ("_connection_context", "_websocket", "_connection_voice", "_connection_first_chunk_ms", "_broken"):
                         current = getattr(self, name)
                         setattr(self, name, getattr(self._standby, name))
                         setattr(self._standby, name, current)
                 websocket = await self._borrow_with_retry(selected_voice, turn_id, deadline)
+                await self._configure_first_chunk(websocket, first_chunk_ms)
                 self._warm_standby(selected_voice)
                 logger.debug(
                     "Embedded TTS turn started session_id=%s turn_id=%s lifecycle=streaming",
@@ -602,6 +609,32 @@ class EmbeddedTTSConnection:
             if eof:
                 return
 
+    async def _configure_first_chunk(self, websocket: Any, first_chunk_ms: int | None) -> None:
+        if first_chunk_ms == self._connection_first_chunk_ms:
+            return
+        await _wait_for_phase(
+            websocket.send(json.dumps({
+                "type": "session.update",
+                "session": {"first_chunk_ms": first_chunk_ms},
+            })),
+            timeout=self._config.send_timeout_seconds,
+            phase="send_timeout",
+        )
+        event = await _wait_for_phase(
+            self._receive_event(websocket),
+            timeout=self._config.ready_timeout_seconds,
+            phase="ready_timeout",
+        )
+        session = event.get("session")
+        if (
+            event.get("type") != "session.updated"
+            or not isinstance(session, dict)
+            or session.get("first_chunk_ms") != first_chunk_ms
+            or (first_chunk_ms is not None and type(session.get("first_chunk_ms")) is not int)
+        ):
+            raise EmbeddedTTSError("TTS first_chunk_ms was not acknowledged", phase="protocol")
+        self._connection_first_chunk_ms = first_chunk_ms
+
     async def _send_text(
         self,
         websocket: Any,
@@ -884,6 +917,7 @@ class EmbeddedTTSConnection:
         self._connection_context = None
         self._websocket = None
         self._connection_voice = None
+        self._connection_first_chunk_ms = None
         if context is not None:
             try:
                 await asyncio.wait_for(

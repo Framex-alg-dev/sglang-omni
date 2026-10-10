@@ -20,6 +20,8 @@ from sglang_omni.serve.inference_gateway.speech_synthesis import (
     GatewaySpeechConfig,
     GatewaySpeechError,
     GatewaySpeechSynthesizer,
+    _PcmFramer,
+    validate_first_chunk_ms,
 )
 from sglang_omni.serve.realtime.embedded_tts import (
     EmbeddedTTSConfig,
@@ -100,6 +102,7 @@ class _SpeechSpeculation:
     generation_id: str
     output_epoch: int
     text_mode: str
+    first_chunk_ms: int | None = None
     synthesis_mode: str = "whole_text"
     text: str = ""
     text_hash: str = ""
@@ -109,6 +112,7 @@ class _SpeechSpeculation:
     text_completed: asyncio.Event = field(default_factory=asyncio.Event)
     chunks: list[bytes] = field(default_factory=list)
     buffered_bytes: int = 0
+    pending_audio_bytes: int = 0
     next_seq: int = 0
     committed: bool = False
     commit_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -120,6 +124,7 @@ class _Session:
         self.websocket = websocket
         self.config = config
         self.session_id = ""
+        self.speech_first_chunk_ms: int | None = None
         self.media: dict[str, _Media] = {}
         self.media_refcounts: dict[str, int] = {}
         self.media_bytes = 0
@@ -143,6 +148,9 @@ class _Session:
         if first.get("type") != "session.open" or contract_version not in {2, 3}:
             raise ValueError("first gateway message must be session.open v3")
         self.session_id = _string(first, "session_id")
+        self.speech_first_chunk_ms = validate_first_chunk_ms(
+            first.get("speech_first_chunk_ms")
+        )
         if self.config.reply_speech is not None:
             self.reply_speech = GatewaySpeechSynthesizer(
                 self.config.reply_speech,
@@ -157,6 +165,8 @@ class _Session:
             "contract_version": contract_version,
             "session_id": self.session_id,
         }
+        if self.speech_first_chunk_ms is not None:
+            ready["speech_first_chunk_ms"] = self.speech_first_chunk_ms
         if contract_version == 3:
             ready.update(
                 availability_epoch=self.availability_epoch,
@@ -394,6 +404,7 @@ class _Session:
             generation_id=generation_id,
             output_epoch=output_epoch,
             text_mode=text_mode,
+            first_chunk_ms=self.speech_first_chunk_ms,
             synthesis_mode="incremental",
         )
         self.speech_speculations[request_id] = state
@@ -423,6 +434,7 @@ class _Session:
             generation_id=generation_id,
             output_epoch=output_epoch,
             text_mode=text_mode,
+            first_chunk_ms=self.speech_first_chunk_ms,
             synthesis_mode="adaptive_whole_or_sentence",
         )
         self.speech_speculations[request_id] = state
@@ -447,7 +459,14 @@ class _Session:
             extra={"request_id": request_id, "reason": reason},
         )
 
+    def _speech_options(self, first_chunk_ms: int | None) -> dict[str, int]:
+        # Preserve the historical call contract for unconfigured sessions.
+        return {"first_chunk_ms": first_chunk_ms} if first_chunk_ms is not None else {}
+
     async def _start_speech(self, message: dict[str, Any]) -> None:
+        first_chunk_ms = validate_first_chunk_ms(
+            message.get("first_chunk_ms", self.speech_first_chunk_ms)
+        )
         request_id = _string(message, "request_id")
         if request_id in self.tasks or request_id in self.reserved_request_ids:
             raise ValueError("gateway request_id is already active")
@@ -472,7 +491,7 @@ class _Session:
             )
             return
         task = asyncio.create_task(
-            self._run_speech(request_id, text, voice, instruction),
+            self._run_speech(request_id, text, voice, instruction, first_chunk_ms),
             name=f"inference-gateway:{self.session_id}:speech:{request_id}",
         )
         self.tasks[request_id] = task
@@ -485,6 +504,7 @@ class _Session:
         text: str,
         voice: str,
         instruction: str,
+        first_chunk_ms: int | None = None,
     ) -> None:
         assert self.reply_speech is not None
         next_seq = 0
@@ -516,6 +536,7 @@ class _Session:
                 voice=voice,
                 instruction=instruction,
                 audio_sink=audio_sink,
+                **self._speech_options(first_chunk_ms),
             )
             await self.send(
                 {
@@ -587,6 +608,7 @@ class _Session:
             instruction=instruction,
             generation_id=generation_id,
             output_epoch=output_epoch,
+            first_chunk_ms=self.speech_first_chunk_ms,
         )
         state = _SpeechSpeculation(
             request_id=request_id,
@@ -596,6 +618,7 @@ class _Session:
             generation_id=generation_id,
             output_epoch=output_epoch,
             text_mode=text_mode,
+            first_chunk_ms=self.speech_first_chunk_ms,
             text=text,
             text_hash=text_hash,
         )
@@ -660,6 +683,7 @@ class _Session:
                 voice=state.voice,
                 instruction=state.instruction,
                 audio_sink=audio_sink,
+                **self._speech_options(state.first_chunk_ms),
             )
             await asyncio.wait_for(
                 state.commit_event.wait(),
@@ -767,6 +791,7 @@ class _Session:
                 audio_sink=audio_sink,
                 voice=state.voice,
                 instruct=instruction(),
+                **self._speech_options(state.first_chunk_ms),
             )
             await asyncio.wait_for(
                 state.commit_event.wait(),
@@ -842,7 +867,8 @@ class _Session:
                     return
                 state.buffered_bytes += len(chunk)
                 self.speculative_buffered_bytes += len(chunk)
-                if state.buffered_bytes > self.config.reply_speech.max_audio_bytes:
+                if (state.buffered_bytes + state.pending_audio_bytes
+                        > self.config.reply_speech.max_audio_bytes):
                     raise GatewaySpeechError(
                         "speculative speech exceeded its audio budget",
                         phase="protocol",
@@ -862,6 +888,50 @@ class _Session:
         audio_bytes = 0
         chunk_count = 0
         provider_response_id = ""
+        # A short sentence is not the response EOS. Keep its PCM until the
+        # configured first packet is complete, including across HTTP requests.
+        framer = (
+            _PcmFramer(
+                self.config.reply_speech.frame_bytes,
+                first_frame_bytes=48 * state.first_chunk_ms,
+            )
+            if state.first_chunk_ms is not None else None
+        )
+
+        async def emit_frame(frame: bytes) -> None:
+            nonlocal audio_bytes, chunk_count
+            await audio_sink(frame)
+            audio_bytes += len(frame)
+            chunk_count += 1
+
+        async def account_pending_audio() -> None:
+            assert framer is not None
+            async with state.lock:
+                pending_bytes = framer.pending_bytes
+                delta = pending_bytes - state.pending_audio_bytes
+                if (state.buffered_bytes + pending_bytes
+                        > self.config.reply_speech.max_audio_bytes):
+                    raise GatewaySpeechError(
+                        "speculative speech exceeded its audio budget",
+                        phase="protocol", retryable=False,
+                    )
+                if (self.speculative_buffered_bytes + delta
+                        > self.config.max_session_speculative_audio_bytes):
+                    raise GatewaySpeechError(
+                        "session speculative speech exceeded its audio budget",
+                        phase="protocol", retryable=False,
+                    )
+                state.pending_audio_bytes = pending_bytes
+                self.speculative_buffered_bytes += delta
+
+        async def framed_audio_sink(chunk: bytes) -> None:
+            frames = framer.feed(chunk) if framer is not None else (chunk,)
+            if framer is not None:
+                await account_pending_audio()
+            for frame in frames:
+                if frame:
+                    await emit_frame(frame)
+
         try:
             while True:
                 segment = await state.text_queue.get()
@@ -874,11 +944,17 @@ class _Session:
                     text=segment,
                     voice=state.voice,
                     instruction=state.instruction,
-                    audio_sink=audio_sink,
+                    audio_sink=framed_audio_sink,
+                    **self._speech_options(
+                        state.first_chunk_ms if audio_bytes == 0 else None
+                    ),
                 )
-                audio_bytes += result.audio_bytes
-                chunk_count += result.chunk_count
                 provider_response_id = result.provider_response_id
+            if framer is not None:
+                tail = framer.finish()
+                await account_pending_audio()
+                if tail is not None:
+                    await emit_frame(tail)
             await asyncio.wait_for(
                 state.commit_event.wait(),
                 timeout=self.config.request_timeout_seconds,
@@ -922,8 +998,10 @@ class _Session:
         finally:
             self.speculative_buffered_bytes = max(
                 0,
-                self.speculative_buffered_bytes - state.buffered_bytes,
+                self.speculative_buffered_bytes
+                - state.buffered_bytes - state.pending_audio_bytes,
             )
+            state.pending_audio_bytes = 0
             self.speech_speculations.pop(state.request_id, None)
 
     async def _configure_speech(self, message: dict[str, Any]) -> None:
@@ -974,6 +1052,7 @@ class _Session:
                 instruction=state.instruction,
                 generation_id=state.generation_id,
                 output_epoch=state.output_epoch,
+                first_chunk_ms=state.first_chunk_ms,
             )
         await self.send(
             {
@@ -1020,6 +1099,9 @@ class _Session:
             or instruction != state.instruction
             or generation_id != state.generation_id
             or output_epoch != state.output_epoch
+            or validate_first_chunk_ms(
+                message.get("first_chunk_ms", self.speech_first_chunk_ms)
+            ) != state.first_chunk_ms
         ):
             await self.send(
                 {
@@ -1073,7 +1155,8 @@ class _Session:
         if state is not None:
             self.speculative_buffered_bytes = max(
                 0,
-                self.speculative_buffered_bytes - state.buffered_bytes,
+                self.speculative_buffered_bytes
+                - state.buffered_bytes - state.pending_audio_bytes,
             )
         if not task.cancelled():
             task.exception()
@@ -1428,6 +1511,7 @@ class _Session:
                                 instruction=state.instruction,
                                 generation_id=state.generation_id,
                                 output_epoch=state.output_epoch,
+                                first_chunk_ms=state.first_chunk_ms,
                             )
                             await state.text_queue.put(None)
                             state.text_completed.set()
@@ -1710,6 +1794,7 @@ def _speculative_speech_hash(
     instruction: str,
     generation_id: str,
     output_epoch: int,
+    first_chunk_ms: int | None = None,
 ) -> str:
     text = text.strip()
     text_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -1720,6 +1805,7 @@ def _speculative_speech_hash(
             "instruction": instruction,
             "generation_id": generation_id,
             "output_epoch": output_epoch,
+            **({"first_chunk_ms": first_chunk_ms} if first_chunk_ms is not None else {}),
         },
         ensure_ascii=False,
         sort_keys=True,

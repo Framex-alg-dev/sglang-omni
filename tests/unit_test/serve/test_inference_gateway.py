@@ -5,6 +5,8 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from sglang_omni.serve.inference_gateway import app as gateway_module
@@ -551,12 +553,14 @@ def test_speech_request_uses_one_whole_text_synthesis(monkeypatch) -> None:
     assert instances[0].closed
 
 
-def test_reply_speculation_buffers_until_matching_commit(monkeypatch) -> None:
+@pytest.mark.parametrize("target", [None, 334])
+def test_reply_speculation_buffers_until_matching_commit(monkeypatch, target) -> None:
     class FakeSpeechSynthesizer:
         def __init__(self, _config):
             pass
 
-        async def synthesize(self, *, text, voice, instruction, audio_sink):
+        async def synthesize(self, *, text, voice, instruction, audio_sink, first_chunk_ms=None):
+            assert first_chunk_ms == target
             assert (text, voice, instruction) == ("你好", "voice-1", "自然地说")
             await audio_sink(b"\x01\x00")
             await audio_sink(b"\x02\x00")
@@ -586,11 +590,12 @@ def test_reply_speculation_buffers_until_matching_commit(monkeypatch) -> None:
         instruction="自然地说",
         generation_id="generation-1",
         output_epoch=1,
+        first_chunk_ms=target,
     )
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 2, "session_id": "s1", **({"speech_first_chunk_ms": target} if target is not None else {})}
         )
         socket.receive_json()
         socket.send_json(
@@ -632,8 +637,9 @@ def test_reply_speculation_buffers_until_matching_commit(monkeypatch) -> None:
     assert done["speculative"] is True
 
 
+@pytest.mark.parametrize("target", [None, 334])
 def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
-    monkeypatch,
+    monkeypatch, target,
 ) -> None:
     speech_calls = []
     streaming_calls = []
@@ -642,7 +648,8 @@ def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
         def __init__(self, _config):
             pass
 
-        async def synthesize(self, *, text, voice, instruction, audio_sink):
+        async def synthesize(self, *, text, voice, instruction, audio_sink, first_chunk_ms=None):
+            assert first_chunk_ms == target
             speech_calls.append((text, voice, instruction))
             await audio_sink(b"\x01\x00")
             return SimpleNamespace(
@@ -693,11 +700,12 @@ def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
         instruction="自然地说",
         generation_id="generation-1",
         output_epoch=1,
+        first_chunk_ms=target,
     )
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 2, "session_id": "s1", **({"speech_first_chunk_ms": target} if target is not None else {})}
         )
         socket.receive_json()
         socket.send_json(
@@ -739,8 +747,9 @@ def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
     assert streaming_calls == []
 
 
+@pytest.mark.parametrize("target", [None, 334])
 def test_streaming_reply_speculation_starts_from_delta_and_waits_for_commit(
-    monkeypatch,
+    monkeypatch, target,
 ) -> None:
     instances = []
 
@@ -752,8 +761,9 @@ def test_streaming_reply_speculation_starts_from_delta_and_waits_for_commit(
             instances.append(self)
 
         async def synthesize_streaming(
-            self, *, turn_id, text_chunks, audio_sink, voice, instruct
+            self, *, turn_id, text_chunks, audio_sink, voice, instruct, first_chunk_ms=None
         ):
+            assert first_chunk_ms == target
             instruction = await instruct
             text = "".join([chunk async for chunk in text_chunks])
             self.calls.append((turn_id, text, voice, instruction))
@@ -789,11 +799,12 @@ def test_streaming_reply_speculation_starts_from_delta_and_waits_for_commit(
         instruction="温暖地说",
         generation_id="generation-1",
         output_epoch=3,
+        first_chunk_ms=target,
     )
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 2, "session_id": "s1"}
+            {"type": "session.open", "contract_version": 2, "session_id": "s1", **({"speech_first_chunk_ms": target} if target is not None else {})}
         )
         socket.receive_json()
         socket.send_json(
@@ -1013,3 +1024,173 @@ def test_streaming_speculation_session_budget_fails_closed(monkeypatch) -> None:
     assert error["type"] == "speech.error"
     assert error["code"] == "tts_failed"
     assert error["retryable"] is True
+
+
+def test_speech_first_chunk_is_session_local_and_request_override_does_not_persist(monkeypatch):
+    calls = []
+    class Speech:
+        def __init__(self, config):
+            self.config = config
+        async def synthesize(self, *, text, voice, instruction, audio_sink, first_chunk_ms=None):
+            calls.append((text, first_chunk_ms))
+            await audio_sink(b'\x01\x00')
+            return SimpleNamespace(audio_bytes=2, chunk_count=1, provider_response_id='mock')
+        async def close(self):
+            pass
+    monkeypatch.setattr(gateway_module, 'GatewaySpeechSynthesizer', Speech)
+    config = _config(reply_speech=GatewaySpeechConfig(endpoint='http://tts/stream'))
+    client = TestClient(create_inference_gateway_app(config))
+    with client.websocket_connect('/v1/inference-session') as configured, client.websocket_connect('/v1/inference-session') as default:
+        for socket, target in ((configured, 334), (default, None)):
+            socket.send_json({'type': 'session.open', 'contract_version': 3, 'session_id': str(target), **({'speech_first_chunk_ms': target} if target is not None else {})})
+            ready = socket.receive_json()
+            assert ready.get('speech_first_chunk_ms') == target
+            assert ('speech_first_chunk_ms' in ready) == (target is not None)
+        for socket, text, override in ((configured, 'configured', {}), (default, 'default', {}), (configured, 'override', {'first_chunk_ms': 250}), (configured, 'restored', {})):
+            socket.send_json({'type': 'speech.request', 'request_id': text, 'text': text, 'voice': 'voice', 'instruction': 'natural', **override})
+            assert socket.receive_json()['type'] == 'speech.accepted'
+            assert socket.receive_json()['type'] == 'speech.audio.delta'
+            assert socket.receive_json()['type'] == 'speech.audio.done'
+    assert calls == [('configured', 334), ('default', None), ('override', 250), ('restored', 334)]
+    assert config.reply_speech.frame_bytes == 12000
+
+
+@pytest.mark.parametrize('target', [True, False, 39, 1001, 334.0, '334'])
+def test_session_rejects_invalid_first_chunk(target):
+    client = TestClient(create_inference_gateway_app(_config()))
+    with client.websocket_connect('/v1/inference-session') as socket:
+        socket.send_json({'type': 'session.open', 'contract_version': 3, 'session_id': 'bad', 'speech_first_chunk_ms': target})
+        error = socket.receive_json()
+        assert error['type'] == 'error'
+        assert error['code'] == 'invalid_request'
+        assert 'first_chunk_ms' in error['detail']
+
+
+def test_speculation_hash_binds_target_but_default_digest_is_unchanged():
+    fields = dict(text='你好', voice='voice', instruction='natural', generation_id='gen', output_epoch=1)
+    legacy = dict(fields)
+    legacy['text_hash'] = 'sha256:' + hashlib.sha256(legacy.pop('text').encode()).hexdigest()
+    expected = 'sha256:' + hashlib.sha256(json.dumps(legacy, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    assert gateway_module._speculative_speech_hash(**fields) == expected
+    assert len({gateway_module._speculative_speech_hash(**fields, first_chunk_ms=value) for value in (None, 250, 334)}) == 3
+
+
+@pytest.mark.asyncio
+async def test_speculation_cannot_commit_with_different_first_packet_target():
+    sent = []
+    class Socket:
+        async def send_json(self, event):
+            sent.append(event)
+    session = gateway_module._Session(Socket(), _config())
+    session.speech_first_chunk_ms = 334
+    state = gateway_module._SpeechSpeculation(request_id='speech', source_request_id='reply', voice='voice', instruction='natural', generation_id='gen', output_epoch=1, text_mode='plain', first_chunk_ms=334, text='hello', text_hash='sha256:correct')
+    state.text_completed.set()
+    session.speech_speculations['speech'] = state
+    await session._commit_speech({'request_id': 'speech', 'text_hash': state.text_hash, 'voice': state.voice, 'instruction': state.instruction, 'generation_id': state.generation_id, 'output_epoch': state.output_epoch, 'first_chunk_ms': 250})
+    assert sent[-1]['code'] == 'speculation_mismatch'
+    assert not state.committed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('committed', [False, True])
+async def test_adaptive_first_packet_accumulates_across_short_sentences(committed):
+    import base64
+    sent = []
+    calls = []
+    state = gateway_module._SpeechSpeculation(request_id='speech', source_request_id='reply', voice='voice', instruction='natural', generation_id='gen', output_epoch=1, text_mode='plain', first_chunk_ms=334)
+    class Socket:
+        async def send_json(self, event):
+            sent.append(event)
+    session = gateway_module._Session(Socket(), _config(reply_speech=GatewaySpeechConfig(endpoint='http://tts/stream')))
+    session.speech_first_chunk_ms = 334
+    source = [b'a' * 4800, b'b' * 17280, b'c' * 12000]
+    class Speech:
+        async def synthesize(self, *, text, voice, instruction, audio_sink, first_chunk_ms=None):
+            index = int(text)
+            calls.append(first_chunk_ms)
+            await audio_sink(source[index])
+            if index == 0:
+                assert not state.chunks
+                assert not sent
+            return SimpleNamespace(audio_bytes=len(source[index]), chunk_count=1, provider_response_id='mock')
+    session.reply_speech = Speech()
+    session.speech_speculations[state.request_id] = state
+    for text in ('0', '1', '2', None):
+        await state.text_queue.put(text)
+    state.committed = committed
+    state.commit_event.set()
+    await session._run_adaptive_speculative_speech(state)
+    assert calls == [334, 334, None]
+    frames = [base64.b64decode(event['delta']) for event in sent if event['type'] == 'speech.audio.delta'] if committed else state.chunks
+    assert list(map(len, frames)) == [16032, 12000, 6048]
+    assert b''.join(frames) == b''.join(source)
+    done = sent[-1]
+    assert done['type'] == 'speech.audio.done'
+    assert done['audio_bytes'] == 34080
+    assert done['chunk_count'] == 3
+    assert session.speculative_buffered_bytes == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('budget_kind', ['request', 'session'])
+async def test_adaptive_first_packet_pending_pcm_counts_toward_audio_budget(budget_kind):
+    sent = []
+    class Socket:
+        async def send_json(self, event):
+            sent.append(event)
+    config = _config(
+        reply_speech=GatewaySpeechConfig(endpoint='http://tts/stream', max_audio_bytes=8000 if budget_kind == 'request' else 32000),
+        max_session_speculative_audio_bytes=9000 if budget_kind == 'session' else 64000,
+    )
+    session = gateway_module._Session(Socket(), config)
+    session.speculative_buffered_bytes = 1000  # Another speculative response.
+    state = gateway_module._SpeechSpeculation(request_id='speech', source_request_id='reply', voice='voice', instruction='natural', generation_id='gen', output_epoch=1, text_mode='plain', first_chunk_ms=334)
+    class Speech:
+        async def synthesize(self, *, audio_sink, **kwargs):
+            await audio_sink(b'a' * 6000)
+            return SimpleNamespace(audio_bytes=6000, chunk_count=1, provider_response_id='mock')
+    session.reply_speech = Speech()
+    session.speech_speculations[state.request_id] = state
+    for text in ('first', 'second', None):
+        await state.text_queue.put(text)
+    await session._run_adaptive_speculative_speech(state)
+    assert sent[-1]['type'] == 'speech.error'
+    assert not state.chunks
+    assert state.pending_audio_bytes == 0
+    assert session.speculative_buffered_bytes == 1000
+
+
+@pytest.mark.asyncio
+async def test_adaptive_pending_pcm_survives_commit_and_releases_on_cancel():
+    sent = []
+    received = asyncio.Event()
+    class Socket:
+        async def send_json(self, event):
+            sent.append(event)
+    session = gateway_module._Session(Socket(), _config(reply_speech=GatewaySpeechConfig(endpoint='http://tts/stream')))
+    session.speech_first_chunk_ms = 334
+    session.speculative_buffered_bytes = 1000
+    state = gateway_module._SpeechSpeculation(request_id='speech', source_request_id='reply', voice='voice', instruction='natural', generation_id='gen', output_epoch=1, text_mode='plain', first_chunk_ms=334, text_hash='sha256:correct')
+    class Speech:
+        async def synthesize(self, *, audio_sink, **kwargs):
+            await audio_sink(b'a' * 6000)
+            received.set()
+            await asyncio.Event().wait()
+    session.reply_speech = Speech()
+    session.speech_speculations[state.request_id] = state
+    await state.text_queue.put('first')
+    task = asyncio.create_task(session._run_adaptive_speculative_speech(state))
+    try:
+        await asyncio.wait_for(received.wait(), 1)
+        assert state.pending_audio_bytes == 6000
+        assert session.speculative_buffered_bytes == 7000
+        state.text_completed.set()
+        await session._commit_speech({'request_id': state.request_id, 'text_hash': state.text_hash, 'voice': state.voice, 'instruction': state.instruction, 'generation_id': state.generation_id, 'output_epoch': state.output_epoch})
+        assert state.committed
+        assert session.speculative_buffered_bytes == 7000
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert state.pending_audio_bytes == 0
+    assert session.speculative_buffered_bytes == 1000
+    assert not any(event['type'] == 'speech.audio.delta' for event in sent)

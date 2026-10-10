@@ -50,17 +50,29 @@ class GatewaySpeechResult:
     provider_response_id: str | None
 
 
+def validate_first_chunk_ms(value: object) -> int | None:
+    if value is not None and (type(value) is not int or not 40 <= value <= 1000):
+        raise ValueError("first_chunk_ms must be an integer between 40 and 1000")
+    return value
+
+
 class _PcmFramer:
-    def __init__(self, frame_bytes: int) -> None:
+    def __init__(self, frame_bytes: int, *, first_frame_bytes: int | None = None) -> None:
         self._frame_bytes = frame_bytes
+        self._next_frame_bytes = first_frame_bytes or frame_bytes
         self._pending = bytearray()
+
+    @property
+    def pending_bytes(self) -> int:
+        return len(self._pending)
 
     def feed(self, chunk: bytes) -> tuple[bytes, ...]:
         self._pending.extend(chunk)
         frames: list[bytes] = []
-        while len(self._pending) >= self._frame_bytes:
-            frames.append(bytes(self._pending[: self._frame_bytes]))
-            del self._pending[: self._frame_bytes]
+        while len(self._pending) >= self._next_frame_bytes:
+            frames.append(bytes(self._pending[: self._next_frame_bytes]))
+            del self._pending[: self._next_frame_bytes]
+            self._next_frame_bytes = self._frame_bytes
         return tuple(frames)
 
     def finish(self) -> bytes | None:
@@ -101,9 +113,11 @@ class GatewaySpeechSynthesizer:
         voice: str,
         instruction: str,
         audio_sink: AudioSink,
+        first_chunk_ms: int | None = None,
     ) -> GatewaySpeechResult:
         if not text.strip() or not voice.strip():
             raise ValueError("gateway speech text and voice are required")
+        first_chunk_ms = validate_first_chunk_ms(first_chunk_ms)
         payload: dict[str, object] = {
             "text": text,
             "speaker_id": voice,
@@ -111,7 +125,13 @@ class GatewaySpeechSynthesizer:
         }
         if instruction.strip():
             payload["instruct"] = instruction.strip()
-        framer = _PcmFramer(self._config.frame_bytes)
+        if first_chunk_ms is not None:
+            payload["first_chunk_ms"] = first_chunk_ms
+        # 24 kHz mono PCM16: 48 bytes/ms. Only the first frame changes.
+        framer = _PcmFramer(
+            self._config.frame_bytes,
+            first_frame_bytes=(48 * first_chunk_ms if first_chunk_ms is not None else None),
+        )
         received_bytes = 0
         emitted_bytes = 0
         chunk_count = 0
@@ -135,6 +155,15 @@ class GatewaySpeechSynthesizer:
                         "speech provider rejected the request",
                         phase="provider",
                         retryable=response.status_code >= 500,
+                    )
+                if (
+                    first_chunk_ms is not None
+                    and response.headers.get("x-tts-first-chunk-ms") != str(first_chunk_ms)
+                ):
+                    raise GatewaySpeechError(
+                        "speech provider did not acknowledge first_chunk_ms",
+                        phase="protocol",
+                        retryable=False,
                     )
                 sample_rate = response.headers.get("x-audio-sample-rate")
                 if sample_rate not in (None, "24000"):
