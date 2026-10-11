@@ -91,6 +91,7 @@ def test_performance_control_reuses_staging_expression_and_tts_policy() -> None:
         "elapsed_ms": response.json()["elapsed_ms"],
     }
     assert model.requests[0].stage == "performance"
+    assert model.requests[0].session_instance_id == "performance:session-1"
 
 
 def test_performance_control_requires_its_private_token() -> None:

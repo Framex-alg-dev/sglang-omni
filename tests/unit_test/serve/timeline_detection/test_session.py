@@ -143,7 +143,7 @@ async def test_accepts_observation_from_the_current_media_chunk() -> None:
             identity_epoch=3,
             observer_epoch=4,
             stream_epoch=1,
-            event_type="E06",
+            event_type="E6",
             summary="起身",
             evidence_start_ms=0,
             evidence_end_ms=40,

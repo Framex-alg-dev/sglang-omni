@@ -561,11 +561,17 @@ class Qwen3OmniPreprocessor:
         if not messages_mm:
             return None
         cache_task = payload.request.metadata.get("task")
-        if cache_task not in {"action_suffix_scoring", "action_direct"}:
+        if cache_task not in {
+            "action_suffix_scoring",
+            "action_direct",
+            "timeline_detection",
+        }:
             return None
-        if cache_task == "action_direct":
-            # Direct action generation shares only the exact rendered system
-            # boundary. Current-turn text and media remain request-private.
+        if cache_task in {"action_direct", "timeline_detection"}:
+            # Direct action and timeline generation share only the exact
+            # rendered system boundary. Current-turn text and media remain
+            # request-private. Timeline additionally passes through the
+            # published-prompt digest verifier in _finalize_state.
             action_spec = {
                 "cache_static_system_only": True,
                 "history_message_count": 0,
@@ -664,12 +670,17 @@ class Qwen3OmniPreprocessor:
                 int(input_ids.numel()),
             )
             return None
-        return {
+        cache_metadata = {
             "cache_prefix_token_count": boundary_len,
             "history_message_count": history_count,
             "history_audio_count": boundary_audio_count,
             "history_image_count": boundary_image_count,
         }
+        if cache_task == "timeline_detection":
+            system_content = messages_mm[0].get("content")
+            if isinstance(system_content, str):
+                cache_metadata["static_system_prompt"] = system_content
+        return cache_metadata
 
     def _finalize_state(
         self,
@@ -696,9 +707,15 @@ class Qwen3OmniPreprocessor:
             from sglang_omni.models.qwen3_omni.public_prefix import PublicPrefixVerifier
             if not hasattr(self, "_public_prefix_verifier"):
                 self._public_prefix_verifier = PublicPrefixVerifier(self.tokenizer, self.processor)
-            if payload.request.metadata.get("task") == "action_direct":
+            cache_task = payload.request.metadata.get("task")
+            if cache_task == "action_direct":
                 public_end = int(
                     action_cache_metadata.get("cache_prefix_token_count", 0)
+                )
+            elif cache_task == "timeline_detection":
+                public_end = self._public_prefix_verifier.boundary(
+                    action_cache_metadata.get("static_system_prompt"),
+                    input_ids.tolist(),
                 )
             else:
                 spec = payload.request.params.get("action_scoring", {})

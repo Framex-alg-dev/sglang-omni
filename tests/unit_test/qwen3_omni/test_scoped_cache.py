@@ -37,6 +37,34 @@ def test_turn_router_scoring_prompt_is_an_approved_public_prefix():
     assert verifier.boundary(_SCORING_SYSTEM_PROMPT, full_ids) == len(full_ids)
 
 
+def test_timeline_v25_prompt_is_an_approved_public_prefix():
+    from sglang_omni.models.qwen3_omni.public_prefix import (
+        PublicPrefixVerifier,
+        is_published_prompt,
+    )
+    from sglang_omni.serve.timeline_detection.prompt import SYSTEM_PROMPT
+
+    assert is_published_prompt(SYSTEM_PROMPT)
+    assert not is_published_prompt(SYSTEM_PROMPT + "\nchanged")
+
+    class Tokenizer:
+        @staticmethod
+        def encode(text, add_special_tokens=False):
+            assert add_special_tokens is False
+            return list(text.encode("utf-8"))
+
+    class Processor:
+        @staticmethod
+        def apply_chat_template(messages, *, tokenize, add_generation_prompt):
+            assert tokenize is False
+            assert add_generation_prompt is False
+            return messages[0]["content"][0]["text"]
+
+    full_ids = Tokenizer.encode(SYSTEM_PROMPT)
+    verifier = PublicPrefixVerifier(Tokenizer(), Processor())
+    assert verifier.boundary(SYSTEM_PROMPT, full_ids) == len(full_ids)
+
+
 @pytest.mark.parametrize('page', [1, 2, 4])
 def test_public_session_request_boundaries_and_single_ownership(page):
     class Allocator:

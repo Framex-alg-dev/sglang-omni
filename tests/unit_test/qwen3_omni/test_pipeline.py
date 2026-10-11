@@ -85,6 +85,16 @@ from tests.unit_test.fixtures.qwen_fakes import (
             },
         ),
         (
+            {"task": "action_direct", "logical_request_id": "action-a"},
+            {
+                "stage": "action_direct",
+                "logical_request_id": "action-a",
+                "prefill_priority_s": 0.25,
+                "decode_protect_steps": 2,
+                "decode_protect_s": 0.10,
+            },
+        ),
+        (
             {
                 "task": "session_visual_gesture_probe",
                 "logical_request_id": "turn-a",

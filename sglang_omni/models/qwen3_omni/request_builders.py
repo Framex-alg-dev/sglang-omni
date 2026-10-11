@@ -50,6 +50,7 @@ CODE2WAV_STAGE = "code2wav"
 MM_AGGREGATE_STAGE = "mm_aggregate"
 ACTION_SCORE_STAGE = "action_score"
 ACTION_SCORE_TASK = "action_suffix_scoring"
+ACTION_DIRECT_TASK = "action_direct"
 ENCODER_PREFETCH_STAGE = "encoder_prefetch_done"
 IMAGE_ENCODER_PREFETCH_TASK = "image_encoder_prefetch"
 TURN_INTENT_TASK = "session_turn_intent"
@@ -139,6 +140,14 @@ def realtime_latency_priority_plan(
             "prefill_priority_s": 0.25,
             "decode_protect_steps": 1,
             "decode_protect_s": 0.05,
+        }
+    if task == ACTION_DIRECT_TASK:
+        return {
+            "stage": "action_direct",
+            "logical_request_id": logical_request_id,
+            "prefill_priority_s": 0.25,
+            "decode_protect_steps": 2,
+            "decode_protect_s": 0.10,
         }
     if task in VISUAL_PROBE_TASKS and metadata.get("private_output") is True:
         return {

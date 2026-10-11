@@ -43,7 +43,7 @@ def _frame(at_ms: int, sequence: int) -> TimelineMediaChunk:
     )
 
 
-def test_builds_cold_start_with_zero_history_and_seven_current_frames() -> None:
+def test_builds_cold_start_with_zero_history_and_six_current_frames() -> None:
     assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
     assert assembler.append(_audio(0, 3_000, 1)) == ()
     windows = ()
@@ -56,7 +56,7 @@ def test_builds_cold_start_with_zero_history_and_seven_current_frames() -> None:
     assert window.end_ms == 3_000
     assert window.history_frames == ()
     assert [item.start_ms for item in window.current_frames] == list(
-        range(0, 3_001, 500)
+        range(500, 3_001, 500)
     )
     assert window.audio_status is AudioEvidenceStatus.COMPLETE
     assert window.evidence_mode == "audio_video"
@@ -72,7 +72,7 @@ def test_accepts_contract_channel_name_alias() -> None:
     assert assembler.append(_audio(0, 1_000, 1)) == ()
 
 
-def test_builds_steady_window_with_seven_history_frames() -> None:
+def test_builds_steady_window_with_fourteen_history_and_six_current_frames() -> None:
     assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
     windows = []
     sequence = 1
@@ -87,8 +87,12 @@ def test_builds_steady_window_with_seven_history_frames() -> None:
     steady = next(item for item in windows if item.end_ms == 12_000)
     assert steady.start_ms == 2_000
     assert steady.current_start_ms == 9_000
-    assert len(steady.history_frames) == 7
-    assert len(steady.current_frames) == 7
+    assert [item.start_ms for item in steady.history_frames] == list(
+        range(2_500, 9_001, 500)
+    )
+    assert [item.start_ms for item in steady.current_frames] == list(
+        range(9_500, 12_001, 500)
+    )
 
 
 def test_does_not_fabricate_missing_current_frames() -> None:
@@ -174,8 +178,8 @@ def test_reports_candidate_count_when_current_window_is_discarded(caplog) -> Non
             assembler.append(_frame(at_ms, index))
 
     assert "reason=current_frames_unavailable" in caplog.text
-    assert "current_candidates=4" in caplog.text
-    assert "current_required=7" in caplog.text
+    assert "current_candidates=3" in caplog.text
+    assert "current_required=6" in caplog.text
     assert "discarded_total=1" in caplog.text
 
 

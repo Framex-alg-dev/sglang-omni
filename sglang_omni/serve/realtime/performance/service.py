@@ -7,7 +7,6 @@ import logging
 import os
 import secrets
 import time
-import uuid
 from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket
@@ -110,7 +109,12 @@ class _StatelessPerformancePipeline(PerformancePipeline):
         self.client = client
         self.model_name = request.model
         self.session_id = request.session_id
-        self.session_instance_id = f"performance-{uuid.uuid4().hex}"
+        # Keep cache ownership stable for this real browser session. Encoder
+        # keys still include the exact media digest, while the scoped radix
+        # cache exposes only the verified static prompt boundary. This lets a
+        # superseded cue and its final response reuse identical audio/prefix
+        # work without allowing media KV to cross sessions.
+        self.session_instance_id = f"performance:{request.session_id}"
         self.language = request.language
         self.action_locale = request.action_locale
         self.action_language = "zh" if request.action_locale == "zh-CN" else "en"

@@ -1,13 +1,18 @@
-"""Prompt-only 43-event timeline detector backed by the shared Omni client."""
+"""V25 frozen 49-event timeline detector backed by the shared Omni client."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import hashlib
+import io
 import logging
+import time
+from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+from PIL import Image, ImageOps
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 
@@ -18,6 +23,7 @@ from .contracts import (
     TimelineSessionStart,
 )
 from .parser import ModelOutputError, parse_event_output
+from .catalog import EVENT_ID_SET, OCCURRENCE_EVENT_IDS
 from .prompt import (
     EVENT_SUMMARIES,
     PROMPT_VERSION,
@@ -29,6 +35,11 @@ from .window import EventDetectionWindow, EventWindowAssembler
 
 
 logger = logging.getLogger(__name__)
+
+
+MODEL_IMAGE_WIDTH = 448
+MODEL_IMAGE_HEIGHT = 252
+NORMALIZED_FRAME_CACHE_SIZE = 64
 
 
 class CompletionClient(Protocol):
@@ -65,8 +76,10 @@ class _EventEdgeLatch:
         self._rearm_absent_windows = rearm_absent_windows
         self._latched: set[str] = set()
         self._absent_streaks: dict[str, int] = {}
+        self._occurrence_high_water: dict[str, int] = {}
 
     def accept(self, event_ids: list[str]) -> tuple[str, ...]:
+        counts = Counter(event_ids)
         present = set(event_ids)
         for event_id in tuple(self._latched):
             if event_id in present:
@@ -79,17 +92,84 @@ class _EventEdgeLatch:
             else:
                 self._absent_streaks[event_id] = streak
 
-        accepted = tuple(
-            event_id for event_id in event_ids if event_id not in self._latched
-        )
+        accepted: list[str] = []
+        for event_id in event_ids:
+            if event_id in OCCURRENCE_EVENT_IDS:
+                continue
+            if event_id not in self._latched:
+                accepted.append(event_id)
+        for event_id in OCCURRENCE_EVENT_IDS:
+            current = counts.get(event_id, 0)
+            previous = self._occurrence_high_water.get(event_id, 0)
+            if current > previous:
+                accepted.extend(event_id for _ in range(current - previous))
+                self._occurrence_high_water[event_id] = current
+            elif current == 0 and event_id not in self._latched:
+                self._occurrence_high_water.pop(event_id, None)
         for event_id in present:
             self._latched.add(event_id)
             self._absent_streaks[event_id] = 0
-        return accepted
+        return tuple(accepted)
 
     def clear(self) -> None:
         self._latched.clear()
         self._absent_streaks.clear()
+        self._occurrence_high_water.clear()
+
+
+class _V25R12Compatibility:
+    """Translate V25 occurrence semantics into the current R12 E contract."""
+
+    _ROLLING_WINDOW_MS = 10_000
+
+    def __init__(self) -> None:
+        self._occurrences: dict[str, deque[int]] = {
+            "E8": deque(),
+            "E49": deque(),
+        }
+        self._aggregate_emitted: set[str] = set()
+
+    def translate(self, event_ids: tuple[str, ...], *, end_ms: int) -> tuple[str, ...]:
+        unknown = set(event_ids) - EVENT_ID_SET
+        if unknown:
+            raise ModelOutputError(
+                f"compatibility input is outside the 50-event catalog: {sorted(unknown)}"
+            )
+        self._prune(end_ms)
+        translated: list[str] = []
+        for event_id in event_ids:
+            if event_id not in self._occurrences:
+                translated.append(event_id)
+                continue
+            occurrences = self._occurrences[event_id]
+            occurrences.append(end_ms)
+            if len(occurrences) == 1:
+                if event_id == "E8":
+                    translated.append("E8")
+                continue
+            if event_id not in self._aggregate_emitted:
+                translated.append("E50" if event_id == "E8" else "E49")
+                self._aggregate_emitted.add(event_id)
+        result = tuple(translated)
+        unknown = set(result) - EVENT_ID_SET
+        if unknown:
+            raise ModelOutputError(
+                f"compatibility output is outside the 50-event catalog: {sorted(unknown)}"
+            )
+        return result
+
+    def _prune(self, end_ms: int) -> None:
+        cutoff = end_ms - self._ROLLING_WINDOW_MS
+        for event_id, occurrences in self._occurrences.items():
+            while occurrences and occurrences[0] <= cutoff:
+                occurrences.popleft()
+            if not occurrences:
+                self._aggregate_emitted.discard(event_id)
+
+    def clear(self) -> None:
+        for occurrences in self._occurrences.values():
+            occurrences.clear()
+        self._aggregate_emitted.clear()
 
 
 class SglangClientTimelineDetectionModel:
@@ -112,7 +192,7 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline max_attempts must be positive")
         if inference_interval_ms not in {1_000, 3_000} or window_ms != 10_000:
             raise ValueError(
-                "the 43-event detector requires a 1s or 3s cadence and 10s H/C window"
+                "the V25 detector requires a 1s or 3s cadence and 10s H/C window"
             )
         if max_window_bytes <= 0:
             raise ValueError("timeline max_window_bytes must be positive")
@@ -121,7 +201,9 @@ class SglangClientTimelineDetectionModel:
         self.model_id = start.model_id
         self.model_version = model_version
         self.prompt_version = PROMPT_VERSION
-        self._attribution_duration_ms = inference_interval_ms
+        # V25/R10 was trained with the complete trailing C=(T-3s,T] as the
+        # decision range, even though the service is called every second.
+        self._attribution_duration_ms = 3_000
         self._max_attempts = max_attempts
         self._assembler = EventWindowAssembler(
             audio_format=start.audio_format,
@@ -136,6 +218,12 @@ class SglangClientTimelineDetectionModel:
                 (3_000 + inference_interval_ms - 1) // inference_interval_ms,
             )
         )
+        self._compatibility = _V25R12Compatibility()
+        # Adjacent one-second windows retain 18 of their 20 selected frames.
+        # Keep the deterministic JPEG normalization result per media sequence
+        # so those retained frames do not repeat CPU decode/resize/encode work.
+        # The cache is instance-local and is cleared on every stream epoch.
+        self._normalized_frames: OrderedDict[tuple[int, int], bytes] = OrderedDict()
         self._windows: asyncio.Queue[_WindowWork] = asyncio.Queue(maxsize=1)
         self._outputs: asyncio.Queue[_ModelOutput] = asyncio.Queue(maxsize=1)
         self._worker: asyncio.Task[None] | None = None
@@ -175,6 +263,8 @@ class SglangClientTimelineDetectionModel:
         self._generation += 1
         self._assembler.clear()
         self._event_edges.clear()
+        self._compatibility.clear()
+        self._normalized_frames.clear()
         _drain(self._windows)
         _drain(self._outputs)
 
@@ -183,6 +273,7 @@ class SglangClientTimelineDetectionModel:
             return
         self._closed = True
         self._assembler.clear()
+        self._normalized_frames.clear()
         worker = self._worker
         if worker is not None:
             worker.cancel()
@@ -233,10 +324,15 @@ class SglangClientTimelineDetectionModel:
             f"timeline:{self._start.session_id}:{self._start.observer_epoch}:"
             f"{work.stream_epoch}:{work.window.end_ms}"
         )
+        input_started = time.perf_counter()
+        frames = (*work.window.history_frames, *work.window.current_frames)
+        image_jpegs = tuple(self._normalized_frame_jpeg(frame) for frame in frames)
+        input_build_ms = (time.perf_counter() - input_started) * 1_000
         for attempt in range(self._max_attempts):
             request = _generate_request(
                 model_id=self.model_id,
                 window=work.window,
+                image_jpegs=image_jpegs,
                 retry=attempt > 0,
                 logical_request_id=logical_request_id,
                 contract_version=self._start.contract_version,
@@ -244,10 +340,12 @@ class SglangClientTimelineDetectionModel:
                 stream_epoch=work.stream_epoch,
                 attribution_duration_ms=self._attribution_duration_ms,
             )
+            inference_started = time.perf_counter()
             result = await self._client.completion(
                 request,
                 request_id=f"{logical_request_id}:{attempt + 1}",
             )
+            inference_ms = (time.perf_counter() - inference_started) * 1_000
             raw_output = str(result.text)
             try:
                 event_ids = parse_event_output(raw_output)
@@ -261,7 +359,26 @@ class SglangClientTimelineDetectionModel:
                     exc,
                 )
                 continue
-            accepted_event_ids = self._event_edges.accept(event_ids)
+            logger.info(
+                "timeline inference complete request_id=%s attempt=%d "
+                "input_layout=ordered_hc_images image_size=%dx%d "
+                "history_frames=%d current_frames=%d input_build_ms=%.1f "
+                "inference_ms=%.1f total_ms=%.1f raw_output=%r",
+                logical_request_id,
+                attempt + 1,
+                MODEL_IMAGE_WIDTH,
+                MODEL_IMAGE_HEIGHT,
+                len(work.window.history_frames),
+                len(work.window.current_frames),
+                input_build_ms,
+                inference_ms,
+                input_build_ms + inference_ms,
+                raw_output,
+            )
+            accepted_event_ids = self._compatibility.translate(
+                self._event_edges.accept(event_ids),
+                end_ms=work.window.end_ms,
+            )
             return tuple(
                 _observation(
                     event_id,
@@ -278,11 +395,24 @@ class SglangClientTimelineDetectionModel:
             f"attempts: {last_error}"
         )
 
+    def _normalized_frame_jpeg(self, frame: TimelineMediaChunk) -> bytes:
+        key = (frame.stream_epoch, frame.sequence)
+        cached = self._normalized_frames.get(key)
+        if cached is not None:
+            self._normalized_frames.move_to_end(key)
+            return cached
+        normalized = _normalize_frame_jpeg(frame.payload)
+        self._normalized_frames[key] = normalized
+        if len(self._normalized_frames) > NORMALIZED_FRAME_CACHE_SIZE:
+            self._normalized_frames.popitem(last=False)
+        return normalized
+
 
 def _generate_request(
     *,
     model_id: str,
     window: EventDetectionWindow,
+    image_jpegs: tuple[bytes, ...],
     retry: bool,
     logical_request_id: str,
     contract_version: int,
@@ -295,17 +425,6 @@ def _generate_request(
     mode = "冷启动" if window.history_duration_ms < 7_000 else "标准稳态"
     audio_status = window.audio_status.value
     attribution_seconds = attribution_duration_ms / 1_000
-    attribution_start_ms = window.end_ms - attribution_duration_ms
-    current_context_frames = tuple(
-        frame
-        for frame in window.current_frames
-        if frame.start_ms < attribution_start_ms
-    )
-    attribution_frames = tuple(
-        frame
-        for frame in window.current_frames
-        if frame.start_ms >= attribution_start_ms
-    )
     audio_start_ms = window.audio_start_ms
     audio_duration_seconds = (
         (window.end_ms - audio_start_ms) / 1_000
@@ -322,7 +441,7 @@ def _generate_request(
     user_prompt = (
         f"本次为{mode}窗口：H={history_seconds:g}秒/"
         f"{len(window.history_frames)}张图片，C=3秒/"
-        f"{len(window.current_frames)}张图片，A=窗口最后{attribution_seconds:g}秒，"
+        f"{len(window.current_frames)}张图片，完整C={attribution_seconds:g}秒均为本轮判定范围，"
         f"音频状态={audio_description}。\n"
         f"{USER_PROMPT}"
     )
@@ -339,34 +458,20 @@ def _generate_request(
         *({"type": "image"} for _ in window.history_frames),
         {
             "type": "text",
-            "text": "【HISTORY H结束｜以下是CURRENT C；H仍可用于完整H+C取证】",
+            "text": "【HISTORY H结束｜与CURRENT C连续、无重叠无间隙】",
         },
         {
             "type": "text",
             "text": (
-                "【CURRENT C前段｜只作取证、不可归属本轮｜"
-                f"{len(current_context_frames)}张图片开始】"
+                f"【CURRENT C开始｜{attribution_seconds:g}秒｜"
+                "完整C=(T-3s,T]均为本轮判定范围｜"
+                f"{len(window.current_frames)}张图片开始】"
             ),
         },
-        *({"type": "image"} for _ in current_context_frames),
+        *({"type": "image"} for _ in window.current_frames),
         {
             "type": "text",
-            "text": (
-                "【CURRENT C前段结束｜以下图片才是ATTRIBUTION A】"
-            ),
-        },
-        {
-            "type": "text",
-            "text": (
-                f"【ATTRIBUTION A｜窗口最后{attribution_seconds:g}秒｜"
-                "只有首次确认点落在以下图片对应时段的事件才可输出｜"
-                f"{len(attribution_frames)}张图片开始】"
-            ),
-        },
-        *({"type": "image"} for _ in attribution_frames),
-        {
-            "type": "text",
-            "text": "【ATTRIBUTION A结束｜此前已成立的事件不得重复输出】",
+            "text": "【CURRENT C结束｜H只作取证，达标点落在完整C内即可输出】",
         },
     ]
     if window.audio_wav is not None:
@@ -384,7 +489,7 @@ def _generate_request(
                     "text": (
                         f"【同步音频完整覆盖{audio_duration_seconds:g}秒："
                         f"{audio_boundary}，"
-                        "但只把确认点落入A的事件归给本轮】"
+                        "完整CURRENT C均为本轮判定范围】"
                     ),
                 },
                 {"type": "audio"},
@@ -401,7 +506,6 @@ def _generate_request(
             }
         )
     content.append({"type": "text", "text": user_prompt})
-    frames = (*window.history_frames, *window.current_frames)
     metadata: dict[str, Any] = {
         "task": "timeline_detection",
         "task_role": "timeline_detection",
@@ -419,10 +523,13 @@ def _generate_request(
             if window.audio_wav is not None
             else "none"
         ),
+        "input_layout": "ordered_hc_images",
         "attribution_duration_ms": attribution_duration_ms,
-        "current_context_image_count": len(current_context_frames),
-        "attribution_image_count": len(attribution_frames),
-        "images": [_data_url("image/jpeg", frame.payload) for frame in frames],
+        "history_frame_count": len(window.history_frames),
+        "current_frame_count": len(window.current_frames),
+        "image_width": MODEL_IMAGE_WIDTH,
+        "image_height": MODEL_IMAGE_HEIGHT,
+        "images": [_data_url("image/jpeg", payload) for payload in image_jpegs],
     }
     if window.audio_wav is not None:
         metadata["audios"] = [_data_url("audio/wav", window.audio_wav)]
@@ -436,10 +543,10 @@ def _generate_request(
             temperature=0.0,
             top_p=1.0,
             seed=0,
-            max_new_tokens=128,
+            max_new_tokens=48,
         ),
         stream=False,
-        max_tokens=128,
+        max_tokens=48,
         output_modalities=["text"],
         metadata=metadata,
     )
@@ -481,6 +588,21 @@ def _observation(
 
 def _data_url(mime: str, payload: bytes) -> str:
     return f"data:{mime};base64," + base64.b64encode(payload).decode("ascii")
+
+
+def _normalize_frame_jpeg(payload: bytes) -> bytes:
+    """Fit a camera frame into the V25 visual budget without cropping people."""
+
+    with Image.open(io.BytesIO(payload)) as source:
+        image = ImageOps.pad(
+            source.convert("RGB"),
+            (MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT),
+            method=Image.Resampling.LANCZOS,
+            color=(0, 0, 0),
+        )
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=90, optimize=True)
+    return output.getvalue()
 
 
 def _drain(queue: asyncio.Queue[Any]) -> None:

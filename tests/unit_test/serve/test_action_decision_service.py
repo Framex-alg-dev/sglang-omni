@@ -16,7 +16,7 @@ from sglang_omni.serve.action_decision.contracts import (
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
 from sglang_omni.serve.action_decision.prompt import (
-    E57A_REFERENCE_SYSTEM_PROMPT_PATH,
+    E65_REFERENCE_SYSTEM_PROMPT_PATH,
     build_system_prompt,
     build_user_prompt,
 )
@@ -160,7 +160,7 @@ def test_e57_prompt_contract_preserves_production_channel_and_catalog() -> None:
     assert "结果映射：1=_x_b，2=_x_c" in prompt
 
 
-def test_e57_reference_profile_uses_exact_training_prompts_without_asr() -> None:
+def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None:
     audio_payload = b"\0\0"
     image_payload = b"jpeg"
     media = tuple(
@@ -191,14 +191,14 @@ def test_e57_reference_profile_uses_exact_training_prompts_without_asr() -> None
         DecisionChannel.BODY,
         text="这个 ASR 文本不得进入音频模式提示词",
         media=media,
-        runtime_context={"prompt_profile": "e57a_eval"},
+        runtime_context={"prompt_profile": "e65_step1512_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E57A_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    expected_system = E65_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     assert build_system_prompt(request, catalog) == expected_system
     user_prompt = build_user_prompt(request, catalog)
-    assert "capture_mode=ptt_utterance" in user_prompt
-    assert "input_frame_count=5" in user_prompt
+    assert "user_video：按时间顺序提供的用户侧画面" in user_prompt
+    assert "user_audio：这是本轮用户原始音频" in user_prompt
     assert "trigger=user_input" in user_prompt
     assert "ASR" not in user_prompt
 
@@ -260,7 +260,7 @@ def test_model_request_has_exact_constraint_and_audio_plus_multiple_images() -> 
     ]
 
 
-def test_e57_reference_request_places_five_images_and_audio_before_text() -> None:
+def test_e65_reference_request_places_five_images_and_audio_before_text() -> None:
     audio_payload = b"\0\0"
     image_payload = b"jpeg"
     images = tuple(
@@ -284,7 +284,7 @@ def test_e57_reference_request_places_five_images_and_audio_before_text() -> Non
             _request(
                 DecisionChannel.BODY,
                 media=(*images, audio),
-                runtime_context={"prompt_profile": "e57a_eval"},
+                runtime_context={"prompt_profile": "e65_step1512_fp8"},
             )
         )
         return client.requests[0][1]

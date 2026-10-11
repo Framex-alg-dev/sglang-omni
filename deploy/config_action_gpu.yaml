@@ -1,8 +1,8 @@
-# Qwen3-Omni E57-A action-only runtime. Body and expression use two independent
+# Qwen3-Omni E65 step1512 FP8 action-only runtime. Body and expression use two independent
 # requests to the same model and the /v1/action-decision contract.
 config_cls: Qwen3OmniPipelineConfig
-name: qwen3-omni-action-gpu
-model_path: /data/xingmt/action_omni_output/fp8_overlay_e57a
+name: qwen3-omni-e65-step1512-fp8
+model_path: /data/xingmt/action_omni_output/fp8_overlay_e65_step1512
 
 runtime_overrides:
   thinker:

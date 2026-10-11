@@ -11,9 +11,9 @@ from .contracts import ActionDecisionRequest, DecisionChannel
 
 
 MAX_CHARACTER_PROMPT_CHARS = 32_000
-E57A_REFERENCE_PROFILE = "e57a_eval"
-E57A_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
-    "e57a_system_prompt.txt"
+E65_REFERENCE_PROFILE = "e65_step1512_fp8"
+E65_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
+    "e65_step1512_system_prompt.md"
 )
 
 
@@ -58,18 +58,18 @@ E57_FINAL_TASK_CONSTRAINTS = """[FINAL_TASK_CONSTRAINTS]
 - 两个加数无法可靠识别、指代不清，或和没有已注册数字手势时，选择 unsupported；不得猜测或用邻近数字替代。"""
 
 
-def uses_e57a_reference_prompt(request: ActionDecisionRequest) -> bool:
+def uses_e65_reference_prompt(request: ActionDecisionRequest) -> bool:
     return (
         request.channel is DecisionChannel.BODY
-        and request.runtime_context.get("prompt_profile") == E57A_REFERENCE_PROFILE
+        and request.runtime_context.get("prompt_profile") == E65_REFERENCE_PROFILE
     )
 
 
 @lru_cache(maxsize=1)
-def _e57a_reference_system_prompt() -> str:
-    prompt = E57A_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+def _e65_reference_system_prompt() -> str:
+    prompt = E65_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     if not prompt.strip():
-        raise ValueError("E57-A reference system prompt must not be empty")
+        raise ValueError("E65 reference system prompt must not be empty")
     return prompt
 
 
@@ -88,8 +88,8 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         for value in (request.character_prompt, request.session_prompt, request.text)
     ):
         raise ValueError("action decision text fields must not contain NUL")
-    if uses_e57a_reference_prompt(request):
-        return _e57a_reference_system_prompt()
+    if uses_e65_reference_prompt(request):
+        return _e65_reference_system_prompt()
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [
@@ -127,29 +127,25 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
 
 def build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
     media_kinds = [item.kind for item in request.media]
-    if uses_e57a_reference_prompt(request):
+    if uses_e65_reference_prompt(request):
         image_count = sum(kind in {"image", "video"} for kind in media_kinds)
         has_audio = "audio" in media_kinds
-        modalities = []
+        parts = []
         if image_count:
-            modalities.append("user_video")
+            parts.append("user_video：按时间顺序提供的用户侧画面；不是数字人输出画面。")
         if has_audio:
-            modalities.append("user_audio")
-        parts = [
-            "[TURN_STATE]",
-            "capture_mode=ptt_utterance",
-            "video_scope=整段=本轮PTT说话期间的当前输入",
-            f"modalities={','.join(modalities) or 'none'}",
-            "video_representation=existing_committed_ptt_5_frames",
-            f"input_frame_count={image_count}",
-            "user_video：按时间顺序提供的用户侧画面；不是数字人输出画面。",
-            "user_audio：这是本轮用户原始音频，请直接理解语义和语气。",
-            "[RUNTIME_CONTEXT]",
-            "source=trusted_orchestrator",
-            "turn_origin=user",
-            "trigger=user_input",
-            "现在只输出一个合法的两-token动作 code。",
-        ]
+            parts.append("user_audio：这是本轮用户原始音频，请直接理解语义和语气。")
+        if request.text and not has_audio:
+            parts.append(f"typed_user_text：{request.text}")
+        parts.extend(
+            (
+                "[RUNTIME_CONTEXT]",
+                "source=trusted_orchestrator",
+                "turn_origin=user",
+                "trigger=user_input",
+                "现在只输出一个合法的两-token动作 code。",
+            )
+        )
         return "\n".join(parts)
     state = {
         "channel": request.channel.value,

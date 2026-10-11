@@ -30,7 +30,7 @@ from .contracts import ActionDecision, ActionDecisionRequest, DecisionChannel
 from .prompt import (
     build_system_prompt,
     build_user_prompt,
-    uses_e57a_reference_prompt,
+    uses_e65_reference_prompt,
 )
 
 
@@ -221,7 +221,7 @@ class ActionDecisionEngine:
         ]
         content: list[dict[str, str]] = (
             [*media_content, user_prompt]
-            if uses_e57a_reference_prompt(request)
+            if uses_e65_reference_prompt(request)
             else [user_prompt, *media_content]
         )
         metadata: dict[str, Any] = {

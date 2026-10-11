@@ -13,7 +13,14 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import load_runtime_act
 # cross-session KV namespace. This digest is the turn-router v5 fixed-candidate
 # scoring prompt assembled by task_classification.client_model.
 _PUBLISHED_EXTERNAL_PROMPT_SHA256 = frozenset(
-    {"ee2921ee7b1be5518c0ff8dd545d76e1b966c3e32d2c65787e7a54b8ec9da545"}
+    {
+        # Turn-router v5 fixed-candidate scoring prompt.
+        "ee2921ee7b1be5518c0ff8dd545d76e1b966c3e32d2c65787e7a54b8ec9da545",
+        # Timeline detection V25 frozen 49-event system prompt. Timeline
+        # requests may share only this exact system-message KV prefix; all
+        # window text, image/audio evidence, and generated tokens stay private.
+        "9b14e51306c60b4d15d8be71da2f22f8d23af60457edee86909573e06f704745",
+    }
 )
 
 

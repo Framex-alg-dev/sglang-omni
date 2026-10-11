@@ -1,66 +1,91 @@
-"""Canonicalize the event detector's short JSON output."""
+"""Parse V25 aliases/P-codes and expose the stable E-code protocol."""
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
-from .prompt import EVENT_IDS
+from .catalog import EVENT_IDS, OCCURRENCE_EVENT_IDS, P_TO_EVENT
+from .prompt import ALIAS_TO_P
 
 
 class ModelOutputError(ValueError):
-    """Raised when no usable event JSON can be recovered."""
+    """Raised when no usable compact event output can be recovered."""
 
 
 _EVENT_ORDER = {event_id: index for index, event_id in enumerate(EVENT_IDS)}
 
 
-def normalize_event_ids(events: set[str]) -> list[str]:
-    """Apply deterministic conflicts for the 43-event product catalog."""
-
-    normalized = set(events)
-    if "E10" in normalized:
-        normalized.discard("E09")
-    if normalized & {"E32", "E33"}:
-        normalized.difference_update({"E24", "E25", "E26", "E29"})
-    if "E33" in normalized:
-        normalized.discard("E08")
-    if "E16" in normalized:
-        normalized.difference_update({"E24", "E35"})
-    if "E44" in normalized:
-        normalized.discard("E11")
-    if normalized & {"E27", "E31"}:
-        normalized.discard("E30")
-    return sorted(normalized, key=_EVENT_ORDER.__getitem__)
-
-
-def _decode_json_object(raw_output: str) -> dict[str, Any]:
+def _strip_accidental_wrapper(raw_output: str) -> str:
     text = raw_output.strip()
-    if not text:
-        raise ModelOutputError("model returned empty text")
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        if start < 0:
-            raise ModelOutputError("model output does not contain a JSON object")
-        try:
-            value, _ = json.JSONDecoder().raw_decode(text[start:])
-        except json.JSONDecodeError as exc:
-            raise ModelOutputError("model output contains invalid JSON") from exc
-    if not isinstance(value, dict):
-        raise ModelOutputError("model output must be a JSON object")
-    return value
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3:
+            text = "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _to_event_id(token: str) -> str | None:
+    model_code = ALIAS_TO_P.get(token, token if token.startswith("P") else None)
+    if model_code is not None:
+        if model_code == "P27":
+            return None
+        event_id = P_TO_EVENT.get(model_code)
+        if event_id is None:
+            raise ModelOutputError(f"invalid model event token: {token}")
+        return event_id
+    if token.startswith("E"):
+        if token == "E27":
+            return None
+        if token in _EVENT_ORDER:
+            return token
+    raise ModelOutputError(f"invalid model event token: {token}")
 
 
 def parse_event_output(raw_output: str) -> list[str]:
-    """Return whitelisted, de-duplicated events in canonical order."""
+    """Return canonical E-codes while retaining independent-instance counts."""
 
-    value = _decode_json_object(raw_output)
-    events = value.get("e")
-    if not isinstance(events, list):
-        raise ModelOutputError("model output must contain an e array")
-    if any(not isinstance(event_id, str) for event_id in events):
-        raise ModelOutputError("every e item must be a string")
-    canonical = {event_id for event_id in events if event_id in _EVENT_ORDER}
-    return normalize_event_ids(canonical)
+    text = _strip_accidental_wrapper(raw_output)
+    if not text:
+        raise ModelOutputError("model returned empty text")
+    if text == "N":
+        return []
+    if any(char.isspace() for char in text):
+        raise ModelOutputError("model output must not contain whitespace")
+
+    tokens = text.split(",")
+    if len(tokens) > 16:
+        raise ModelOutputError("model returned too many event tokens")
+
+    events: list[str] = []
+    seen: set[str] = set()
+    occurrence_counts: dict[str, int] = {}
+    for token in tokens:
+        event_id = _to_event_id(token)
+        if event_id is None:
+            continue
+        if event_id in OCCURRENCE_EVENT_IDS:
+            count = occurrence_counts.get(event_id, 0) + 1
+            if count > 8:
+                raise ModelOutputError("model repeated one occurrence event too many times")
+            occurrence_counts[event_id] = count
+            events.append(event_id)
+        elif event_id not in seen:
+            events.append(event_id)
+        seen.add(event_id)
+    return normalize_event_ids(events)
+
+
+def normalize_event_ids(events: list[str]) -> list[str]:
+    """Apply deterministic ontology conflicts without collapsing occurrences."""
+
+    present = set(events)
+    suppressed: set[str] = set()
+    if present & {"E33", "E34"}:
+        suppressed.update({"E24", "E25", "E26", "E30"})
+    if "E28" in present:
+        suppressed.add("E31")
+    if "E48" in present:
+        suppressed.add("E9")
+    if "E17" in present:
+        suppressed.update({"E24", "E36"})
+
+    normalized = [event_id for event_id in events if event_id not in suppressed]
+    return sorted(normalized, key=_EVENT_ORDER.__getitem__)

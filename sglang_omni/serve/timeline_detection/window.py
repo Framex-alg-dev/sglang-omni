@@ -52,7 +52,7 @@ class EventWindowAssembler:
         current_duration_ms: int = 3_000,
         history_duration_ms: int = 7_000,
         window_stride_ms: int | None = None,
-        current_frame_count: int = 7,
+        current_frame_count: int = 6,
         audio_grace_ms: int = 350,
         max_buffer_bytes: int = 32 * 1024 * 1024,
     ) -> None:
@@ -166,7 +166,7 @@ class EventWindowAssembler:
         current_candidates = tuple(
             item
             for item in self._video
-            if current_start_ms <= item.start_ms <= end_ms
+            if current_start_ms < item.start_ms <= end_ms
         )
         current_frames = _select_nearest_frames(
             current_candidates,
@@ -174,6 +174,7 @@ class EventWindowAssembler:
             end_ms=end_ms,
             count=self._current_frame_count,
             maximum_distance_ms=400,
+            right_aligned=True,
         )
         if current_frames is None:
             self._log_discarded_window(
@@ -185,19 +186,19 @@ class EventWindowAssembler:
             return None
 
         history_duration_ms = current_start_ms - start_ms
-        history_count = min(7, history_duration_ms // 1_000)
+        history_count = min(14, history_duration_ms // 500)
         history_candidates = tuple(
             item
             for item in self._video
-            if start_ms <= item.start_ms < current_start_ms
+            if start_ms < item.start_ms <= current_start_ms
         )
         history_frames = _select_nearest_frames(
             history_candidates,
             start_ms=start_ms,
             end_ms=current_start_ms,
             count=history_count,
-            maximum_distance_ms=750,
-            include_end=False,
+            maximum_distance_ms=400,
+            right_aligned=True,
         )
         if history_frames is None:
             self._log_discarded_window(
@@ -404,19 +405,24 @@ def _select_nearest_frames(
     end_ms: int,
     count: int,
     maximum_distance_ms: int,
-    include_end: bool = True,
+    right_aligned: bool = False,
 ) -> tuple[TimelineMediaChunk, ...] | None:
     if count == 0:
         return ()
     if len(candidates) < count:
         return None
-    if count == 1:
+    if right_aligned:
+        span = end_ms - start_ms
+        targets = tuple(
+            start_ms + (span * (index + 1) // count)
+            for index in range(count)
+        )
+    elif count == 1:
         targets = ((start_ms + end_ms) // 2,)
     else:
         span = end_ms - start_ms
-        divisor = count if not include_end else count - 1
         targets = tuple(
-            start_ms + (span * index // divisor)
+            start_ms + (span * index // (count - 1))
             for index in range(count)
         )
     selected: list[TimelineMediaChunk] = []
