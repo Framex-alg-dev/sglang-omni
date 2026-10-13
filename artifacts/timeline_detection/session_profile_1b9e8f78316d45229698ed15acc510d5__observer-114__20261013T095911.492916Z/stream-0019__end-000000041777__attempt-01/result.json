@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E5"
+  ],
+  "inference_ms": 472.94641472399235,
+  "input_build_ms": 47.22544364631176,
+  "observations": [
+    {
+      "audio_status": "complete",
+      "contract_version": 2,
+      "event_type": "E5",
+      "evidence_end_ms": 41777,
+      "evidence_mode": "audio_video",
+      "evidence_start_ms": 32777,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-d3eb2e9b74d910209e328f94",
+      "observer_epoch": 114,
+      "session_id": "session_profile_1b9e8f78316d45229698ed15acc510d5",
+      "stream_epoch": 19,
+      "summary": "打哈欠完整序列"
+    }
+  ],
+  "parsed_event_ids": [
+    "E5"
+  ],
+  "raw_output": "E5",
+  "recorded_at": "2026-10-13T09:59:21.721368+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 520.1718583703041,
+  "usage": {
+    "completion_tokens": 3,
+    "prompt_tokens": 8318,
+    "total_tokens": 8321
+  },
+  "weight_version": "default"
+}

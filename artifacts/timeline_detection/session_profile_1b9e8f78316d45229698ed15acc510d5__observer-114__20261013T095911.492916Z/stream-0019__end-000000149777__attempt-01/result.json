@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E10"
+  ],
+  "inference_ms": 615.168072283268,
+  "input_build_ms": 48.460423946380615,
+  "observations": [
+    {
+      "audio_status": "complete",
+      "contract_version": 2,
+      "event_type": "E10",
+      "evidence_end_ms": 149777,
+      "evidence_mode": "audio_video",
+      "evidence_start_ms": 139777,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-bc8ae89c692618f31b2b73b0",
+      "observer_epoch": 114,
+      "session_id": "session_profile_1b9e8f78316d45229698ed15acc510d5",
+      "stream_epoch": 19,
+      "summary": "揉眼或太阳穴"
+    }
+  ],
+  "parsed_event_ids": [
+    "E10"
+  ],
+  "raw_output": "E10",
+  "recorded_at": "2026-10-13T10:01:09.991812+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 663.6284962296486,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8475,
+    "total_tokens": 8479
+  },
+  "weight_version": "default"
+}

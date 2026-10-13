@@ -1,0 +1,206 @@
+{
+  "current": [
+    {
+      "encoding": "jpeg",
+      "end_ms": 27900,
+      "payload_bytes": 26173,
+      "sequence": 2452,
+      "sha256": "6908adcadaf1a3016fc6aee835a60ee882a4342300d49a1e9d1f702b547889ca",
+      "start_ms": 27800,
+      "stored_as": "frames/current-00__seq-00002452.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 28440,
+      "payload_bytes": 28115,
+      "sequence": 2510,
+      "sha256": "53d73576e104f23a2205210b7f97f1dbc86b0bc28b05d4ed9af66c54dae12dfb",
+      "start_ms": 28340,
+      "stored_as": "frames/current-01__seq-00002510.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 28940,
+      "payload_bytes": 32659,
+      "sequence": 2564,
+      "sha256": "b1f1121d26579b51815d7d048a6416c717c065e8b216b24b1b8b296a7a643670",
+      "start_ms": 28840,
+      "stored_as": "frames/current-02__seq-00002564.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 29459,
+      "payload_bytes": 24257,
+      "sequence": 2620,
+      "sha256": "6b98d187eaaf11d04e84a411f2f73d287b8f676eb16a6c62613ebabe58903db0",
+      "start_ms": 29359,
+      "stored_as": "frames/current-03__seq-00002620.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 30000,
+      "payload_bytes": 22653,
+      "sequence": 2678,
+      "sha256": "a1644b07f843958bb0a09eb5de3246fdbe6d68b937dd700f938c6dc61ee4ecee",
+      "start_ms": 29900,
+      "stored_as": "frames/current-04__seq-00002678.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 30341,
+      "payload_bytes": 20177,
+      "sequence": 2715,
+      "sha256": "d325d959a186753c90610c2b43ee1ef2a06e9a55068aaf31b2239866d9b84cae",
+      "start_ms": 30241,
+      "stored_as": "frames/current-05__seq-00002715.jpg",
+      "stream_epoch": 0
+    }
+  ],
+  "history": [
+    {
+      "encoding": "jpeg",
+      "end_ms": 20960,
+      "payload_bytes": 26347,
+      "sequence": 1706,
+      "sha256": "003f2c3e4771f16d2aac07cfaa3726ccb910c9f527764e99fd4ca9b1be8810f9",
+      "start_ms": 20860,
+      "stored_as": "frames/history-00__seq-00001706.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 21480,
+      "payload_bytes": 25406,
+      "sequence": 1762,
+      "sha256": "cf5480b0fb3fd2aaf59a567935e70a874cd4fd9fdca6c39e7e7ae86b76a5a033",
+      "start_ms": 21380,
+      "stored_as": "frames/history-01__seq-00001762.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 21880,
+      "payload_bytes": 24977,
+      "sequence": 1805,
+      "sha256": "88753c75c98882b4c6161ece783af00d5425020abdc2edc441e1c282640973b6",
+      "start_ms": 21780,
+      "stored_as": "frames/history-02__seq-00001805.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 22359,
+      "payload_bytes": 24358,
+      "sequence": 1857,
+      "sha256": "9b2c5cf428771c3978cc51df2e37e3e87f8c2c81d7fdff927f3fa99dc9b481bf",
+      "start_ms": 22259,
+      "stored_as": "frames/history-03__seq-00001857.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 22900,
+      "payload_bytes": 19892,
+      "sequence": 1914,
+      "sha256": "6c18704e69b142953b5ad9ebfad7edf4a3b43b44d0b346839c414e985df3858a",
+      "start_ms": 22800,
+      "stored_as": "frames/history-04__seq-00001914.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 23401,
+      "payload_bytes": 20367,
+      "sequence": 1968,
+      "sha256": "4450df86227503aa27c8360bb1657d7fbc936648242e873904ae7b7be1b18e6d",
+      "start_ms": 23301,
+      "stored_as": "frames/history-05__seq-00001968.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 23900,
+      "payload_bytes": 15020,
+      "sequence": 2022,
+      "sha256": "6a4da20637280380ba05d8c90178a003d221670dbc172ef8c60932fe0c93e42c",
+      "start_ms": 23800,
+      "stored_as": "frames/history-06__seq-00002022.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 24440,
+      "payload_bytes": 13277,
+      "sequence": 2080,
+      "sha256": "6216f655acd5fb78415eda51723d28462da2cee04b97c197c4468d87c70b1599",
+      "start_ms": 24340,
+      "stored_as": "frames/history-07__seq-00002080.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 24900,
+      "payload_bytes": 14416,
+      "sequence": 2129,
+      "sha256": "80fb8c4099acb8e6fb2be6bc3e2d310c192381fad236ca40f091c4f5f8c58258",
+      "start_ms": 24800,
+      "stored_as": "frames/history-08__seq-00002129.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 25399,
+      "payload_bytes": 14348,
+      "sequence": 2183,
+      "sha256": "b1e4ca7dfa53d96995e093de20931229c47d6ce195f41bdc95365c6b8164e31a",
+      "start_ms": 25299,
+      "stored_as": "frames/history-09__seq-00002183.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 25920,
+      "payload_bytes": 17775,
+      "sequence": 2239,
+      "sha256": "8697af16423ac3161da5d4cbc58e11f3da54ce46b89a351d927d64e51b4f0b1a",
+      "start_ms": 25820,
+      "stored_as": "frames/history-10__seq-00002239.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 26461,
+      "payload_bytes": 16383,
+      "sequence": 2297,
+      "sha256": "dd090159047b7a9cf9fba5a8ee7c070c27ee2b8e4086c5ecbcaf643d5d3f97a4",
+      "start_ms": 26361,
+      "stored_as": "frames/history-11__seq-00002297.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 26980,
+      "payload_bytes": 19575,
+      "sequence": 2353,
+      "sha256": "37cf33fffb25a91d60af137b5b1ef4c736942d7f5261959bcc72c0767b2624c8",
+      "start_ms": 26880,
+      "stored_as": "frames/history-12__seq-00002353.jpg",
+      "stream_epoch": 0
+    },
+    {
+      "encoding": "jpeg",
+      "end_ms": 27359,
+      "payload_bytes": 19103,
+      "sequence": 2394,
+      "sha256": "bf33cb874e3a43611fa9ce55398770169bd6e8e9a685fac3292326a6734583ff",
+      "start_ms": 27259,
+      "stored_as": "frames/history-13__seq-00002394.jpg",
+      "stream_epoch": 0
+    }
+  ]
+}

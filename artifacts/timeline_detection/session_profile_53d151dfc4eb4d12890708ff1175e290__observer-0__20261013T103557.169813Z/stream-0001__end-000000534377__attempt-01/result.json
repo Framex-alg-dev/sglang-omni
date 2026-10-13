@@ -1,0 +1,23 @@
+{
+  "accepted_event_ids": [],
+  "inference_ms": 546.1676446720958,
+  "input_build_ms": 45.68823333829641,
+  "observations": [],
+  "parsed_event_ids": [
+    "E30"
+  ],
+  "raw_output": "E30",
+  "recorded_at": "2026-10-13T10:44:52.650693+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "frequency_suppressed",
+  "suppressed_event_ids": [
+    "E30"
+  ],
+  "total_ms": 591.8558780103922,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8475,
+    "total_tokens": 8479
+  },
+  "weight_version": "default"
+}

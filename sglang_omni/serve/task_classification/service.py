@@ -51,7 +51,7 @@ def create_task_classification_app(
 
     app = FastAPI(
         title="sglang-omni-turn-router",
-        version="5",
+        version="6",
         lifespan=lifespan,
     )
 
@@ -145,6 +145,9 @@ async def _classify_payload(
         "input_revision": result.input_revision,
         "route_token": result.route_token.value,
         "route": result.route.value,
+        "route_code": result.route_code,
+        "needs_mcp": result.needs_mcp,
+        "needs_multimodal": result.needs_multimodal,
         "output_directive": result.output_directive.value,
         "task_directive": result.task_directive.value,
         "media_directive": result.media_directive.value,

@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E46"
+  ],
+  "inference_ms": 559.8583966493607,
+  "input_build_ms": 63.25501203536987,
+  "observations": [
+    {
+      "audio_status": "complete",
+      "contract_version": 2,
+      "event_type": "E46",
+      "evidence_end_ms": 142867,
+      "evidence_mode": "audio_video",
+      "evidence_start_ms": 132867,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-617c488ef27fa25a36333c6d",
+      "observer_epoch": 0,
+      "session_id": "session_profile_c2434909ce5d4a3088c76799b5feeb9a",
+      "stream_epoch": 0,
+      "summary": "揉脖子或肩"
+    }
+  ],
+  "parsed_event_ids": [
+    "E46"
+  ],
+  "raw_output": "E46",
+  "recorded_at": "2026-10-13T10:24:36.501765+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 623.1134086847305,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8475,
+    "total_tokens": 8479
+  },
+  "weight_version": "default"
+}

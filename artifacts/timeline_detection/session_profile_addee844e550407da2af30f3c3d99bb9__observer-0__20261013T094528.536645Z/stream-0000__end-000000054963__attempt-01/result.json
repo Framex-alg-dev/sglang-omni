@@ -1,0 +1,23 @@
+{
+  "accepted_event_ids": [],
+  "inference_ms": 551.9337523728609,
+  "input_build_ms": 59.54059865325689,
+  "observations": [],
+  "parsed_event_ids": [
+    "E38"
+  ],
+  "raw_output": "E38",
+  "recorded_at": "2026-10-13T09:46:24.339445+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "frequency_suppressed",
+  "suppressed_event_ids": [
+    "E38"
+  ],
+  "total_ms": 611.4743510261178,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8474,
+    "total_tokens": 8478
+  },
+  "weight_version": "default"
+}

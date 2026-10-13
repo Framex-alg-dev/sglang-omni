@@ -1185,6 +1185,50 @@ def test_chat_request_propagates_internal_session_cache_owner() -> None:
     assert gen_req.metadata["session_instance_id"] == "session-1"
 
 
+def test_chat_request_leaves_runtime_reply_policy_opt_in() -> None:
+    req = ChatCompletionRequest(
+        model="qwen3-omni",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    gen_req = _build_chat_generate_request(req)
+
+    assert [(item.role, item.content) for item in gen_req.messages] == [
+        ("user", "hello")
+    ]
+    assert "runtime_prompt_profile" not in gen_req.metadata
+
+
+def test_chat_request_injects_effective_reply_policy_before_caller_messages(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "sglang_omni.serve.openai_api.effective_runtime_prompt",
+        lambda key, default, *, language: (
+            f"effective:{key}:{language}:{bool(default)}"
+        ),
+    )
+    req = ChatCompletionRequest(
+        model="qwen3-omni",
+        messages=[
+            {"role": "system", "content": "application reply contract"},
+            {"role": "user", "content": "hello"},
+        ],
+        runtime_prompt_profile="reply",
+        runtime_prompt_language="en-US",
+    )
+
+    gen_req = _build_chat_generate_request(req)
+
+    assert [(item.role, item.content) for item in gen_req.messages] == [
+        ("system", "effective:reply_rules:en-US:True"),
+        ("system", "application reply contract"),
+        ("user", "hello"),
+    ]
+    assert gen_req.metadata["runtime_prompt_profile"] == "reply"
+    assert gen_req.metadata["runtime_prompt_language"] == "en-US"
+
+
 def test_chat_request_preserves_explicit_default_sampling_values() -> None:
     req = ChatCompletionRequest(
         model="OpenMOSS-Team/MOSS-Transcribe-Diarize",

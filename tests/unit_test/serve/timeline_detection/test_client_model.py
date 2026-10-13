@@ -18,6 +18,7 @@ from sglang_omni.serve.timeline_detection.contracts import (
     TimelineMediaChunk,
     TimelineSessionStart,
 )
+from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
 from sglang_omni.serve.timeline_detection.prompt import PROMPT_VERSION, SYSTEM_PROMPT
 from sglang_omni.serve.timeline_detection.parser import ModelOutputError
 
@@ -30,6 +31,16 @@ class Client:
     async def completion(self, request, *, request_id, audio_format="wav"):
         self.calls.append((request, request_id))
         return SimpleNamespace(text=self.outputs.pop(0))
+
+
+class PrefillClient(Client):
+    def __init__(self, outputs: list[str]) -> None:
+        super().__init__(outputs)
+        self.prefill_calls = []
+
+    async def prefill_completion_prefix(self, request, *, request_id):
+        self.prefill_calls.append((request, request_id))
+        return True
 
 
 def start() -> TimelineSessionStart:
@@ -93,6 +104,39 @@ async def feed_first_video_only_window(
 ) -> None:
     for sequence, at_ms in enumerate(range(0, 3_501, 500), start=1):
         await model.append(frame(at_ms, sequence))
+
+
+@pytest.mark.asyncio
+async def test_direct_e50_prewarms_static_prefix_before_inference(
+    monkeypatch,
+) -> None:
+    profile = DirectE50Profile(
+        system_prompt="strict training system prompt",
+        user_prompt="strict training user prompt",
+        prompt_version="event-e50-direct-checkpoint1500-v1",
+    )
+    monkeypatch.setattr(
+        client_model_module.DirectE50Profile,
+        "from_environment",
+        classmethod(lambda cls: profile),
+    )
+    client = PrefillClient([])
+    model = SglangClientTimelineDetectionModel(
+        client,
+        start(),
+        model_version="e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+        inference_interval_ms=1_000,
+    )
+
+    await model.start(start())
+
+    assert len(client.prefill_calls) == 1
+    request, request_id = client.prefill_calls[0]
+    assert request_id == "timeline:session-1:0:prefix-prefill"
+    assert request.messages[0].content == profile.system_prompt
+    assert request.metadata["videos"] == []
+    assert request.metadata["audios"] == []
+    await model.close()
 
 
 @pytest.mark.asyncio
@@ -190,6 +234,67 @@ async def test_retries_invalid_output_with_retry_prompt() -> None:
     assert len(client.calls) == 2
     assert "格式错误" in client.calls[1][0].messages[1].content[-1]["text"]
     await model.close()
+
+
+@pytest.mark.asyncio
+async def test_artifacts_are_not_written_for_no_event(
+    monkeypatch, tmp_path
+) -> None:
+    artifact_root = tmp_path / "timeline-artifacts"
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT", str(artifact_root)
+    )
+    monkeypatch.setattr(
+        client_model_module.DirectE50Profile,
+        "from_environment",
+        classmethod(lambda cls: None),
+    )
+    model = SglangClientTimelineDetectionModel(
+        Client(["N"]),
+        start(),
+        model_version=PROMPT_VERSION,
+    )
+    await model.start(start())
+    await feed_first_window(model)
+
+    assert await model.next_observations() == ()
+    await model.close()
+
+    assert not artifact_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_complete_call_is_written_after_event_output(
+    monkeypatch, tmp_path
+) -> None:
+    artifact_root = tmp_path / "timeline-artifacts"
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT", str(artifact_root)
+    )
+    monkeypatch.setattr(
+        client_model_module.DirectE50Profile,
+        "from_environment",
+        classmethod(lambda cls: None),
+    )
+    model = SglangClientTimelineDetectionModel(
+        Client(["g"]),
+        start(),
+        model_version=PROMPT_VERSION,
+    )
+    await model.start(start())
+    await feed_first_window(model)
+
+    events = await model.next_observations()
+    assert [item.event_type for item in events] == ["E31"]
+    await model.close()
+
+    session_dirs = list(artifact_root.iterdir())
+    assert len(session_dirs) == 1
+    call_dirs = list(session_dirs[0].glob("stream-*"))
+    assert len(call_dirs) == 1
+    assert (call_dirs[0] / "request.json").is_file()
+    assert (call_dirs[0] / "result.json").is_file()
+    assert len(list((call_dirs[0] / "input" / "frames").glob("*.jpg"))) == 6
 
 
 def test_accepts_one_second_sliding_cadence() -> None:

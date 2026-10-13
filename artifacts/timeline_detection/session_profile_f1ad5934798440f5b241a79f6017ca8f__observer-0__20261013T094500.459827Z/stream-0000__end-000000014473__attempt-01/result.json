@@ -1,0 +1,10 @@
+{
+  "error": "",
+  "error_type": "CancelledError",
+  "inference_ms": 279.11013923585415,
+  "input_build_ms": 43.189811520278454,
+  "recorded_at": "2026-10-13T09:45:15.380332+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "model_error",
+  "total_ms": 322.2999507561326
+}

@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E19"
+  ],
+  "inference_ms": 550.8352257311344,
+  "input_build_ms": 63.55265434831381,
+  "observations": [
+    {
+      "audio_status": "complete",
+      "contract_version": 2,
+      "event_type": "E19",
+      "evidence_end_ms": 95585,
+      "evidence_mode": "audio_video",
+      "evidence_start_ms": 85585,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-c25cf079c4e862fda002c466",
+      "observer_epoch": 0,
+      "session_id": "session_profile_99533c0fd3be49f9b3e754575168df8b",
+      "stream_epoch": 0,
+      "summary": "手机后置摄像头朝向镜头"
+    }
+  ],
+  "parsed_event_ids": [
+    "E19"
+  ],
+  "raw_output": "E19",
+  "recorded_at": "2026-10-13T09:39:42.681355+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 614.3878800794482,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8474,
+    "total_tokens": 8478
+  },
+  "weight_version": "default"
+}

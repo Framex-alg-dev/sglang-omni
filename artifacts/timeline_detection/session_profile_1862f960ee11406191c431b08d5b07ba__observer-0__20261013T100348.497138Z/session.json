@@ -1,0 +1,19 @@
+{
+  "created_at": "2026-10-13T10:04:17.562739+00:00",
+  "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+  "prompt_version": "event-v0.2-h7c3-reviewed-r12-c3-multiple-cough-p50-v1-e1-reviewed-c3-direct-e50",
+  "recording_policy": "event_outputs_only",
+  "retention_max_bytes": 8589934592,
+  "schema_version": "timeline-artifacts.v1",
+  "session": {
+    "audio_format": "pcm_s16le/16000/1",
+    "contract_version": 2,
+    "identity_epoch": 1,
+    "model_id": "qwen3-omni-gpu4-timeline",
+    "next_sequence": 1,
+    "observer_epoch": 0,
+    "session_id": "session_profile_1862f960ee11406191c431b08d5b07ba",
+    "stream_epoch": 0,
+    "video_format": "image/jpeg"
+  }
+}

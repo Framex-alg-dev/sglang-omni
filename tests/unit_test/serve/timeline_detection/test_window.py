@@ -95,13 +95,22 @@ def test_builds_steady_window_with_fourteen_history_and_six_current_frames() -> 
     )
 
 
-def test_does_not_fabricate_missing_current_frames() -> None:
+def test_sparse_current_frames_are_resampled_to_keep_cadence() -> None:
     assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
     assembler.append(_audio(0, 3_000, 1))
     windows = ()
     for index, at_ms in enumerate((0, 1_000, 2_000, 3_000), start=2):
         windows = assembler.append(_frame(at_ms, index))
-    assert windows == ()
+    assert len(windows) == 1
+    assert len(windows[0].current_frames) == 6
+    assert [frame.start_ms for frame in windows[0].current_frames] == [
+        1_000,
+        1_000,
+        2_000,
+        2_000,
+        3_000,
+        3_000,
+    ]
 
 
 def test_builds_video_only_window_after_bounded_audio_grace() -> None:
@@ -166,7 +175,7 @@ def test_late_audio_falls_back_after_video_grace() -> None:
     assert windows[0].audio_status is AudioEvidenceStatus.BEHIND
 
 
-def test_reports_candidate_count_when_current_window_is_discarded(caplog) -> None:
+def test_reports_resampling_when_current_window_is_sparse(caplog) -> None:
     assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
     assembler.append(_audio(0, 3_000, 1))
 
@@ -177,12 +186,10 @@ def test_reports_candidate_count_when_current_window_is_discarded(caplog) -> Non
         for index, at_ms in enumerate((0, 1_000, 2_000, 3_000), start=2):
             assembler.append(_frame(at_ms, index))
 
-    assert "reason=current_frames_unavailable" in caplog.text
+    assert "timeline window ready" in caplog.text
     assert "current_candidates=3" in caplog.text
-    assert "current_required=6" in caplog.text
-    assert "discarded_total=1" in caplog.text
-
-
+    assert "current_selected=6" in caplog.text
+    assert "current_sampling=duplicated" in caplog.text
 def test_reports_when_audio_advances_without_video(caplog) -> None:
     assembler = EventWindowAssembler(audio_format="pcm_s16le/16000/1")
 

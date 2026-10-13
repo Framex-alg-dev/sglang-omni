@@ -14,6 +14,7 @@ import av
 import librosa
 import torch
 from qwen_vl_utils import vision_process as qwen_vision
+from torchvision import io as torchvision_io
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as tv_f
 
@@ -323,21 +324,30 @@ def load_video_path(
         ele["total_pixels"] = int(total_pixels)
     backend = qwen_vision.get_video_reader_backend()
     try:
-        video, sample_fps = qwen_vision.VIDEO_READER_BACKENDS[backend](ele)
+        if backend == "torchvision" and not callable(
+            getattr(torchvision_io, "read_video", None)
+        ):
+            # torchvision 0.24+ can be installed without the legacy video I/O
+            # extension.  PyAV is already a required runtime dependency here
+            # and preserves the same linspace sampling contract used by the
+            # qwen-vl-utils torchvision/decord readers.
+            video, sample_fps = _read_video_pyav(ele)
+        else:
+            video, sample_fps = qwen_vision.VIDEO_READER_BACKENDS[backend](ele)
     except Exception as backend_exc:
         if backend == "torchvision":
             raise VideoDecodeError(
-                f"Failed to decode video path={path}; torchvision failed with "
+                f"Failed to decode video path={path}; video reader failed with "
                 f"{type(backend_exc).__name__}: {backend_exc}"
             ) from backend_exc
-        logger.warning("Video reader %s failed, falling back to torchvision", backend)
+        logger.warning("Video reader %s failed, falling back to PyAV", backend)
         try:
-            video, sample_fps = qwen_vision.VIDEO_READER_BACKENDS["torchvision"](ele)
+            video, sample_fps = _read_video_pyav(ele)
         except Exception as fallback_exc:
             raise VideoDecodeError(
                 f"Failed to decode video path={path}; {backend} failed with "
                 f"{type(backend_exc).__name__}: {backend_exc}; "
-                f"torchvision failed with {type(fallback_exc).__name__}: "
+                f"PyAV failed with {type(fallback_exc).__name__}: "
                 f"{fallback_exc}"
             ) from fallback_exc
     nframes, _, height, width = video.shape
@@ -372,6 +382,48 @@ def load_video_path(
         interpolation=InterpolationMode.BICUBIC,
         antialias=True,
     ).float()
+    return video, sample_fps
+
+
+def _read_video_pyav(ele: dict[str, Any]) -> tuple[torch.Tensor, float]:
+    """Decode through PyAV with qwen-vl-utils-compatible frame sampling."""
+
+    path = str(ele["video"])
+    decoded: list[torch.Tensor] = []
+    with av.open(path, mode="r") as container:
+        stream = container.streams.video[0]
+        rate = stream.average_rate or stream.base_rate
+        video_fps = float(rate) if rate is not None else 0.0
+        if video_fps <= 0:
+            raise ValueError("PyAV video stream has no positive frame rate")
+        for frame in container.decode(stream):
+            decoded.append(torch.from_numpy(frame.to_ndarray(format="rgb24")))
+    if not decoded:
+        raise ValueError("PyAV video stream contains no frames")
+
+    total_frames = len(decoded)
+    start_frame, end_frame, selected_range = qwen_vision.calculate_video_frame_range(
+        ele,
+        total_frames,
+        video_fps,
+    )
+    nframes = qwen_vision.smart_nframes(
+        ele,
+        total_frames=selected_range,
+        video_fps=video_fps,
+    )
+    indices = (
+        torch.linspace(start_frame, end_frame, nframes).round().long().tolist()
+    )
+    video = torch.stack([decoded[index] for index in indices]).permute(0, 3, 1, 2)
+    sample_fps = nframes / max(selected_range, 1e-6) * video_fps
+    logger.info(
+        "PyAV decoded video path=%s total_frames=%d selected_frames=%d fps=%.3f",
+        path,
+        total_frames,
+        nframes,
+        video_fps,
+    )
     return video, sample_fps
 
 

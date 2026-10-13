@@ -20,6 +20,10 @@ _PUBLISHED_EXTERNAL_PROMPT_SHA256 = frozenset(
         # requests may share only this exact system-message KV prefix; all
         # window text, image/audio evidence, and generated tokens stay private.
         "9b14e51306c60b4d15d8be71da2f22f8d23af60457edee86909573e06f704745",
+        # Timeline detection E50 direct checkpoint-1500 system prompt. This is
+        # the exact stripped content deployed by gpu4-timeline.env; the video,
+        # audio, dynamic H+C window text and generated tokens remain private.
+        "ccd76772db751450205dae0f82beea877f0bec5f4c0d1d98bf03ef1feef90a44",
     }
 )
 

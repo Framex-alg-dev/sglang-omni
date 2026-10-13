@@ -9,6 +9,7 @@ import io
 import logging
 import time
 from collections import Counter, OrderedDict, deque
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -16,11 +17,20 @@ from PIL import Image, ImageOps
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 
+from .artifacts import TimelineArtifactRecorder, observation_records
 from .contracts import (
     ObservationEvent,
     TimelineDiscontinuity,
     TimelineMediaChunk,
     TimelineSessionStart,
+)
+from .direct_e50 import (
+    DirectE50FrequencyGate,
+    DirectE50Profile,
+    build_direct_e50_prefill_request,
+    build_direct_e50_request,
+    encode_hc_video_mp4,
+    parse_direct_e50_output,
 )
 from .parser import ModelOutputError, parse_event_output
 from .catalog import EVENT_ID_SET, OCCURRENCE_EVENT_IDS
@@ -40,6 +50,7 @@ logger = logging.getLogger(__name__)
 MODEL_IMAGE_WIDTH = 448
 MODEL_IMAGE_HEIGHT = 252
 NORMALIZED_FRAME_CACHE_SIZE = 64
+DIRECT_E50_PREFILL_TIMEOUT_SECONDS = 30.0
 
 
 class CompletionClient(Protocol):
@@ -50,6 +61,13 @@ class CompletionClient(Protocol):
         request_id: str,
         audio_format: str = "wav",
     ) -> Any: ...
+
+    async def prefill_completion_prefix(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -198,9 +216,19 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline max_window_bytes must be positive")
         self._client = client
         self._start = start
+        self._direct_e50 = DirectE50Profile.from_environment()
         self.model_id = start.model_id
         self.model_version = model_version
-        self.prompt_version = PROMPT_VERSION
+        self.prompt_version = (
+            self._direct_e50.prompt_version
+            if self._direct_e50 is not None
+            else PROMPT_VERSION
+        )
+        self._artifacts = TimelineArtifactRecorder.from_environment(
+            start=start,
+            model_version=model_version,
+            prompt_version=self.prompt_version,
+        )
         # V25/R10 was trained with the complete trailing C=(T-3s,T] as the
         # decision range, even though the service is called every second.
         self._attribution_duration_ms = 3_000
@@ -211,11 +239,19 @@ class SglangClientTimelineDetectionModel:
             history_duration_ms=window_ms - 3_000,
             window_stride_ms=inference_interval_ms,
             max_buffer_bytes=max_window_bytes,
+            window_event_sink=self._artifacts.record_window_event,
         )
-        self._event_edges = _EventEdgeLatch(
-            rearm_absent_windows=max(
-                2,
-                (3_000 + inference_interval_ms - 1) // inference_interval_ms,
+        self._event_edges = (
+            DirectE50FrequencyGate(
+                cooldown_ms=self._direct_e50.cooldown_ms,
+                rearm_absent_windows=self._direct_e50.rearm_absent_windows,
+            )
+            if self._direct_e50 is not None
+            else _EventEdgeLatch(
+                rearm_absent_windows=max(
+                    2,
+                    (3_000 + inference_interval_ms - 1) // inference_interval_ms,
+                )
             )
         )
         self._compatibility = _V25R12Compatibility()
@@ -239,10 +275,59 @@ class SglangClientTimelineDetectionModel:
         if self._started:
             return
         self._started = True
+        await self._prewarm_direct_e50_prefix()
         self._worker = asyncio.create_task(
             self._run_inference(),
             name=f"timeline-inference-{request.session_id}",
         )
+
+    async def _prewarm_direct_e50_prefix(self) -> bool:
+        profile = self._direct_e50
+        prefill = getattr(self._client, "prefill_completion_prefix", None)
+        if profile is None or not callable(prefill):
+            return False
+        request_id = (
+            f"timeline:{self._start.session_id}:{self._start.observer_epoch}:"
+            "prefix-prefill"
+        )
+        request = build_direct_e50_prefill_request(
+            profile=profile,
+            model_id=self.model_id,
+            session_id=self._start.session_id,
+            logical_request_id=request_id,
+        )
+        started = time.perf_counter()
+        try:
+            ready = bool(
+                await asyncio.wait_for(
+                    prefill(request, request_id=request_id),
+                    timeout=DIRECT_E50_PREFILL_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:
+            abort = getattr(self._client, "abort", None)
+            if callable(abort):
+                with suppress(Exception):
+                    await abort(request_id)
+            logger.warning(
+                "timeline prefix prefill failed session_id=%s request_id=%s "
+                "error=%s",
+                self._start.session_id,
+                request_id,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return False
+        logger.info(
+            "timeline prefix prefill complete session_id=%s request_id=%s "
+            "prompt_version=%s prewarmed=%s elapsed_ms=%.1f",
+            self._start.session_id,
+            request_id,
+            profile.prompt_version,
+            ready,
+            (time.perf_counter() - started) * 1_000,
+        )
+        return ready
 
     async def append(self, chunk: TimelineMediaChunk) -> None:
         if not self._started or self._closed:
@@ -260,6 +345,14 @@ class SglangClientTimelineDetectionModel:
         return output
 
     async def discontinuity(self, event: TimelineDiscontinuity) -> None:
+        self._artifacts.record_window_event(
+            {
+                "status": "discontinuity",
+                "old_stream_epoch": event.old_stream_epoch,
+                "new_stream_epoch": event.new_stream_epoch,
+                "reason": event.reason,
+            }
+        )
         self._generation += 1
         self._assembler.clear()
         self._event_edges.clear()
@@ -281,14 +374,25 @@ class SglangClientTimelineDetectionModel:
         self._worker = None
         _drain(self._windows)
         _drain(self._outputs)
+        await asyncio.to_thread(self._artifacts.close)
 
     def _replace_pending_window(self, work: _WindowWork) -> None:
         try:
             self._windows.put_nowait(work)
             return
         except asyncio.QueueFull:
-            self._windows.get_nowait()
+            replaced = self._windows.get_nowait()
             self._windows.task_done()
+            self._artifacts.record_window_event(
+                {
+                    "status": "skipped",
+                    "reason": "superseded_before_inference",
+                    "stream_epoch": replaced.stream_epoch,
+                    "start_ms": replaced.window.start_ms,
+                    "current_start_ms": replaced.window.current_start_ms,
+                    "end_ms": replaced.window.end_ms,
+                }
+            )
         self._windows.put_nowait(work)
 
     async def _run_inference(self) -> None:
@@ -326,48 +430,136 @@ class SglangClientTimelineDetectionModel:
         )
         input_started = time.perf_counter()
         frames = (*work.window.history_frames, *work.window.current_frames)
-        image_jpegs = tuple(self._normalized_frame_jpeg(frame) for frame in frames)
+        if self._direct_e50 is not None:
+            video_mp4 = encode_hc_video_mp4(
+                frames, fps=self._direct_e50.video_fps
+            )
+            image_jpegs: tuple[bytes, ...] = ()
+        else:
+            video_mp4 = None
+            image_jpegs = tuple(self._normalized_frame_jpeg(frame) for frame in frames)
         input_build_ms = (time.perf_counter() - input_started) * 1_000
         for attempt in range(self._max_attempts):
-            request = _generate_request(
-                model_id=self.model_id,
-                window=work.window,
-                image_jpegs=image_jpegs,
-                retry=attempt > 0,
-                logical_request_id=logical_request_id,
-                contract_version=self._start.contract_version,
-                observer_epoch=self._start.observer_epoch,
-                stream_epoch=work.stream_epoch,
-                attribution_duration_ms=self._attribution_duration_ms,
-            )
+            if self._direct_e50 is not None:
+                assert video_mp4 is not None
+                request = build_direct_e50_request(
+                    profile=self._direct_e50,
+                    model_id=self.model_id,
+                    session_id=self._start.session_id,
+                    window=work.window,
+                    video_mp4=video_mp4,
+                    retry=attempt > 0,
+                    logical_request_id=logical_request_id,
+                    contract_version=self._start.contract_version,
+                    observer_epoch=self._start.observer_epoch,
+                    stream_epoch=work.stream_epoch,
+                )
+            else:
+                request = _generate_request(
+                    model_id=self.model_id,
+                    window=work.window,
+                    image_jpegs=image_jpegs,
+                    retry=attempt > 0,
+                    logical_request_id=logical_request_id,
+                    contract_version=self._start.contract_version,
+                    observer_epoch=self._start.observer_epoch,
+                    stream_epoch=work.stream_epoch,
+                    attribution_duration_ms=self._attribution_duration_ms,
+                )
+            call_dir = None
+            try:
+                call_dir = self._artifacts.record_model_input(
+                    stream_epoch=work.stream_epoch,
+                    window=work.window,
+                    attempt=attempt + 1,
+                    request=request,
+                    video_mp4=video_mp4,
+                    image_jpegs=image_jpegs,
+                    audio_wav=(
+                        work.window.audio_wav
+                        if request.metadata.get("audios")
+                        else None
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "timeline model input artifact write failed request_id=%s attempt=%d",
+                    logical_request_id,
+                    attempt + 1,
+                )
             inference_started = time.perf_counter()
-            result = await self._client.completion(
-                request,
-                request_id=f"{logical_request_id}:{attempt + 1}",
-            )
+            try:
+                result = await self._client.completion(
+                    request,
+                    request_id=f"{logical_request_id}:{attempt + 1}",
+                )
+            except BaseException as exc:
+                inference_ms = (time.perf_counter() - inference_started) * 1_000
+                await self._record_artifact_result(
+                    call_dir,
+                    {
+                        "status": "model_error",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "input_build_ms": input_build_ms,
+                        "inference_ms": inference_ms,
+                        "total_ms": input_build_ms + inference_ms,
+                    },
+                )
+                raise
             inference_ms = (time.perf_counter() - inference_started) * 1_000
             raw_output = str(result.text)
             try:
-                event_ids = parse_event_output(raw_output)
+                event_ids = (
+                    parse_direct_e50_output(raw_output)
+                    if self._direct_e50 is not None
+                    else parse_event_output(raw_output)
+                )
             except ModelOutputError as exc:
                 last_error = exc
+                await self._record_artifact_result(
+                    call_dir,
+                    {
+                        "status": "invalid_output",
+                        "raw_output": raw_output,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "input_build_ms": input_build_ms,
+                        "inference_ms": inference_ms,
+                        "total_ms": input_build_ms + inference_ms,
+                        "usage": (
+                            getattr(result, "usage").to_dict()
+                            if getattr(result, "usage", None) is not None
+                            else None
+                        ),
+                        "weight_version": getattr(result, "weight_version", None),
+                    },
+                )
                 logger.warning(
                     "timeline invalid output request_id=%s attempt=%d prompt=%s error=%s",
                     logical_request_id,
                     attempt + 1,
-                    PROMPT_VERSION,
+                    self.prompt_version,
                     exc,
                 )
                 continue
             logger.info(
                 "timeline inference complete request_id=%s attempt=%d "
-                "input_layout=ordered_hc_images image_size=%dx%d "
+                "input_layout=%s visual_preprocess=%s "
                 "history_frames=%d current_frames=%d input_build_ms=%.1f "
                 "inference_ms=%.1f total_ms=%.1f raw_output=%r",
                 logical_request_id,
                 attempt + 1,
-                MODEL_IMAGE_WIDTH,
-                MODEL_IMAGE_HEIGHT,
+                (
+                    "single_continuous_hc_native_video"
+                    if self._direct_e50 is not None
+                    else "ordered_hc_images"
+                ),
+                (
+                    f"dynamic-native-video(max_pixels={self._direct_e50.video_max_pixels})"
+                    if self._direct_e50 is not None
+                    else f"fixed-images({MODEL_IMAGE_WIDTH}x{MODEL_IMAGE_HEIGHT})"
+                ),
                 len(work.window.history_frames),
                 len(work.window.current_frames),
                 input_build_ms,
@@ -375,11 +567,16 @@ class SglangClientTimelineDetectionModel:
                 input_build_ms + inference_ms,
                 raw_output,
             )
-            accepted_event_ids = self._compatibility.translate(
-                self._event_edges.accept(event_ids),
-                end_ms=work.window.end_ms,
-            )
-            return tuple(
+            if self._direct_e50 is not None:
+                accepted_event_ids = self._event_edges.accept(
+                    event_ids, end_ms=work.window.end_ms
+                )
+            else:
+                accepted_event_ids = self._compatibility.translate(
+                    self._event_edges.accept(event_ids),
+                    end_ms=work.window.end_ms,
+                )
+            observations = tuple(
                 _observation(
                     event_id,
                     start=self._start,
@@ -387,13 +584,61 @@ class SglangClientTimelineDetectionModel:
                     window=work.window,
                     model_id=self.model_id,
                     model_version=self.model_version,
+                    prompt_version=self.prompt_version,
                 )
                 for event_id in accepted_event_ids
             )
+            suppressed_counts = Counter(event_ids)
+            suppressed_counts.subtract(Counter(accepted_event_ids))
+            suppressed_event_ids = [
+                event_id
+                for event_id, count in suppressed_counts.items()
+                for _ in range(max(0, count))
+            ]
+            await self._record_artifact_result(
+                call_dir,
+                {
+                    "status": (
+                        "emitted"
+                        if accepted_event_ids
+                        else "frequency_suppressed"
+                        if event_ids
+                        else "no_event"
+                    ),
+                    "raw_output": raw_output,
+                    "parsed_event_ids": event_ids,
+                    "accepted_event_ids": list(accepted_event_ids),
+                    "suppressed_event_ids": suppressed_event_ids,
+                    "observations": observation_records(observations),
+                    "input_build_ms": input_build_ms,
+                    "inference_ms": inference_ms,
+                    "total_ms": input_build_ms + inference_ms,
+                    "usage": (
+                        getattr(result, "usage").to_dict()
+                        if getattr(result, "usage", None) is not None
+                        else None
+                    ),
+                    "weight_version": getattr(result, "weight_version", None),
+                },
+            )
+            return observations
         raise ModelOutputError(
             f"model did not return usable event JSON after {self._max_attempts} "
             f"attempts: {last_error}"
         )
+
+    async def _record_artifact_result(
+        self,
+        call_dir: Any,
+        result: dict[str, Any],
+    ) -> None:
+        try:
+            self._artifacts.record_model_result(call_dir, result)
+        except Exception:
+            logger.exception(
+                "timeline model result artifact write failed path=%s",
+                call_dir,
+            )
 
     def _normalized_frame_jpeg(self, frame: TimelineMediaChunk) -> bytes:
         key = (frame.stream_epoch, frame.sequence)
@@ -560,11 +805,12 @@ def _observation(
     window: EventDetectionWindow,
     model_id: str,
     model_version: str,
+    prompt_version: str,
 ) -> ObservationEvent:
     event_key = (
         f"{start.session_id}:{start.identity_epoch}:{stream_epoch}:"
         f"{window.current_start_ms}:{window.end_ms}:{event_id}:"
-        f"{window.evidence_mode}:{window.audio_status.value}:{PROMPT_VERSION}"
+        f"{window.evidence_mode}:{window.audio_status.value}:{prompt_version}"
     )
     return ObservationEvent(
         observation_id="observation-" + hashlib.sha256(

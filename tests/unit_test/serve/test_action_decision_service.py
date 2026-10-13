@@ -17,6 +17,8 @@ from sglang_omni.serve.action_decision.contracts import (
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
 from sglang_omni.serve.action_decision.prompt import (
     E65_REFERENCE_SYSTEM_PROMPT_PATH,
+    E66_REFERENCE_SYSTEM_PROMPT_PATH,
+    E67_REFERENCE_SYSTEM_PROMPT_PATH,
     build_system_prompt,
     build_user_prompt,
 )
@@ -201,6 +203,32 @@ def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None
     assert "user_audio：这是本轮用户原始音频" in user_prompt
     assert "trigger=user_input" in user_prompt
     assert "ASR" not in user_prompt
+
+
+def test_e66_reference_profile_uses_frozen_v116_training_prompt() -> None:
+    request = _request(
+        DecisionChannel.BODY,
+        runtime_context={"prompt_profile": "e66_v116_step935_fp8"},
+    )
+    catalog = _registry().resolve(request)
+    expected_system = E66_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    assert build_system_prompt(request, catalog) == expected_system
+    assert hashlib.sha256(expected_system.encode()).hexdigest() == (
+        "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
+    )
+
+
+def test_e67_reference_profile_uses_frozen_v116_training_prompt() -> None:
+    request = _request(
+        DecisionChannel.BODY,
+        runtime_context={"prompt_profile": "e67_v116_step695_fp8"},
+    )
+    catalog = _registry().resolve(request)
+    expected_system = E67_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    assert build_system_prompt(request, catalog) == expected_system
+    assert hashlib.sha256(expected_system.encode()).hexdigest() == (
+        "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
+    )
 
 
 def test_character_prompt_rejects_only_above_d_stage_response_budget() -> None:

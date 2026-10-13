@@ -49,10 +49,10 @@ env \
     CUDA_VISIBLE_DEVICES=0 \
     SGLANG_OMNI_SERVICE_INSTANCE_ID=sglang-omni-GPU0_1-dev-gpu0 \
     SGLANG_OMNI_SERVICE_ROLE=action-decision \
-    SGLANG_OMNI_MODEL_VERSION=e65-step1512-fp8 \
+    SGLANG_OMNI_MODEL_VERSION=e67-v116-step695-fp8 \
     SGLANG_OMNI_ACTION_DECISION_TOKEN="${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:-${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:?set an internal service token}}}" \
     SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN="${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:-${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:?set an internal service token}}}" \
-    SGLANG_OMNI_ACTION_ARTIFACT_ROOT=/data/xingmt/model_repo/action_prediction_model/assets \
+    SGLANG_OMNI_ACTION_ARTIFACT_ROOT=/data/xingmt/model_repo/action_prediction_model/assets/e67_v116 \
     "$python_bin" -m sglang_omni.cli serve \
         --config "$project_root/deploy/config_action_gpu.yaml" \
         --host 0.0.0.0 \

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "service_role": "timeline-detection",
+  "contract_version": 1,
+  "model_id": "qwen3-omni-gpu4-timeline",
+  "base_model": "Qwen3-Omni-30B-A3B-FP8 + checkpoint-1500 FP8 top-24/lm_head overlay",
+  "checkpoint_path": "/data/xingmt/action_omni_remote/deploy/event_e50_direct_checkpoint1500_fp8_20261012",
+  "input_modalities": [
+    "audio",
+    "video"
+  ],
+  "output_contract": "timeline-detection.v1",
+  "artifacts": [
+    {
+      "path": "model-00001-of-00015.safetensors",
+      "size_bytes": 3997767184,
+      "sha256": "f696ae48f6c823a4583f96292220e8a444a80378f994dbc2da7dba9658408c43"
+    },
+    {
+      "path": "model-00002-of-00015.safetensors",
+      "size_bytes": 2500556536,
+      "sha256": "11c79a1bd08ba070fdca2e0f1a7f088a316bc52b6f1991b342f073e4d748fadb"
+    },
+    {
+      "path": "model-00003-of-00015.safetensors",
+      "size_bytes": 2500556544,
+      "sha256": "c13b856a3db8d69088394e4ed0a71bd75ee261bc71122408b933852925ee84b4"
+    },
+    {
+      "path": "model-00004-of-00015.safetensors",
+      "size_bytes": 2500559840,
+      "sha256": "9c45e872565e6b94b90f676f018bd718d5cc0470242c3f6b1664ab68f0a4db67"
+    },
+    {
+      "path": "model-00005-of-00015.safetensors",
+      "size_bytes": 2500559696,
+      "sha256": "c0391162f6af96060f2a71d39d5b398fd208fbaadaf37491f4b857fb5648e002"
+    },
+    {
+      "path": "model-00006-of-00015.safetensors",
+      "size_bytes": 2500559696,
+      "sha256": "b01061196ad032fef2f2d267c7882203e10b5e14deec1bbf1f89c465297af887"
+    },
+    {
+      "path": "model-00007-of-00015.safetensors",
+      "size_bytes": 2500559744,
+      "sha256": "c6074826a21c0082f48702ccfa9efed09e9b4a0affc9a9ce8fbce064a7ffc4c7"
+    },
+    {
+      "path": "model-00008-of-00015.safetensors",
+      "size_bytes": 2500559752,
+      "sha256": "a36b2c45728ae942996c1fb7a02b76298f6ce61b22c72afc8473355d279ef555"
+    },
+    {
+      "path": "model-00009-of-00015.safetensors",
+      "size_bytes": 2500559752,
+      "sha256": "5fe02dfb0298e0e36d5ff8d95f06be2839b62fad56be6bfdb18b826899837bcf"
+    },
+    {
+      "path": "model-00010-of-00015.safetensors",
+      "size_bytes": 2500559768,
+      "sha256": "0a2ae86279fb128e7287e5a2f3fc708865029deaee56ff308221c7483c6c17ee"
+    },
+    {
+      "path": "model-00011-of-00015.safetensors",
+      "size_bytes": 2500559776,
+      "sha256": "43f5d0024dc20db1131376377c9f549215aa108f56a408003f89b77774dc1293"
+    },
+    {
+      "path": "model-00012-of-00015.safetensors",
+      "size_bytes": 2500559776,
+      "sha256": "cda65da8e7c399d96b77435cee49acddbda93c9cd0b1dc111858af5fb92bb2c9"
+    },
+    {
+      "path": "model-00013-of-00015.safetensors",
+      "size_bytes": 2813342504,
+      "sha256": "2b151f85c49aee00b811c19b1a93324ef960a58609ba75e5dbbee2ad7a69836b"
+    },
+    {
+      "path": "model-00014-of-00015.safetensors",
+      "size_bytes": 2507095568,
+      "sha256": "3d2ae8a264937eecb485511b77dccb9381dfe48036a028263ce2b56febd0d53d"
+    },
+    {
+      "path": "model-00015-of-00015.safetensors",
+      "size_bytes": 553698762,
+      "sha256": "f30142d3d5f7494808efd32a8aacb54e9ccbbe771b1f79a0776c4e2b2faeedc3"
+    },
+    {
+      "path": "model.safetensors.index.json",
+      "size_bytes": 5582756,
+      "sha256": "c95dd293a657611808603f1588455e29d3470773d596f669d8eb91b427d4d5c2"
+    },
+    {
+      "path": "config.json",
+      "size_bytes": 12218,
+      "sha256": "c7f5d9206e33a989885f08cde4eb562f0f1b051ad572fe6270201c76cc706a57"
+    },
+    {
+      "path": "generation_config.json",
+      "size_bytes": 146,
+      "sha256": "7fa40989be8e43c078907810c41c25d33747523afce3d5a34d5850f930c886cb"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "size_bytes": 603,
+      "sha256": "b10e27fd4542cf89ec7145942b87f3e65408d4e9f9d031a29acdd293c15fb3fc"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size_bytes": 7344,
+      "sha256": "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670"
+    },
+    {
+      "path": "vocab.json",
+      "size_bytes": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    {
+      "path": "merges.txt",
+      "size_bytes": 1671839,
+      "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+    },
+    {
+      "path": "chat_template.json",
+      "size_bytes": 6772,
+      "sha256": "90c1b81f29e41b7642b0cc02c877a10c8bf6751a8d8fa1d16ac9a718cf1c3d86"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 90295,
+      "sha256": "0e44065c4c4a27071f7239afd5b5a33af5bc2e437dd7ea9950e51aafabfde3df"
+    },
+    {
+      "path": "trainable_overlay.json",
+      "size_bytes": 11583,
+      "sha256": "45726106ff06e293c4870f1a0f75488f0ef717ef2bffb90396cc15cad6cd1ba3"
+    },
+    {
+      "path": "sidecar_variant.json",
+      "size_bytes": 3721,
+      "sha256": "3116cad6d01b56215f782c3c28acca3c13f178313fb61105ce0915fb5f390b9d"
+    }
+  ]
+}

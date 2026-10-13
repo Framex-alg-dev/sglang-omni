@@ -122,6 +122,7 @@ from sglang_omni.serve.protocol import (
 )
 from sglang_omni.serve.structured_output import response_json_schema
 from sglang_omni.serve.realtime.runtime_prompt_overrides import (
+    effective_runtime_prompt,
     prompt_slot_payloads as realtime_prompt_slot_payloads,
     write_runtime_prompt as write_realtime_prompt,
 )
@@ -1237,6 +1238,18 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
 
     # Convert messages
     messages = [Message(role=m.role, content=m.content) for m in req.messages]
+    if req.runtime_prompt_profile == "reply":
+        messages.insert(
+            0,
+            Message(
+                role="system",
+                content=effective_runtime_prompt(
+                    "reply_rules",
+                    repository_reply_rules(req.runtime_prompt_language),
+                    language=req.runtime_prompt_language,
+                ),
+            ),
+        )
 
     # Determine output modalities
     output_modalities = req.modalities or ["text"]  # e.g. ["text", "audio"]
@@ -1283,6 +1296,9 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         metadata["video_total_pixels"] = req.video_total_pixels
     if req.session_instance_id is not None:
         metadata["session_instance_id"] = req.session_instance_id
+    if req.runtime_prompt_profile is not None:
+        metadata["runtime_prompt_profile"] = req.runtime_prompt_profile
+        metadata["runtime_prompt_language"] = req.runtime_prompt_language
     _record_explicit_generation_params(
         metadata,
         _explicit_generation_params(req),

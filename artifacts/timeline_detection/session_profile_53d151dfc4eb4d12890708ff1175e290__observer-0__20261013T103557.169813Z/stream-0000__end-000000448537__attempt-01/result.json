@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E48"
+  ],
+  "inference_ms": 522.4714512005448,
+  "input_build_ms": 48.75046666711569,
+  "observations": [
+    {
+      "audio_status": "complete",
+      "contract_version": 2,
+      "event_type": "E48",
+      "evidence_end_ms": 448537,
+      "evidence_mode": "audio_video",
+      "evidence_start_ms": 438537,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-92f219de41f86b9275adb97d",
+      "observer_epoch": 0,
+      "session_id": "session_profile_53d151dfc4eb4d12890708ff1175e290",
+      "stream_epoch": 0,
+      "summary": "吃药"
+    }
+  ],
+  "parsed_event_ids": [
+    "E48"
+  ],
+  "raw_output": "E48",
+  "recorded_at": "2026-10-13T10:43:26.649662+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 571.2219178676605,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8475,
+    "total_tokens": 8479
+  },
+  "weight_version": "default"
+}

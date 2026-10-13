@@ -550,7 +550,14 @@ class ReplyPromptComponent:
                     "重复、修改或比较先前内容，或者包含必须依赖先前对话才能确定含义的"
                     "指代或省略时，才使用提供给你的相关历史消息；否则应独立理解并回答"
                     "当前请求，不得延续、复用或重复先前回复的主题或答案。不得假定自己"
-                    "能够看到未提供的历史消息。"
+                    "能够看到未提供的历史消息。历史中的 assistant 回复均视为已经向用户"
+                    "完整说出，而不是可再次发送的草稿。当前请求是简短的同意、拒绝、选择、"
+                    "追问或指代时，应先解析它与最近一条助手问题或提议的关系，再直接推进到"
+                    "下一步，不得重说上一条问题或整段回复。除非用户明确要求复述，否则本轮"
+                    "必须提供新的有效信息、执行当前要求的下一步，或在确实缺少必要信息时只问"
+                    "一个最小澄清问题；不得输出与最近助手回复完全相同的正文。仅说‘继续’、"
+                    "‘接着讲’、‘下一步’或宣布稍后推进，不算完成推进；只要当前轮可以执行"
+                    "下一步，就必须在同一回复中直接给出下一步的实质内容。"
                 ),
                 en=(
                     "[Current user request takes priority] The user audio or text in the "
@@ -564,7 +571,17 @@ class ReplyPromptComponent:
                     "conversation. Otherwise, understand and answer the current request "
                     "independently, and do not continue, reuse, or repeat the topic or answer "
                     "of an earlier reply. Do not assume access to any history that was not "
-                    "provided."
+                    "provided. Every assistant reply in history has already been fully delivered "
+                    "to the user; it is not a draft that may be sent again. When the current "
+                    "request is a brief acceptance, rejection, selection, follow-up, or reference, "
+                    "first resolve it against the latest assistant question or proposal and then "
+                    "move directly to the next step instead of restating that question or reply. "
+                    "Unless the user explicitly asks for repetition, every reply must add useful "
+                    "new information, perform the next requested step, or ask one minimal "
+                    "clarifying question only when indispensable. A transition-only sentence "
+                    "such as 'let's continue', 'keep going', or 'we'll move on' is not progress; "
+                    "when the next step can be completed now, include its substantive content in "
+                    "the same reply. Never output the exact body of a recent assistant reply."
                 ),
             ),
         }

@@ -1,0 +1,19 @@
+{
+  "accepted_event_ids": [],
+  "inference_ms": 360.99799536168575,
+  "input_build_ms": 29.02795933187008,
+  "observations": [],
+  "parsed_event_ids": [],
+  "raw_output": "N",
+  "recorded_at": "2026-10-13T09:31:34.913574+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "no_event",
+  "suppressed_event_ids": [],
+  "total_ms": 390.02595469355583,
+  "usage": {
+    "completion_tokens": 2,
+    "prompt_tokens": 7381,
+    "total_tokens": 7383
+  },
+  "weight_version": "default"
+}

@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E8"
+  ],
+  "inference_ms": 550.511066801846,
+  "input_build_ms": 101.12759936600924,
+  "observations": [
+    {
+      "audio_status": "complete",
+      "contract_version": 2,
+      "event_type": "E8",
+      "evidence_end_ms": 58918,
+      "evidence_mode": "audio_video",
+      "evidence_start_ms": 48918,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-b73ab64bdfda32a7d4a148c0",
+      "observer_epoch": 0,
+      "session_id": "session_profile_fe94c6792ddb4fa8bbacd22fb54aa29f",
+      "stream_epoch": 0,
+      "summary": "一次咳嗽或喷嚏"
+    }
+  ],
+  "parsed_event_ids": [
+    "E8"
+  ],
+  "raw_output": "E8",
+  "recorded_at": "2026-10-13T09:52:51.378599+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 651.6386661678553,
+  "usage": {
+    "completion_tokens": 3,
+    "prompt_tokens": 8474,
+    "total_tokens": 8477
+  },
+  "weight_version": "default"
+}

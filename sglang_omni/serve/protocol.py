@@ -98,6 +98,18 @@ class ChatCompletionRequest(BaseModel):
     # Misc
     request_id: str | None = None
     user: str | None = None
+    # Internal prompt ownership selected by trusted application callers.  The
+    # default preserves ordinary OpenAI-compatible requests unchanged; reply
+    # workers opt in so the same hot-reloadable service policy used by realtime
+    # sessions also governs generated application replies.
+    runtime_prompt_profile: Literal["reply"] | None = Field(
+        default=None,
+        exclude=True,
+    )
+    runtime_prompt_language: Literal["zh", "en", "zh-CN", "en-US"] = Field(
+        default="zh-CN",
+        exclude=True,
+    )
     # Internal cache namespace supplied by the authenticated inference gateway.
     # It is deliberately separate from ``user`` so application callers cannot
     # accidentally couple cache ownership to an end-user controlled label.

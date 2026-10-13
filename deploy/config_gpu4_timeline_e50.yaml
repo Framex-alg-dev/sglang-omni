@@ -1,0 +1,33 @@
+# Prepared candidate for event-sft-e50-direct-best1500. The active service
+# continues to use config_gpu4_timeline.yaml until artifact verification passes.
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-gpu4-timeline
+model_path: /data/xingmt/action_omni_remote/deploy/event_e50_direct_checkpoint1500_fp8_20261012
+
+runtime_overrides:
+  thinker:
+    server_args_overrides:
+      chunked_prefill_size: 8192
+      max_running_requests: 4
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 60000
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 60000
+      resources:
+        total_gpu_memory_fraction: 0.78

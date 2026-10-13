@@ -1,15 +1,14 @@
-"""Strict direct/delegate routing pipeline around model-1 implementations."""
+"""Strict four-code capability routing pipeline around model-1."""
 
 from __future__ import annotations
 
-import json
-from typing import Any, Mapping, Protocol
+import re
+from typing import Protocol
 
 from .contracts import (
+    BrainRoute,
     MediaDirective,
     OutputDirective,
-    ROUTE_BY_TOKEN,
-    RequestCuePlan,
     RouteToken,
     TaskClassificationRequest,
     TaskClassificationResult,
@@ -31,7 +30,7 @@ class InvalidRouteOutput(ValueError):
 
 
 class TaskClassificationPipeline:
-    """Enforce the model-1 contract's closed routing vocabulary."""
+    """Enforce Router v0.7's exact one-character output vocabulary."""
 
     def __init__(self, model: TaskClassificationModel) -> None:
         self._model = model
@@ -46,30 +45,15 @@ class TaskClassificationPipeline:
         request: TaskClassificationRequest,
     ) -> TaskClassificationResult:
         raw = await self._model.classify(request)
-        try:
-            parsed = json.loads(raw)
-            if not isinstance(parsed, Mapping):
-                raise ValueError("router output must be an object")
-            allowed = {
-                "route_token",
-                "output_directive",
-                "task_directive",
-                "media_directive",
-                "response_locale",
-                "request_cue",
-            }
-            if set(parsed) != allowed:
-                raise ValueError("router output fields are invalid")
-            route_token = RouteToken(_string(parsed, "route_token"))
-            output_directive = OutputDirective(_string(parsed, "output_directive"))
-            task_directive = TaskDirective(_string(parsed, "task_directive"))
-            media_directive = MediaDirective(_string(parsed, "media_directive"))
-            response_locale = _string(parsed, "response_locale")
-            request_cue = _request_cue(parsed.get("request_cue"))
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        if raw not in {"0", "1", "2", "3"}:
             raise InvalidRouteOutput(
-                "turn-router model must output the exact v5 JSON contract"
-            ) from exc
+                "turn-router model must output exactly one of 0, 1, 2, or 3"
+            )
+        route_code = int(raw)
+        needs_mcp = bool(route_code & 1)
+        needs_multimodal = bool(route_code & 2)
+        route_token = RouteToken.DELEGATE if needs_mcp else RouteToken.DIRECT
+        route = BrainRoute.BRAIN2 if needs_mcp else BrainRoute.BRAIN1
         try:
             return TaskClassificationResult(
                 request_id=request.request_id,
@@ -78,35 +62,27 @@ class TaskClassificationPipeline:
                 identity_epoch=request.identity_epoch,
                 input_revision=request.input_revision,
                 route_token=route_token,
-                route=ROUTE_BY_TOKEN[route_token],
-                output_directive=output_directive,
-                task_directive=task_directive,
-                media_directive=media_directive,
-                response_locale=response_locale,
-                request_cue=request_cue,
+                route=route,
+                route_code=route_code,
+                needs_mcp=needs_mcp,
+                needs_multimodal=needs_multimodal,
+                output_directive=OutputDirective.KEEP,
+                task_directive=TaskDirective.KEEP,
+                media_directive=MediaDirective.NONE,
+                response_locale=_response_locale(request.text),
+                request_cue=None,
                 model_id=self._model.model_id,
                 model_version=self._model.model_version,
             )
         except ValueError as exc:
             raise InvalidRouteOutput(
-                "turn-router model must output the exact v5 JSON contract"
+                "turn-router model returned an inconsistent capability code"
             ) from exc
 
 
-def _string(raw: Mapping[str, Any], key: str) -> str:
-    value = raw.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{key} must be a non-empty string")
-    return value
+def _response_locale(text: str | None) -> str:
+    """Keep the legacy locale field outside Router v0.7's model authority."""
 
-
-def _request_cue(raw: object) -> RequestCuePlan | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, Mapping) or set(raw) != {"verb", "object", "language"}:
-        raise ValueError("request_cue must use the exact cue contract")
-    return RequestCuePlan(
-        verb=_string(raw, "verb"),
-        object=_string(raw, "object"),
-        language=_string(raw, "language"),
-    )
+    if text and re.search(r"[\u3400-\u9fff]", text) is None:
+        return "en-US"
+    return "zh-CN"

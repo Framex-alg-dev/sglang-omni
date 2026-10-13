@@ -6,6 +6,7 @@ import io
 import logging
 import wave
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -55,6 +56,7 @@ class EventWindowAssembler:
         current_frame_count: int = 6,
         audio_grace_ms: int = 350,
         max_buffer_bytes: int = 32 * 1024 * 1024,
+        window_event_sink: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         stride_ms = current_duration_ms if window_stride_ms is None else window_stride_ms
         if min(
@@ -76,6 +78,7 @@ class EventWindowAssembler:
         self._current_frame_count = current_frame_count
         self._audio_grace_ms = audio_grace_ms
         self._max_buffer_bytes = max_buffer_bytes
+        self._window_event_sink = window_event_sink
         self._buffered_bytes = 0
         self._audio: deque[TimelineMediaChunk] = deque()
         self._video: deque[TimelineMediaChunk] = deque()
@@ -176,14 +179,26 @@ class EventWindowAssembler:
             maximum_distance_ms=400,
             right_aligned=True,
         )
+        current_sampling = "exact"
         if current_frames is None:
-            self._log_discarded_window(
+            current_frames, current_sampling = _resample_window_frames(
+                current_candidates,
+                fallback_candidates=tuple(
+                    item for item in self._video if item.start_ms <= end_ms
+                ),
+                start_ms=current_start_ms,
                 end_ms=end_ms,
-                reason="current_frames_unavailable",
-                current_candidates=len(current_candidates),
-                history_candidates=0,
+                count=self._current_frame_count,
+                right_aligned=True,
             )
-            return None
+            if current_frames is None:
+                self._log_discarded_window(
+                    end_ms=end_ms,
+                    reason="no_video_evidence",
+                    current_candidates=len(current_candidates),
+                    history_candidates=0,
+                )
+                return None
 
         history_duration_ms = current_start_ms - start_ms
         history_count = min(14, history_duration_ms // 500)
@@ -200,14 +215,28 @@ class EventWindowAssembler:
             maximum_distance_ms=400,
             right_aligned=True,
         )
+        history_sampling = "exact"
         if history_frames is None:
-            self._log_discarded_window(
-                end_ms=end_ms,
-                reason="history_frames_unavailable",
-                current_candidates=len(current_candidates),
-                history_candidates=len(history_candidates),
+            history_frames, history_sampling = _resample_window_frames(
+                history_candidates,
+                fallback_candidates=tuple(
+                    item
+                    for item in self._video
+                    if item.start_ms <= current_start_ms
+                ),
+                start_ms=start_ms,
+                end_ms=current_start_ms,
+                count=history_count,
+                right_aligned=True,
             )
-            return None
+            if history_frames is None:
+                self._log_discarded_window(
+                    end_ms=end_ms,
+                    reason="no_video_evidence",
+                    current_candidates=len(current_candidates),
+                    history_candidates=len(history_candidates),
+                )
+                return None
         audio_status = self._audio_status(start_ms, end_ms)
         audio_start_ms: int | None = None
         if audio_status is AudioEvidenceStatus.COMPLETE:
@@ -225,17 +254,38 @@ class EventWindowAssembler:
             else None
         )
         self._window_built += 1
+        self._record_window_event(
+            {
+                "status": "ready",
+                "end_ms": end_ms,
+                "current_candidates": len(current_candidates),
+                "current_selected": len(current_frames),
+                "current_sampling": current_sampling,
+                "history_candidates": len(history_candidates),
+                "history_selected": len(history_frames),
+                "history_sampling": history_sampling,
+                "evidence_mode": (
+                    "audio_video" if audio_wav is not None else "video_only"
+                ),
+                "audio_status": audio_status.value,
+                "built_total": self._window_built,
+                "attempted_total": self._window_attempts,
+            }
+        )
         logger.info(
             "timeline window ready session_id=%s end_ms=%s current_candidates=%s "
-            "current_selected=%s history_candidates=%s history_selected=%s "
+            "current_selected=%s current_sampling=%s history_candidates=%s "
+            "history_selected=%s history_sampling=%s "
             "evidence_mode=%s audio_status=%s audio_scope=%s "
             "built_total=%s attempted_total=%s",
             self._session_id,
             end_ms,
             len(current_candidates),
             len(current_frames),
+            current_sampling,
             len(history_candidates),
             len(history_frames),
+            history_sampling,
             "audio_video" if audio_wav is not None else "video_only",
             audio_status.value,
             (
@@ -268,6 +318,18 @@ class EventWindowAssembler:
         history_candidates: int,
     ) -> None:
         self._window_discarded += 1
+        self._record_window_event(
+            {
+                "status": "discarded",
+                "end_ms": end_ms,
+                "reason": reason,
+                "current_candidates": current_candidates,
+                "current_required": self._current_frame_count,
+                "history_candidates": history_candidates,
+                "discarded_total": self._window_discarded,
+                "attempted_total": self._window_attempts,
+            }
+        )
         logger.info(
             "timeline window discarded session_id=%s end_ms=%s reason=%s "
             "current_candidates=%s current_required=%s history_candidates=%s "
@@ -281,6 +343,17 @@ class EventWindowAssembler:
             self._window_discarded,
             self._window_attempts,
         )
+
+    def _record_window_event(self, event: dict[str, object]) -> None:
+        if self._window_event_sink is None:
+            return
+        try:
+            self._window_event_sink(event)
+        except Exception:
+            logger.exception(
+                "timeline window artifact write failed session_id=%s",
+                self._session_id,
+            )
 
     def _media_progress_ms(self) -> int:
         audio_end_ms = self._audio[-1].end_ms if self._audio else 0
@@ -404,7 +477,7 @@ def _select_nearest_frames(
     start_ms: int,
     end_ms: int,
     count: int,
-    maximum_distance_ms: int,
+    maximum_distance_ms: int | None,
     right_aligned: bool = False,
 ) -> tuple[TimelineMediaChunk, ...] | None:
     if count == 0:
@@ -429,12 +502,74 @@ def _select_nearest_frames(
     remaining = list(candidates)
     for target in targets:
         nearest = min(remaining, key=lambda item: abs(item.start_ms - target))
-        if abs(nearest.start_ms - target) > maximum_distance_ms:
+        if (
+            maximum_distance_ms is not None
+            and abs(nearest.start_ms - target) > maximum_distance_ms
+        ):
             return None
         selected.append(nearest)
         remaining.remove(nearest)
     selected.sort(key=lambda item: item.start_ms)
     return tuple(selected)
+
+
+def _resample_window_frames(
+    candidates: tuple[TimelineMediaChunk, ...],
+    *,
+    fallback_candidates: tuple[TimelineMediaChunk, ...],
+    start_ms: int,
+    end_ms: int,
+    count: int,
+    right_aligned: bool,
+) -> tuple[tuple[TimelineMediaChunk, ...] | None, str]:
+    """Fill a fixed-rate model window without dropping a cadence tick.
+
+    Prefer distinct frames from the requested time range.  If delivery was
+    sparse, reuse the nearest frame for missing sample points.  Falling back
+    outside the requested range is only used when that range contains no
+    frame at all, which keeps a short camera stall from disabling inference.
+    """
+
+    if count == 0:
+        return (), "exact"
+    source = candidates or fallback_candidates
+    if not source:
+        return None, "unavailable"
+    distinct = _select_nearest_frames(
+        source,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        count=count,
+        maximum_distance_ms=None,
+        right_aligned=right_aligned,
+    )
+    if distinct is not None:
+        return distinct, "resampled"
+
+    span = end_ms - start_ms
+    if right_aligned:
+        targets = tuple(
+            start_ms + (span * (index + 1) // count)
+            for index in range(count)
+        )
+    elif count == 1:
+        targets = ((start_ms + end_ms) // 2,)
+    else:
+        targets = tuple(
+            start_ms + (span * index // (count - 1))
+            for index in range(count)
+        )
+    selected = tuple(
+        min(
+            source,
+            key=lambda item: (
+                abs(item.start_ms - target),
+                -item.start_ms,
+            ),
+        )
+        for target in targets
+    )
+    return selected, "duplicated"
 
 
 def _parse_audio_format(value: str) -> tuple[int, int]:

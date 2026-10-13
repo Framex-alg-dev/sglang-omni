@@ -15,6 +15,19 @@ E65_REFERENCE_PROFILE = "e65_step1512_fp8"
 E65_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
     "e65_step1512_system_prompt.md"
 )
+E66_REFERENCE_PROFILE = "e66_v116_step935_fp8"
+E66_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
+    "e66_v116_step935_system_prompt.txt"
+)
+E67_REFERENCE_PROFILE = "e67_v116_step695_fp8"
+E67_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
+    "e67_v116_step695_system_prompt.txt"
+)
+REFERENCE_SYSTEM_PROMPT_PATHS = {
+    E65_REFERENCE_PROFILE: E65_REFERENCE_SYSTEM_PROMPT_PATH,
+    E66_REFERENCE_PROFILE: E66_REFERENCE_SYSTEM_PROMPT_PATH,
+    E67_REFERENCE_PROFILE: E67_REFERENCE_SYSTEM_PROMPT_PATH,
+}
 
 
 # E57-A was trained with this action-selection protocol. Keep the stable rules
@@ -58,18 +71,31 @@ E57_FINAL_TASK_CONSTRAINTS = """[FINAL_TASK_CONSTRAINTS]
 - 两个加数无法可靠识别、指代不清，或和没有已注册数字手势时，选择 unsupported；不得猜测或用邻近数字替代。"""
 
 
-def uses_e65_reference_prompt(request: ActionDecisionRequest) -> bool:
+def reference_prompt_profile(request: ActionDecisionRequest) -> str | None:
+    profile = request.runtime_context.get("prompt_profile")
     return (
-        request.channel is DecisionChannel.BODY
-        and request.runtime_context.get("prompt_profile") == E65_REFERENCE_PROFILE
+        profile
+        if request.channel is DecisionChannel.BODY
+        and isinstance(profile, str)
+        and profile in REFERENCE_SYSTEM_PROMPT_PATHS
+        else None
     )
 
 
-@lru_cache(maxsize=1)
-def _e65_reference_system_prompt() -> str:
-    prompt = E65_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+def uses_reference_prompt(request: ActionDecisionRequest) -> bool:
+    return reference_prompt_profile(request) is not None
+
+
+def uses_e65_reference_prompt(request: ActionDecisionRequest) -> bool:
+    """Backward-compatible predicate for callers that still name E65."""
+    return reference_prompt_profile(request) == E65_REFERENCE_PROFILE
+
+
+@lru_cache(maxsize=len(REFERENCE_SYSTEM_PROMPT_PATHS))
+def _reference_system_prompt(profile: str) -> str:
+    prompt = REFERENCE_SYSTEM_PROMPT_PATHS[profile].read_text(encoding="utf-8")
     if not prompt.strip():
-        raise ValueError("E65 reference system prompt must not be empty")
+        raise ValueError(f"{profile} reference system prompt must not be empty")
     return prompt
 
 
@@ -88,8 +114,9 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         for value in (request.character_prompt, request.session_prompt, request.text)
     ):
         raise ValueError("action decision text fields must not contain NUL")
-    if uses_e65_reference_prompt(request):
-        return _e65_reference_system_prompt()
+    profile = reference_prompt_profile(request)
+    if profile is not None:
+        return _reference_system_prompt(profile)
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [
@@ -127,7 +154,7 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
 
 def build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
     media_kinds = [item.kind for item in request.media]
-    if uses_e65_reference_prompt(request):
+    if uses_reference_prompt(request):
         image_count = sum(kind in {"image", "video"} for kind in media_kinds)
         has_audio = "audio" in media_kinds
         parts = []

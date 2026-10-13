@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any
 
 
-CONTRACT_VERSION = 5
+CONTRACT_VERSION = 6
 DEFAULT_BRAIN1_CAPABILITIES = (
     "普通聊天、简单问答、计算、下游用户视频理解；"
     "不处理应用能力、曲库或媒体播放查询"
@@ -63,6 +63,13 @@ ROUTE_BY_TOKEN = {
     RouteToken.DIRECT: BrainRoute.BRAIN1,
     RouteToken.DELEGATE: BrainRoute.BRAIN2,
     RouteToken.CONTROL: BrainRoute.CONTROL,
+}
+
+ROUTE_CODE_REQUIREMENTS = {
+    0: (False, False),
+    1: (True, False),
+    2: (False, True),
+    3: (True, True),
 }
 
 
@@ -194,6 +201,9 @@ class TaskClassificationResult:
     input_revision: int
     route_token: RouteToken
     route: BrainRoute
+    route_code: int
+    needs_mcp: bool
+    needs_multimodal: bool
     output_directive: OutputDirective
     task_directive: TaskDirective
     media_directive: MediaDirective
@@ -212,6 +222,17 @@ class TaskClassificationResult:
             ("model_version", self.model_version),
         ):
             _required(name, value)
+        if self.route_code not in ROUTE_CODE_REQUIREMENTS:
+            raise ValueError("turn-router code must be 0, 1, 2, or 3")
+        expected_mcp, expected_multimodal = ROUTE_CODE_REQUIREMENTS[self.route_code]
+        if (self.needs_mcp, self.needs_multimodal) != (
+            expected_mcp,
+            expected_multimodal,
+        ):
+            raise ValueError("turn-router code and capability requirements disagree")
+        expected_token = RouteToken.DELEGATE if self.needs_mcp else RouteToken.DIRECT
+        if self.route_token is not expected_token:
+            raise ValueError("turn-router code and derived route token disagree")
         if ROUTE_BY_TOKEN[self.route_token] is not self.route:
             raise ValueError("turn-router token and Brain route disagree")
         if self.response_locale not in {"zh-CN", "en-US"}:
@@ -235,7 +256,5 @@ class TaskClassificationResult:
             raise ValueError(
                 "control route requires an output, task, or media directive"
             )
-        if self.route_token is RouteToken.DELEGATE and self.request_cue is None:
-            raise ValueError("delegated route requires a request cue")
         if self.route_token is not RouteToken.DELEGATE and self.request_cue is not None:
             raise ValueError("only delegated routes may contain a request cue")

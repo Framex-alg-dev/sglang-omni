@@ -1,0 +1,40 @@
+{
+  "accepted_event_ids": [
+    "E35"
+  ],
+  "inference_ms": 532.7324401587248,
+  "input_build_ms": 60.75385678559542,
+  "observations": [
+    {
+      "audio_status": "gapped",
+      "contract_version": 2,
+      "event_type": "E35",
+      "evidence_end_ms": 19369,
+      "evidence_mode": "video_only",
+      "evidence_start_ms": 9369,
+      "identity_epoch": 1,
+      "model_id": "qwen3-omni-gpu4-timeline",
+      "model_version": "e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+      "observation_id": "observation-a96cda8aefba4822ef74cad4",
+      "observer_epoch": 0,
+      "session_id": "session_profile_db9f89ecc16d4adea3366bbe89aa5a7e",
+      "stream_epoch": 0,
+      "summary": "宠物入画"
+    }
+  ],
+  "parsed_event_ids": [
+    "E35"
+  ],
+  "raw_output": "E35",
+  "recorded_at": "2026-10-13T10:05:28.325237+00:00",
+  "schema_version": "timeline-model-result.v1",
+  "status": "emitted",
+  "suppressed_event_ids": [],
+  "total_ms": 593.4862969443202,
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 8337,
+    "total_tokens": 8341
+  },
+  "weight_version": "default"
+}

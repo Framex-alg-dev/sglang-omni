@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
-
 import msgpack
 from fastapi.testclient import TestClient
 
@@ -23,26 +21,7 @@ class _Model:
     model_version = "prompt-v1"
 
     async def classify(self, request):
-        delegated = request.text == "book a ticket"
-        return json.dumps(
-            {
-                "route_token": "delegate" if delegated else "direct",
-                "output_directive": "keep",
-                "task_directive": "keep",
-                "media_directive": "none",
-                "response_locale": "en-US" if delegated else "zh-CN",
-                "request_cue": (
-                    {
-                        "verb": "book",
-                        "object": "a ticket",
-                        "language": "en-US",
-                    }
-                    if delegated
-                    else None
-                ),
-            },
-            separators=(",", ":"),
-        )
+        return "1" if request.text == "book a ticket" else "0"
 
 
 def _body(text: str) -> bytes:
@@ -101,13 +80,12 @@ def test_authenticated_turn_router_contract() -> None:
     assert response.status_code == 200
     assert response.json()["route_token"] == "delegate"
     assert response.json()["route"] == "BRAIN2"
+    assert response.json()["route_code"] == 1
+    assert response.json()["needs_mcp"] is True
+    assert response.json()["needs_multimodal"] is False
     assert response.json()["input_revision"] == 4
     assert response.json()["contract_version"] == CONTRACT_VERSION
-    assert response.json()["request_cue"] == {
-        "verb": "book",
-        "object": "a ticket",
-        "language": "en-US",
-    }
+    assert response.json()["request_cue"] is None
 
 
 def test_websocket_streams_binary_media_before_classification() -> None:
@@ -115,21 +93,7 @@ def test_websocket_streams_binary_media_before_classification() -> None:
         async def classify(self, request):
             assert request.text is None
             assert request.media[0].payload == raw_media
-            return json.dumps(
-                {
-                    "route_token": "delegate",
-                    "output_directive": "keep",
-                    "task_directive": "keep",
-                    "media_directive": "none",
-                    "response_locale": "en-US",
-                    "request_cue": {
-                        "verb": "handle",
-                        "object": "that request",
-                        "language": "en-US",
-                    },
-                },
-                separators=(",", ":"),
-            )
+            return "3"
 
     raw_media = b"\x01\x00" * 160
     app = create_task_classification_app(
@@ -180,6 +144,8 @@ def test_websocket_streams_binary_media_before_classification() -> None:
 
     assert completed["type"] == "response.completed"
     assert completed["response"]["route"] == "BRAIN2"
+    assert completed["response"]["route_code"] == 3
+    assert completed["response"]["needs_multimodal"] is True
 
 
 def test_invalid_model_output_is_upstream_failure() -> None:
