@@ -244,7 +244,9 @@ class SglangClientTimelineDetectionModel:
         self._event_edges = (
             DirectE50FrequencyGate(
                 cooldown_ms=self._direct_e50.cooldown_ms,
+                control_cooldown_ms=self._direct_e50.control_cooldown_ms,
                 rearm_absent_windows=self._direct_e50.rearm_absent_windows,
+                silent_event_ids=self._direct_e50.silent_event_ids,
             )
             if self._direct_e50 is not None
             else _EventEdgeLatch(
@@ -466,47 +468,11 @@ class SglangClientTimelineDetectionModel:
                     stream_epoch=work.stream_epoch,
                     attribution_duration_ms=self._attribution_duration_ms,
                 )
-            call_dir = None
-            try:
-                call_dir = self._artifacts.record_model_input(
-                    stream_epoch=work.stream_epoch,
-                    window=work.window,
-                    attempt=attempt + 1,
-                    request=request,
-                    video_mp4=video_mp4,
-                    image_jpegs=image_jpegs,
-                    audio_wav=(
-                        work.window.audio_wav
-                        if request.metadata.get("audios")
-                        else None
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "timeline model input artifact write failed request_id=%s attempt=%d",
-                    logical_request_id,
-                    attempt + 1,
-                )
             inference_started = time.perf_counter()
-            try:
-                result = await self._client.completion(
-                    request,
-                    request_id=f"{logical_request_id}:{attempt + 1}",
-                )
-            except BaseException as exc:
-                inference_ms = (time.perf_counter() - inference_started) * 1_000
-                await self._record_artifact_result(
-                    call_dir,
-                    {
-                        "status": "model_error",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                        "input_build_ms": input_build_ms,
-                        "inference_ms": inference_ms,
-                        "total_ms": input_build_ms + inference_ms,
-                    },
-                )
-                raise
+            result = await self._client.completion(
+                request,
+                request_id=f"{logical_request_id}:{attempt + 1}",
+            )
             inference_ms = (time.perf_counter() - inference_started) * 1_000
             raw_output = str(result.text)
             try:
@@ -517,24 +483,6 @@ class SglangClientTimelineDetectionModel:
                 )
             except ModelOutputError as exc:
                 last_error = exc
-                await self._record_artifact_result(
-                    call_dir,
-                    {
-                        "status": "invalid_output",
-                        "raw_output": raw_output,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                        "input_build_ms": input_build_ms,
-                        "inference_ms": inference_ms,
-                        "total_ms": input_build_ms + inference_ms,
-                        "usage": (
-                            getattr(result, "usage").to_dict()
-                            if getattr(result, "usage", None) is not None
-                            else None
-                        ),
-                        "weight_version": getattr(result, "weight_version", None),
-                    },
-                )
                 logger.warning(
                     "timeline invalid output request_id=%s attempt=%d prompt=%s error=%s",
                     logical_request_id,
@@ -568,10 +516,18 @@ class SglangClientTimelineDetectionModel:
                 raw_output,
             )
             if self._direct_e50 is not None:
-                accepted_event_ids = self._event_edges.accept(
+                frequency_decision = self._event_edges.evaluate(
                     event_ids, end_ms=work.window.end_ms
                 )
+                accepted_event_ids = frequency_decision.accepted_event_ids
+                if event_ids:
+                    logger.info(
+                        "timeline frequency decision request_id=%s decisions=%s",
+                        logical_request_id,
+                        frequency_decision.to_record(),
+                    )
             else:
+                frequency_decision = None
                 accepted_event_ids = self._compatibility.translate(
                     self._event_edges.accept(event_ids),
                     end_ms=work.window.end_ms,
@@ -595,50 +551,59 @@ class SglangClientTimelineDetectionModel:
                 for event_id, count in suppressed_counts.items()
                 for _ in range(max(0, count))
             ]
-            await self._record_artifact_result(
-                call_dir,
-                {
-                    "status": (
-                        "emitted"
-                        if accepted_event_ids
-                        else "frequency_suppressed"
-                        if event_ids
-                        else "no_event"
-                    ),
-                    "raw_output": raw_output,
-                    "parsed_event_ids": event_ids,
-                    "accepted_event_ids": list(accepted_event_ids),
-                    "suppressed_event_ids": suppressed_event_ids,
-                    "observations": observation_records(observations),
-                    "input_build_ms": input_build_ms,
-                    "inference_ms": inference_ms,
-                    "total_ms": input_build_ms + inference_ms,
-                    "usage": (
-                        getattr(result, "usage").to_dict()
-                        if getattr(result, "usage", None) is not None
-                        else None
-                    ),
-                    "weight_version": getattr(result, "weight_version", None),
-                },
-            )
+            artifact_result = {
+                "status": (
+                    "emitted"
+                    if accepted_event_ids
+                    else "frequency_suppressed"
+                    if event_ids
+                    else "no_event"
+                ),
+                "raw_output": raw_output,
+                "parsed_event_ids": event_ids,
+                "accepted_event_ids": list(accepted_event_ids),
+                "suppressed_event_ids": suppressed_event_ids,
+                "observations": observation_records(observations),
+                "input_build_ms": input_build_ms,
+                "inference_ms": inference_ms,
+                "total_ms": input_build_ms + inference_ms,
+                "usage": (
+                    getattr(result, "usage").to_dict()
+                    if getattr(result, "usage", None) is not None
+                    else None
+                ),
+                "weight_version": getattr(result, "weight_version", None),
+            }
+            if frequency_decision is not None:
+                artifact_result["frequency_gate"] = frequency_decision.to_record()
+            if event_ids:
+                try:
+                    self._artifacts.record_event_call(
+                        stream_epoch=work.stream_epoch,
+                        window=work.window,
+                        attempt=attempt + 1,
+                        request=request,
+                        video_mp4=video_mp4,
+                        image_jpegs=image_jpegs,
+                        audio_wav=(
+                            work.window.audio_wav
+                            if request.metadata.get("audios")
+                            else None
+                        ),
+                        result=artifact_result,
+                    )
+                except Exception:
+                    logger.exception(
+                        "timeline event artifact enqueue failed "
+                        "request_id=%s attempt=%d",
+                        logical_request_id,
+                        attempt + 1,
+                    )
             return observations
         raise ModelOutputError(
             f"model did not return usable event JSON after {self._max_attempts} "
             f"attempts: {last_error}"
         )
-
-    async def _record_artifact_result(
-        self,
-        call_dir: Any,
-        result: dict[str, Any],
-    ) -> None:
-        try:
-            self._artifacts.record_model_result(call_dir, result)
-        except Exception:
-            logger.exception(
-                "timeline model result artifact write failed path=%s",
-                call_dir,
-            )
 
     def _normalized_frame_jpeg(self, frame: TimelineMediaChunk) -> bytes:
         key = (frame.stream_epoch, frame.sequence)

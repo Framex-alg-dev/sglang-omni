@@ -12,7 +12,7 @@ from sglang_omni.serve.task_classification.contracts import (
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
-from sglang_omni.serve.task_classification.prompt import (
+from sglang_omni.serve.task_classification.prompt_v09 import (
     SINGLE_TURN_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
 )
@@ -26,6 +26,16 @@ class _Client:
     async def completion(self, request, *, request_id, audio_format="wav"):
         self.calls.append((request, request_id, audio_format))
         return CompletionResult(request_id=request_id, text=self.output)
+
+
+class _SequenceClient(_Client):
+    def __init__(self, outputs: list[str]) -> None:
+        super().__init__()
+        self.outputs = iter(outputs)
+
+    async def completion(self, request, *, request_id, audio_format="wav"):
+        self.calls.append((request, request_id, audio_format))
+        return CompletionResult(request_id=request_id, text=next(self.outputs))
 
 
 def _model(client: _Client) -> SglangClientTaskClassificationModel:
@@ -73,7 +83,7 @@ def _audio(payload: bytes = b"audio") -> ClassificationMediaRef:
 
 
 @pytest.mark.asyncio
-async def test_single_turn_uses_exact_v06_prompt_and_one_token_decode() -> None:
+async def test_single_turn_uses_exact_v09_prompt_and_one_token_decode() -> None:
     client = _Client("1")
     output = await _model(client).classify(_request(text="你会唱歌吗"))
 
@@ -86,8 +96,16 @@ async def test_single_turn_uses_exact_v06_prompt_and_one_token_decode() -> None:
     assert request.sampling.max_new_tokens == 1
     assert request.max_tokens == 1
     assert request.sampling.stop == ["\n"]
-    assert request.metadata["prefix_cache_namespace"] == "turn-router:v08"
+    assert request.metadata["prefix_cache_namespace"] == "turn-router:v09"
     assert request.metadata["cache_static_system_only"] is True
+    assert request.metadata["trace_id"] == "request-1"
+    assert request.metadata["operation_id"] == "request-1"
+    assert request.metadata["classification_id"] == "request-1"
+    assert request.metadata["session_id"] == "session-1"
+    assert request.metadata["turn_id"] == "turn-1"
+    assert request.metadata["input_revision"] == 2
+    assert request.metadata["model"] == "shared-base"
+    assert request.metadata["model_version"] == "router-v0.6"
 
 
 @pytest.mark.asyncio
@@ -164,7 +182,7 @@ async def test_original_audio_has_no_asr_text_and_uses_same_policy() -> None:
 
 @pytest.mark.asyncio
 async def test_prewarm_populates_single_and_multi_turn_prefixes() -> None:
-    client = _Client("0")
+    client = _SequenceClient(["0", "1"])
     await _model(client).prewarm()
     assert len(client.calls) == 2
     single_request = client.calls[0][0]
@@ -173,6 +191,23 @@ async def test_prewarm_populates_single_and_multi_turn_prefixes() -> None:
     assert multi_request.messages[0].content == SYSTEM_PROMPT
     assert single_request.sampling.max_new_tokens == 1
     assert multi_request.sampling.max_new_tokens == 1
+    assert "需要我查询当前天气吗？" in str(multi_request.messages[1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outputs", "message"),
+    [
+        (["1"], "ordinary conversation"),
+        (["0", "0"], "inherited MCP request"),
+    ],
+)
+async def test_prewarm_rejects_broken_route_invariants(
+    outputs: list[str], message: str
+) -> None:
+    client = _SequenceClient(outputs)
+    with pytest.raises(RuntimeError, match=message):
+        await _model(client).prewarm()
 
 
 def test_rejects_visual_media() -> None:

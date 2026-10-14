@@ -14,6 +14,7 @@ Environment=TRANSFORMERS_OFFLINE=1
 Environment=SGLANG_OMNI_QWEN3_CHAT_TEMPLATE_MODEL=/data/models/Qwen3-Omni-30B-A3B-Instruct
 Environment=SGLANG_OMNI_SERVICE_ROLE=decision-services
 Environment=SGLANG_OMNI_SERVICE_INSTANCE_ID=sglang-omni-gpu3-decision-services
+Environment=SGLANG_OMNI_REALTIME_LOG_DIR=/data/fanshide/sglang-omni-dev/logs/structured
 Environment=SGLANG_OMNI_STRICT_PORT=1
 Environment=SGLANG_OMNI_ACTION_WARMUP=0
 Environment=SGLANG_OMNI_SCOPED_RADIX_CACHE=1

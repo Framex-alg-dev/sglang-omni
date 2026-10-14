@@ -57,6 +57,11 @@ from sglang_omni.profiler.event_recorder import (
     emit_model_path_start as _emit_model_path_start,
 )
 from sglang_omni.profiler.event_recorder import get_active_stage as _get_active_stage
+from sglang_omni.profiler.decision_timing import (
+    decision_correlation_fields,
+    emit_decision_timing,
+    request_metadata as decision_request_metadata,
+)
 from sglang_omni.proto.admin import (
     ADMIN_CONTINUE_GENERATION,
     ADMIN_DESTROY_WEIGHTS_UPDATE_GROUP,
@@ -957,6 +962,16 @@ class OmniScheduler:
 
             if msg.type == "new_request":
                 self._completed_request_ids.pop(msg.request_id, None)
+                timing_metadata = decision_request_metadata(msg.data)
+                emit_decision_timing(
+                    "decision_scheduler_dequeued",
+                    request_id=msg.request_id,
+                    metadata=timing_metadata,
+                    component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                    worker_id=os.getpid(),
+                    gpu_id=getattr(self, "gpu_id", None),
+                    dequeue_group_size=len(recv_msgs),
+                )
                 new_reqs.append(msg.data)
             elif msg.type == "stream_chunk":
                 self._on_stream_chunk(msg.request_id, msg.data)
@@ -1056,16 +1071,59 @@ class OmniScheduler:
 
     def _run_request_builder(self, payload: Any, active_stage: str | None) -> Any:
         req_id = payload.request_id
+        timing_metadata = decision_request_metadata(payload)
+        started = time.perf_counter()
         _emit_event(
             request_id=req_id,
             stage=active_stage,
             event_name="scheduler_request_build_start",
         )
-        req_data = self._request_builder(payload)
+        emit_decision_timing(
+            "decision_request_build_started",
+            request_id=req_id,
+            metadata=timing_metadata,
+            component=f"scheduler_{active_stage or 'unknown'}",
+            worker_id=os.getpid(),
+            gpu_id=getattr(self, "gpu_id", None),
+        )
+        try:
+            req_data = self._request_builder(payload)
+        except Exception as exc:
+            emit_decision_timing(
+                "decision_request_build_completed",
+                request_id=req_id,
+                metadata=timing_metadata,
+                component=f"scheduler_{active_stage or 'unknown'}",
+                status="error",
+                error_type=type(exc).__name__,
+                request_build_ms=round(
+                    (time.perf_counter() - started) * 1000.0,
+                    3,
+                ),
+                worker_id=os.getpid(),
+                gpu_id=getattr(self, "gpu_id", None),
+            )
+            raise
         _emit_event(
             request_id=req_id,
             stage=active_stage,
             event_name="scheduler_request_build_end",
+        )
+        req = getattr(req_data, "req", None)
+        input_ids = getattr(req, "origin_input_ids", ())
+        emit_decision_timing(
+            "decision_request_build_completed",
+            request_id=req_id,
+            metadata=timing_metadata,
+            component=f"scheduler_{active_stage or 'unknown'}",
+            status="success",
+            request_build_ms=round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            ),
+            input_tokens=len(input_ids) if input_ids is not None else 0,
+            worker_id=os.getpid(),
+            gpu_id=getattr(self, "gpu_id", None),
         )
         return req_data
 
@@ -1221,10 +1279,22 @@ class OmniScheduler:
                 stage=None,
                 event_name="scheduler_queue_enter",
             )
-            req._coalesce_enqueue_t = time.perf_counter()
+            queued_at = time.perf_counter()
+            req._coalesce_enqueue_t = queued_at
+            req._decision_queue_entered_at = queued_at
+            req._decision_decode_ms = 0.0
             req._omni_terminal_claimed = False
             req._omni_data = req_data
             self.waiting_queue.append(req)
+            emit_decision_timing(
+                "decision_scheduler_queue_entered",
+                request_id=req_id,
+                metadata=decision_request_metadata(req_data),
+                component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                worker_id=os.getpid(),
+                gpu_id=getattr(self, "gpu_id", None),
+                waiting_count=len(self.waiting_queue),
+            )
 
         if request_admission_lock_held:
             enqueue_if_live()
@@ -1994,6 +2064,35 @@ class OmniScheduler:
             oldest = min(oldest, t)
         if now - oldest >= self.prefill_coalesce_wait_s:
             return _Upstream.get_new_batch_prefill(self, running_batch)
+        for req in waiting:
+            if getattr(req, "_decision_batch_wait_started_at", None) is not None:
+                continue
+            req_data = getattr(req, "_omni_data", None)
+            timing_metadata = decision_request_metadata(req_data)
+            request_id = getattr(req, "rid", "")
+            if (
+                decision_correlation_fields(
+                    request_id=request_id,
+                    metadata=timing_metadata,
+                )
+                is None
+            ):
+                continue
+            req._decision_batch_wait_started_at = now
+            emit_decision_timing(
+                "decision_batch_wait_started",
+                request_id=request_id,
+                metadata=timing_metadata,
+                component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                worker_id=os.getpid(),
+                gpu_id=getattr(self, "gpu_id", None),
+                waiting_count=len(waiting),
+                coalesce_target=self.prefill_coalesce_requests,
+                coalesce_budget_ms=round(
+                    self.prefill_coalesce_wait_s * 1000.0,
+                    3,
+                ),
+            )
         return NextBatchPlan(batch_to_run=None, running_batch=running_batch)
 
     def run_batch(self, batch, pp_proxy_tensors=None):
@@ -2051,7 +2150,9 @@ class OmniScheduler:
         batch.forward_iter = self.forward_ct
         sched_output = self._build_sched_output(batch)
         self._start_action_candidate_materialization_for_batch(batch)
+        self._mark_decision_model_step_started(batch)
         mr_output = self._model_runner.execute(sched_output)
+        self._emit_decision_model_step_completed(batch)
         self._emit_stream_output(sched_output, mr_output)
         return self._make_batch_result(mr_output)
 
@@ -2083,9 +2184,16 @@ class OmniScheduler:
             self._put_stream_messages(
                 rid,
                 self._stream_output_builder(rid, sched_req.data, req_output),
+                req_data=sched_req.data,
             )
 
-    def _put_stream_messages(self, request_id: str, messages: Any) -> None:
+    def _put_stream_messages(
+        self,
+        request_id: str,
+        messages: Any,
+        *,
+        req_data: Any = None,
+    ) -> None:
         emitted_any = False
         for msg in messages:
             if not emitted_any:
@@ -2095,6 +2203,14 @@ class OmniScheduler:
                         request_id=request_id,
                         stage=None,
                         event_name="scheduler_first_emit",
+                    )
+                    emit_decision_timing(
+                        "decision_scheduler_first_output",
+                        request_id=request_id,
+                        metadata=decision_request_metadata(req_data),
+                        component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                        worker_id=os.getpid(),
+                        gpu_id=getattr(self, "gpu_id", None),
                     )
                 emitted_any = True
             self.outbox.put(msg)
@@ -2106,7 +2222,11 @@ class OmniScheduler:
         flush = getattr(stream_output_builder, "flush", None)
         if flush is None:
             return
-        self._put_stream_messages(request_id, flush(request_id, req_data))
+        self._put_stream_messages(
+            request_id,
+            flush(request_id, req_data),
+            req_data=req_data,
+        )
 
     @staticmethod
     def _make_batch_result(mr_output):
@@ -2128,6 +2248,136 @@ class OmniScheduler:
             extend_logprob_start_len_per_req=mr_output.extend_logprob_start_len_per_req,
         )
 
+    def _mark_decision_model_step_started(self, batch: Any) -> None:
+        started = time.perf_counter()
+        for req in batch.reqs:
+            req_data = getattr(req, "_omni_data", None)
+            metadata = decision_request_metadata(req_data)
+            if (
+                decision_correlation_fields(
+                    request_id=req.rid,
+                    metadata=metadata,
+                )
+                is None
+            ):
+                continue
+            req._decision_model_step_started_at = started
+
+    def _emit_decision_model_step_completed(self, batch: Any) -> None:
+        completed = time.perf_counter()
+        for req in batch.reqs:
+            started = getattr(req, "_decision_model_step_started_at", None)
+            if not isinstance(started, (int, float)):
+                continue
+            req_data = getattr(req, "_omni_data", None)
+            metadata = decision_request_metadata(req_data)
+            if (
+                decision_correlation_fields(
+                    request_id=req.rid,
+                    metadata=metadata,
+                )
+                is None
+            ):
+                continue
+            step_ms = max((completed - float(started)) * 1000.0, 0.0)
+            common = {
+                "worker_id": os.getpid(),
+                "gpu_id": getattr(self, "gpu_id", None),
+                "batch_id": getattr(req, "_decision_batch_id", None),
+                "batch_size": len(batch.reqs),
+            }
+            if not getattr(req, "_decision_prefill_completed", False):
+                req._decision_prefill_completed = True
+                req._decision_prefill_completed_at = completed
+                queue_entered = getattr(
+                    req,
+                    "_decision_queue_entered_at",
+                    started,
+                )
+                model_ttft_ms = max(
+                    (completed - float(queue_entered)) * 1000.0,
+                    0.0,
+                )
+                emit_decision_timing(
+                    "decision_prefill_completed",
+                    request_id=req.rid,
+                    metadata=metadata,
+                    component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                    prefill_ms=round(step_ms, 3),
+                    **common,
+                )
+                emit_decision_timing(
+                    "decision_first_token_generated",
+                    request_id=req.rid,
+                    metadata=metadata,
+                    component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                    first_token_ms=round(model_ttft_ms, 3),
+                    **common,
+                )
+            else:
+                req._decision_decode_ms = (
+                    float(getattr(req, "_decision_decode_ms", 0.0)) + step_ms
+                )
+
+    def _emit_decision_terminal(
+        self,
+        req: Any,
+        req_data: Any,
+        *,
+        status: str,
+        error_type: str | None = None,
+    ) -> None:
+        if getattr(req, "_decision_terminal_logged", False):
+            return
+        metadata = decision_request_metadata(req_data)
+        if (
+            decision_correlation_fields(
+                request_id=req.rid,
+                metadata=metadata,
+            )
+            is None
+        ):
+            return
+        req._decision_terminal_logged = True
+        completed = time.perf_counter()
+        queue_entered = getattr(req, "_decision_queue_entered_at", None)
+        scheduler_total_ms = (
+            max((completed - float(queue_entered)) * 1000.0, 0.0)
+            if isinstance(queue_entered, (int, float))
+            else None
+        )
+        output_ids = getattr(req, "output_ids", ())
+        common: dict[str, Any] = {
+            "status": status,
+            "worker_id": os.getpid(),
+            "gpu_id": getattr(self, "gpu_id", None),
+            "batch_id": getattr(req, "_decision_batch_id", None),
+            "output_tokens": len(output_ids) if output_ids is not None else 0,
+        }
+        if scheduler_total_ms is not None:
+            common["scheduler_total_ms"] = round(scheduler_total_ms, 3)
+        if error_type is not None:
+            common["error_type"] = error_type
+        if getattr(req, "_decision_prefill_completed", False):
+            emit_decision_timing(
+                "decision_decode_completed",
+                request_id=req.rid,
+                metadata=metadata,
+                component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                decode_ms=round(
+                    float(getattr(req, "_decision_decode_ms", 0.0)),
+                    3,
+                ),
+                **common,
+            )
+        emit_decision_timing(
+            "decision_scheduler_response_completed",
+            request_id=req.rid,
+            metadata=metadata,
+            component=f"scheduler_{_get_active_stage() or 'unknown'}",
+            **common,
+        )
+
     def _run_batch_launch(self, batch):
         """Async: build SchedulerOutput and launch the decode step on the GPU
         (forward + sample, then ``post_decode_launch`` publishes the resolve
@@ -2139,6 +2389,7 @@ class OmniScheduler:
         self.forward_ct += 1
         batch.forward_iter = self.forward_ct
         sched_output = self._build_sched_output(batch)
+        self._mark_decision_model_step_started(batch)
         pending_step = self._model_runner.execute_launch(sched_output)
         self._start_action_candidate_materialization_for_batch(batch)
         return sched_output, pending_step
@@ -2157,6 +2408,7 @@ class OmniScheduler:
         mr_output = self._model_runner.execute_resolve(pending_step)
         if mr_output is None:
             return _FAILED_BATCH_RESULT
+        self._emit_decision_model_step_completed(batch)
         self._emit_stream_output(sched_output, mr_output, skip_rids=skip_rids)
         return GenerationBatchResult(
             logits_output=mr_output.logits_output,
@@ -2171,6 +2423,12 @@ class OmniScheduler:
         request_ids = [req.rid for req in reqs]
         logger.exception("OmniScheduler batch failed for requests=%s", request_ids)
         for req in reqs:
+            self._emit_decision_terminal(
+                req,
+                getattr(req, "_omni_data", None),
+                status="error",
+                error_type=type(error).__name__,
+            )
             self._emit_request_error(req.rid, error)
             self._emit_model_path_end_once(req.rid, status="error")
             self.abort(req.rid, defer_running_cleanup=False)
@@ -2238,6 +2496,64 @@ class OmniScheduler:
             if rid in self._prefill_start_done:
                 continue
             self._prefill_start_done.add(rid)
+            timing_metadata = decision_request_metadata(req_data)
+            if (
+                decision_correlation_fields(
+                    request_id=rid,
+                    metadata=timing_metadata,
+                )
+                is not None
+            ):
+                now = time.perf_counter()
+                queue_entered = getattr(req, "_decision_queue_entered_at", now)
+                batch_wait_started = getattr(
+                    req,
+                    "_decision_batch_wait_started_at",
+                    None,
+                )
+                batch_wait_ms = (
+                    max((now - float(batch_wait_started)) * 1000.0, 0.0)
+                    if isinstance(batch_wait_started, (int, float))
+                    else 0.0
+                )
+                prompt_tokens = len(getattr(req, "origin_input_ids", ()))
+                cached_tokens = len(getattr(req, "prefix_indices", ()))
+                batch_id = f"{os.getpid()}-{self.forward_ct + 1}"
+                req._decision_batch_id = batch_id
+                req._decision_prefill_started_at = now
+                common = {
+                    "worker_id": os.getpid(),
+                    "gpu_id": getattr(self, "gpu_id", None),
+                    "batch_id": batch_id,
+                    "batch_size": len(batch.reqs),
+                    "waiting_count": len(self.waiting_queue),
+                    "scheduler_queue_ms": round(
+                        max((now - float(queue_entered)) * 1000.0, 0.0),
+                        3,
+                    ),
+                    "batch_wait_ms": round(batch_wait_ms, 3),
+                    "input_tokens": prompt_tokens,
+                    "cached_tokens": cached_tokens,
+                    "cache_hit": cached_tokens > 0,
+                    "scheduled_prefill_tokens": max(
+                        prompt_tokens - cached_tokens,
+                        0,
+                    ),
+                }
+                emit_decision_timing(
+                    "decision_batch_formed",
+                    request_id=rid,
+                    metadata=timing_metadata,
+                    component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                    **common,
+                )
+                emit_decision_timing(
+                    "decision_prefill_started",
+                    request_id=rid,
+                    metadata=timing_metadata,
+                    component=f"scheduler_{_get_active_stage() or 'unknown'}",
+                    **common,
+                )
             _emit_model_path_start(rid)
             _emit_event(
                 request_id=rid,
@@ -2299,6 +2615,11 @@ class OmniScheduler:
                 # resurrect the request downstream.
                 self._run_abort_callback(rid)
                 self._first_emit_done.discard(rid)
+                self._emit_decision_terminal(
+                    req,
+                    getattr(req, "_omni_data", None),
+                    status="cancelled",
+                )
                 self._emit_model_path_end_once(rid, status="aborted")
                 _detach_request_data(req)
                 continue
@@ -2355,6 +2676,18 @@ class OmniScheduler:
                             terminal_error = exc
                 data.prefill_input_embeds = None
                 data.decode_input_embeds = None
+                self._emit_decision_terminal(
+                    req,
+                    data,
+                    status=(
+                        "error" if terminal_error is not None else "success"
+                    ),
+                    error_type=(
+                        type(terminal_error).__name__
+                        if terminal_error is not None
+                        else None
+                    ),
+                )
                 # Note: (Jiaxin Deng) close the model-path interval before
                 # _close_completed_request, which discards the same rid that
                 # _emit_model_path_end_once dedups on. Emitting afterwards
@@ -2507,6 +2840,11 @@ class OmniScheduler:
             waiting_queue = []
             for req in self.waiting_queue:
                 if req.rid == request_id:
+                    self._emit_decision_terminal(
+                        req,
+                        getattr(req, "_omni_data", None),
+                        status="cancelled",
+                    )
                     _detach_request_data(req)
                 else:
                     waiting_queue.append(req)

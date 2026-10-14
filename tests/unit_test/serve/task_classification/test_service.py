@@ -9,6 +9,7 @@ from sglang_omni.serve.task_classification.contracts import (
     DEFAULT_BRAIN1_CAPABILITIES,
     DEFAULT_BRAIN2_CAPABILITIES,
 )
+from sglang_omni.serve.task_classification import service as classification_service
 from sglang_omni.serve.task_classification.pipeline import TaskClassificationPipeline
 from sglang_omni.serve.task_classification.service import (
     _request_from_json,
@@ -62,7 +63,13 @@ def test_requires_the_exact_request_contract() -> None:
         raise AssertionError("missing request fields must be rejected")
 
 
-def test_authenticated_turn_router_contract() -> None:
+def test_authenticated_turn_router_contract(monkeypatch) -> None:
+    timing_events = []
+    monkeypatch.setattr(
+        classification_service,
+        "emit_decision_timing",
+        lambda event, **fields: timing_events.append((event, fields)) or True,
+    )
     app = create_task_classification_app(
         TaskClassificationPipeline(_Model()),
         token="secret",
@@ -86,6 +93,16 @@ def test_authenticated_turn_router_contract() -> None:
     assert response.json()["input_revision"] == 4
     assert response.json()["contract_version"] == CONTRACT_VERSION
     assert response.json()["request_cue"] is None
+    assert [event for event, _ in timing_events] == [
+        "decision_request_received",
+        "decision_response_completed",
+        "decision_response_sent",
+    ]
+    for _, fields in timing_events:
+        assert fields["request_id"] == "request-1"
+        assert fields["metadata"]["session_id"] == "session-1"
+        assert fields["metadata"]["turn_id"] == "turn-1"
+        assert "text" not in fields["metadata"]
 
 
 def test_websocket_streams_binary_media_before_classification() -> None:

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
 import msgpack
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 from starlette.websockets import WebSocketDisconnect
 
+from sglang_omni.profiler.decision_timing import emit_decision_timing
 from sglang_omni.serve.streaming_request import (
     receive_streamed_request,
     run_until_websocket_disconnect,
@@ -77,7 +81,19 @@ def create_task_classification_app(
         authenticate(request)
         body = await _read_envelope(request, max_body_bytes=max_body_bytes)
         try:
-            return JSONResponse(await _classify_payload(pipeline, body))
+            payload = await _classify_payload(
+                pipeline,
+                body,
+                transport="http",
+            )
+            return JSONResponse(
+                payload,
+                background=BackgroundTask(
+                    _emit_response_sent,
+                    payload,
+                    "http",
+                ),
+            )
         except InvalidRouteOutput as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
@@ -110,7 +126,7 @@ def create_task_classification_app(
             ]
             result = await run_until_websocket_disconnect(
                 websocket,
-                _classify_payload(pipeline, body),
+                _classify_payload(pipeline, body, transport="websocket"),
             )
             await websocket.send_json(
                 {
@@ -119,6 +135,7 @@ def create_task_classification_app(
                     "response": result,
                 }
             )
+            _emit_response_sent(result, "websocket")
         except WebSocketDisconnect:
             return
         except (InvalidRouteOutput, ValueError) as exc:
@@ -133,10 +150,52 @@ def create_task_classification_app(
 async def _classify_payload(
     pipeline: TaskClassificationPipeline,
     body: dict[str, Any],
+    *,
+    transport: str = "internal",
 ) -> dict[str, Any]:
     classification_request = _request_from_json(body)
-    result = await pipeline.classify(classification_request)
-    return {
+    metadata = _timing_metadata(classification_request)
+    started = time.perf_counter()
+    emit_decision_timing(
+        "decision_request_received",
+        request_id=classification_request.request_id,
+        metadata=metadata,
+        component="turn_router",
+        transport=transport,
+        input_mode="audio" if classification_request.media else "text",
+    )
+    try:
+        result = await pipeline.classify(classification_request)
+    except asyncio.CancelledError:
+        emit_decision_timing(
+            "decision_response_completed",
+            request_id=classification_request.request_id,
+            metadata=metadata,
+            component="turn_router",
+            status="cancelled",
+            transport=transport,
+            server_total_ms=round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            ),
+        )
+        raise
+    except Exception as exc:
+        emit_decision_timing(
+            "decision_response_completed",
+            request_id=classification_request.request_id,
+            metadata=metadata,
+            component="turn_router",
+            status="error",
+            error_type=type(exc).__name__,
+            transport=transport,
+            server_total_ms=round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            ),
+        )
+        raise
+    response = {
         "contract_version": result.contract_version,
         "request_id": result.request_id,
         "session_id": result.session_id,
@@ -164,6 +223,70 @@ async def _classify_payload(
         "model_id": result.model_id,
         "model_version": result.model_version,
     }
+    completed_metadata = {
+        **metadata,
+        "model": result.model_id,
+        "model_version": result.model_version,
+    }
+    emit_decision_timing(
+        "decision_response_completed",
+        request_id=classification_request.request_id,
+        metadata=completed_metadata,
+        component="turn_router",
+        status="success",
+        transport=transport,
+        route_code=result.route_code,
+        server_total_ms=round(
+            (time.perf_counter() - started) * 1000.0,
+            3,
+        ),
+    )
+    return response
+
+
+def _timing_metadata(request: TaskClassificationRequest) -> dict[str, Any]:
+    return {
+        "task": "turn_router",
+        "trace_id": request.request_id,
+        "operation_id": request.request_id,
+        "classification_id": request.request_id,
+        "session_id": request.session_id,
+        "turn_id": request.turn_id,
+        "logical_request_id": request.turn_id,
+        "identity_epoch": request.identity_epoch,
+        "input_revision": request.input_revision,
+        "audio_count": len(request.media),
+        "media_count": len(request.media),
+        "stage": "router",
+    }
+
+
+def _emit_response_sent(response: dict[str, Any], transport: str) -> None:
+    request_id = response.get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        return
+    metadata = {
+        "task": "turn_router",
+        "trace_id": request_id,
+        "operation_id": request_id,
+        "classification_id": request_id,
+        "session_id": response.get("session_id"),
+        "turn_id": response.get("turn_id"),
+        "logical_request_id": response.get("turn_id"),
+        "identity_epoch": response.get("identity_epoch"),
+        "input_revision": response.get("input_revision"),
+        "model": response.get("model_id"),
+        "model_version": response.get("model_version"),
+        "stage": "router",
+    }
+    emit_decision_timing(
+        "decision_response_sent",
+        request_id=request_id,
+        metadata=metadata,
+        component="turn_router",
+        transport=transport,
+        response_chunk_count=1,
+    )
 
 
 def create_decision_services_app(

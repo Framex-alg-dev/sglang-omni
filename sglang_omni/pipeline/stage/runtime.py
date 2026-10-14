@@ -29,6 +29,10 @@ from sglang_omni.pipeline.tp_control import TPLeaderFanout, TPWorkMessage
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.profiler.event_recorder import get_recorder as _get_recorder
 from sglang_omni.profiler.event_recorder import set_active_stage as _set_active_stage
+from sglang_omni.profiler.decision_timing import (
+    emit_decision_timing,
+    request_metadata as decision_request_metadata,
+)
 from sglang_omni.profiler.torch_profiler import TorchProfiler
 from sglang_omni.proto import (
     AdminMessage,
@@ -821,12 +825,31 @@ class Stage:
 
     async def _execute(self, payload: Any) -> None:
         request_id = payload.request_id
+        timing_metadata = decision_request_metadata(payload)
         _emit_event(
             request_id=request_id,
             stage=self.name,
             event_name="stage_dispatch",
-            metadata={key: getattr(getattr(payload, "request", None), "metadata", {}).get(key)
-                      for key in ("session_instance_id", "session_id", "turn_id", "logical_request_id", "task", "action_stage")},
+            metadata={
+                key: timing_metadata.get(key)
+                for key in (
+                    "session_instance_id",
+                    "session_id",
+                    "turn_id",
+                    "logical_request_id",
+                    "task",
+                    "action_stage",
+                )
+            },
+        )
+        emit_decision_timing(
+            "decision_scheduler_enqueued",
+            request_id=request_id,
+            metadata=timing_metadata,
+            component=f"stage_{self.name}",
+            worker_id=os.getpid(),
+            gpu_id=self.gpu_id,
+            scheduler_queue_depth=self.scheduler.inbox.qsize(),
         )
         if (
             self.role == "leader"

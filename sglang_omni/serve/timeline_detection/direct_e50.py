@@ -1,4 +1,4 @@
-"""Checkpoint-1500 direct-E50 inference profile and product frequency gate."""
+"""Checkpoint-1500 direct-E50 inference profile and product frequency policy."""
 
 from __future__ import annotations
 
@@ -23,6 +23,69 @@ from .window import EventDetectionWindow
 
 DIRECT_E50_PROTOCOL = "direct-e50"
 DIRECT_E50_OCCURRENCE_IDS = frozenset({"E22", "E38", "E44"})
+DIRECT_E50_CONTROL_EVENT_IDS = frozenset({"E20", "E21"})
+# These events are intentionally retained in detector artifacts and forwarded
+# to the product boundary, where they are hidden from the user.  They must not
+# reserve the global slot used by actionable events.
+DIRECT_E50_SILENT_EVENT_IDS = frozenset(
+    {
+        "E1",
+        "E3",
+        "E4",
+        "E12",
+        "E16",
+        "E17",
+        "E18",
+        "E25",
+        "E26",
+        "E29",
+        "E30",
+        "E31",
+        "E35",
+        "E39",
+        "E41",
+        "E42",
+        "E43",
+        "E45",
+        "E48",
+    }
+)
+
+
+@dataclass(frozen=True)
+class DirectE50EventFrequencyDecision:
+    event_id: str
+    event_class: str
+    disposition: str
+    reason: str
+    cooldown_remaining_ms: int = 0
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "event_class": self.event_class,
+            "disposition": self.disposition,
+            "reason": self.reason,
+            "cooldown_remaining_ms": self.cooldown_remaining_ms,
+        }
+
+
+@dataclass(frozen=True)
+class DirectE50FrequencyDecision:
+    accepted_event_ids: tuple[str, ...]
+    event_decisions: tuple[DirectE50EventFrequencyDecision, ...]
+    ordinary_latched: bool
+    ordinary_clear_streak: int
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "accepted_event_ids": list(self.accepted_event_ids),
+            "event_decisions": [
+                decision.to_record() for decision in self.event_decisions
+            ],
+            "ordinary_latched": self.ordinary_latched,
+            "ordinary_clear_streak": self.ordinary_clear_streak,
+        }
 
 
 @dataclass(frozen=True)
@@ -34,8 +97,10 @@ class DirectE50Profile:
     video_fps: float = 2.0
     video_max_frames: int = 20
     video_max_pixels: int = 130_000
-    cooldown_ms: int = 30_000
+    cooldown_ms: int = 15_000
+    control_cooldown_ms: int = 3_000
     rearm_absent_windows: int = 3
+    silent_event_ids: frozenset[str] = DIRECT_E50_SILENT_EVENT_IDS
 
     @classmethod
     def from_environment(cls) -> DirectE50Profile | None:
@@ -65,57 +130,186 @@ class DirectE50Profile:
             prompt_version=prompt_version,
             max_tokens=_positive_int("SGLANG_OMNI_TIMELINE_MAX_TOKENS", 8),
             cooldown_ms=_positive_int(
-                "SGLANG_OMNI_TIMELINE_EVENT_COOLDOWN_MS", 30_000
+                "SGLANG_OMNI_TIMELINE_EVENT_COOLDOWN_MS", 15_000
+            ),
+            control_cooldown_ms=_positive_int(
+                "SGLANG_OMNI_TIMELINE_CONTROL_EVENT_COOLDOWN_MS", 3_000
             ),
             rearm_absent_windows=_positive_int(
                 "SGLANG_OMNI_TIMELINE_REARM_ABSENT_WINDOWS", 3
+            ),
+            silent_event_ids=_event_id_set(
+                "SGLANG_OMNI_TIMELINE_SILENT_EVENT_IDS",
+                DIRECT_E50_SILENT_EVENT_IDS,
             ),
         )
 
 
 class DirectE50FrequencyGate:
-    """Globally gate positive windows and retain per-event cooldowns.
+    """Apply control, silent, and ordinary event frequency semantics.
 
-    Once any positive window is observed, no later positive window is emitted
-    until an explicit run of N windows rearms the stream.  Multiple event codes
-    produced by the same initially accepted window are emitted together.
+    Ordinary events share a global latch so the tail of one event cannot be
+    published as a different event without an explicit absence run.  Control
+    events bypass that latch so E20/E21 can always stop active output.  Silent
+    events retain independent edge/cooldown suppression but never occupy or
+    extend the ordinary global latch.
     """
 
-    def __init__(self, *, cooldown_ms: int, rearm_absent_windows: int) -> None:
-        if cooldown_ms <= 0 or rearm_absent_windows <= 0:
+    def __init__(
+        self,
+        *,
+        cooldown_ms: int,
+        rearm_absent_windows: int,
+        control_cooldown_ms: int = 3_000,
+        silent_event_ids: frozenset[str] = DIRECT_E50_SILENT_EVENT_IDS,
+    ) -> None:
+        if (
+            cooldown_ms <= 0
+            or control_cooldown_ms <= 0
+            or rearm_absent_windows <= 0
+        ):
             raise ValueError("direct E50 frequency limits must be positive")
+        unknown_silent_ids = silent_event_ids - EVENT_ID_SET
+        if unknown_silent_ids:
+            raise ValueError(
+                "direct E50 silent event ids are outside the catalog: "
+                f"{sorted(unknown_silent_ids)}"
+            )
+        overlap = silent_event_ids & DIRECT_E50_CONTROL_EVENT_IDS
+        if overlap:
+            raise ValueError(
+                "direct E50 events cannot be both control and silent: "
+                f"{sorted(overlap)}"
+            )
         self._cooldown_ms = cooldown_ms
+        self._control_cooldown_ms = control_cooldown_ms
         self._rearm_absent_windows = rearm_absent_windows
-        self._latched: set[str] = set()
-        self._clear_streak = 0
+        self._silent_event_ids = silent_event_ids
+        self._independent_latched: set[str] = set()
+        self._independent_absent_streaks: dict[str, int] = {}
+        self._ordinary_latched = False
+        self._ordinary_clear_streak = 0
         self._cooldown_until: dict[str, int] = {}
 
     def accept(self, event_ids: list[str], *, end_ms: int) -> tuple[str, ...]:
-        event_ids = list(dict.fromkeys(event_ids))
-        if not event_ids:
-            self._clear_streak += 1
-            if self._clear_streak >= self._rearm_absent_windows:
-                self._latched.clear()
-            return ()
+        return self.evaluate(event_ids, end_ms=end_ms).accepted_event_ids
 
-        # Any positive class resets the N streak.  While a previous positive
-        # window is latched, suppress every positive code (including a
-        # different event) until explicit N windows rearm the whole stream.
-        self._clear_streak = 0
-        if self._latched:
-            return ()
+    def evaluate(
+        self, event_ids: list[str], *, end_ms: int
+    ) -> DirectE50FrequencyDecision:
+        unknown_ids = set(event_ids) - EVENT_ID_SET
+        if unknown_ids:
+            raise ValueError(
+                "direct E50 frequency input is outside the catalog: "
+                f"{sorted(unknown_ids)}"
+            )
+        if end_ms < 0:
+            raise ValueError("direct E50 frequency timestamp must be non-negative")
+
+        present = set(event_ids)
+        independent_ids = (
+            DIRECT_E50_CONTROL_EVENT_IDS | self._silent_event_ids
+        )
+        for event_id in tuple(self._independent_latched):
+            if event_id in present:
+                self._independent_absent_streaks[event_id] = 0
+                continue
+            streak = self._independent_absent_streaks.get(event_id, 0) + 1
+            if streak >= self._rearm_absent_windows:
+                self._independent_latched.remove(event_id)
+                self._independent_absent_streaks.pop(event_id, None)
+            else:
+                self._independent_absent_streaks[event_id] = streak
+
+        ordinary_present = bool(present - independent_ids)
+        ordinary_was_latched = self._ordinary_latched
+        if ordinary_present:
+            self._ordinary_clear_streak = 0
+        elif self._ordinary_latched:
+            self._ordinary_clear_streak += 1
+            if self._ordinary_clear_streak >= self._rearm_absent_windows:
+                self._ordinary_latched = False
+                self._ordinary_clear_streak = 0
 
         accepted: list[str] = []
+        decisions: list[DirectE50EventFrequencyDecision] = []
+        seen: set[str] = set()
         for event_id in event_ids:
-            if end_ms >= self._cooldown_until.get(event_id, 0):
+            event_class = self._event_class(event_id)
+            if event_id in seen:
+                decisions.append(
+                    DirectE50EventFrequencyDecision(
+                        event_id=event_id,
+                        event_class=event_class,
+                        disposition="suppressed",
+                        reason="duplicate_in_window",
+                    )
+                )
+                continue
+            seen.add(event_id)
+
+            cooldown_until = self._cooldown_until.get(event_id, 0)
+            cooldown_remaining_ms = max(0, cooldown_until - end_ms)
+            if event_class != "ordinary" and event_id in self._independent_latched:
+                disposition = "suppressed"
+                reason = "continuous_event"
+            elif event_class == "ordinary" and ordinary_was_latched:
+                disposition = "suppressed"
+                reason = "ordinary_window_latched"
+            elif cooldown_remaining_ms:
+                disposition = "suppressed"
+                reason = "event_cooldown"
+            else:
+                disposition = "accepted"
+                reason = "accepted"
                 accepted.append(event_id)
-                self._cooldown_until[event_id] = end_ms + self._cooldown_ms
-            self._latched.add(event_id)
-        return tuple(accepted)
+                cooldown_ms = (
+                    self._control_cooldown_ms
+                    if event_class == "control"
+                    else self._cooldown_ms
+                )
+                self._cooldown_until[event_id] = end_ms + cooldown_ms
+            decisions.append(
+                DirectE50EventFrequencyDecision(
+                    event_id=event_id,
+                    event_class=event_class,
+                    disposition=disposition,
+                    reason=reason,
+                    cooldown_remaining_ms=(
+                        cooldown_remaining_ms
+                        if reason == "event_cooldown"
+                        else 0
+                    ),
+                )
+            )
+
+        for event_id in present & independent_ids:
+            self._independent_latched.add(event_id)
+            self._independent_absent_streaks[event_id] = 0
+        if ordinary_present:
+            # Even a cooldown-suppressed ordinary event protects the tail from
+            # being reclassified as a different actionable event.
+            self._ordinary_latched = True
+
+        return DirectE50FrequencyDecision(
+            accepted_event_ids=tuple(accepted),
+            event_decisions=tuple(decisions),
+            ordinary_latched=self._ordinary_latched,
+            ordinary_clear_streak=self._ordinary_clear_streak,
+        )
+
+    def _event_class(self, event_id: str) -> str:
+        if event_id in DIRECT_E50_CONTROL_EVENT_IDS:
+            return "control"
+        if event_id in self._silent_event_ids:
+            return "silent"
+        return "ordinary"
 
     def clear(self) -> None:
-        self._latched.clear()
-        self._clear_streak = 0
+        self._independent_latched.clear()
+        self._independent_absent_streaks.clear()
+        self._ordinary_latched = False
+        self._ordinary_clear_streak = 0
         self._cooldown_until.clear()
 
 
@@ -340,6 +534,23 @@ def _positive_int(environment_name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{environment_name} must be positive")
     return value
+
+
+def _event_id_set(
+    environment_name: str, default: frozenset[str]
+) -> frozenset[str]:
+    raw_value = os.environ.get(environment_name)
+    if raw_value is None:
+        return default
+    event_ids = frozenset(
+        token.strip() for token in raw_value.split(",") if token.strip()
+    )
+    unknown_ids = event_ids - EVENT_ID_SET
+    if unknown_ids:
+        raise ValueError(
+            f"{environment_name} contains unknown event ids: {sorted(unknown_ids)}"
+        )
+    return event_ids
 
 
 def _data_url(mime: str, payload: bytes) -> str:

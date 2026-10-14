@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from io import BytesIO
 from types import SimpleNamespace
@@ -295,6 +296,52 @@ async def test_complete_call_is_written_after_event_output(
     assert (call_dirs[0] / "request.json").is_file()
     assert (call_dirs[0] / "result.json").is_file()
     assert len(list((call_dirs[0] / "input" / "frames").glob("*.jpg"))) == 6
+
+
+@pytest.mark.asyncio
+async def test_direct_e50_artifact_records_frequency_decisions(
+    monkeypatch, tmp_path
+) -> None:
+    artifact_root = tmp_path / "timeline-artifacts"
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT", str(artifact_root)
+    )
+    profile = DirectE50Profile(
+        system_prompt="strict training system prompt",
+        user_prompt="strict training user prompt",
+        prompt_version="event-e50-direct-checkpoint1500-v1",
+    )
+    monkeypatch.setattr(
+        client_model_module.DirectE50Profile,
+        "from_environment",
+        classmethod(lambda cls: profile),
+    )
+    model = SglangClientTimelineDetectionModel(
+        PrefillClient(["E20"]),
+        start(),
+        model_version="e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+        inference_interval_ms=1_000,
+    )
+    await model.start(start())
+    await feed_first_window(model)
+
+    events = await model.next_observations()
+    assert [item.event_type for item in events] == ["E20"]
+    await model.close()
+
+    result_paths = list(artifact_root.glob("*/stream-*/result.json"))
+    assert len(result_paths) == 1
+    result = json.loads(result_paths[0].read_text(encoding="utf-8"))
+    assert result["accepted_event_ids"] == ["E20"]
+    assert result["frequency_gate"]["event_decisions"] == [
+        {
+            "cooldown_remaining_ms": 0,
+            "disposition": "accepted",
+            "event_class": "control",
+            "event_id": "E20",
+            "reason": "accepted",
+        }
+    ]
 
 
 def test_accepts_one_second_sliding_cadence() -> None:

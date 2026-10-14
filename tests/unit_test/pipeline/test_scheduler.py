@@ -63,6 +63,126 @@ def _new_stage_payload(request_id: str) -> StagePayload:
     )
 
 
+def _decision_stage_payload(request_id: str = "classification-1") -> StagePayload:
+    return StagePayload(
+        request_id=request_id,
+        request=OmniRequest(
+            inputs={},
+            metadata={
+                "task": "turn_router",
+                "trace_id": "trace-1",
+                "operation_id": request_id,
+                "classification_id": request_id,
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "logical_request_id": "turn-1",
+                "model": "decision-model",
+            },
+        ),
+        data=None,
+    )
+
+
+def test_decision_request_build_emits_bounded_stage_timing(monkeypatch) -> None:
+    scheduler = object.__new__(OmniScheduler)
+    scheduler.gpu_id = 3
+    scheduler._request_builder = lambda _payload: SimpleNamespace(
+        req=SimpleNamespace(origin_input_ids=[1, 2, 3])
+    )
+    events = []
+    monkeypatch.setattr(
+        omni_scheduler_module,
+        "emit_decision_timing",
+        lambda event, **fields: events.append((event, fields)) or True,
+    )
+
+    result = scheduler._run_request_builder(
+        _decision_stage_payload(),
+        "preprocessing",
+    )
+
+    assert result.req.origin_input_ids == [1, 2, 3]
+    assert [event for event, _ in events] == [
+        "decision_request_build_started",
+        "decision_request_build_completed",
+    ]
+    assert events[-1][1]["status"] == "success"
+    assert events[-1][1]["input_tokens"] == 3
+    assert "request_build_ms" in events[-1][1]
+
+
+def test_decision_scheduler_emits_batch_prefill_first_token_and_terminal(
+    monkeypatch,
+) -> None:
+    scheduler = object.__new__(OmniScheduler)
+    scheduler.gpu_id = 3
+    scheduler.forward_ct = 7
+    scheduler.waiting_queue = []
+    scheduler._prefill_start_done = set()
+    events = []
+    now = [100.0]
+    monkeypatch.setattr(
+        omni_scheduler_module.time,
+        "perf_counter",
+        lambda: now[0],
+    )
+    monkeypatch.setattr(
+        omni_scheduler_module,
+        "_emit_model_path_start",
+        lambda _request_id: None,
+    )
+    monkeypatch.setattr(
+        omni_scheduler_module,
+        "emit_decision_timing",
+        lambda event, **fields: events.append((event, fields)) or True,
+    )
+    req_data = SimpleNamespace(
+        stage_payload=_decision_stage_payload(),
+        action_scoring_role=None,
+    )
+    req = SimpleNamespace(
+        rid="classification-1",
+        _omni_data=req_data,
+        _decision_queue_entered_at=99.9,
+        _decision_decode_ms=0.0,
+        origin_input_ids=[1, 2, 3, 4],
+        prefix_indices=[1, 2],
+        output_ids=[],
+    )
+    batch = SimpleNamespace(
+        reqs=[req],
+        is_prefill_only=False,
+        is_extend_in_batch=True,
+    )
+
+    scheduler._emit_prefill_start_for_batch(batch)
+    req._decision_model_step_started_at = 100.0
+    now[0] = 100.025
+    scheduler._emit_decision_model_step_completed(batch)
+    req.output_ids = [42]
+    scheduler._emit_decision_terminal(req, req_data, status="success")
+
+    assert [event for event, _ in events] == [
+        "decision_batch_formed",
+        "decision_prefill_started",
+        "decision_prefill_completed",
+        "decision_first_token_generated",
+        "decision_decode_completed",
+        "decision_scheduler_response_completed",
+    ]
+    batch_fields = events[0][1]
+    assert batch_fields["batch_size"] == 1
+    assert batch_fields["scheduler_queue_ms"] == 100.0
+    assert batch_fields["input_tokens"] == 4
+    assert batch_fields["cached_tokens"] == 2
+    assert batch_fields["cache_hit"] is True
+    prefill_fields = events[2][1]
+    assert prefill_fields["prefill_ms"] == 25.0
+    terminal_fields = events[-1][1]
+    assert terminal_fields["status"] == "success"
+    assert terminal_fields["output_tokens"] == 1
+
+
 def test_simple_scheduler_batch_and_error_contracts() -> None:
     """Preserves batched success output and per-request batch failure emission."""
     good = SimpleScheduler(

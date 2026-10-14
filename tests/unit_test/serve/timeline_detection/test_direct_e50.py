@@ -12,6 +12,7 @@ from sglang_omni.serve.timeline_detection.contracts import (
     TimelineMediaChunk,
 )
 from sglang_omni.serve.timeline_detection.direct_e50 import (
+    DIRECT_E50_SILENT_EVENT_IDS,
     DirectE50FrequencyGate,
     DirectE50Profile,
     build_direct_e50_prefill_request,
@@ -79,6 +80,52 @@ def _profile() -> DirectE50Profile:
     )
 
 
+def test_profile_reads_all_frequency_policy_layers(monkeypatch, tmp_path) -> None:
+    system_prompt = tmp_path / "system.txt"
+    user_prompt = tmp_path / "user.txt"
+    system_prompt.write_text(SYSTEM_PROMPT, encoding="utf-8")
+    user_prompt.write_text(USER_PROMPT, encoding="utf-8")
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL", "direct-e50")
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", str(system_prompt)
+    )
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_USER_PROMPT_PATH", str(user_prompt)
+    )
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_PROMPT_VERSION", "test-v1")
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_EVENT_COOLDOWN_MS", "15000")
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_CONTROL_EVENT_COOLDOWN_MS", "3000"
+    )
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_SILENT_EVENT_IDS", "E1,E3")
+
+    profile = DirectE50Profile.from_environment()
+
+    assert profile is not None
+    assert profile.cooldown_ms == 15_000
+    assert profile.control_cooldown_ms == 3_000
+    assert profile.silent_event_ids == frozenset({"E1", "E3"})
+
+
+def test_profile_rejects_unknown_silent_event(monkeypatch, tmp_path) -> None:
+    system_prompt = tmp_path / "system.txt"
+    user_prompt = tmp_path / "user.txt"
+    system_prompt.write_text(SYSTEM_PROMPT, encoding="utf-8")
+    user_prompt.write_text(USER_PROMPT, encoding="utf-8")
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL", "direct-e50")
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", str(system_prompt)
+    )
+    monkeypatch.setenv(
+        "SGLANG_OMNI_TIMELINE_USER_PROMPT_PATH", str(user_prompt)
+    )
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_PROMPT_VERSION", "test-v1")
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_SILENT_EVENT_IDS", "E51")
+
+    with pytest.raises(ValueError, match="contains unknown event ids"):
+        DirectE50Profile.from_environment()
+
+
 def _request(window: EventDetectionWindow, video: bytes = b"mp4"):
     return build_direct_e50_request(
         profile=_profile(),
@@ -116,35 +163,133 @@ def test_parse_direct_e50_output_rejects_non_contract_output(raw: str) -> None:
         parse_direct_e50_output(raw)
 
 
-def test_frequency_gate_globally_requires_three_n_windows_and_applies_cooldown() -> None:
-    gate = DirectE50FrequencyGate(cooldown_ms=30_000, rearm_absent_windows=3)
+def _frequency_gate() -> DirectE50FrequencyGate:
+    return DirectE50FrequencyGate(
+        cooldown_ms=15_000,
+        control_cooldown_ms=3_000,
+        rearm_absent_windows=3,
+        silent_event_ids=DIRECT_E50_SILENT_EVENT_IDS,
+    )
 
-    assert gate.accept(["E20"], end_ms=3_000) == ("E20",)
-    assert gate.accept(["E20"], end_ms=4_000) == ()
-    assert gate.accept([], end_ms=5_000) == ()
-    assert gate.accept([], end_ms=6_000) == ()
-    # A different positive event also remains blocked and resets the N streak.
-    assert gate.accept(["E12"], end_ms=7_000) == ()
-    assert gate.accept([], end_ms=8_000) == ()
+
+def test_frequency_gate_protects_ordinary_transitions_and_uses_15s_cooldown() -> None:
+    gate = _frequency_gate()
+
+    assert gate.accept(["E5"], end_ms=3_000) == ("E5",)
+    # A different actionable event cannot consume the tail of E5.
+    decision = gate.evaluate(["E6"], end_ms=4_000)
+    assert decision.accepted_event_ids == ()
+    assert decision.event_decisions[0].reason == "ordinary_window_latched"
+
+    # Silent-only windows count as ordinary absence instead of extending the
+    # global latch.
+    assert gate.accept(["E1"], end_ms=5_000) == ("E1",)
+    assert gate.accept(["E1"], end_ms=6_000) == ()
+    assert gate.accept(["E3"], end_ms=7_000) == ("E3",)
+    assert gate.accept(["E6"], end_ms=8_000) == ("E6",)
+
     assert gate.accept([], end_ms=9_000) == ()
     assert gate.accept([], end_ms=10_000) == ()
-    assert gate.accept(["E12"], end_ms=11_000) == ("E12",)
-    assert gate.accept([], end_ms=12_000) == ()
+    assert gate.accept([], end_ms=11_000) == ()
+    decision = gate.evaluate(["E5"], end_ms=12_000)
+    assert decision.accepted_event_ids == ()
+    assert decision.event_decisions[0].reason == "event_cooldown"
+    assert decision.event_decisions[0].cooldown_remaining_ms == 6_000
+
     assert gate.accept([], end_ms=13_000) == ()
     assert gate.accept([], end_ms=14_000) == ()
-    # Rearming the global gate does not bypass E20's 30-second cooldown.
-    assert gate.accept(["E20"], end_ms=15_000) == ()
-    assert gate.accept([], end_ms=16_000) == ()
-    assert gate.accept([], end_ms=17_000) == ()
-    assert gate.accept([], end_ms=18_000) == ()
-    assert gate.accept(["E20"], end_ms=33_000) == ("E20",)
+    assert gate.accept([], end_ms=15_000) == ()
+    assert gate.accept(["E5"], end_ms=18_000) == ("E5",)
 
 
-def test_frequency_gate_emits_multiple_codes_from_first_positive_window() -> None:
-    gate = DirectE50FrequencyGate(cooldown_ms=30_000, rearm_absent_windows=3)
+def test_control_events_bypass_ordinary_latch_without_suppressing_each_other() -> None:
+    gate = _frequency_gate()
 
-    assert gate.accept(["E0", "E28"], end_ms=3_000) == ("E0", "E28")
-    assert gate.accept(["E12"], end_ms=4_000) == ()
+    assert gate.accept(["E5"], end_ms=3_000) == ("E5",)
+    assert gate.accept(["E20"], end_ms=4_000) == ("E20",)
+    decision = gate.evaluate(["E20", "E21", "E6"], end_ms=5_000)
+
+    assert decision.accepted_event_ids == ("E21",)
+    assert [item.reason for item in decision.event_decisions] == [
+        "continuous_event",
+        "accepted",
+        "ordinary_window_latched",
+    ]
+
+    assert gate.accept([], end_ms=6_000) == ()
+    assert gate.accept([], end_ms=7_000) == ()
+    assert gate.accept([], end_ms=8_000) == ()
+    assert gate.accept(["E20"], end_ms=9_000) == ("E20",)
+
+
+def test_silent_events_neither_occupy_nor_extend_the_ordinary_window() -> None:
+    gate = _frequency_gate()
+
+    assert gate.accept(["E1"], end_ms=3_000) == ("E1",)
+    assert gate.accept(["E5"], end_ms=4_000) == ("E5",)
+    assert gate.accept(["E1"], end_ms=5_000) == ()
+    assert gate.accept(["E3"], end_ms=6_000) == ("E3",)
+    assert gate.accept(["E4"], end_ms=7_000) == ("E4",)
+    assert gate.accept(["E6"], end_ms=8_000) == ("E6",)
+
+
+def test_frequency_gate_emits_all_classes_from_first_mixed_window() -> None:
+    gate = _frequency_gate()
+
+    decision = gate.evaluate(["E0", "E1", "E20", "E28"], end_ms=3_000)
+
+    assert decision.accepted_event_ids == ("E0", "E1", "E20", "E28")
+    assert [item.event_class for item in decision.event_decisions] == [
+        "ordinary",
+        "silent",
+        "control",
+        "ordinary",
+    ]
+
+
+def test_frequency_gate_reports_duplicate_codes_and_control_cooldown() -> None:
+    gate = _frequency_gate()
+
+    decision = gate.evaluate(["E20", "E20"], end_ms=3_000)
+    assert decision.accepted_event_ids == ("E20",)
+    assert [item.reason for item in decision.event_decisions] == [
+        "accepted",
+        "duplicate_in_window",
+    ]
+
+    assert gate.accept([], end_ms=3_100) == ()
+    assert gate.accept([], end_ms=3_200) == ()
+    assert gate.accept([], end_ms=3_300) == ()
+    decision = gate.evaluate(["E20"], end_ms=3_400)
+    assert decision.accepted_event_ids == ()
+    assert decision.event_decisions[0].reason == "event_cooldown"
+    assert decision.event_decisions[0].cooldown_remaining_ms == 2_600
+
+
+def test_frequency_gate_clear_resets_every_policy_layer() -> None:
+    gate = _frequency_gate()
+
+    assert gate.accept(["E5", "E20"], end_ms=3_000) == ("E5", "E20")
+    gate.clear()
+    assert gate.accept(["E5", "E20"], end_ms=3_001) == ("E5", "E20")
+
+
+def test_frequency_gate_rejects_invalid_policy_ids() -> None:
+    with pytest.raises(ValueError, match="outside the catalog"):
+        DirectE50FrequencyGate(
+            cooldown_ms=15_000,
+            control_cooldown_ms=3_000,
+            rearm_absent_windows=3,
+            silent_event_ids=frozenset({"E51"}),
+        )
+
+    with pytest.raises(ValueError, match="both control and silent"):
+        DirectE50FrequencyGate(
+            cooldown_ms=15_000,
+            control_cooldown_ms=3_000,
+            rearm_absent_windows=3,
+            silent_event_ids=frozenset({"E20"}),
+        )
 
 
 def test_build_request_matches_training_wrapper_and_media_cardinality() -> None:
