@@ -722,6 +722,44 @@ def test_omni_scheduler_abort_propagates_immediate_kv_cleanup_failure(
     assert batch.reqs == [req]
 
 
+def test_omni_scheduler_cross_thread_abort_runs_on_scheduler_thread() -> None:
+    """External aborts must not mutate scheduler-owned KV state concurrently."""
+    scheduler = object.__new__(OmniScheduler)
+    scheduler._running = True
+    scheduler._scheduler_thread_id = threading.get_ident()
+    scheduler._abort_queue = Queue()
+    calls: list[tuple[str, bool, bool, int]] = []
+    scheduler._abort_on_scheduler_thread = (
+        lambda request_id, *, defer_running_cleanup, _internal: calls.append(
+            (
+                request_id,
+                defer_running_cleanup,
+                _internal,
+                threading.get_ident(),
+            )
+        )
+    )
+    errors: list[BaseException] = []
+
+    def abort_from_control_plane() -> None:
+        try:
+            scheduler.abort("req-cross-thread", defer_running_cleanup=False)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=abort_from_control_plane)
+    worker.start()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert calls == []
+    assert scheduler._process_abort_requests() == 1
+    assert calls == [
+        ("req-cross-thread", False, False, scheduler._scheduler_thread_id)
+    ]
+
+
 def test_omni_scheduler_abort_marks_running_request_for_finish(monkeypatch) -> None:
     """Running aborts follow upstream SGLang's deferred KV cleanup path."""
     cleaned: list[str] = []

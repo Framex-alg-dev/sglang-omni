@@ -156,6 +156,32 @@ def test_stage_routes_results_streams_and_clears_abort_state() -> None:
     asyncio.run(_run())
 
 
+def test_stage_requests_thread_safe_scheduler_abort_when_available() -> None:
+    class ThreadOwnedScheduler(FakeScheduler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested_aborts: list[str] = []
+
+        def request_abort(self, request_id: str) -> None:
+            self.requested_aborts.append(request_id)
+
+        def abort(self, request_id: str) -> None:
+            raise AssertionError("Stage must not mutate a running scheduler directly")
+
+    scheduler = ThreadOwnedScheduler()
+    stage_obj = make_stage(
+        name="thinker",
+        get_next=lambda request_id, output: None,
+        endpoints={},
+        scheduler=scheduler,
+        control_plane=RecordingStageControlPlane(),
+    )
+
+    stage_obj._on_abort("req-1")
+
+    assert scheduler.requested_aborts == ["req-1"]
+
+
 def test_stage_process_rejects_dynamic_targets_outside_static_topology() -> None:
     spec = StageLaunchConfig(
         stage_name="thinker",

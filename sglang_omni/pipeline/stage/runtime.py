@@ -1606,7 +1606,11 @@ class Stage:
         self._record_aborted_request_id(request_id)
         self._comm.cleanup(request_id)
         self._clear_request_state(request_id)
-        self.scheduler.abort(request_id)
+        request_abort = getattr(self.scheduler, "request_abort", None)
+        if request_abort is not None:
+            request_abort(request_id)
+        else:
+            self.scheduler.abort(request_id)
 
     def _on_profiler_start(self, msg: ProfilerStartMessage) -> None:
         run_id = msg.run_id

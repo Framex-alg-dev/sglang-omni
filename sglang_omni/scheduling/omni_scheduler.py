@@ -530,6 +530,7 @@ class OmniScheduler:
         self._engine_paused = False
         self._admin_lock = threading.Lock()
         self._admin_queue = _queue_mod.Queue()
+        self._abort_queue = _queue_mod.Queue()
         self._scheduler_thread_id: int | None = None
         self._last_pause_mode: str | None = None
 
@@ -2793,6 +2794,57 @@ class OmniScheduler:
     def abort(
         self, request_id: str, *, defer_running_cleanup: bool = True, _internal: bool = False
     ) -> None:
+        if self._should_enqueue_abort():
+            self.request_abort(
+                request_id,
+                defer_running_cleanup=defer_running_cleanup,
+                _internal=_internal,
+            )
+            return
+        self._abort_on_scheduler_thread(
+            request_id,
+            defer_running_cleanup=defer_running_cleanup,
+            _internal=_internal,
+        )
+
+    def request_abort(
+        self,
+        request_id: str,
+        *,
+        defer_running_cleanup: bool = True,
+        _internal: bool = False,
+    ) -> None:
+        """Queue an abort for the thread that owns scheduler and KV state."""
+        self._abort_queue.put((request_id, defer_running_cleanup, _internal))
+
+    def _should_enqueue_abort(self) -> bool:
+        scheduler_thread_id = getattr(self, "_scheduler_thread_id", None)
+        return (
+            bool(getattr(self, "_running", False))
+            and scheduler_thread_id is not None
+            and threading.get_ident() != scheduler_thread_id
+        )
+
+    def _process_abort_requests(self) -> int:
+        processed = 0
+        while True:
+            try:
+                request_id, defer_running_cleanup, internal = (
+                    self._abort_queue.get_nowait()
+                )
+            except _queue_mod.Empty:
+                break
+            self._abort_on_scheduler_thread(
+                request_id,
+                defer_running_cleanup=defer_running_cleanup,
+                _internal=internal,
+            )
+            processed += 1
+        return processed
+
+    def _abort_on_scheduler_thread(
+        self, request_id: str, *, defer_running_cleanup: bool, _internal: bool
+    ) -> None:
         action_scoring_requests = getattr(self, "_action_scoring_requests", None)
         if action_scoring_requests is None:
             action_scoring_requests = {}
@@ -3379,6 +3431,7 @@ class OmniScheduler:
         # (which is mostly Python-side dispatch into many small CUDA kernels)
         # slows ~600x, dropping audio QPS from >10 to <0.5.
         while self._running:
+            self._process_abort_requests()
             self._process_admin_requests()
             recv_reqs = self.recv_requests()
             recv_reqs.extend(self._take_deferred_request_payloads())
@@ -3619,6 +3672,7 @@ class OmniScheduler:
         decode first and run synchronously (the in-flight step is never stranded).
         """
         while self._running:
+            self._process_abort_requests()
             self._process_admin_requests()
             recv_reqs = self.recv_requests()
             recv_reqs.extend(self._take_deferred_request_payloads())
