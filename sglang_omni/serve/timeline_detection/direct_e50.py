@@ -99,6 +99,7 @@ class DirectE50Profile:
     video_max_pixels: int = 130_000
     cooldown_ms: int = 15_000
     control_cooldown_ms: int = 3_000
+    confirmation_windows: int = 2
     rearm_absent_windows: int = 3
     silent_event_ids: frozenset[str] = DIRECT_E50_SILENT_EVENT_IDS
 
@@ -135,6 +136,9 @@ class DirectE50Profile:
             control_cooldown_ms=_positive_int(
                 "SGLANG_OMNI_TIMELINE_CONTROL_EVENT_COOLDOWN_MS", 3_000
             ),
+            confirmation_windows=_positive_int(
+                "SGLANG_OMNI_TIMELINE_CONFIRMATION_WINDOWS", 2
+            ),
             rearm_absent_windows=_positive_int(
                 "SGLANG_OMNI_TIMELINE_REARM_ABSENT_WINDOWS", 3
             ),
@@ -148,6 +152,10 @@ class DirectE50Profile:
 class DirectE50FrequencyGate:
     """Apply control, silent, and ordinary event frequency semantics.
 
+    Every event must first appear in the configured number of consecutive
+    inference windows.  A missing window resets that event's confirmation
+    streak, so separate one-off guesses never combine into a trigger.
+
     Ordinary events share a global latch so the tail of one event cannot be
     published as a different event without an explicit absence run.  Control
     events bypass that latch so E20/E21 can always stop active output.  Silent
@@ -159,6 +167,7 @@ class DirectE50FrequencyGate:
         self,
         *,
         cooldown_ms: int,
+        confirmation_windows: int,
         rearm_absent_windows: int,
         control_cooldown_ms: int = 3_000,
         silent_event_ids: frozenset[str] = DIRECT_E50_SILENT_EVENT_IDS,
@@ -166,6 +175,7 @@ class DirectE50FrequencyGate:
         if (
             cooldown_ms <= 0
             or control_cooldown_ms <= 0
+            or confirmation_windows <= 0
             or rearm_absent_windows <= 0
         ):
             raise ValueError("direct E50 frequency limits must be positive")
@@ -183,6 +193,7 @@ class DirectE50FrequencyGate:
             )
         self._cooldown_ms = cooldown_ms
         self._control_cooldown_ms = control_cooldown_ms
+        self._confirmation_windows = confirmation_windows
         self._rearm_absent_windows = rearm_absent_windows
         self._silent_event_ids = silent_event_ids
         self._independent_latched: set[str] = set()
@@ -190,6 +201,7 @@ class DirectE50FrequencyGate:
         self._ordinary_latched = False
         self._ordinary_clear_streak = 0
         self._cooldown_until: dict[str, int] = {}
+        self._confirmation_streaks: dict[str, int] = {}
 
     def accept(self, event_ids: list[str], *, end_ms: int) -> tuple[str, ...]:
         return self.evaluate(event_ids, end_ms=end_ms).accepted_event_ids
@@ -207,6 +219,9 @@ class DirectE50FrequencyGate:
             raise ValueError("direct E50 frequency timestamp must be non-negative")
 
         present = set(event_ids)
+        for event_id in tuple(self._confirmation_streaks):
+            if event_id not in present:
+                self._confirmation_streaks.pop(event_id, None)
         independent_ids = (
             DIRECT_E50_CONTROL_EVENT_IDS | self._silent_event_ids
         )
@@ -232,6 +247,8 @@ class DirectE50FrequencyGate:
                 self._ordinary_clear_streak = 0
 
         accepted: list[str] = []
+        accepted_independent: set[str] = set()
+        ordinary_should_latch = False
         decisions: list[DirectE50EventFrequencyDecision] = []
         seen: set[str] = set()
         for event_id in event_ids:
@@ -259,16 +276,33 @@ class DirectE50FrequencyGate:
             elif cooldown_remaining_ms:
                 disposition = "suppressed"
                 reason = "event_cooldown"
+                if event_class == "ordinary":
+                    ordinary_should_latch = True
             else:
-                disposition = "accepted"
-                reason = "accepted"
-                accepted.append(event_id)
-                cooldown_ms = (
-                    self._control_cooldown_ms
-                    if event_class == "control"
-                    else self._cooldown_ms
+                confirmation_streak = (
+                    self._confirmation_streaks.get(event_id, 0) + 1
                 )
-                self._cooldown_until[event_id] = end_ms + cooldown_ms
+                if confirmation_streak < self._confirmation_windows:
+                    self._confirmation_streaks[event_id] = confirmation_streak
+                    disposition = "suppressed"
+                    reason = "awaiting_confirmation"
+                else:
+                    self._confirmation_streaks.pop(event_id, None)
+                    disposition = "accepted"
+                    reason = "accepted"
+                    accepted.append(event_id)
+                    if event_class == "ordinary":
+                        ordinary_should_latch = True
+                    else:
+                        accepted_independent.add(event_id)
+                    cooldown_ms = (
+                        self._control_cooldown_ms
+                        if event_class == "control"
+                        else self._cooldown_ms
+                    )
+                    self._cooldown_until[event_id] = end_ms + cooldown_ms
+            if reason not in {"awaiting_confirmation", "accepted"}:
+                self._confirmation_streaks.pop(event_id, None)
             decisions.append(
                 DirectE50EventFrequencyDecision(
                     event_id=event_id,
@@ -283,10 +317,10 @@ class DirectE50FrequencyGate:
                 )
             )
 
-        for event_id in present & independent_ids:
+        for event_id in accepted_independent:
             self._independent_latched.add(event_id)
             self._independent_absent_streaks[event_id] = 0
-        if ordinary_present:
+        if ordinary_should_latch:
             # Even a cooldown-suppressed ordinary event protects the tail from
             # being reclassified as a different actionable event.
             self._ordinary_latched = True
@@ -311,6 +345,7 @@ class DirectE50FrequencyGate:
         self._ordinary_latched = False
         self._ordinary_clear_streak = 0
         self._cooldown_until.clear()
+        self._confirmation_streaks.clear()
 
 
 def parse_direct_e50_output(raw_output: str) -> list[str]:

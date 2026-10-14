@@ -326,20 +326,20 @@ async def test_direct_e50_artifact_records_frequency_decisions(
     await feed_first_window(model)
 
     events = await model.next_observations()
-    assert [item.event_type for item in events] == ["E20"]
+    assert events == ()
     await model.close()
 
     result_paths = list(artifact_root.glob("*/stream-*/result.json"))
     assert len(result_paths) == 1
     result = json.loads(result_paths[0].read_text(encoding="utf-8"))
-    assert result["accepted_event_ids"] == ["E20"]
+    assert result["accepted_event_ids"] == []
     assert result["frequency_gate"]["event_decisions"] == [
         {
             "cooldown_remaining_ms": 0,
-            "disposition": "accepted",
+            "disposition": "suppressed",
             "event_class": "control",
             "event_id": "E20",
-            "reason": "accepted",
+            "reason": "awaiting_confirmation",
         }
     ]
 

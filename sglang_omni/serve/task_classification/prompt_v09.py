@@ -58,14 +58,17 @@ MCP 位和多模态位必须独立判断，再组合成最终路由码。从用�
 SINGLE_TURN_SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT + """
 
 [SINGLE_TURN]
-当前没有可继承的历史任务。当前输入本身已明确要求执行白名单操作时直接设置 MCP 位；只有无法独立确定操作类型或交付目标的省略表达不能继承操作。"""
+当前没有可继承的回复文本。当前输入本身已明确要求执行白名单操作时直接设置 MCP 位。
+若 has_active_agent=true 且 pending_confirmation 或 follow_up_required 为 true，孤立的确认、继续或补充表达可继续当前 Agent/MCP 任务，MCP 位为 1；has_active_agent=false 时不得继承。
+除此之外，无法独立确定操作类型或交付目标的省略表达不能继承操作。"""
 
 
 SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT + """
 
 [MULTI_TURN_RESOLUTION]
 ROUTER_HISTORY 只包含紧邻当前输入之前的一条数字人可听回复，仅用于还原当前输入中的省略表达。当前用户提出完整新请求时，以新请求为准。
-只有上一条回复能明确补全当前省略的操作类型或交付目标，并且补全后属于唱歌、搜索或查交通，当前输入才继承 MCP 位；否则不继承。历史不能凭自身创建操作请求。"""
+has_active_agent=false 表示当前没有正在执行或等待用户确认的 Agent/MCP 任务。此时“继续、go on、continue、接着”等孤立续讲表达属于普通对话续讲，MCP 位必须为 0；不得因为故事、教学或闲聊历史偶然提到天气、地图、歌曲、搜索等词而继承 MCP。
+只有 has_active_agent=true，且上一条回复能明确补全当前省略的操作类型或交付目标，并且补全后属于唱歌、搜索或查交通，当前输入才继承 MCP 位；否则不继承。历史和布尔状态都不能单独创建操作请求。"""
 
 
 def build_user_prompt(
@@ -92,6 +95,11 @@ def build_user_prompt(
         f"mcp={mcp_scope}",
         f"multimodal={multimodal_scope}",
         "",
+        "[ACTIVE_AGENT]",
+        f"has_active_agent={'true' if has_active_agent else 'false'}",
+        f"pending_confirmation={'true' if pending_confirmation else 'false'}",
+        f"follow_up_required={'true' if follow_up_required else 'false'}",
+        "",
         "[ROUTER_HISTORY]",
         json.dumps(compact_history, ensure_ascii=False, separators=(",", ":")),
     ]
@@ -116,11 +124,26 @@ def build_user_prompt(
     else:
         parts.append({"type": "text", "text": f"[CURRENT_USER_TEXT]\n{text}"})
 
-    history_rule = (
-        "上一条数字人回复只用于补全当前省略的操作类型或交付目标；补全后明确要求执行唱歌、搜索或查交通时才继承 MCP。"
-        if compact_history
-        else "没有可继承的数字人回复；当前输入本身明确要求执行白名单操作时直接判断，无法独立确定操作类型或交付目标的省略表达不继承操作。"
-    )
+    if compact_history and has_active_agent:
+        history_rule = (
+            "存在活动 Agent：上一条数字人回复只用于补全当前省略的操作类型或交付目标；"
+            "补全后明确继续唱歌、搜索或查交通时才继承 MCP。"
+        )
+    elif compact_history:
+        history_rule = (
+            "没有活动 Agent：上一条数字人回复只用于理解普通对话；孤立的继续、go on、"
+            "continue、接着必须按普通续讲输出 0，不得从故事、教学或闲聊内容继承 MCP。"
+        )
+    elif has_active_agent and (pending_confirmation or follow_up_required):
+        history_rule = (
+            "没有上一条可听回复，但存在等待确认或继续的活动 Agent；当前输入若是对该任务的"
+            "确认、继续或补充，继承 MCP，否则按当前完整请求判断。"
+        )
+    else:
+        history_rule = (
+            "没有可继承的数字人回复；当前输入本身明确要求执行白名单操作时直接判断，"
+            "无法独立确定操作类型或交付目标的省略表达不继承操作。"
+        )
     parts.append(
         {
             "type": "text",

@@ -62,10 +62,15 @@ deploy/realtime-knowledge.env
 deploy/realtime-executors.env
 deploy/gpu3-decision-services.env
 deploy/gpu4-timeline.env
+deploy/gpu4-timeline-e50.env
+deploy/gpu4-timeline.env.pre-e50-*
 deploy/gpu0-performance.env
 deploy/config_gpu3_decision_services.yaml
 deploy/config_gpu4_timeline.yaml
 deploy/gpu4-timeline-model-release.json
+
+# Local timeline-detector captures can contain large audio/video/frame dumps.
+artifacts/timeline_detection/
 
 runtime/*
 !runtime/.gitkeep

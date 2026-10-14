@@ -245,6 +245,7 @@ class SglangClientTimelineDetectionModel:
             DirectE50FrequencyGate(
                 cooldown_ms=self._direct_e50.cooldown_ms,
                 control_cooldown_ms=self._direct_e50.control_cooldown_ms,
+                confirmation_windows=self._direct_e50.confirmation_windows,
                 rearm_absent_windows=self._direct_e50.rearm_absent_windows,
                 silent_event_ids=self._direct_e50.silent_event_ids,
             )

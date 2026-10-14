@@ -127,7 +127,7 @@ async def test_multi_turn_uses_only_last_complete_assistant_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_interrupted_history_reaches_prompt_without_runtime_task_flags() -> None:
+async def test_interrupted_history_reaches_prompt_with_runtime_task_flags() -> None:
     client = _Client("1")
     history = ({
         "role": "assistant",
@@ -147,9 +147,9 @@ async def test_interrupted_history_reaches_prompt_without_runtime_task_flags() -
     prompt_text = str(request.messages[1].content)
     assert "playback_status" in prompt_text
     assert "interrupted" in prompt_text
-    assert "has_active_agent" not in prompt_text
-    assert "pending_confirmation" not in prompt_text
-    assert "follow_up_required" not in prompt_text
+    assert "has_active_agent=true" in prompt_text
+    assert "pending_confirmation=true" in prompt_text
+    assert "follow_up_required=true" in prompt_text
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,10 @@ async def test_active_task_without_reply_history_uses_single_turn_prompt() -> No
 
     request = client.calls[0][0]
     assert request.messages[0].content == SINGLE_TURN_SYSTEM_PROMPT
-    assert "has_active_agent" not in str(request.messages[1].content)
+    prompt_text = str(request.messages[1].content)
+    assert "has_active_agent=true" in prompt_text
+    assert "follow_up_required=true" in prompt_text
+    assert "等待确认或继续的活动 Agent" in prompt_text
 
 
 @pytest.mark.asyncio

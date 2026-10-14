@@ -70,7 +70,7 @@ def test_interrupted_history_keeps_only_confirmed_prefix_and_status() -> None:
     }]
 
 
-def test_prompt_excludes_runtime_task_state() -> None:
+def test_prompt_uses_active_agent_only_to_bound_elliptical_continuation() -> None:
     parts = build_user_prompt(
         query_mode="text",
         text="继续",
@@ -83,10 +83,30 @@ def test_prompt_excludes_runtime_task_state() -> None:
     )
 
     prompt = str(parts)
-    assert "ACTIVE_TASK" not in prompt
-    assert "has_active_agent" not in prompt
-    assert "pending_confirmation" not in prompt
-    assert "follow_up_required" not in prompt
+    assert "[ACTIVE_AGENT]" in prompt
+    assert "has_active_agent=true" in prompt
+    assert "pending_confirmation=true" in prompt
+    assert "follow_up_required=true" in prompt
+    assert "布尔状态都不能单独创建操作请求" in SYSTEM_PROMPT
+
+
+def test_no_active_agent_makes_plain_go_on_a_direct_continuation() -> None:
+    parts = build_user_prompt(
+        query_mode="text",
+        text="go on",
+        history=({
+            "role": "assistant",
+            "text": "Lily followed the map into the old library.",
+            "playback_status": "completed",
+        },),
+        mcp_scope="MCP",
+        multimodal_scope="MM",
+        has_active_agent=False,
+    )
+
+    prompt = str(parts)
+    assert "has_active_agent=false" in prompt
+    assert "必须按普通续讲输出 0" in prompt
 
 
 def test_audio_prompt_uses_speech_act_semantics_without_asr() -> None:

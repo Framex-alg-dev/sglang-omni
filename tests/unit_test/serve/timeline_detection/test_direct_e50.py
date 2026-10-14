@@ -97,6 +97,7 @@ def test_profile_reads_all_frequency_policy_layers(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv(
         "SGLANG_OMNI_TIMELINE_CONTROL_EVENT_COOLDOWN_MS", "3000"
     )
+    monkeypatch.setenv("SGLANG_OMNI_TIMELINE_CONFIRMATION_WINDOWS", "2")
     monkeypatch.setenv("SGLANG_OMNI_TIMELINE_SILENT_EVENT_IDS", "E1,E3")
 
     profile = DirectE50Profile.from_environment()
@@ -104,6 +105,7 @@ def test_profile_reads_all_frequency_policy_layers(monkeypatch, tmp_path) -> Non
     assert profile is not None
     assert profile.cooldown_ms == 15_000
     assert profile.control_cooldown_ms == 3_000
+    assert profile.confirmation_windows == 2
     assert profile.silent_event_ids == frozenset({"E1", "E3"})
 
 
@@ -163,12 +165,41 @@ def test_parse_direct_e50_output_rejects_non_contract_output(raw: str) -> None:
         parse_direct_e50_output(raw)
 
 
-def _frequency_gate() -> DirectE50FrequencyGate:
+def _frequency_gate(*, confirmation_windows: int = 1) -> DirectE50FrequencyGate:
     return DirectE50FrequencyGate(
         cooldown_ms=15_000,
         control_cooldown_ms=3_000,
+        confirmation_windows=confirmation_windows,
         rearm_absent_windows=3,
         silent_event_ids=DIRECT_E50_SILENT_EVENT_IDS,
+    )
+
+
+def test_frequency_gate_requires_two_consecutive_windows() -> None:
+    gate = _frequency_gate(confirmation_windows=2)
+
+    first = gate.evaluate(["E37"], end_ms=3_000)
+    assert first.accepted_event_ids == ()
+    assert first.event_decisions[0].reason == "awaiting_confirmation"
+
+    # An empty or different-event window breaks the confirmation streak.
+    assert gate.accept([], end_ms=4_000) == ()
+    assert gate.accept(["E37"], end_ms=5_000) == ()
+    assert gate.accept(["E38"], end_ms=6_000) == ()
+
+    second = gate.evaluate(["E38"], end_ms=7_000)
+    assert second.accepted_event_ids == ("E38",)
+    assert second.event_decisions[0].reason == "accepted"
+
+
+def test_frequency_gate_confirms_all_event_classes_on_second_window() -> None:
+    gate = _frequency_gate(confirmation_windows=2)
+
+    assert gate.accept(["E0", "E1", "E20"], end_ms=3_000) == ()
+    assert gate.accept(["E0", "E1", "E20"], end_ms=4_000) == (
+        "E0",
+        "E1",
+        "E20",
     )
 
 
@@ -279,6 +310,7 @@ def test_frequency_gate_rejects_invalid_policy_ids() -> None:
         DirectE50FrequencyGate(
             cooldown_ms=15_000,
             control_cooldown_ms=3_000,
+            confirmation_windows=2,
             rearm_absent_windows=3,
             silent_event_ids=frozenset({"E51"}),
         )
@@ -287,8 +319,17 @@ def test_frequency_gate_rejects_invalid_policy_ids() -> None:
         DirectE50FrequencyGate(
             cooldown_ms=15_000,
             control_cooldown_ms=3_000,
+            confirmation_windows=2,
             rearm_absent_windows=3,
             silent_event_ids=frozenset({"E20"}),
+        )
+
+    with pytest.raises(ValueError, match="frequency limits must be positive"):
+        DirectE50FrequencyGate(
+            cooldown_ms=15_000,
+            control_cooldown_ms=3_000,
+            confirmation_windows=0,
+            rearm_absent_windows=3,
         )
 
 
