@@ -44,6 +44,25 @@ MODEL_FAMILIES = {
 }
 
 
+@pytest.mark.parametrize("role", ["committed_reply", "speculative_reply", "tool_transition"])
+def test_reply_workload_class_reaches_the_runtime_admission(role):
+    request = ChatCompletionRequest(
+        model="qwen3-omni", messages=[{"role": "user", "content": "hi"}],
+        runtime_workload_class=role,
+    )
+    generated = _build_chat_generate_request(request)
+    assert generated.metadata["runtime_workload_class"] == role
+    assert "runtime_workload_class" not in request.model_dump()
+
+
+def test_unknown_reply_workload_class_is_rejected():
+    with pytest.raises(ValueError):
+        ChatCompletionRequest(
+            model="qwen3-omni", messages=[{"role": "user", "content": "hi"}],
+            runtime_workload_class="unregistered_workload",
+        )
+
+
 class FaultInjectingCoordinator(Coordinator):
     """Inject a model-stage failure through the real Coordinator/Client path."""
 

@@ -125,6 +125,9 @@ def realtime_latency_priority_plan(
         return None
     task = metadata.get("task")
     logical_request_id = metadata.get("logical_request_id")
+    if metadata.get("runtime_workload_class") == "tool_transition":
+        return {"stage": "reply_tool_transition", "logical_request_id": logical_request_id,
+                "prefill_priority_s": .25, "decode_protect_steps": 4, "decode_protect_s": .1}
     if task == TURN_INTENT_TASK:
         return {
             "stage": "turn_intent_route",

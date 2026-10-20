@@ -1274,7 +1274,7 @@ class Client:
         request_id: str | None = None,
     ) -> AsyncIterator[GenerateChunk]:
         metadata = request.metadata or {}
-        gpu0_work = metadata.get("task") in {"action_direct", "turn_intent", "turn_router"}
+        gpu0_work = metadata.get("task") in {"action_direct", "turn_intent", "turn_router"} or metadata.get("runtime_workload_class") is not None
         if not gpu0_work:
             async with aclosing(self._generate_unadmitted(request, request_id=request_id)) as stream:
                 async for chunk in stream:
@@ -1282,7 +1282,10 @@ class Client:
             return
         # This Client is owned once by the API launcher and shared by sessions.
         # The same gate already admits score_action_suffixes (Performance).
-        priority = -100 if metadata.get("task") == "action_direct" else -50
+        priority = (-100 if metadata.get("task") == "action_direct"
+                    else -50 if metadata.get("task") in {"turn_intent", "turn_router"}
+                    or metadata.get("runtime_workload_class") == "tool_transition"
+                    else -25 if metadata.get("runtime_workload_class") == "committed_reply" else 3)
         session = metadata.get("session_instance_id") or metadata.get("session_id")
         queued_at = time.perf_counter()
         async with self._action_scoring_gate.slot(priority, session):

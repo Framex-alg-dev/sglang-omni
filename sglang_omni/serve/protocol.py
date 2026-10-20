@@ -102,6 +102,7 @@ class ChatCompletionRequest(BaseModel):
     # default preserves ordinary OpenAI-compatible requests unchanged; reply
     # workers opt in so the same hot-reloadable service policy used by realtime
     # sessions also governs generated application replies.
+    runtime_workload_class: Literal["committed_reply", "speculative_reply", "tool_transition"] | None = Field(default=None, exclude=True)
     runtime_prompt_profile: Literal["reply"] | None = Field(
         default=None,
         exclude=True,

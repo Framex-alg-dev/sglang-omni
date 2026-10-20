@@ -32,6 +32,7 @@ htmlcov/
 *.txt
 !examples/runtime_prompts/*.txt
 !sglang_omni/serve/action_decision/e57a_system_prompt.txt
+!sglang_omni/serve/action_decision/e66_v116_step935_system_prompt.txt
 !sglang_omni/serve/action_decision/assets/e67_v116/*.txt
 output.wav
 

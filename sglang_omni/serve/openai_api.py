@@ -1296,6 +1296,8 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         metadata["video_total_pixels"] = req.video_total_pixels
     if req.session_instance_id is not None:
         metadata["session_instance_id"] = req.session_instance_id
+    if req.runtime_workload_class is not None:
+        metadata["runtime_workload_class"] = req.runtime_workload_class
     if req.runtime_prompt_profile is not None:
         metadata["runtime_prompt_profile"] = req.runtime_prompt_profile
         metadata["runtime_prompt_language"] = req.runtime_prompt_language

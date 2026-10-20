@@ -5,6 +5,41 @@ from sglang_omni.client.client import _PriorityAdmissionGate
 from sglang_omni.utils.turn_media_scope import turn_media_scope
 
 
+def test_committed_reply_and_tool_feedback_precede_queued_speculative_reply():
+    from sglang_omni.client.client import Client
+    from sglang_omni.client.types import GenerateChunk, GenerateRequest
+
+    async def run():
+        client = Client.__new__(Client)
+        gate = _PriorityAdmissionGate(1)
+        client._action_scoring_gate = gate
+        order = []
+
+        async def generate(request, request_id=None):
+            order.append(request_id)
+            yield GenerateChunk(request_id=request_id, modality="text", text="ok")
+
+        client._generate_unadmitted = generate
+
+        async def consume(role):
+            request = GenerateRequest(metadata={"runtime_workload_class": role})
+            async for _ in client.generate(request, request_id=role):
+                pass
+
+        await gate.acquire(0, "busy")
+        tasks = []
+        for role in ("speculative_reply", "committed_reply", "tool_transition"):
+            tasks.append(asyncio.create_task(consume(role)))
+            await asyncio.sleep(0)
+        await gate.release()
+        await asyncio.gather(*tasks)
+        assert order == ["tool_transition", "committed_reply", "speculative_reply"]
+        assert gate.snapshot()["active_total"] == 0
+        assert not gate._waiters
+
+    asyncio.run(run())
+
+
 def test_body_precedes_queued_performance_and_cancelled_queue_is_removed():
     async def run():
         gate = _PriorityAdmissionGate(1)
