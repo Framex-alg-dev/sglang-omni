@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,9 +21,8 @@ E66_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
     "e66_v116_step935_system_prompt.txt"
 )
 E67_REFERENCE_PROFILE = "e67_v116_step695_fp8"
-E67_REFERENCE_SYSTEM_PROMPT_PATH = Path(__file__).with_name(
-    "e67_v116_step695_system_prompt.txt"
-)
+DEFAULT_E67_ARTIFACT_ROOT = Path(__file__).with_name("assets") / "e67_v116"
+E67_REFERENCE_SYSTEM_PROMPT_PATH = DEFAULT_E67_ARTIFACT_ROOT / "e67_v116_step695_system_prompt.txt"
 REFERENCE_SYSTEM_PROMPT_PATHS = {
     E65_REFERENCE_PROFILE: E65_REFERENCE_SYSTEM_PROMPT_PATH,
     E66_REFERENCE_PROFILE: E66_REFERENCE_SYSTEM_PROMPT_PATH,
@@ -91,9 +91,18 @@ def uses_e65_reference_prompt(request: ActionDecisionRequest) -> bool:
     return reference_prompt_profile(request) == E65_REFERENCE_PROFILE
 
 
-@lru_cache(maxsize=len(REFERENCE_SYSTEM_PROMPT_PATHS))
 def _reference_system_prompt(profile: str) -> str:
-    prompt = REFERENCE_SYSTEM_PROMPT_PATHS[profile].read_text(encoding="utf-8")
+    local = REFERENCE_SYSTEM_PROMPT_PATHS[profile]
+    artifact_root = (os.getenv("SGLANG_OMNI_ACTION_ARTIFACT_ROOT")
+                     or os.getenv("ACTION_ARTIFACT_ROOT"))
+    path = Path(artifact_root).expanduser() / local.name if artifact_root else local
+    metadata = path.stat()
+    return _read_reference_prompt(str(path.resolve()), metadata.st_mtime_ns, metadata.st_size, profile)
+
+
+@lru_cache(maxsize=16)
+def _read_reference_prompt(path: str, modified_ns: int, size: int, profile: str) -> str:
+    prompt = Path(path).read_text(encoding="utf-8")
     if not prompt.strip():
         raise ValueError(f"{profile} reference system prompt must not be empty")
     return prompt

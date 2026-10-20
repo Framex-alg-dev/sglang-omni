@@ -666,6 +666,7 @@ async def _run_server(
                 token=token,
             )
         elif service_role == "action-decision":
+            from sglang_omni.serve.action_decision.prompt import DEFAULT_E67_ARTIFACT_ROOT
             from sglang_omni.serve.action_decision.service import (
                 ActionDecisionConfig,
                 create_action_decision_app,
@@ -673,7 +674,7 @@ async def _run_server(
 
             artifact_root = os.environ.get(
                 "SGLANG_OMNI_ACTION_ARTIFACT_ROOT",
-                "/data/xingmt/model_repo/action_prediction_model/assets",
+                str(DEFAULT_E67_ARTIFACT_ROOT),
             ).strip()
             action_config = ActionDecisionConfig(
                 token=os.environ.get(

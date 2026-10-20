@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -43,6 +44,21 @@ class PerformanceExpressionInput(BaseModel):
     description: str = Field(min_length=1, max_length=2_000)
 
 
+class PerformanceIntentInput(BaseModel):
+    """D-approved Generation meaning; this endpoint cannot redefine REQUIRED."""
+
+    model_config = ConfigDict(extra="forbid")
+    response_purpose: str = Field(min_length=1, max_length=4_000)
+    reply_mode: Literal[
+        "normal_turn", "timeline_event", "interruption_side_reply",
+        "interruption_recovery", "tool_transition", "tool_result",
+    ]
+    presentation_act: str | None = Field(default=None, max_length=128)
+    voice_style: str = Field(default="自然地说", max_length=2_000)
+    spoken_text_preview: str | None = Field(default=None, max_length=1_000)
+    required_behavior_contract: Literal["none", "body", "expression", "both"]
+
+
 class PerformanceControlRequest(BaseModel):
     """One committed Turn evaluated with the staging performance policy."""
 
@@ -59,6 +75,9 @@ class PerformanceControlRequest(BaseModel):
     language: Literal["zh", "en"]
     action_locale: Literal["zh-CN", "en-US"]
     text: str | None = Field(default=None, max_length=32_000)
+    performance_intent: PerformanceIntentInput | None = None
+    identity_epoch: int | None = Field(default=None, ge=0, strict=True)
+    input_revision: int | None = Field(default=None, ge=0, strict=True)
     audios: list[str] = Field(default_factory=list, max_length=8)
     images: list[str] = Field(default_factory=list, max_length=8)
     image_roles: list[Literal["user_camera", "avatar_state"]] = Field(
@@ -75,7 +94,7 @@ class PerformanceControlRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_turn(self) -> "PerformanceControlRequest":
-        if not (self.text or "").strip() and not self.audios and not self.images:
+        if not (self.text or "").strip() and not self.audios and not self.images and self.performance_intent is None:
             raise ValueError("performance control requires text, audio, or image input")
         if len(self.images) != len(self.image_roles):
             raise ValueError("images and image_roles must have equal length")
@@ -107,6 +126,11 @@ class _StatelessPerformancePipeline(PerformancePipeline):
         request: PerformanceControlRequest,
     ) -> None:
         self.client = client
+        self.performance_intent = request.performance_intent
+        from sglang_omni.utils.turn_media_scope import turn_media_scope
+        self.media_cache_owner = turn_media_scope(
+            request.session_id, request.turn_id, request.identity_epoch, request.input_revision,
+        )
         self.model_name = request.model
         self.session_id = request.session_id
         # Keep cache ownership stable for this real browser session. Encoder
@@ -145,6 +169,22 @@ class _StatelessPerformancePipeline(PerformancePipeline):
     def _action_prompt(self, *, zh: str, en: str) -> str:
         return zh if self.action_language == "zh" else en
 
+    def _performance_system_prompt(self, choices, *, visual_deictic_expression=False):
+        prompt = super()._performance_system_prompt(
+            choices, visual_deictic_expression=visual_deictic_expression,
+        )
+        if self.performance_intent is None:
+            return prompt
+        return prompt + self._action_prompt(
+            zh=("\n权威回复计划已经确定执行范围。以下 performance_intent 是角色当前回复的语义，"
+                "不是用户原话。按回复目的、表达行为及 voice_style 选择表情；用户媒体仅作上下文。"
+                "不得重新定义 REQUIRED 范围或修改正在合成的语音。\n"),
+            en=("\nThe host has frozen behavior obligations. performance_intent describes the "
+                "character's current reply, not the user's words. Select expression by reply "
+                "purpose, presentation act and voice style; user media is context only. "
+                "Do not redefine REQUIRED or change in-flight speech.\n"),
+        ) + json.dumps(self.performance_intent.model_dump(), ensure_ascii=False, separators=(",", ":"))
+
     async def _score_action_request(
         self,
         turn: TurnBuffer,
@@ -171,7 +211,11 @@ class _StatelessPerformancePipeline(PerformancePipeline):
         return await self._infer_turn_performance(
             turn,
             request.audios,
-            current_text=turn.text,
+            current_text=(
+                json.dumps({"performance_intent": request.performance_intent.model_dump(),
+                            "user_context": turn.text}, ensure_ascii=False, separators=(",", ":"))
+                if request.performance_intent is not None else turn.text
+            ),
             images=request.images,
             image_roles=list(request.image_roles),
         )

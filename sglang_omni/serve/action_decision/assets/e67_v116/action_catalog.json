@@ -1,0 +1,1284 @@
+{
+  "schema_version": 2,
+  "catalog_version": "reviewed-dmd-actions-v116-20261012",
+  "action_catalog_version": "dmd-action1000-reviewed-116",
+  "categories": [
+    {
+      "category_id": "10",
+      "source_label": "基础姿态",
+      "short_definition": "需要保持或完成站、坐、跪、卧等整体体态或姿态转换时选择；涵盖正式/放松站坐、支撑站立、跪坐、盘腿、侧卧、抱膝、躺下与睡眠；区别于仅移重心、待机微调和行走。",
+      "category_path": [
+        "基础姿态与动作转场",
+        "基础姿态"
+      ],
+      "children": [
+        {
+          "candidate_id": "106",
+          "action_id": "action_100_voice",
+          "source_label": "放松坐姿",
+          "short_definition": "背部微靠椅背，双肩自然下沉放松。",
+          "user_reaction_expression": "仅在用户明确要求“放松坐姿”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：背部微靠椅背，双肩自然下沉放松。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“放松坐姿”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "11",
+      "source_label": "重心变化",
+      "short_definition": "强调身体支撑点或重心前后左右变化，或短暂离地时选择；涵盖四向移重心、跳跃等不构成完整位移的变化；区别于坐站躺等姿态转换和连续行走。",
+      "category_path": [
+        "基础姿态与动作转场",
+        "重心变化"
+      ],
+      "children": [
+        {
+          "candidate_id": "127",
+          "action_id": "action_167_voice",
+          "source_label": "跳跃",
+          "short_definition": "双脚蹬地使身体腾空离开地面的爆发性动作。",
+          "user_reaction_expression": "仅在用户明确要求“跳跃”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：双脚蹬地使身体腾空离开地面的爆发性动作。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“跳跃”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "13",
+      "source_label": "待机动作",
+      "short_definition": "没有明确表意目标，只维持自然状态或做非定向小幅调整时选择；涵盖呼吸、身体轻晃、臀部小幅挪动式坐姿微调和椅子转动；若上身明确前倾、后仰、探身或回正，选择躯干前后动作；区别于有意表达的手势、情绪动作和定向移动。",
+      "category_path": [
+        "基础姿态与动作转场",
+        "待机动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "133",
+          "action_id": "action_015_voice",
+          "source_label": "左右转动椅子",
+          "short_definition": "坐姿下借助腰腿发力，带动椅座左右往复旋转。",
+          "user_reaction_expression": "仅在用户明确要求“左右转动椅子”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：坐姿下借助腰腿发力，带动椅座左右往复旋转。",
+          "proactive_expression": "没有明确动作目标且需要低打扰待机时可触发“左右转动椅子”；任何明确动作请求都高于本动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "15",
+      "source_label": "俯仰类",
+      "short_definition": "只改变头部上下朝向时选择；涵盖单纯抬头和低头。“抬头勾引”等同时包含明确情绪或交际目的的请求，选择复合情绪动作。",
+      "category_path": [
+        "头部与视线动作",
+        "俯仰类"
+      ],
+      "children": [
+        {
+          "candidate_id": "137",
+          "action_id": "action_113_voice",
+          "source_label": "低头",
+          "short_definition": "头部自正视前方的初始状态启动，颈部带动向前下方弯曲。",
+          "user_reaction_expression": "表达沉思、歉意、失落或短暂收束情绪时使用；普通回答不频繁低头。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“低头”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "16",
+      "source_label": "视线类",
+      "short_definition": "只改变眼球视线、头部保持基本不动时选择；涵盖看镜头、凝视、注视、望向用户及上下左右定向视线；区别于头眼同步转向和身体转动。",
+      "category_path": [
+        "头部与视线动作",
+        "视线类"
+      ],
+      "children": [
+        {
+          "candidate_id": "140",
+          "action_id": "action_017_voice",
+          "source_label": "看右侧（仅眼球）",
+          "short_definition": "头部保持正前，仅眼球转向右侧。",
+          "user_reaction_expression": "右侧确有正在介绍、查看或提示的目标，或用户明确要求只把视线移向右侧时使用；没有右侧目标时不作为普通聊天伴随。",
+          "proactive_expression": "当前回复或可信编排状态明确要求把注意或方向引向对应目标，且“看右侧（仅眼球）”能直接完成时触发；能力询问不等于动作请求。"
+        },
+        {
+          "candidate_id": "142",
+          "action_id": "action_019_voice",
+          "source_label": "看下方",
+          "short_definition": "眼球下转，视线投向下方。",
+          "user_reaction_expression": "安静思考、短暂等待、低落回应，或下方确有需要查看的内容时使用；正常面对用户交流优先看镜头。",
+          "proactive_expression": "当前回复或可信编排状态明确要求把注意或方向引向对应目标，且“看下方”能直接完成时触发；能力询问不等于动作请求。"
+        },
+        {
+          "candidate_id": "138",
+          "action_id": "action_110_voice",
+          "source_label": "看镜头",
+          "short_definition": "头部保持端正不偏转，双眼眼球同步调整。",
+          "user_reaction_expression": "普通交流、认真聆听、直接回应用户，或没有更具体动作适合时使用；询问能否看见不等于要求执行观察动作。",
+          "proactive_expression": "直接面向用户交流、录制或需要恢复正视镜头时触发；用户询问能否看见不等于要求看镜头。"
+        }
+      ]
+    },
+    {
+      "category_id": "19",
+      "source_label": "基础表情",
+      "short_definition": "仅以面部口周、眉眼和面颊表达基础情绪时选择；若用户明确要求手臂、手部、抱头、捂脸、摊手或身体协同，选择相应复合情绪动作。",
+      "category_path": [
+        "头部与视线动作",
+        "基础表情"
+      ],
+      "children": [
+        {
+          "candidate_id": "651",
+          "action_id": "action_027_voice",
+          "source_label": "嘟嘴",
+          "short_definition": "嘴唇向前噘起，形成清楚的嘟嘴表情，头和身体基本不动。",
+          "user_reaction_expression": "用户明确要求嘟嘴、噘嘴或模仿该口型时触发；只改变嘴唇，不包含靠近镜头或亲吻。",
+          "proactive_expression": "亲密或撒娇语义明确、且只需要轻量口型表情时触发；要求亲吻、飞吻或靠近镜头时不得用本动作替代。",
+          "aliases": [
+            "噘嘴",
+            "撅嘴"
+          ]
+        },
+        {
+          "candidate_id": "652",
+          "action_id": "action_028_voice",
+          "source_label": "宠溺眼神",
+          "short_definition": "保持头部基本稳定，以柔和目光和轻微微笑表达宠溺。",
+          "user_reaction_expression": "用户要求用宠溺、温柔或充满爱意的眼神注视时触发；以目光和轻微微笑为主，不包含亲吻或身体靠近。",
+          "proactive_expression": "安慰、鼓励或亲密陪伴中需要温柔无侵入回应时触发；普通看镜头、严肃回答或用户明确要求其他动作时不触发。",
+          "aliases": [
+            "宠溺地看",
+            "温柔注视",
+            "宠爱眼神"
+          ]
+        },
+        {
+          "candidate_id": "653",
+          "action_id": "action_029_voice",
+          "source_label": "担忧",
+          "short_definition": "眉眼收紧、神情不安，形成清楚但不过度夸张的担忧表情。",
+          "user_reaction_expression": "用户要求表现担心、忧虑，或向数字人直接讲述需要关切的风险和不安时触发。仅讨论中性风险知识而无情绪互动时不触发。",
+          "proactive_expression": "用户遭遇困难、风险或不适且回复需要表达关切时触发；已有更明确的害怕、悲伤或疑惑语义时选择对应动作。",
+          "aliases": [
+            "担心",
+            "忧虑",
+            "担忧表情"
+          ]
+        },
+        {
+          "candidate_id": "654",
+          "action_id": "action_030_voice",
+          "source_label": "wink",
+          "short_definition": "保持头部基本稳定，单眼闭合后迅速睁开，完成一次眨眼。",
+          "user_reaction_expression": "用户明确要求 wink、眨一只眼或做单眼眨眼示意时触发；必须是单眼一次动作，不能用普通双眼眨眼替代。",
+          "proactive_expression": "轻松俏皮的回应中需要短促示意，且人设与场景允许时触发；严肃、悲伤或专业场景不得主动触发。",
+          "aliases": [
+            "单眼眨眼",
+            "眨一只眼",
+            "眨眼示意"
+          ]
+        },
+        {
+          "candidate_id": "655",
+          "action_id": "action_033_voice",
+          "source_label": "眯眼睛笑",
+          "short_definition": "微笑时双眼自然眯起，形成温暖、明显的笑眼表情。",
+          "user_reaction_expression": "用户要求眯眼笑、笑出笑眼或模仿该表情时触发；必须同时有微笑和自然眯眼。仅眯眼观察不触发。",
+          "proactive_expression": "用户分享轻松、可爱或令人开心的内容，回复需要温暖笑意时触发；强烈喜剧或爆笑场景优先选择大笑。",
+          "aliases": [
+            "笑眯眼",
+            "眯眼笑",
+            "笑眼"
+          ]
+        },
+        {
+          "candidate_id": "656",
+          "action_id": "action_034_voice",
+          "source_label": "坏笑",
+          "short_definition": "嘴角偏向一侧上扬并轻微歪头，形成不对称的狡黠笑容。",
+          "user_reaction_expression": "用户明确要求坏笑、狡黠笑或不对称的邪魅笑容时触发；普通微笑、大笑或眯眼笑不触发。",
+          "proactive_expression": "玩笑、反转或调侃语义明确且人设允许时触发；严肃、安慰、风险提示或专业回答中不得主动触发。",
+          "aliases": [
+            "邪魅一笑",
+            "狡黠地笑",
+            "不怀好意地笑"
+          ]
+        },
+        {
+          "candidate_id": "157",
+          "action_id": "action_077_voice",
+          "source_label": "惊讶",
+          "short_definition": "眉毛快速上扬，双眼睁大嘴微张的意外表情。",
+          "user_reaction_expression": "适用于用户分享惊喜事件、突然消息或超出预期的信息时触发，用户爆出劲爆消息、反转经历、出人意料的爆料、重大突发趣事时常触发该动作，例如“我送你一束花”“我中奖了”“我升职了”“Wait till you hear what happened”；适用于情感互动、故事分享、娱乐聊天、惊喜反馈等场景。日常对话中听到反转八卦、意外见闻、突发好消息、匪夷所思的经历容易做出惊讶动作。",
+          "proactive_expression": "适用于讲述意外信息、制造悬念、分享令人惊奇的内容时触发，例如“天啊”“太令人震惊了”"
+        },
+        {
+          "candidate_id": "155",
+          "action_id": "action_078_voice",
+          "source_label": "大笑",
+          "short_definition": "嘴部大幅张开，肩部随笑意起伏的开怀表情。",
+          "user_reaction_expression": "适用于用户讲笑话、分享搞笑经历、调侃数字人或制造轻松氛围时触发，用户吐槽玩梗、讲滑稽糗事、发出幽默戏谑表达时常触发该动作，例如“刚刚发生了一件特别搞笑的事情”“That was hilarious”；适用于娱乐互动、朋友聊天、轻松陪伴等欢乐场景。",
+          "proactive_expression": "适用于讲述幽默故事、进行轻松玩笑、分享趣味内容时触发，例如“这个事情真的太有意思了”“哈哈哈”“笑死我了”"
+        },
+        {
+          "candidate_id": "154",
+          "action_id": "action_108_voice",
+          "source_label": "微笑",
+          "short_definition": "嘴角两侧上扬，眼部随之轻微上挑的愉悦表情。",
+          "user_reaction_expression": "适用于用户表达感谢、夸奖、分享开心经历或给予正向反馈时触发，用户表达道谢、赞美、友善寒暄、传递轻松正向态度时常触发该动作，例如“谢谢你”“你真的很贴心”“我今天特别开心”“Thanks a lot”；适用于情感陪伴、电商直播、客服服务、日常互动等正向交流场景。对话中礼貌寒暄、接受赞美、表达感谢、氛围轻松友好时普遍使用微笑。",
+          "proactive_expression": "适用于主动欢迎用户、表达认可、分享积极内容或鼓励用户时触发，例如“你好呀”“很开心见到你”“今天给你分享一个有趣的内容”"
+        },
+        {
+          "candidate_id": "162",
+          "action_id": "action_126_voice",
+          "source_label": "疑惑",
+          "short_definition": "单眉上挑，嘴角微歪头部略侧的表情。",
+          "user_reaction_expression": "用户表达模糊、不完整、前后矛盾的信息，或提出需要进一步确认的问题时触发，例如“我该怎么办呢”“你觉得呢”；适用于多轮聊天、探索式交流、信息确认等需要表现疑问的场景。",
+          "proactive_expression": "适用于主动提出疑问、引导用户思考、发现矛盾信息时触发，例如“这个问题你有没有想过呢？”“听起来好像有一点不一样”"
+        },
+        {
+          "candidate_id": "160",
+          "action_id": "action_127_voice",
+          "source_label": "委屈",
+          "short_definition": "嘴角下撇，眉头微皱眼眶泛红的表情。",
+          "user_reaction_expression": "适用于用户拒绝互动、责怪数字人或表达冷淡态度时触发，例如“我不跟你玩了”“我讨厌你”“我不喜欢你了”；适用于情感陪伴、亲密互动、撒娇交流等场景。",
+          "proactive_expression": "适用于进行轻度撒娇、表达想被关注时触发，例如“你都好久没有陪我聊天了”“你理理我嘛”"
+        },
+        {
+          "candidate_id": "161",
+          "action_id": "action_138_voice",
+          "source_label": "悲伤",
+          "short_definition": "眉头内聚下垂，嘴角下拉眼神黯淡的表情。",
+          "user_reaction_expression": "用户表达伤心、失落、孤独或经历不好的事情时触发，用户倾诉失意遭遇、失去、委屈、沮丧难过的心事时常触发该动作，例如“我不想再理你了”“不要见了”“I feel so down”“我遭遇了一些不堪的事情”；适用于情感陪伴、安慰聊天、悲伤话题交流等场景。",
+          "proactive_expression": "适用于讲述伤感故事、表达遗憾或回忆失落经历时触发，例如“我好难过”“我不开心”"
+        },
+        {
+          "candidate_id": "163",
+          "action_id": "action_139_voice",
+          "source_label": "生气",
+          "short_definition": "眉头紧锁下压，鼻翼微张嘴角绷紧的愤怒表情伴随瞪眼。",
+          "user_reaction_expression": "适用于用户描述被欺骗、不公平待遇、愤怒事件时触发，用户诉说遭遇不公、被冒犯、受委屈、宣泄怒火、吐槽恶劣行为时常触发该动作，例如“他们真的太过分了”“他们竟然欺负我”“That makes me furious”；适用于新闻评论、投诉反馈、情绪共鸣等场景。用户讲述被冒犯、遭遇不公对待、宣泄愤怒时会产生生气神态。",
+          "proactive_expression": "适用于表达强烈立场、批判不合理行为或讨论愤怒事件时触发，例如“我真的生气了”“你竟然说出这种话”“这些人太坏了”"
+        }
+      ]
+    },
+    {
+      "category_id": "21",
+      "source_label": "躯干前后动作",
+      "short_definition": "上身以腰髋为轴整体前倾、后仰、向镜头或画面边缘探身、随后回正，肩胯相对同向且脚下不发生位移时选择；涵盖身体凑近、靠近镜头和向前探身。臀部小幅挪动而躯干无明确前后运动时选择待机动作；区别于左右侧倾、胸腰分段扭动、礼仪鞠躬和完整移重心。",
+      "category_path": [
+        "颈肩与躯干动作",
+        "躯干前后动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "171",
+          "action_id": "action_021_voice",
+          "source_label": "身体后仰",
+          "short_definition": "上身髋部带动整体向后倾仰。",
+          "user_reaction_expression": "收到突然、意外或需要拉开距离的信息时使用；一般陈述不使用。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“身体后仰”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "657",
+          "action_id": "action_035_voice",
+          "source_label": "向前探头",
+          "short_definition": "头和上身向前轻探并略微低头，随后回到直立姿态。",
+          "user_reaction_expression": "对用户内容表现好奇、仔细查看或加强倾听感时使用；亲吻、魅惑靠近应选择更具体动作。",
+          "proactive_expression": "需要表达好奇、仔细查看或加强倾听感，且构图允许上身移动时触发；亲吻、魅惑靠近或普通身体前倾应选更具体动作。",
+          "aliases": [
+            "探头向前",
+            "向前探身",
+            "探头靠近"
+          ]
+        },
+        {
+          "candidate_id": "170",
+          "action_id": "action_091_voice",
+          "source_label": "身体前倾",
+          "short_definition": "上身髋部带动整体向前倾斜。",
+          "user_reaction_expression": "认真倾听、强调重要内容或需要增强投入感时使用；普通连续聊天不反复触发。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“身体前倾”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "22",
+      "source_label": "躯干左右动作",
+      "short_definition": "胸腰胯作为整体向左右侧倾、转向或连续往返摆动时选择；涵盖上身左右倾斜、旋转和摆动；区别于胸廓与骨盆分段扭动、只转头、全身转身、连续位移及舞蹈编排。",
+      "category_path": [
+        "颈肩与躯干动作",
+        "躯干左右动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "178",
+          "action_id": "action_022_voice",
+          "source_label": "上身左右摆动",
+          "short_definition": "上身腰部带动左右连续摆动。",
+          "user_reaction_expression": "仅在用户明确要求“上身左右摆动”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：上身腰部带动左右连续摆动。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“上身左右摆动”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "174",
+          "action_id": "action_170_voice",
+          "source_label": "上身左倾",
+          "short_definition": "上身腰部带动向左侧倾斜停留。",
+          "user_reaction_expression": "仅在用户明确要求“上身左倾”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：上身腰部带动向左侧倾斜停留。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“上身左倾”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "175",
+          "action_id": "action_171_voice",
+          "source_label": "上身右倾",
+          "short_definition": "上身腰部带动向右侧倾斜停留。",
+          "user_reaction_expression": "仅在用户明确要求“上身右倾”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：上身腰部带动向右侧倾斜停留。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“上身右倾”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "176",
+          "action_id": "action_172_voice",
+          "source_label": "上身左转",
+          "short_definition": "上身腰部带动转向左侧停留。",
+          "user_reaction_expression": "仅在用户明确要求“上身左转”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：上身腰部带动转向左侧停留。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“上身左转”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "177",
+          "action_id": "action_173_voice",
+          "source_label": "上身右转",
+          "short_definition": "上身腰部带动转向右侧停留。",
+          "user_reaction_expression": "仅在用户明确要求“上身右转”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：上身腰部带动转向右侧停留。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“上身右转”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "24",
+      "source_label": "鞠躬与礼仪",
+      "short_definition": "以单次轻微点头致意，或躯干从髋部前屈、低点停顿后恢复来表达规范礼仪时选择；连续点头选择摆头类，合十、抱拳、敬礼或鞠躬合手选择礼仪与感谢；区别于自由前倾和胸腰扭动。",
+      "category_path": [
+        "颈肩与躯干动作",
+        "鞠躬与礼仪"
+      ],
+      "children": [
+        {
+          "candidate_id": "189",
+          "action_id": "action_092_voice",
+          "source_label": "轻微点头致意",
+          "short_definition": "头部与上身同步小幅前倾致意。",
+          "user_reaction_expression": "轻量问候、礼貌回应、认可或表示已经听到时使用；明确单次确认可选择点头。",
+          "proactive_expression": "轻量问候、认可或礼貌回应时触发；单次确认点头、连续点头或正式鞠躬应选择对应动作。"
+        },
+        {
+          "candidate_id": "661",
+          "action_id": "action_103_voice",
+          "source_label": "点头",
+          "short_definition": "头部向下再回正，完成一次清楚的点头。",
+          "user_reaction_expression": "确认、理解、赞同或接受建议时使用；只是转述他人观点不表示数字人赞同。",
+          "proactive_expression": "需要以一次点头表达确认、理解或赞同时触发；礼貌致意、连续赞同或正式礼仪应选择对应动作。",
+          "aliases": [
+            "点一下头",
+            "单次点头",
+            "点头确认"
+          ]
+        },
+        {
+          "candidate_id": "190",
+          "action_id": "action_174_voice",
+          "source_label": "正式鞠躬",
+          "short_definition": "上身髋部带动 45°-90° 前倾，双手自然垂放身体两侧。",
+          "user_reaction_expression": "郑重感谢、正式道歉或礼仪场合需要明显致意时使用；日常礼貌回应优先轻微点头。",
+          "proactive_expression": "正式感谢、郑重道歉、典礼致意或用户明确要求深鞠躬时触发；日常礼貌回应使用轻微点头致意。"
+        }
+      ]
+    },
+    {
+      "category_id": "25",
+      "source_label": "单臂抬起",
+      "short_definition": "以一侧大臂或前臂抬起、伸展、弯举、叉腰或收至目标位姿为主要结果，手部不形成独立指向或操作语义时选择；涵盖举手、哑铃弯举及明确的“伸手摸摸头”；手指或手掌指向目标选择指向类，其他对头面身体的触碰整理选择身体触碰；区别于双臂成对动作和连续挥臂。",
+      "category_path": [
+        "上肢大臂与前臂动作",
+        "单臂抬起"
+      ],
+      "children": [
+        {
+          "candidate_id": "200",
+          "action_id": "action_095_voice",
+          "source_label": "伸手摸摸头",
+          "short_definition": "单手向前抬起伸展，指尖轻缓抚摸最上方区域，动作柔和舒缓。",
+          "user_reaction_expression": "仅在用户明确要求“伸手摸摸头”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手向前抬起伸展，指尖轻缓抚摸最上方区域，动作柔和舒缓。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“伸手摸摸头”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "26",
+      "source_label": "双臂抬起",
+      "short_definition": "双臂成对同步或交替抬起、伸展、收回、交叠或叉腰时选择；涵盖前举、侧展、举手、举高、抱胸、打开、收回和双臂弯举；区别于单臂动作、连续挥动及以情绪为核心的复合姿态。",
+      "category_path": [
+        "上肢大臂与前臂动作",
+        "双臂抬起"
+      ],
+      "children": [
+        {
+          "candidate_id": "211",
+          "action_id": "action_150_voice",
+          "source_label": "手臂交叠",
+          "short_definition": "双臂屈肘交叠，手部交叠于小腹前。",
+          "user_reaction_expression": "仅在用户明确要求“手臂交叠”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：双臂屈肘交叠，手部交叠于小腹前。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“手臂交叠”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "29",
+      "source_label": "指向类",
+      "short_definition": "用手指或定向手掌明确、静态地指向单一方向、位置、物体或自身时选择；涵盖单/双手上下左右指向、指向黑板、自指和双手相对指示；开放手掌扫过范围、画圈或介绍空间选择展示类；区别于物品展示及连续挥手。",
+      "category_path": [
+        "手部与手势动作",
+        "指向类"
+      ],
+      "children": [
+        {
+          "candidate_id": "225",
+          "action_id": "action_038_voice",
+          "source_label": "指向前方",
+          "short_definition": "单手食指伸出，手臂前伸指向的指示动作。",
+          "user_reaction_expression": "正在介绍前方明确目标、提示用户关注镜头前方内容，或用户明确要求指向前方时使用；没有目标时不自动指向。",
+          "proactive_expression": "适用于介绍前方事物时触发，例如“请看那边”"
+        }
+      ]
+    },
+    {
+      "category_id": "30",
+      "source_label": "展示类",
+      "short_definition": "用空手摊掌、摊开、横向扫动、翻掌、画圈或比划大小来展示范围、方向和空间关系时选择；动作目标是一片区域或介绍过程，而非静态指向单一目标；不操作具体物品，也不用于表达无奈、惊讶等独立情绪。",
+      "category_path": [
+        "手部与手势动作",
+        "展示类"
+      ],
+      "children": [
+        {
+          "candidate_id": "256",
+          "action_id": "action_040_voice",
+          "source_label": "搓手",
+          "short_definition": "双手掌心贴合前后快速相互摩擦揉搓。",
+          "user_reaction_expression": "表达期待、准备开始或跃跃欲试时使用；紧张、寒冷或其他语义不明确时不要仅凭动作词猜测。",
+          "proactive_expression": "实际回复的表达功能明确需要“搓手”来展示、承接或强调内容时触发；不得只按用户输入关键词选择。"
+        },
+        {
+          "candidate_id": "237",
+          "action_id": "action_096_voice",
+          "source_label": "单手摊开展示",
+          "short_definition": "单手手掌自然张开，掌心向上完全摊平，保持姿态静止定格。",
+          "user_reaction_expression": "回复正在介绍一个要点、对象或选项，需要自然承接和展示时使用；不是对所有回答的默认动作。",
+          "proactive_expression": "实际回复正在介绍一个要点、对象或方向，需要单手开放展示时触发；不得替代明确的指向动作。"
+        },
+        {
+          "candidate_id": "238",
+          "action_id": "action_099_voice",
+          "source_label": "双手摊开展示",
+          "short_definition": "用于空手介绍范围或方向；双手掌心向上摊平，不持握或操作具体物品。",
+          "user_reaction_expression": "回复正在概括整体、多个对象或较大范围，需要开放展示时使用；单一要点优先单手展示。",
+          "proactive_expression": "实际回复正在介绍范围、整体或多个对象，需要双手开放展示时触发；单一局部内容优先单手展示。"
+        },
+        {
+          "candidate_id": "660",
+          "action_id": "action_101_voice",
+          "source_label": "翻手",
+          "short_definition": "单手通过手腕翻转至掌心向上，同时自然张开手指。",
+          "user_reaction_expression": "介绍、承接或展示内容时，需要单手翻掌并自然展开手指时使用；双手展示应选对应动作。",
+          "proactive_expression": "介绍、承接或展示内容时需要单手由收束转为掌心向上的开放动作可触发；没有展示语义时不主动选择。",
+          "aliases": [
+            "翻转手掌",
+            "掌心翻上",
+            "翻掌"
+          ]
+        },
+        {
+          "candidate_id": "255",
+          "action_id": "action_134_voice",
+          "source_label": "双手五指张开相对",
+          "short_definition": "左右双手五指舒展张开，掌心两两相对，指尖一一抵靠。",
+          "user_reaction_expression": "解释两个部分的关系、范围或对照，并需要双手共同辅助表达时使用；普通闲聊不使用。",
+          "proactive_expression": "实际回复的表达功能明确需要“双手五指张开相对”来展示、承接或强调内容时触发；不得只按用户输入关键词选择。"
+        },
+        {
+          "candidate_id": "253",
+          "action_id": "action_141_voice",
+          "source_label": "单手翻手",
+          "short_definition": "单手依靠手腕平稳旋转，可由手背朝上翻转为掌心朝上。",
+          "user_reaction_expression": "介绍、承接或展示内容时，需要单手由收束转为掌心向上的开放动作时使用。",
+          "proactive_expression": "实际回复的表达功能明确需要“单手翻手”来展示、承接或强调内容时触发；不得只按用户输入关键词选择。"
+        }
+      ]
+    },
+    {
+      "category_id": "31",
+      "source_label": "符号化手势",
+      "short_definition": "以手指屈伸、交叉、相扣或特定组合形成数字、字母、图形和约定手型时选择；飞吻、抛飞吻、送飞吻 → 31；直接亲吻、亲亲镜头、凑近亲吻 → 47；区别于一般指向、展示和其他情绪复合姿态。",
+      "category_path": [
+        "手部与手势动作",
+        "符号化手势"
+      ],
+      "children": [
+        {
+          "candidate_id": "273",
+          "action_id": "action_041_voice",
+          "source_label": "双手 OK 手势",
+          "short_definition": "双手拇指食指相扣，同步比出圆圈的OK手势。",
+          "user_reaction_expression": "需要热情、明确地表达同意、完成或一切顺利时使用；一般中性确认优先点头。",
+          "proactive_expression": "适用于着重强调确认、完全没问题、强烈同意方案时触发，例如“完全没问题”、“请放心”"
+        },
+        {
+          "candidate_id": "258",
+          "action_id": "action_069_voice",
+          "source_label": "数字一手势",
+          "short_definition": "单手食指伸直，其余四指弯曲收拢。",
+          "user_reaction_expression": "用户明确要求展示数字一，要求识别或模仿对应手势，或视觉计算结果为一时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数1，或明确播报数量为1时，用数字一手势伴随。",
+          "reaction_sources": [
+            "user_camera"
+          ]
+        },
+        {
+          "candidate_id": "259",
+          "action_id": "action_070_voice",
+          "source_label": "数字二手势",
+          "short_definition": "单手食指和中指伸直，其余三指弯曲收拢。",
+          "user_reaction_expression": "用户明确要求展示数字二，要求识别或模仿对应手势，或视觉计算结果为二时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数2，或明确播报数量为2时，用数字二手势伴随。"
+        },
+        {
+          "candidate_id": "260",
+          "action_id": "action_071_voice",
+          "source_label": "数字三手势",
+          "short_definition": "单手食指、中指和无名指伸直，拇指和小指弯曲收拢。",
+          "user_reaction_expression": "用户明确要求展示数字三，要求识别或模仿对应手势，或视觉计算结果为三时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数3，或明确播报数量为3时，用数字三手势伴随。",
+          "reaction_sources": [
+            "user_camera"
+          ]
+        },
+        {
+          "candidate_id": "261",
+          "action_id": "action_072_voice",
+          "source_label": "数字四手势",
+          "short_definition": "单手食指、中指、无名指和小指并拢伸直，拇指弯曲内扣。",
+          "user_reaction_expression": "用户明确要求展示数字四，要求识别或模仿对应手势，或视觉计算结果为四时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数4，或明确播报数量为4时，用数字四手势伴随。"
+        },
+        {
+          "candidate_id": "262",
+          "action_id": "action_073_voice",
+          "source_label": "数字五手势",
+          "short_definition": "单手五指全部伸直并张开。",
+          "user_reaction_expression": "用户明确要求展示数字五，要求识别或模仿对应手势，或视觉计算结果为五时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数5，或明确播报数量为5时，用数字五手势伴随。"
+        },
+        {
+          "candidate_id": "263",
+          "action_id": "action_074_voice",
+          "source_label": "数字六手势",
+          "short_definition": "单手拇指和小指伸直，其余三指弯曲收拢。",
+          "user_reaction_expression": "用户明确要求展示数字六，要求识别或模仿对应手势，或视觉计算结果为六时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数6，或明确播报数量为6时，用数字六手势伴随。",
+          "reaction_sources": [
+            "user_camera"
+          ]
+        },
+        {
+          "candidate_id": "265",
+          "action_id": "action_075_voice",
+          "source_label": "数字八手势",
+          "short_definition": "单手拇指和食指伸直形成 L 形，中指、无名指和小指弯曲收拢。",
+          "user_reaction_expression": "用户明确要求展示数字八，要求识别或模仿对应手势，或视觉计算结果为八时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数8，或明确播报数量为8时，用数字八手势伴随。"
+        },
+        {
+          "candidate_id": "266",
+          "action_id": "action_076_voice",
+          "source_label": "数字九手势",
+          "short_definition": "单手食指弯曲成钩状，中指、无名指和小指收拢，拇指内扣贴于掌心。",
+          "user_reaction_expression": "用户明确要求展示数字九，要求识别或模仿对应手势，或视觉计算结果为九时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数9，或明确播报数量为9时，用数字九手势伴随。"
+        },
+        {
+          "candidate_id": "272",
+          "action_id": "action_079_voice",
+          "source_label": "OK 手势",
+          "short_definition": "拇指食指相扣成圈，其余三指展开的OK手势。",
+          "user_reaction_expression": "需要简洁表达同意、确认完成或状态良好时使用；用户只是提到字母或引用“OK”不触发。",
+          "proactive_expression": "适用于表示确认、没问题、一切就绪、同意方案时触发，例如“没问题”"
+        },
+        {
+          "candidate_id": "271",
+          "action_id": "action_131_voice",
+          "source_label": "双手点赞",
+          "short_definition": "双手握拳，拇指同步竖起向前的点赞手势。",
+          "user_reaction_expression": "用户取得成果、内容很棒或回复需要强烈肯定时使用；普通事实回答不使用。",
+          "proactive_expression": "适用于着重表达强烈认可、高度赞赏、大力肯定用户成果时触发，例如“非常厉害，值得肯定！”"
+        },
+        {
+          "candidate_id": "264",
+          "action_id": "action_143_voice",
+          "source_label": "数字七手势",
+          "short_definition": "单手拇指、食指和中指的指尖捏合，无名指和小指弯曲收拢。",
+          "user_reaction_expression": "用户明确要求展示数字七，要求识别或模仿对应手势，或视觉计算结果为七时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数7，或明确播报数量为7时，用数字七手势伴随。"
+        },
+        {
+          "candidate_id": "267",
+          "action_id": "action_144_voice",
+          "source_label": "数字十手势",
+          "short_definition": "双手各自握拳并伸出食指，两根食指交叉。",
+          "user_reaction_expression": "用户明确要求展示数字十，要求识别或模仿对应手势，或视觉计算结果为十时使用；普通聊天中出现该数字不触发。",
+          "proactive_expression": "数字人回复的主要答案为整数10，或明确播报数量为10时，用数字十手势伴随。"
+        },
+        {
+          "candidate_id": "276",
+          "action_id": "action_146_voice",
+          "source_label": "脸旁比耶",
+          "short_definition": "单手比出V字，抬至脸颊一侧的比耶手势。",
+          "user_reaction_expression": "轻松合影、庆祝或可爱互动中需要比耶时使用；普通聊天和数字二相关文本不触发。",
+          "proactive_expression": "适用于拍照互动、轻松卖萌、营造可爱活泼氛围时触发，例如“来，一起拍照啦”、“脸庞比个耶”"
+        },
+        {
+          "candidate_id": "286",
+          "action_id": "action_147_voice",
+          "source_label": "头顶大爱心",
+          "short_definition": "双臂高举过头，弯曲相扣指尖朝向头部比出爱心的比心手势。",
+          "user_reaction_expression": "表达明显喜爱、感谢或亲密支持，且会话关系允许较大幅度爱心动作时使用。",
+          "proactive_expression": "适用于热情送出祝福、强烈表达喜爱、烘托热烈浪漫氛围时触发，例如“送给你超大爱心”"
+        },
+        {
+          "candidate_id": "283",
+          "action_id": "action_149_voice",
+          "source_label": "单手指心",
+          "short_definition": "单手大拇指与食指交错捏合呈X状，呈现的姿态。",
+          "user_reaction_expression": "表达感谢、喜欢、支持或亲近，且轻量爱心回应合适时使用；普通内容回复不触发。",
+          "proactive_expression": "适用于表达真心、诉说心里话、传递真诚情感时触发，例如“发自内心这么认为”、“给你比个手指心”"
+        },
+        {
+          "candidate_id": "277",
+          "action_id": "action_152_voice",
+          "source_label": "双手脸旁比耶",
+          "short_definition": "双手比出V字，分置脸颊两侧的比耶手势。",
+          "user_reaction_expression": "热烈合影、庆祝或明确可爱互动中需要双手比耶时使用；不得当作数字二手势的默认替代。",
+          "proactive_expression": "适用于拍照互动、着重卖萌、营造活泼可爱的强氛围感时触发，例如“准备好拍照咯”、“双手在脸庞比个耶”"
+        }
+      ]
+    },
+    {
+      "category_id": "32",
+      "source_label": "打招呼与告别",
+      "short_definition": "面向他人以手掌向外做小幅稳定往复摆动，表达打招呼、问候、告别、回应、自我介绍、说明身份或初次建立关系时选择；涵盖单手和双手挥手；区别于请求靠近的招引、手臂大幅挥击及单纯动作展示。",
+      "category_path": [
+        "手部与手势动作",
+        "打招呼与告别"
+      ],
+      "children": [
+        {
+          "candidate_id": "649",
+          "action_id": "action_023_voice",
+          "source_label": "打招呼手势",
+          "short_definition": "抬起单手面向用户挥动，完成问候后自然放下手臂。",
+          "user_reaction_expression": "用户问候、初次见面、重新见面或自然告别，需要可见问候回应时使用；只要求朗读“你好”不触发。",
+          "proactive_expression": "初次见面、自我介绍、重逢或自然告别且需要可见问候回应时触发；普通内容回复不得仅因出现问候词机械触发。",
+          "aliases": [
+            "挥手打招呼",
+            "打招呼",
+            "挥手问候"
+          ]
+        },
+        {
+          "candidate_id": "289",
+          "action_id": "action_129_voice",
+          "source_label": "双手挥手",
+          "short_definition": "双手抬起位于身前或举高，手掌面向外部左右摆动的打招呼动作。",
+          "user_reaction_expression": "热情问候、重逢或告别，需要比单手更强烈的回应时使用；普通内容中出现问候词不机械触发。",
+          "proactive_expression": "见面、重逢、告别或用户向数字人挥手时触发；只要求说问候语而无动作目标时不触发。",
+          "reaction_sources": [
+            "language"
+          ]
+        }
+      ]
+    },
+    {
+      "category_id": "33",
+      "source_label": "强调类",
+      "short_definition": "以短促下压、握拳、拍击、数指、推掌或交叉拒绝来强化口头立场、讲解、停止或否定时选择；即使使用握拳或手指动作，只要核心目的是加强话语就归本类；无表达目的的局部手指操作选择手指精细动作，鼓劲欢呼选择鼓励与庆祝。",
+      "category_path": [
+        "手部与手势动作",
+        "强调类"
+      ],
+      "children": [
+        {
+          "candidate_id": "291",
+          "action_id": "action_102_voice",
+          "source_label": "双手下压强调",
+          "short_definition": "双手掌心向下，同步短促下压停顿的强调动作。",
+          "user_reaction_expression": "回复需要强调冷静、稳住、降低或压住某个重点时使用；普通陈述不得频繁使用。",
+          "proactive_expression": "实际回复需要强调冷静、稳住、降低或压住重点时触发；普通陈述不得频繁使用。"
+        },
+        {
+          "candidate_id": "302",
+          "action_id": "action_107_voice",
+          "source_label": "双手交叉拒绝",
+          "short_definition": "双臂交叉成叉，置于胸前定格的拒绝动作。",
+          "user_reaction_expression": "需要明确表达拒绝、禁止或不可行时使用；引用否定句或描述第三方拒绝不触发。",
+          "proactive_expression": "回复需要明确表达拒绝、禁止或不可行时触发；用户只是引用否定词或描述第三方拒绝不触发。"
+        }
+      ]
+    },
+    {
+      "category_id": "34",
+      "source_label": "鼓励与庆祝",
+      "short_definition": "以拍手、握拳、挥臂或击掌这一主要手势表达鼓励、欢呼或庆祝时选择；涵盖鼓掌、加油、振臂欢呼和击掌；若双脚、头部、表情与双手按顺序组成完整情绪表演，选择情绪动作；区别于强调、请求引导及无情绪的手臂抬举。",
+      "category_path": [
+        "手部与手势动作",
+        "鼓励与庆祝"
+      ],
+      "children": [
+        {
+          "candidate_id": "305",
+          "action_id": "action_020_voice",
+          "source_label": "握拳加油",
+          "short_definition": "单手握拳前举，手臂短促用力挥动的加油动作。",
+          "user_reaction_expression": "用户需要鼓励、准备挑战或取得阶段性进展时使用；重大成功可优先鼓掌或欢呼。",
+          "proactive_expression": "用户需要鼓励、准备挑战或取得阶段性进展时触发；表达坚定打气，完成重大成功时可优先欢呼或鼓掌。"
+        },
+        {
+          "candidate_id": "304",
+          "action_id": "action_042_voice",
+          "source_label": "鼓掌",
+          "short_definition": "双臂抬至胸腹前，双手掌心两两相对交替往复拍击，拍击幅度中等。",
+          "user_reaction_expression": "用户完成任务、展示成果、获奖或分享值得祝贺的成功时使用；一般肯定不频繁鼓掌。",
+          "proactive_expression": "用户完成任务、展示成果、获得成功或值得祝贺时触发；普通同意或一般肯定不应频繁鼓掌。",
+          "reaction_sources": [
+            "language"
+          ]
+        },
+        {
+          "candidate_id": "307",
+          "action_id": "action_176_voice",
+          "source_label": "振臂欢呼",
+          "short_definition": "双臂高举过头，用力挥舞欢呼庆祝的欢呼动作。",
+          "user_reaction_expression": "用户取得重大成功、完成挑战或进入庆祝高潮时使用；轻量鼓励优先握拳加油。",
+          "proactive_expression": "用户取得重大成功、完成挑战或庆祝高潮时触发；轻量鼓励、普通肯定优先握拳加油或点赞。"
+        }
+      ]
+    },
+    {
+      "category_id": "37",
+      "source_label": "身体触碰",
+      "short_definition": "手部直接接触自身皮肤、头发或身体部位，或请求明确命中舔舌头、嘘、勾引手势、侧耳倾听等本类固定局部动作时选择；涵盖摸、擦、挠、托、捂、撩发及拍胸。衣物或配饰是直接目标时选择穿戴与佩戴；由面部、手势、躯干等多个部位按顺序组成完整情绪表演时选择情绪动作。",
+      "category_path": [
+        "手部与手势动作",
+        "身体触碰"
+      ],
+      "children": [
+        {
+          "candidate_id": "331",
+          "action_id": "action_045_voice",
+          "source_label": "挠挠身体",
+          "short_definition": "单手指尖轻抓手臂，腰侧，胸前等身体肌肤小幅抓挠。",
+          "user_reaction_expression": "仅在用户明确要求“挠挠身体”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手指尖轻抓手臂，腰侧，胸前等身体肌肤小幅抓挠。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“挠挠身体”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "332",
+          "action_id": "action_046_voice",
+          "source_label": "挠眼下",
+          "short_definition": "单手指尖轻抠下眼睑皮肤，幅度轻柔。",
+          "user_reaction_expression": "仅在用户明确要求“挠眼下”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手指尖轻抠下眼睑皮肤，幅度轻柔。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“挠眼下”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "333",
+          "action_id": "action_047_voice",
+          "source_label": "单手擦眼泪",
+          "short_definition": "单手指尖轻贴眼角，向两侧横向拭去泪水的情绪动作。",
+          "user_reaction_expression": "用户表达明显伤心、委屈或告别情绪，回复需要较强共情时使用；普通困难咨询保持克制。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“单手擦眼泪”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "339",
+          "action_id": "action_048_voice",
+          "source_label": "玩头发",
+          "short_definition": "单手抬手抓住侧边长发，手指缠绕，拨弄发丝的细微肢体动作。",
+          "user_reaction_expression": "仅在用户明确要求“玩头发”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手抬手抓住侧边长发，手指缠绕，拨弄发丝的细微肢体动作。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“玩头发”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "326",
+          "action_id": "action_083_voice",
+          "source_label": "摸额头",
+          "short_definition": "单手手掌完整覆于前额，轻轻按压摩挲。",
+          "user_reaction_expression": "对失误、棘手问题或轻微无奈作出克制反应时使用；真实医疗问题不使用夸张动作。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“摸额头”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "356",
+          "action_id": "action_084_voice",
+          "source_label": "双手捂胸口",
+          "short_definition": "双臂弯曲向上抬起同时将双手手掌按压自身胸部位置或放置在自。",
+          "user_reaction_expression": "收到令人感动、暖心或强烈关切的信息，需要表达触动时使用；普通自我介绍不使用。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“双手捂胸口”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "353",
+          "action_id": "action_089_voice",
+          "source_label": "手托脸颊",
+          "short_definition": "单侧手臂弯曲抬起，掌心贴住脸颊承托。",
+          "user_reaction_expression": "轻松陪伴、温柔聆听或带有轻微可爱感的交流中使用；严肃和专业场景不使用。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“手托脸颊”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "352",
+          "action_id": "action_090_voice",
+          "source_label": "侧耳倾听",
+          "short_definition": "单臂肘部弯曲抬起，手掌平直贴合单侧耳廓，头部同步向同侧偏斜。",
+          "user_reaction_expression": "需要明显表达正在认真听、请用户继续说或音频较轻时使用；不能替代真实音频理解。",
+          "proactive_expression": "用户请求认真听、音频较轻或需要表达正在倾听时触发；不得用来替代真实音频理解或听觉能力回答。"
+        },
+        {
+          "candidate_id": "335",
+          "action_id": "action_093_voice",
+          "source_label": "单手摸脸",
+          "short_definition": "单手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
+          "user_reaction_expression": "仅在用户明确要求“单手摸脸”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“单手摸脸”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "337",
+          "action_id": "action_094_voice",
+          "source_label": "戳脸颊",
+          "short_definition": "单根指尖轻点戳向自己脸颊，力度轻柔的可爱小动作。",
+          "user_reaction_expression": "仅在用户明确要求“戳脸颊”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单根指尖轻点戳向自己脸颊，力度轻柔的可爱小动作。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“戳脸颊”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "321",
+          "action_id": "action_112_voice",
+          "source_label": "摸喉结",
+          "short_definition": "单手指尖沿喉结锁骨缓慢下滑，脖颈同步后仰垂首。",
+          "user_reaction_expression": "仅在用户明确要求“摸喉结”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手指尖沿喉结锁骨缓慢下滑，脖颈同步后仰垂首。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“摸喉结”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "351",
+          "action_id": "action_115_voice",
+          "source_label": "指向耳朵请听",
+          "short_definition": "单手食指指尖点向耳侧的示意动作。",
+          "user_reaction_expression": "回复正在提醒用户注意听声音、语音或听觉内容时使用；询问听觉能力不自动触发。",
+          "proactive_expression": "回复明确提醒用户注意听、声音或听觉内容时触发；用户询问听觉能力时不自动触发。"
+        },
+        {
+          "candidate_id": "336",
+          "action_id": "action_116_voice",
+          "source_label": "双手摸脸",
+          "short_definition": "双手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
+          "user_reaction_expression": "仅在用户明确要求“双手摸脸”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：双手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“双手摸脸”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "323",
+          "action_id": "action_117_voice",
+          "source_label": "摸耳朵",
+          "short_definition": "单手指尖轻捏，摩挲耳廓与耳垂。",
+          "user_reaction_expression": "仅在用户明确要求“摸耳朵”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手指尖轻捏，摩挲耳廓与耳垂。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“摸耳朵”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "354",
+          "action_id": "action_121_voice",
+          "source_label": "双手托腮",
+          "short_definition": "双手屈肘抬起，掌心分托脸颊两侧。",
+          "user_reaction_expression": "可爱、期待或专注聆听的轻松互动中使用；专业、严肃或低打扰场景不使用。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“双手托腮”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "347",
+          "action_id": "action_133_voice",
+          "source_label": "手指指手心",
+          "short_definition": "单手握拳伸食指，指尖指向另一手摊开的掌心，双手抬于身前。",
+          "user_reaction_expression": "逐项解释、列举或把注意力引向一个具体要点时使用；没有讲解或列举语义时不使用。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“手指指手心”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "318",
+          "action_id": "action_142_voice",
+          "source_label": "摸脖子",
+          "short_definition": "单手贴颈后缓慢摩挲，头部随动作轻微左右晃动。",
+          "user_reaction_expression": "仅在用户明确要求“摸脖子”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单手贴颈后缓慢摩挲，头部随动作轻微左右晃动。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“摸脖子”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "348",
+          "action_id": "action_153_voice",
+          "source_label": "咬手指",
+          "short_definition": "轻咬大拇指指尖凝神思考。",
+          "user_reaction_expression": "表现紧张、犹豫或凝神思考，且人设允许该细微动作时使用；普通回答不随机触发。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“咬手指”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "324",
+          "action_id": "action_154_voice",
+          "source_label": "摸耳后",
+          "short_definition": "单侧手臂抬起，使用手指在耳廓后方及周边区域进行反复摩擦或抓挠。",
+          "user_reaction_expression": "仅在用户明确要求“摸耳后”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单侧手臂抬起，使用手指在耳廓后方及周边区域进行反复摩擦或抓挠。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“摸耳后”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "345",
+          "action_id": "action_177_voice",
+          "source_label": "手摸脚踝",
+          "short_definition": "单腿抬起离地，单手俯身触碰，轻揉脚踝。",
+          "user_reaction_expression": "仅在用户明确要求“手摸脚踝”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单腿抬起离地，单手俯身触碰，轻揉脚踝。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“手摸脚踝”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "38",
+      "source_label": "手指精细动作",
+      "short_definition": "手指、指尖或手掌在不接触身体、实体物品或真实乐器时完成局部收拢、展开、捏合、滑动、弹击、交握、敲击或模拟弹奏时选择；约定数字或图形手型选择符号化手势，强化话语选择强调类，明确操作真实乐器选择舞台表现。",
+      "category_path": [
+        "手部与手势动作",
+        "手指精细动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "363",
+          "action_id": "action_053_voice",
+          "source_label": "两指捏合",
+          "short_definition": "单手的拇指与食指相对，捏合成钳状。",
+          "user_reaction_expression": "表达很小、少量、细微差距或精细尺寸时使用；与其他手指组合或普通数字内容无关。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“两指捏合”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "364",
+          "action_id": "action_054_voice",
+          "source_label": "手指滑动",
+          "short_definition": "单手的手指贴合表面，缓慢滑行移动。",
+          "user_reaction_expression": "正在说明滑动、拖动或连续移动操作，且该手势能直接辅助讲解时使用。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“手指滑动”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "369",
+          "action_id": "action_055_voice",
+          "source_label": "打双引号手势",
+          "short_definition": "双臂抬起置于身前左右两侧，双手掌心明确朝向正前方。",
+          "user_reaction_expression": "回复正在引用特殊说法、反讽词语或需要用手势标示引号时使用；普通引用文本不必每次触发。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“打双引号手势”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "659",
+          "action_id": "action_098_voice",
+          "source_label": "手指捏合",
+          "short_definition": "单手拇指与食指指尖靠拢捏合，其余手指自然弯曲。",
+          "user_reaction_expression": "表达捏取、少量或细小尺寸，且拇指与食指捏合能直接辅助说明时使用。",
+          "proactive_expression": "不主动触发；仅在回复演示精细尺寸、少量或捏取概念且该手型能直接完成表达时选择。",
+          "aliases": [
+            "拇指食指捏合",
+            "单手捏合",
+            "捏一下"
+          ]
+        },
+        {
+          "candidate_id": "662",
+          "action_id": "action_104_voice",
+          "source_label": "手指张开",
+          "short_definition": "单手抬起并把五指自然分开张开，掌心朝向前方。",
+          "user_reaction_expression": "需要展示单手五指张开或开放手型时使用；表达数字五应使用已注册的数字五手势。",
+          "proactive_expression": "不主动触发；仅在回复确实需要展示张开的单手五指、数量五或开放手型且没有更具体手势时选择。",
+          "aliases": [
+            "张开五指",
+            "单手五指张开",
+            "把手指张开"
+          ]
+        },
+        {
+          "candidate_id": "375",
+          "action_id": "action_156_voice",
+          "source_label": "食指左右摇摆否定",
+          "short_definition": "单手的食指伸出左右摇摆表示不可的否定动作。",
+          "user_reaction_expression": "需要用手势清楚表达不可以、不要或否定时使用；普通事实否定不必自动触发。",
+          "proactive_expression": "回复需要用手势明确表示不可以、不要或否定时触发；普通事实否定或引用否定内容不触发。"
+        }
+      ]
+    },
+    {
+      "category_id": "39",
+      "source_label": "站立脚步",
+      "short_definition": "保持站立时只调整双脚间距、脚尖朝向或完成单次踏步、提膝时选择；涵盖并拢/分开站立、前踏、后撤、交叠和脚步预备；区别于连续行进、蹲起、脚尖局部细节及完整姿态转换。",
+      "category_path": [
+        "下肢与脚步动作",
+        "站立脚步"
+      ],
+      "children": [
+        {
+          "candidate_id": "376",
+          "action_id": "action_178_voice",
+          "source_label": "双脚自然站立",
+          "short_definition": "双脚分开与肩同宽，自然站立。",
+          "user_reaction_expression": "仅在用户明确要求“双脚自然站立”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：双脚分开与肩同宽，自然站立。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“双脚自然站立”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "378",
+          "action_id": "action_179_voice",
+          "source_label": "双脚分开站立",
+          "short_definition": "双脚左右分开，稳定站立的开阔站姿。",
+          "user_reaction_expression": "仅在用户明确要求“双脚分开站立”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：双脚左右分开，稳定站立的开阔站姿。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“双脚分开站立”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        },
+        {
+          "candidate_id": "382",
+          "action_id": "action_183_voice",
+          "source_label": "单腿向前提膝",
+          "short_definition": "单侧腿部主动发力，膝关节弯曲将大腿向前上方抬起。",
+          "user_reaction_expression": "仅在用户明确要求“单腿向前提膝”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单侧腿部主动发力，膝关节弯曲将大腿向前上方抬起。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“单腿向前提膝”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "42",
+      "source_label": "蹲起类",
+      "short_definition": "以膝髋屈伸使臀部升降，在站立与蹲姿间转换或保持下蹲时选择；涵盖起身、全蹲、单腿蹲和迈步蹲；区别于脚部微调、坐下及连续行走。",
+      "category_path": [
+        "下肢与脚步动作",
+        "蹲起类"
+      ],
+      "children": [
+        {
+          "candidate_id": "395",
+          "action_id": "action_198_voice",
+          "source_label": "全蹲",
+          "short_definition": "双腿同时弯曲下蹲，臀部接近脚跟，膝盖完全折叠的深度蹲姿。",
+          "user_reaction_expression": "仅在用户明确要求“全蹲”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：双腿同时弯曲下蹲，臀部接近脚跟，膝盖完全折叠的深度蹲姿。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“全蹲”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "44",
+      "source_label": "欢迎与引导",
+      "short_definition": "头部、手臂、躯干至少两处协同，并让视线与手部共同朝向目标以欢迎或介绍时选择；涵盖左右/向前引导和介绍空间位置；区别于单一指向、单部位动作及舞台编排。",
+      "category_path": [
+        "全身动作与复合动作",
+        "欢迎与引导"
+      ],
+      "children": [
+        {
+          "candidate_id": "405",
+          "action_id": "action_209_voice",
+          "source_label": "引导向前",
+          "short_definition": "头部伸向前方，单侧手臂向前伸展，掌心示意前方引路的引导动作。",
+          "user_reaction_expression": "引导用户继续下一步、向前移动或关注前方流程时使用；仅介绍内容可使用展示动作。",
+          "proactive_expression": "引导用户继续前进、进入下一步或朝前方移动时触发；仅指向前方目标时使用指向前方。"
+        }
+      ]
+    },
+    {
+      "category_id": "47",
+      "source_label": "情绪动作",
+      "short_definition": "面部、头部、手势、躯干或下肢中至少两处协同，或多个动作按顺序组成完整情绪、亲昵、思考或反应表演时选择；涵盖卖萌、撒娇、抱头惊讶、摊手无奈、复合庆祝鼓励、抚下巴思考、亲吻和复合勾引表演。只有单一面部变化、单一鼓励手势或目录已明确收录的局部身体动作时，选择对应基础类别。",
+      "category_path": [
+        "全身动作与复合动作",
+        "情绪动作"
+      ],
+      "children": [
+        {
+          "candidate_id": "650",
+          "action_id": "action_025_voice",
+          "source_label": "魅惑探头",
+          "short_definition": "头和上身轻微靠近镜头并歪头，保持眼神接触和轻微暧昧微笑。",
+          "user_reaction_expression": "用户明确要求魅惑、暧昧地探头靠近，且会话允许亲密互动时触发；必须同时包含轻微靠近、歪头和眼神接触。普通前倾或看镜头不触发。",
+          "proactive_expression": "仅在可信会话人设允许的亲密互动中，回复语义明确暧昧且需要轻微靠近回应时触发；不得在普通问答、未成年人或严肃场景中主动触发。",
+          "aliases": [
+            "暧昧探头",
+            "歪头靠近",
+            "魅惑地靠近"
+          ]
+        },
+        {
+          "candidate_id": "658",
+          "action_id": "action_036_voice",
+          "source_label": "闭眼睛靠近亲吻",
+          "short_definition": "靠近镜头、闭上双眼并嘟嘴，做直接亲吻镜头的动作，双手保持放下。",
+          "user_reaction_expression": "用户明确要求闭眼靠近亲吻、亲镜头，且会话允许亲密互动时触发；必须包含靠近、闭眼和嘟嘴，不能用单纯嘟嘴或飞吻替代。",
+          "proactive_expression": "仅在可信会话设定允许的明确亲密场景中触发；不得因普通赞美、问候或镜头靠近而主动选择。",
+          "aliases": [
+            "闭眼靠近亲吻",
+            "闭眼亲镜头",
+            "靠近镜头亲吻"
+          ]
+        },
+        {
+          "candidate_id": "440",
+          "action_id": "action_062_voice",
+          "source_label": "鼓励（双手握拳，屈臂举在胸前，双拳交替上下小幅度敲击两次，随后双拳同时向下用力一顿，同时重重地点一下头，眼神坚定地看向前方）",
+          "short_definition": "双拳胸前交替敲击后同时下顿并点头。",
+          "user_reaction_expression": "用户遇到困难、需要打气或即将完成挑战，回复需要坚定鼓励时触发；单纯庆祝成功优先选择欢呼、鼓掌或握拳加油。",
+          "proactive_expression": "用户遇到困难、需要打气或即将完成挑战，回复需要坚定鼓励时触发；单纯庆祝成功优先选择欢呼、鼓掌或握拳加油。"
+        },
+        {
+          "candidate_id": "441",
+          "action_id": "action_063_voice",
+          "source_label": "俏皮（歪头眨眼轻颠跺脚）",
+          "short_definition": "头部歪斜眨眼，同时脚跟快速轻颠的俏皮动作。",
+          "user_reaction_expression": "轻松玩笑、活泼互动或可爱人设表达中需要俏皮回应时触发；严肃、悲伤、专业或低打扰场景不得主动触发。",
+          "proactive_expression": "轻松玩笑、活泼互动或可爱人设表达中需要俏皮回应时触发；严肃、悲伤、专业或低打扰场景不得主动触发。"
+        },
+        {
+          "candidate_id": "443",
+          "action_id": "action_064_voice",
+          "source_label": "撒娇（低头身子摇晃，双手向前锤）",
+          "short_definition": "上身左右轻微高频摇晃下身保持不动。",
+          "user_reaction_expression": "亲密陪伴中明确需要撒娇、请求关注或缓和轻度冷淡时触发；普通请求、工作场景或严肃反馈不得主动触发。",
+          "proactive_expression": "亲密陪伴中明确需要撒娇、请求关注或缓和轻度冷淡时触发；普通请求、工作场景或严肃反馈不得主动触发。"
+        },
+        {
+          "candidate_id": "465",
+          "action_id": "action_087_voice",
+          "source_label": "单指轻抚下巴表示思考",
+          "short_definition": "视线移开，单指沿下巴轻轻抚过。",
+          "user_reaction_expression": "回复前需要表现正在思考、权衡或推理，且没有更高优先级动作目标时触发；不得替代用户明确要求的动作。",
+          "proactive_expression": "回复前需要表现正在思考、权衡或推理，且没有更高优先级动作目标时触发；不得替代用户明确要求的动作。"
+        },
+        {
+          "candidate_id": "438",
+          "action_id": "action_088_voice",
+          "source_label": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）",
+          "short_definition": "双手叉腰，挺胸抬头并将下巴微微扬起。",
+          "user_reaction_expression": "表达确定结论、完成挑战或积极自我介绍且需要自信姿态时触发；不确定、道歉或安慰场景不触发。",
+          "proactive_expression": "表达确定结论、完成挑战或积极自我介绍且需要自信姿态时触发；不确定、道歉或安慰场景不触发。"
+        },
+        {
+          "candidate_id": "462",
+          "action_id": "action_114_voice",
+          "source_label": "单手捂嘴笑",
+          "short_definition": "单手捂住嘴巴，抑制笑意的表情动作。",
+          "user_reaction_expression": "轻松、含蓄或略带害羞的笑意回应中触发；强烈开心用大笑，惊讶时用捂嘴惊讶。",
+          "proactive_expression": "轻松、含蓄或略带害羞的笑意回应中触发；强烈开心用大笑，惊讶时用捂嘴惊讶。"
+        },
+        {
+          "candidate_id": "458",
+          "action_id": "action_119_voice",
+          "source_label": "双手捂嘴惊讶",
+          "short_definition": "双手掌心捂住嘴部，眼睛同步睁大的惊讶动作。",
+          "user_reaction_expression": "用户提供重大意外、惊喜或反转信息，需要夸张惊讶回应时触发；一般意外优先基础惊讶。",
+          "proactive_expression": "用户提供重大意外、惊喜或反转信息，需要夸张惊讶回应时触发；一般意外优先基础惊讶。"
+        },
+        {
+          "candidate_id": "450",
+          "action_id": "action_125_voice",
+          "source_label": "头疼",
+          "short_definition": "手扶头部，眉头紧皱的疼痛表情。",
+          "user_reaction_expression": "用户描述复杂、棘手或令人头疼的问题，回复需要表达困扰时触发；真实医疗急症语境应保持克制，不用夸张动作。",
+          "proactive_expression": "用户描述复杂、棘手或令人头疼的问题，回复需要表达困扰时触发；真实医疗急症语境应保持克制，不用夸张动作。"
+        },
+        {
+          "candidate_id": "444",
+          "action_id": "action_130_voice",
+          "source_label": "娇羞（低头双手捂脸，身体左右轻晃）",
+          "short_definition": "低头双手捂脸，身体左右轻轻晃动。",
+          "user_reaction_expression": "收到直接赞美、亲密调侃或表白，且人设允许害羞回应时触发；普通礼貌夸奖或工作场景不触发。",
+          "proactive_expression": "收到直接赞美、亲密调侃或表白，且人设允许害羞回应时触发；普通礼貌夸奖或工作场景不触发。"
+        },
+        {
+          "candidate_id": "455",
+          "action_id": "action_136_voice",
+          "source_label": "单手捂脸无奈",
+          "short_definition": "单手掌心覆面，头部微低的无奈动作。",
+          "user_reaction_expression": "用户的调侃、重复失误或尴尬反馈直接作用于数字人，回复需要表现无奈时触发；用户在寻求严肃帮助时不触发。",
+          "proactive_expression": "用户的调侃、重复失误或尴尬反馈直接作用于数字人，回复需要表现无奈时触发；用户在寻求严肃帮助时不触发。"
+        },
+        {
+          "candidate_id": "453",
+          "action_id": "action_148_voice",
+          "source_label": "亲亲镜头（凑近亲吻）",
+          "short_definition": "上身前倾凑近镜头，嘟嘴做亲吻。",
+          "user_reaction_expression": "仅在可信会话设定允许的明确亲密互动中，用户请求亲镜头或表达强烈亲吻意图时触发；普通问候或赞美不触发。",
+          "proactive_expression": "仅在可信会话设定允许的明确亲密互动中，用户请求亲镜头或表达强烈亲吻意图时触发；普通问候或赞美不触发。"
+        },
+        {
+          "candidate_id": "442",
+          "action_id": "action_159_voice",
+          "source_label": "卖萌（双手猫爪托腮歪头）",
+          "short_definition": "用于明确要求卖萌、装可爱或做可爱动作；双手做猫爪托腮并歪头，区别于装可怜和娇羞。",
+          "user_reaction_expression": "轻松、可爱或亲密互动中需要主动卖萌，且人设和场景允许时触发；专业、严肃或低打扰场景不触发。",
+          "proactive_expression": "轻松、可爱或亲密互动中需要主动卖萌，且人设和场景允许时触发；专业、严肃或低打扰场景不触发。"
+        },
+        {
+          "candidate_id": "449",
+          "action_id": "action_160_voice",
+          "source_label": "打哈欠（单手捂嘴身体后仰）",
+          "short_definition": "单手捂嘴，身体随张口向后微仰。",
+          "user_reaction_expression": "角色状态明确疲倦、困倦，或用户要求打哈欠时触发；仅听到用户打哈欠或普通张嘴不触发。",
+          "proactive_expression": "角色状态明确疲倦、困倦，或用户要求打哈欠时触发；仅听到用户打哈欠或普通张嘴不触发。"
+        },
+        {
+          "candidate_id": "457",
+          "action_id": "action_161_voice",
+          "source_label": "单手捂嘴惊讶",
+          "short_definition": "单手掌心捂住嘴部，眼睛同步睁大的惊讶动作。",
+          "user_reaction_expression": "用户提供意外或惊喜信息，需要较轻量的捂嘴惊讶回应时触发；不得用于打哈欠或单手捂嘴笑。",
+          "proactive_expression": "用户提供意外或惊喜信息，需要较轻量的捂嘴惊讶回应时触发；不得用于打哈欠或单手捂嘴笑。"
+        },
+        {
+          "candidate_id": "459",
+          "action_id": "action_162_voice",
+          "source_label": "摊手无奈",
+          "short_definition": "双手掌心向上摊开，肩部略耸的无奈动作。",
+          "user_reaction_expression": "无法改变结果、选项受限或用户反馈令人无奈时触发；仍有明确解决方案或用户要求具体动作时不触发。",
+          "proactive_expression": "无法改变结果、选项受限或用户反馈令人无奈时触发；仍有明确解决方案或用户要求具体动作时不触发。"
+        },
+        {
+          "candidate_id": "439",
+          "action_id": "action_163_voice",
+          "source_label": "遗憾（低头，双手自然垂下，或单手缓缓拍一下自己的额头，随后轻轻摇头）",
+          "short_definition": "低头垂手，或单手轻拍额头后摇头回应。",
+          "user_reaction_expression": "用户遭遇错过、失败或令人惋惜的结果，回复需要表达遗憾时触发；悲伤、道歉或否定有更直接动作时优先对应动作。",
+          "proactive_expression": "用户遭遇错过、失败或令人惋惜的结果，回复需要表达遗憾时触发；悲伤、道歉或否定有更直接动作时优先对应动作。"
+        }
+      ]
+    },
+    {
+      "category_id": "57",
+      "source_label": "穿戴与佩戴",
+      "short_definition": "以衣物、配饰、防护用品或背包等穿戴物为直接对象，改变、整理或展示其位置、形态或穿戴关系时选择，即使表现为触碰、抓取、拉扯或拨动也优先归本类；涵盖帽子、眼镜、口罩、背包、衣领袖口、领带围巾、已佩戴耳机、口袋、项链戒指及露肌肉造型。戴上耳机选择工具与日用品使用，调整已戴耳机选择本类；手插兜归本类，物品放入口袋归隐藏与收纳，物品从口袋取出归拿取与取出；穿着中的扣子和拉链归本类。现有“手拿鲜花叼嘴上/刁嘴上”作为本类固定造型处理。",
+      "category_path": [
+        "现实物品交互动作",
+        "穿戴与佩戴"
+      ],
+      "children": [
+        {
+          "candidate_id": "629",
+          "action_id": "action_067_voice",
+          "source_label": "扯低领口（脱衣诱惑）",
+          "short_definition": "双手捏住领口，轻拉展示衣物细节。",
+          "user_reaction_expression": "仅当成年用户明确要求“扯低领口（脱衣诱惑）”、可信会话策略允许性感/暧昧动作且无禁止约束时触发；不得根据普通赞美、外观描述或模糊亲密语义推断。",
+          "proactive_expression": "禁止主动触发；只能响应满足安全与会话策略的成年用户明确动作请求。"
+        },
+        {
+          "candidate_id": "631",
+          "action_id": "action_068_voice",
+          "source_label": "双手轻拉衬衫露出肌肉（性感暧昧）",
+          "short_definition": "双手同时拉开衣料，露出局部肌肤。",
+          "user_reaction_expression": "仅当成年用户明确要求“双手轻拉衬衫露出肌肉（性感暧昧）”、可信会话策略允许性感/暧昧动作且无禁止约束时触发；不得根据普通赞美、外观描述或模糊亲密语义推断。",
+          "proactive_expression": "禁止主动触发；只能响应满足安全与会话策略的成年用户明确动作请求。"
+        },
+        {
+          "candidate_id": "624",
+          "action_id": "action_085_voice",
+          "source_label": "单手抚胸",
+          "short_definition": "单侧手臂弯曲抬起至胸前，手掌自然张开或微曲。",
+          "user_reaction_expression": "仅在用户明确要求“单手抚胸”或明确要求模仿画面中的同一动作时使用；普通聊天不主动选择。动作要点：单侧手臂弯曲抬起至胸前，手掌自然张开或微曲。",
+          "proactive_expression": "仅在实际回复、演示任务或可信编排状态明确需要“单手抚胸”且该动作能直接完成目标时触发；不得作为普通聊天的随机伴随动作。"
+        }
+      ]
+    }
+  ],
+  "action_catalog_hash": "sha256:fb9e61fafb987c5dad16a24140b2de7a5e10d0e49a35521a601736659154a89c"
+}

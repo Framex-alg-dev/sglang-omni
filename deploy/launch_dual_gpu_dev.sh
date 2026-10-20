@@ -6,6 +6,7 @@ runtime_home=/data/fanshide/.runtime-home
 cache_root=/data/fanshide/.cache
 log_root="$runtime_home/sglang-omni-dev"
 python_bin="$project_root/.venv/bin/python3"
+action_artifact_root="${SGLANG_OMNI_ACTION_ARTIFACT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sglang_omni/serve/action_decision/assets/e67_v116}"
 gpu1_pid=""
 gpu0_pid=""
 
@@ -52,7 +53,7 @@ env \
     SGLANG_OMNI_MODEL_VERSION=e67-v116-step695-fp8 \
     SGLANG_OMNI_ACTION_DECISION_TOKEN="${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:-${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:?set an internal service token}}}" \
     SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN="${SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN:-${SGLANG_OMNI_ACTION_DECISION_TOKEN:-${SGLANG_OMNI_INTERNAL_MODEL_TOKEN:?set an internal service token}}}" \
-    SGLANG_OMNI_ACTION_ARTIFACT_ROOT=/data/xingmt/model_repo/action_prediction_model/assets/e67_v116 \
+    SGLANG_OMNI_ACTION_ARTIFACT_ROOT="$action_artifact_root" \
     "$python_bin" -m sglang_omni.cli serve \
         --config "$project_root/deploy/config_action_gpu.yaml" \
         --host 0.0.0.0 \

@@ -1,0 +1,1051 @@
+{
+  "schema_version": 1,
+  "catalog_version": "reviewed-dmd-actions-v116-20261012",
+  "candidate_count": 116,
+  "bindings": [
+    {
+      "candidate_id": "133",
+      "action_id": "action_015_voice",
+      "action_name": "左右转动椅子",
+      "video_path": "videos/action_015_voice.mp4",
+      "legacy_candidate_id": "133",
+      "source_row": 2,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "140",
+      "action_id": "action_017_voice",
+      "action_name": "看右侧（仅眼球）",
+      "video_path": "videos/action_017_voice.mp4",
+      "legacy_candidate_id": "140",
+      "source_row": 3,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "142",
+      "action_id": "action_019_voice",
+      "action_name": "看下方",
+      "video_path": "videos/action_019_voice.mp4",
+      "legacy_candidate_id": "142",
+      "source_row": 4,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "305",
+      "action_id": "action_020_voice",
+      "action_name": "握拳加油",
+      "video_path": "videos/action_020_voice.mp4",
+      "legacy_candidate_id": "305",
+      "source_row": 5,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "171",
+      "action_id": "action_021_voice",
+      "action_name": "身体后仰",
+      "video_path": "videos/action_021_voice.mp4",
+      "legacy_candidate_id": "171",
+      "source_row": 6,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "178",
+      "action_id": "action_022_voice",
+      "action_name": "上身左右摆动",
+      "video_path": "videos/action_022_voice.mp4",
+      "legacy_candidate_id": "178",
+      "source_row": 7,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "649",
+      "action_id": "action_023_voice",
+      "action_name": "打招呼手势",
+      "video_path": "videos/action_023_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 8,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "650",
+      "action_id": "action_025_voice",
+      "action_name": "魅惑探头",
+      "video_path": "videos/action_025_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 9,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "651",
+      "action_id": "action_027_voice",
+      "action_name": "嘟嘴",
+      "video_path": "videos/action_027_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 10,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "652",
+      "action_id": "action_028_voice",
+      "action_name": "宠溺眼神",
+      "video_path": "videos/action_028_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 11,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "653",
+      "action_id": "action_029_voice",
+      "action_name": "担忧",
+      "video_path": "videos/action_029_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 12,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "654",
+      "action_id": "action_030_voice",
+      "action_name": "wink",
+      "video_path": "videos/action_030_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 13,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "655",
+      "action_id": "action_033_voice",
+      "action_name": "眯眼睛笑",
+      "video_path": "videos/action_033_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 14,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "656",
+      "action_id": "action_034_voice",
+      "action_name": "坏笑",
+      "video_path": "videos/action_034_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 15,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "657",
+      "action_id": "action_035_voice",
+      "action_name": "向前探头",
+      "video_path": "videos/action_035_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 16,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "658",
+      "action_id": "action_036_voice",
+      "action_name": "闭眼睛靠近亲吻",
+      "video_path": "videos/action_036_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 17,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "225",
+      "action_id": "action_038_voice",
+      "action_name": "指向前方",
+      "video_path": "videos/action_038_voice.mp4",
+      "legacy_candidate_id": "225",
+      "source_row": 18,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "256",
+      "action_id": "action_040_voice",
+      "action_name": "搓手",
+      "video_path": "videos/action_040_voice.mp4",
+      "legacy_candidate_id": "256",
+      "source_row": 19,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "273",
+      "action_id": "action_041_voice",
+      "action_name": "双手 OK 手势",
+      "video_path": "videos/action_041_voice.mp4",
+      "legacy_candidate_id": "273",
+      "source_row": 20,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "304",
+      "action_id": "action_042_voice",
+      "action_name": "鼓掌",
+      "video_path": "videos/action_042_voice.mp4",
+      "legacy_candidate_id": "304",
+      "source_row": 21,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "331",
+      "action_id": "action_045_voice",
+      "action_name": "挠挠身体",
+      "video_path": "videos/action_045_voice.mp4",
+      "legacy_candidate_id": "331",
+      "source_row": 22,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "332",
+      "action_id": "action_046_voice",
+      "action_name": "挠眼下",
+      "video_path": "videos/action_046_voice.mp4",
+      "legacy_candidate_id": "332",
+      "source_row": 23,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "333",
+      "action_id": "action_047_voice",
+      "action_name": "单手擦眼泪",
+      "video_path": "videos/action_047_voice.mp4",
+      "legacy_candidate_id": "333",
+      "source_row": 24,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "339",
+      "action_id": "action_048_voice",
+      "action_name": "玩头发",
+      "video_path": "videos/action_048_voice.mp4",
+      "legacy_candidate_id": "339",
+      "source_row": 25,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "363",
+      "action_id": "action_053_voice",
+      "action_name": "两指捏合",
+      "video_path": "videos/action_053_voice.mp4",
+      "legacy_candidate_id": "363",
+      "source_row": 26,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "364",
+      "action_id": "action_054_voice",
+      "action_name": "手指滑动",
+      "video_path": "videos/action_054_voice.mp4",
+      "legacy_candidate_id": "364",
+      "source_row": 27,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "369",
+      "action_id": "action_055_voice",
+      "action_name": "打双引号手势",
+      "video_path": "videos/action_055_voice.mp4",
+      "legacy_candidate_id": "369",
+      "source_row": 28,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "440",
+      "action_id": "action_062_voice",
+      "action_name": "鼓励（双手握拳，屈臂举在胸前，双拳交替上下小幅度敲击两次，随后双拳同时向下用力一顿，同时重重地点一下头，眼神坚定地看向前方）",
+      "video_path": "videos/action_062_voice.mp4",
+      "legacy_candidate_id": "440",
+      "source_row": 29,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "441",
+      "action_id": "action_063_voice",
+      "action_name": "俏皮（歪头眨眼轻颠跺脚）",
+      "video_path": "videos/action_063_voice.mp4",
+      "legacy_candidate_id": "441",
+      "source_row": 30,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "443",
+      "action_id": "action_064_voice",
+      "action_name": "撒娇（低头身子摇晃，双手向前锤）",
+      "video_path": "videos/action_064_voice.mp4",
+      "legacy_candidate_id": "443",
+      "source_row": 31,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "629",
+      "action_id": "action_067_voice",
+      "action_name": "扯低领口（脱衣诱惑）",
+      "video_path": "videos/action_067_voice.mp4",
+      "legacy_candidate_id": "629",
+      "source_row": 32,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "631",
+      "action_id": "action_068_voice",
+      "action_name": "双手轻拉衬衫露出肌肉（性感暧昧）",
+      "video_path": "videos/action_068_voice.mp4",
+      "legacy_candidate_id": "631",
+      "source_row": 33,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "258",
+      "action_id": "action_069_voice",
+      "action_name": "数字一手势",
+      "video_path": "videos/action_069_voice.mp4",
+      "legacy_candidate_id": "258",
+      "source_row": 34,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "259",
+      "action_id": "action_070_voice",
+      "action_name": "数字二手势",
+      "video_path": "videos/action_070_voice.mp4",
+      "legacy_candidate_id": "259",
+      "source_row": 35,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "260",
+      "action_id": "action_071_voice",
+      "action_name": "数字三手势",
+      "video_path": "videos/action_071_voice.mp4",
+      "legacy_candidate_id": "260",
+      "source_row": 36,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "261",
+      "action_id": "action_072_voice",
+      "action_name": "数字四手势",
+      "video_path": "videos/action_072_voice.mp4",
+      "legacy_candidate_id": "261",
+      "source_row": 37,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "262",
+      "action_id": "action_073_voice",
+      "action_name": "数字五手势",
+      "video_path": "videos/action_073_voice.mp4",
+      "legacy_candidate_id": "262",
+      "source_row": 38,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "263",
+      "action_id": "action_074_voice",
+      "action_name": "数字六手势",
+      "video_path": "videos/action_074_voice.mp4",
+      "legacy_candidate_id": "263",
+      "source_row": 39,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "265",
+      "action_id": "action_075_voice",
+      "action_name": "数字八手势",
+      "video_path": "videos/action_075_voice.mp4",
+      "legacy_candidate_id": "265",
+      "source_row": 40,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "266",
+      "action_id": "action_076_voice",
+      "action_name": "数字九手势",
+      "video_path": "videos/action_076_voice.mp4",
+      "legacy_candidate_id": "266",
+      "source_row": 41,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "157",
+      "action_id": "action_077_voice",
+      "action_name": "惊讶",
+      "video_path": "videos/action_077_voice.mp4",
+      "legacy_candidate_id": "157",
+      "source_row": 42,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "155",
+      "action_id": "action_078_voice",
+      "action_name": "大笑",
+      "video_path": "videos/action_078_voice.mp4",
+      "legacy_candidate_id": "155",
+      "source_row": 43,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "272",
+      "action_id": "action_079_voice",
+      "action_name": "OK 手势",
+      "video_path": "videos/action_079_voice.mp4",
+      "legacy_candidate_id": "272",
+      "source_row": 44,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "326",
+      "action_id": "action_083_voice",
+      "action_name": "摸额头",
+      "video_path": "videos/action_083_voice.mp4",
+      "legacy_candidate_id": "326",
+      "source_row": 45,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "356",
+      "action_id": "action_084_voice",
+      "action_name": "双手捂胸口",
+      "video_path": "videos/action_084_voice.mp4",
+      "legacy_candidate_id": "356",
+      "source_row": 46,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "624",
+      "action_id": "action_085_voice",
+      "action_name": "单手抚胸",
+      "video_path": "videos/action_085_voice.mp4",
+      "legacy_candidate_id": "624",
+      "source_row": 47,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "465",
+      "action_id": "action_087_voice",
+      "action_name": "单指轻抚下巴表示思考",
+      "video_path": "videos/action_087_voice.mp4",
+      "legacy_candidate_id": "465",
+      "source_row": 48,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "438",
+      "action_id": "action_088_voice",
+      "action_name": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）",
+      "video_path": "videos/action_088_voice.mp4",
+      "legacy_candidate_id": "438",
+      "source_row": 49,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "353",
+      "action_id": "action_089_voice",
+      "action_name": "手托脸颊",
+      "video_path": "videos/action_089_voice.mp4",
+      "legacy_candidate_id": "353",
+      "source_row": 50,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "352",
+      "action_id": "action_090_voice",
+      "action_name": "侧耳倾听",
+      "video_path": "videos/action_090_voice.mp4",
+      "legacy_candidate_id": "352",
+      "source_row": 51,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "170",
+      "action_id": "action_091_voice",
+      "action_name": "身体前倾",
+      "video_path": "videos/action_091_voice.mp4",
+      "legacy_candidate_id": "170",
+      "source_row": 52,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "189",
+      "action_id": "action_092_voice",
+      "action_name": "轻微点头致意",
+      "video_path": "videos/action_092_voice.mp4",
+      "legacy_candidate_id": "189",
+      "source_row": 53,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "335",
+      "action_id": "action_093_voice",
+      "action_name": "单手摸脸",
+      "video_path": "videos/action_093_voice.mp4",
+      "legacy_candidate_id": "335",
+      "source_row": 54,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "337",
+      "action_id": "action_094_voice",
+      "action_name": "戳脸颊",
+      "video_path": "videos/action_094_voice.mp4",
+      "legacy_candidate_id": "337",
+      "source_row": 55,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "200",
+      "action_id": "action_095_voice",
+      "action_name": "伸手摸摸头",
+      "video_path": "videos/action_095_voice.mp4",
+      "legacy_candidate_id": "200",
+      "source_row": 56,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "237",
+      "action_id": "action_096_voice",
+      "action_name": "单手摊开展示",
+      "video_path": "videos/action_096_voice.mp4",
+      "legacy_candidate_id": "237",
+      "source_row": 57,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "659",
+      "action_id": "action_098_voice",
+      "action_name": "手指捏合",
+      "video_path": "videos/action_098_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 58,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "238",
+      "action_id": "action_099_voice",
+      "action_name": "双手摊开展示",
+      "video_path": "videos/action_099_voice.mp4",
+      "legacy_candidate_id": "238",
+      "source_row": 59,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "106",
+      "action_id": "action_100_voice",
+      "action_name": "放松坐姿",
+      "video_path": "videos/action_100_voice.mp4",
+      "legacy_candidate_id": "106",
+      "source_row": 60,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "660",
+      "action_id": "action_101_voice",
+      "action_name": "翻手",
+      "video_path": "videos/action_101_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 61,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "291",
+      "action_id": "action_102_voice",
+      "action_name": "双手下压强调",
+      "video_path": "videos/action_102_voice.mp4",
+      "legacy_candidate_id": "291",
+      "source_row": 62,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "661",
+      "action_id": "action_103_voice",
+      "action_name": "点头",
+      "video_path": "videos/action_103_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 63,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "662",
+      "action_id": "action_104_voice",
+      "action_name": "手指张开",
+      "video_path": "videos/action_104_voice.mp4",
+      "legacy_candidate_id": null,
+      "source_row": 64,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "302",
+      "action_id": "action_107_voice",
+      "action_name": "双手交叉拒绝",
+      "video_path": "videos/action_107_voice.mp4",
+      "legacy_candidate_id": "302",
+      "source_row": 65,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "154",
+      "action_id": "action_108_voice",
+      "action_name": "微笑",
+      "video_path": "videos/action_108_voice.mp4",
+      "legacy_candidate_id": "154",
+      "source_row": 66,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "138",
+      "action_id": "action_110_voice",
+      "action_name": "看镜头",
+      "video_path": "videos/action_110_voice.mp4",
+      "legacy_candidate_id": "138",
+      "source_row": 67,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "321",
+      "action_id": "action_112_voice",
+      "action_name": "摸喉结",
+      "video_path": "videos/action_112_voice.mp4",
+      "legacy_candidate_id": "321",
+      "source_row": 68,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "137",
+      "action_id": "action_113_voice",
+      "action_name": "低头",
+      "video_path": "videos/action_113_voice.mp4",
+      "legacy_candidate_id": "137",
+      "source_row": 69,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "462",
+      "action_id": "action_114_voice",
+      "action_name": "单手捂嘴笑",
+      "video_path": "videos/action_114_voice.mp4",
+      "legacy_candidate_id": "462",
+      "source_row": 70,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "351",
+      "action_id": "action_115_voice",
+      "action_name": "指向耳朵请听",
+      "video_path": "videos/action_115_voice.mp4",
+      "legacy_candidate_id": "351",
+      "source_row": 71,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "336",
+      "action_id": "action_116_voice",
+      "action_name": "双手摸脸",
+      "video_path": "videos/action_116_voice.mp4",
+      "legacy_candidate_id": "336",
+      "source_row": 72,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "323",
+      "action_id": "action_117_voice",
+      "action_name": "摸耳朵",
+      "video_path": "videos/action_117_voice.mp4",
+      "legacy_candidate_id": "323",
+      "source_row": 73,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "458",
+      "action_id": "action_119_voice",
+      "action_name": "双手捂嘴惊讶",
+      "video_path": "videos/action_119_voice.mp4",
+      "legacy_candidate_id": "458",
+      "source_row": 74,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "354",
+      "action_id": "action_121_voice",
+      "action_name": "双手托腮",
+      "video_path": "videos/action_121_voice.mp4",
+      "legacy_candidate_id": "354",
+      "source_row": 75,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "450",
+      "action_id": "action_125_voice",
+      "action_name": "头疼",
+      "video_path": "videos/action_125_voice.mp4",
+      "legacy_candidate_id": "450",
+      "source_row": 76,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "162",
+      "action_id": "action_126_voice",
+      "action_name": "疑惑",
+      "video_path": "videos/action_126_voice.mp4",
+      "legacy_candidate_id": "162",
+      "source_row": 77,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "160",
+      "action_id": "action_127_voice",
+      "action_name": "委屈",
+      "video_path": "videos/action_127_voice.mp4",
+      "legacy_candidate_id": "160",
+      "source_row": 78,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "289",
+      "action_id": "action_129_voice",
+      "action_name": "双手挥手",
+      "video_path": "videos/action_129_voice.mp4",
+      "legacy_candidate_id": "289",
+      "source_row": 79,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "444",
+      "action_id": "action_130_voice",
+      "action_name": "娇羞（低头双手捂脸，身体左右轻晃）",
+      "video_path": "videos/action_130_voice.mp4",
+      "legacy_candidate_id": "444",
+      "source_row": 80,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "271",
+      "action_id": "action_131_voice",
+      "action_name": "双手点赞",
+      "video_path": "videos/action_131_voice.mp4",
+      "legacy_candidate_id": "271",
+      "source_row": 81,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "347",
+      "action_id": "action_133_voice",
+      "action_name": "手指指手心",
+      "video_path": "videos/action_133_voice.mp4",
+      "legacy_candidate_id": "347",
+      "source_row": 82,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "255",
+      "action_id": "action_134_voice",
+      "action_name": "双手五指张开相对",
+      "video_path": "videos/action_134_voice.mp4",
+      "legacy_candidate_id": "255",
+      "source_row": 83,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "455",
+      "action_id": "action_136_voice",
+      "action_name": "单手捂脸无奈",
+      "video_path": "videos/action_136_voice.mp4",
+      "legacy_candidate_id": "455",
+      "source_row": 84,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "161",
+      "action_id": "action_138_voice",
+      "action_name": "悲伤",
+      "video_path": "videos/action_138_voice.mp4",
+      "legacy_candidate_id": "161",
+      "source_row": 85,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "163",
+      "action_id": "action_139_voice",
+      "action_name": "生气",
+      "video_path": "videos/action_139_voice.mp4",
+      "legacy_candidate_id": "163",
+      "source_row": 86,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "253",
+      "action_id": "action_141_voice",
+      "action_name": "单手翻手",
+      "video_path": "videos/action_141_voice.mp4",
+      "legacy_candidate_id": "253",
+      "source_row": 87,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "318",
+      "action_id": "action_142_voice",
+      "action_name": "摸脖子",
+      "video_path": "videos/action_142_voice.mp4",
+      "legacy_candidate_id": "318",
+      "source_row": 88,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "264",
+      "action_id": "action_143_voice",
+      "action_name": "数字七手势",
+      "video_path": "videos/action_143_voice.mp4",
+      "legacy_candidate_id": "264",
+      "source_row": 105,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "267",
+      "action_id": "action_144_voice",
+      "action_name": "数字十手势",
+      "video_path": "videos/action_144_voice.mp4",
+      "legacy_candidate_id": "267",
+      "source_row": 106,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "276",
+      "action_id": "action_146_voice",
+      "action_name": "脸旁比耶",
+      "video_path": "videos/action_146_voice.mp4",
+      "legacy_candidate_id": "276",
+      "source_row": 107,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "286",
+      "action_id": "action_147_voice",
+      "action_name": "头顶大爱心",
+      "video_path": "videos/action_147_voice.mp4",
+      "legacy_candidate_id": "286",
+      "source_row": 108,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "453",
+      "action_id": "action_148_voice",
+      "action_name": "亲亲镜头（凑近亲吻）",
+      "video_path": "videos/action_148_voice.mp4",
+      "legacy_candidate_id": "453",
+      "source_row": 109,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "283",
+      "action_id": "action_149_voice",
+      "action_name": "单手指心",
+      "video_path": "videos/action_149_voice.mp4",
+      "legacy_candidate_id": "283",
+      "source_row": 110,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "211",
+      "action_id": "action_150_voice",
+      "action_name": "手臂交叠",
+      "video_path": "videos/action_150_voice.mp4",
+      "legacy_candidate_id": "211",
+      "source_row": 111,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "277",
+      "action_id": "action_152_voice",
+      "action_name": "双手脸旁比耶",
+      "video_path": "videos/action_152_voice.mp4",
+      "legacy_candidate_id": "277",
+      "source_row": 112,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "348",
+      "action_id": "action_153_voice",
+      "action_name": "咬手指",
+      "video_path": "videos/action_153_voice.mp4",
+      "legacy_candidate_id": "348",
+      "source_row": 113,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "324",
+      "action_id": "action_154_voice",
+      "action_name": "摸耳后",
+      "video_path": "videos/action_154_voice.mp4",
+      "legacy_candidate_id": "324",
+      "source_row": 114,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "375",
+      "action_id": "action_156_voice",
+      "action_name": "食指左右摇摆否定",
+      "video_path": "videos/action_156_voice.mp4",
+      "legacy_candidate_id": "375",
+      "source_row": 115,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "442",
+      "action_id": "action_159_voice",
+      "action_name": "卖萌（双手猫爪托腮歪头）",
+      "video_path": "videos/action_159_voice.mp4",
+      "legacy_candidate_id": "442",
+      "source_row": 116,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "449",
+      "action_id": "action_160_voice",
+      "action_name": "打哈欠（单手捂嘴身体后仰）",
+      "video_path": "videos/action_160_voice.mp4",
+      "legacy_candidate_id": "449",
+      "source_row": 117,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "457",
+      "action_id": "action_161_voice",
+      "action_name": "单手捂嘴惊讶",
+      "video_path": "videos/action_161_voice.mp4",
+      "legacy_candidate_id": "457",
+      "source_row": 118,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "459",
+      "action_id": "action_162_voice",
+      "action_name": "摊手无奈",
+      "video_path": "videos/action_162_voice.mp4",
+      "legacy_candidate_id": "459",
+      "source_row": 119,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "439",
+      "action_id": "action_163_voice",
+      "action_name": "遗憾（低头，双手自然垂下，或单手缓缓拍一下自己的额头，随后轻轻摇头）",
+      "video_path": "videos/action_163_voice.mp4",
+      "legacy_candidate_id": "439",
+      "source_row": 120,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "127",
+      "action_id": "action_167_voice",
+      "action_name": "跳跃",
+      "video_path": "videos/action_167_voice.mp4",
+      "legacy_candidate_id": "127",
+      "source_row": 121,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "174",
+      "action_id": "action_170_voice",
+      "action_name": "上身左倾",
+      "video_path": "videos/action_170_voice.mp4",
+      "legacy_candidate_id": "174",
+      "source_row": 122,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "175",
+      "action_id": "action_171_voice",
+      "action_name": "上身右倾",
+      "video_path": "videos/action_171_voice.mp4",
+      "legacy_candidate_id": "175",
+      "source_row": 123,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "176",
+      "action_id": "action_172_voice",
+      "action_name": "上身左转",
+      "video_path": "videos/action_172_voice.mp4",
+      "legacy_candidate_id": "176",
+      "source_row": 124,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "177",
+      "action_id": "action_173_voice",
+      "action_name": "上身右转",
+      "video_path": "videos/action_173_voice.mp4",
+      "legacy_candidate_id": "177",
+      "source_row": 125,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "190",
+      "action_id": "action_174_voice",
+      "action_name": "正式鞠躬",
+      "video_path": "videos/action_174_voice.mp4",
+      "legacy_candidate_id": "190",
+      "source_row": 126,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "307",
+      "action_id": "action_176_voice",
+      "action_name": "振臂欢呼",
+      "video_path": "videos/action_176_voice.mp4",
+      "legacy_candidate_id": "307",
+      "source_row": 127,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "345",
+      "action_id": "action_177_voice",
+      "action_name": "手摸脚踝",
+      "video_path": "videos/action_177_voice.mp4",
+      "legacy_candidate_id": "345",
+      "source_row": 128,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "376",
+      "action_id": "action_178_voice",
+      "action_name": "双脚自然站立",
+      "video_path": "videos/action_178_voice.mp4",
+      "legacy_candidate_id": "376",
+      "source_row": 129,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "378",
+      "action_id": "action_179_voice",
+      "action_name": "双脚分开站立",
+      "video_path": "videos/action_179_voice.mp4",
+      "legacy_candidate_id": "378",
+      "source_row": 130,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "382",
+      "action_id": "action_183_voice",
+      "action_name": "单腿向前提膝",
+      "video_path": "videos/action_183_voice.mp4",
+      "legacy_candidate_id": "382",
+      "source_row": 131,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "395",
+      "action_id": "action_198_voice",
+      "action_name": "全蹲",
+      "video_path": "videos/action_198_voice.mp4",
+      "legacy_candidate_id": "395",
+      "source_row": 132,
+      "source_review_result": "符合"
+    },
+    {
+      "candidate_id": "405",
+      "action_id": "action_209_voice",
+      "action_name": "引导向前",
+      "video_path": "videos/action_209_voice.mp4",
+      "legacy_candidate_id": "405",
+      "source_row": 133,
+      "source_review_result": "符合"
+    }
+  ]
+}

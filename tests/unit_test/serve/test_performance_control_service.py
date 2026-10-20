@@ -94,6 +94,35 @@ def test_performance_control_reuses_staging_expression_and_tts_policy() -> None:
     assert model.requests[0].session_instance_id == "performance:session-1"
 
 
+def test_performance_uses_generation_intent_without_redefining_obligation() -> None:
+    model = _Client()
+    payload = _payload()
+    payload["performance_intent"] = {
+        "response_purpose": "解释事实，克制表达",
+        "reply_mode": "normal_turn",
+        "voice_style": "平静自然",
+        "required_behavior_contract": "body",
+    }
+    response = TestClient(_app(model)).post(
+        "/v1/performance-control", headers={"Authorization": "Bearer secret"}, json=payload,
+    )
+    assert response.status_code == 200
+    assert "performance_intent" in model.requests[0].current_text
+    assert "解释事实，克制表达" in model.requests[0].current_text
+    assert "不得重新定义 REQUIRED" in model.requests[0].system_prompt
+
+
+def test_performance_cache_fences_are_strict_integers() -> None:
+    client = TestClient(_app(_Client()))
+    for key in ("identity_epoch", "input_revision"):
+        for invalid in (True, "1", 1.0, -1):
+            payload = _payload()
+            payload[key] = invalid
+            response = client.post("/v1/performance-control",
+                                   headers={"Authorization": "Bearer secret"}, json=payload)
+            assert response.status_code == 422
+
+
 def test_performance_control_requires_its_private_token() -> None:
     response = TestClient(_app(_Client())).post(
         "/v1/performance-control",
