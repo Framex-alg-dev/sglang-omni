@@ -28,7 +28,12 @@ class _Model:
         return self.output
 
 
-def _request(text: str = "帮我订明天的火车票") -> TaskClassificationRequest:
+def _request(
+    text: str = "帮我订明天的火车票",
+    *,
+    router_profile: str = "v1.0",
+    has_active_agent: bool = False,
+) -> TaskClassificationRequest:
     return TaskClassificationRequest(
         request_id="request-1",
         session_id="session-1",
@@ -37,6 +42,8 @@ def _request(text: str = "帮我订明天的火车票") -> TaskClassificationReq
         input_revision=4,
         text=text,
         media=(),
+        router_profile=router_profile,
+        has_active_agent=has_active_agent,
     )
 
 
@@ -68,9 +75,50 @@ async def test_maps_the_four_codes_to_capability_requirements(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raw", ["", "4", " 1", "1\n", "direct", '{"route":1}'])
 async def test_rejects_everything_except_one_exact_code(raw: str) -> None:
-    with pytest.raises(InvalidRouteOutput, match="exactly one of 0, 1, 2, or 3"):
+    with pytest.raises(InvalidRouteOutput, match="exactly one of 0, 1, 2, 3"):
         await TaskClassificationPipeline(_Model(raw)).classify(_request())
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "needs_multimodal"),
+    [("4", False), ("5", True)],
+)
+async def test_v11_accepts_active_task_relation_codes(
+    raw: str, needs_multimodal: bool
+) -> None:
+    result = await TaskClassificationPipeline(_Model(raw)).classify(
+        _request(router_profile="v1.1")
+    )
+    assert result.route_code == int(raw)
+    assert result.needs_mcp is True
+    assert result.needs_multimodal is needs_multimodal
+    assert result.route_token is RouteToken.DELEGATE
+
+
+@pytest.mark.asyncio
+async def test_v12_accepts_continue_only_with_active_task() -> None:
+    result = await TaskClassificationPipeline(_Model("4")).classify(
+        _request(router_profile="v1.2", has_active_agent=True)
+    )
+    assert result.route_code == 4
+
+
+@pytest.mark.asyncio
+async def test_v12_rejects_continue_without_active_task() -> None:
+    with pytest.raises(InvalidRouteOutput, match="requires an active MCP task"):
+        await TaskClassificationPipeline(_Model("4")).classify(
+            _request(router_profile="v1.2")
+        )
+
+
+@pytest.mark.asyncio
+async def test_v10_rejects_v11_relation_codes() -> None:
+    with pytest.raises(InvalidRouteOutput, match="exactly one of 0, 1, 2, 3"):
+        await TaskClassificationPipeline(_Model("4")).classify(
+            _request(router_profile="v1.0")
+        )
 
 @pytest.mark.asyncio
 async def test_legacy_locale_is_derived_outside_model_authority() -> None:

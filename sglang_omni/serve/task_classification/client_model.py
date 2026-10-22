@@ -1,4 +1,4 @@
-"""Prompted Router v0.9 adapter backed by the local SGLang Omni client."""
+"""Prompted turn-router adapter backed by the local SGLang Omni client."""
 
 from __future__ import annotations
 
@@ -12,14 +12,12 @@ from typing import Any, Protocol
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.profiler.decision_timing import emit_decision_timing
 
-from .contracts import ClassificationMediaRef, TaskClassificationRequest
-from .prompt_v09 import (
-    DEFAULT_MCP_SCOPE,
-    DEFAULT_MULTIMODAL_SCOPE,
-    SINGLE_TURN_SYSTEM_PROMPT,
-    SYSTEM_PROMPT,
-    build_user_prompt,
-    normalize_history,
+from . import prompt_v09, prompt_v10, prompt_v11, prompt_v12
+from .contracts import (
+    DEFAULT_ROUTER_PROFILE,
+    SUPPORTED_ROUTER_PROFILES,
+    ClassificationMediaRef,
+    TaskClassificationRequest,
 )
 
 
@@ -34,7 +32,7 @@ class CompletionClient(Protocol):
 
 
 class SglangClientTaskClassificationModel:
-    """Classify one text or raw-audio turn with Router v0.9."""
+    """Classify one text or raw-audio turn with the selected Router profile."""
 
     def __init__(
         self,
@@ -51,18 +49,31 @@ class SglangClientTaskClassificationModel:
 
     async def classify(self, request: TaskClassificationRequest) -> str:
         audio = request.media[0] if request.media else None
-        history = normalize_history(request.router_history)
+        prompt = _prompt_contract(request.router_profile)
+        history = prompt.normalize_history(request.router_history)
         query_mode = "audio" if audio is not None else "text"
-        content = build_user_prompt(
+        prompt_kwargs = dict(
             query_mode=query_mode,
             text=request.text,
             history=history,
-            mcp_scope=DEFAULT_MCP_SCOPE,
-            multimodal_scope=DEFAULT_MULTIMODAL_SCOPE,
+            mcp_scope=prompt.DEFAULT_MCP_SCOPE,
+            multimodal_scope=prompt.DEFAULT_MULTIMODAL_SCOPE,
             has_active_agent=request.has_active_agent,
             pending_confirmation=request.pending_confirmation,
             follow_up_required=request.follow_up_required,
         )
+        if request.router_profile in {"v1.1", "v1.2"}:
+            prompt_kwargs.update(
+                active_task_goal=request.active_task_goal,
+                active_task_status=request.active_task_status,
+            )
+        if request.router_profile == "v1.2":
+            prompt_kwargs.update(
+                active_task_family=request.active_task_family,
+                active_task_phase=request.active_task_phase,
+                active_task_awaiting_input=request.active_task_awaiting_input,
+            )
+        content = prompt.build_user_prompt(**prompt_kwargs)
         metadata = self._metadata(request)
         if audio is not None:
             media_started = time.perf_counter()
@@ -108,15 +119,30 @@ class SglangClientTaskClassificationModel:
             messages=[
                 Message(
                     role="system",
-                    content=(SYSTEM_PROMPT if history else SINGLE_TURN_SYSTEM_PROMPT),
+                    content=(
+                        prompt.SYSTEM_PROMPT
+                        if history
+                        else prompt.SINGLE_TURN_SYSTEM_PROMPT
+                    ),
                 ),
                 Message(role="user", content=content),
             ],
-            sampling=SamplingParams(
-                temperature=0.0,
-                top_p=1.0,
-                max_new_tokens=1,
-                stop=["\n"],
+            sampling=(
+                SamplingParams(
+                    temperature=0.0,
+                    top_p=1.0,
+                    max_new_tokens=1,
+                    stop=["\n"],
+                    seed=0,
+                    regex=("[0-5]" if request.has_active_agent else "[0-3]"),
+                )
+                if request.router_profile == "v1.2"
+                else SamplingParams(
+                    temperature=0.0,
+                    top_p=1.0,
+                    max_new_tokens=1,
+                    stop=["\n"],
+                )
             ),
             stream=False,
             max_tokens=1,
@@ -176,48 +202,69 @@ class SglangClientTaskClassificationModel:
         return str(result.text)
 
     async def prewarm(self) -> None:
-        """Populate both Router prefixes and verify their route invariants."""
+        """Populate every supported prompt prefix and verify route invariants."""
 
-        direct = await self.classify(
-            TaskClassificationRequest(
-                request_id="turn-router-prewarm",
-                session_id="turn-router-prewarm",
-                turn_id="turn-router-prewarm",
-                identity_epoch=0,
-                input_revision=0,
-                text="你好",
-                media=(),
+        for router_profile in SUPPORTED_ROUTER_PROFILES:
+            direct = await self.classify(
+                TaskClassificationRequest(
+                    request_id=f"turn-router-{router_profile}-prewarm",
+                    session_id="turn-router-prewarm",
+                    turn_id=f"turn-router-{router_profile}-prewarm",
+                    identity_epoch=0,
+                    input_revision=0,
+                    text="你好",
+                    media=(),
+                    router_profile=router_profile,
+                )
             )
-        )
-        if direct != "0":
-            raise RuntimeError(
-                "turn-router prewarm expected ordinary conversation to route 0, "
-                f"got {direct!r}"
-            )
+            if direct != "0":
+                raise RuntimeError(
+                    "turn-router prewarm expected ordinary conversation to route 0, "
+                    f"got {direct!r} for {router_profile}"
+                )
 
-        delegate = await self.classify(
-            TaskClassificationRequest(
-                request_id="turn-router-multi-turn-prewarm",
-                session_id="turn-router-prewarm",
-                turn_id="turn-router-multi-turn-prewarm",
-                identity_epoch=0,
-                input_revision=0,
-                text="继续",
-                media=(),
-                router_history=({
-                    "role": "assistant",
-                    "text": "需要我查询当前天气吗？",
-                    "playback_status": "completed",
-                },),
-                has_active_agent=True,
-                follow_up_required=True,
+            delegate = await self.classify(
+                TaskClassificationRequest(
+                    request_id=f"turn-router-{router_profile}-multi-turn-prewarm",
+                    session_id="turn-router-prewarm",
+                    turn_id=f"turn-router-{router_profile}-multi-turn-prewarm",
+                    identity_epoch=0,
+                    input_revision=0,
+                    text="继续",
+                    media=(),
+                    router_history=({
+                        "role": "assistant",
+                        "text": "需要我查询当前天气吗？",
+                        "playback_status": "completed",
+                    },),
+                    has_active_agent=True,
+                    follow_up_required=True,
+                    active_task_goal="查询当前天气",
+                    active_task_status="waiting_user",
+                    active_task_family="weather",
+                    active_task_phase="waiting_user",
+                    active_task_awaiting_input="details",
+                    router_profile=router_profile,
+                )
             )
-        )
-        if delegate != "1":
-            raise RuntimeError(
-                "turn-router prewarm expected an inherited MCP request to route 1, "
-                f"got {delegate!r}"
+            expected_delegate = (
+                "4" if router_profile in {"v1.1", "v1.2"} else "1"
             )
+            if delegate != expected_delegate:
+                raise RuntimeError(
+                    "turn-router prewarm expected an inherited MCP request to route "
+                    f"{expected_delegate}, "
+                    f"got {delegate!r} for {router_profile}"
+                )
+
+    def model_version_for(self, request: TaskClassificationRequest) -> str:
+        if request.router_profile == DEFAULT_ROUTER_PROFILE:
+            return self.model_version
+        suffix = f"-{DEFAULT_ROUTER_PROFILE}"
+        if self.model_version.endswith(suffix):
+            prefix = self.model_version[: -len(DEFAULT_ROUTER_PROFILE)]
+            return prefix + request.router_profile
+        return f"{self.model_version}+prompt-{request.router_profile}"
 
     def _metadata(
         self,
@@ -237,12 +284,29 @@ class SglangClientTaskClassificationModel:
             "identity_epoch": request.identity_epoch,
             "input_revision": request.input_revision,
             "model": self.model_id,
-            "model_version": self.model_version,
-            "prefix_cache_namespace": "turn-router:v09",
+            "model_version": self.model_version_for(request),
+            "router_profile": request.router_profile,
+            "prefix_cache_namespace": _prefix_namespace(request.router_profile),
             "cache_static_system_only": True,
             "stage": "router",
             "admission_priority": 0,
         }
+
+
+def _prompt_contract(router_profile: str) -> Any:
+    if router_profile == "v1.2":
+        return prompt_v12
+    if router_profile == "v1.1":
+        return prompt_v11
+    if router_profile == "v1.0":
+        return prompt_v10
+    if router_profile == "v0.9":
+        return prompt_v09
+    raise ValueError("unsupported turn-router profile")
+
+
+def _prefix_namespace(router_profile: str) -> str:
+    return f"turn-router:{router_profile.replace('.', '')}"
 
 
 def _audio_data_url(media: ClassificationMediaRef) -> str:

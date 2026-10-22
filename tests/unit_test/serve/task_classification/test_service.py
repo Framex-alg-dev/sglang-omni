@@ -53,7 +53,36 @@ def test_requires_the_exact_request_contract() -> None:
 
     assert parsed.brain1_capabilities == DEFAULT_BRAIN1_CAPABILITIES
     assert parsed.brain2_capabilities == DEFAULT_BRAIN2_CAPABILITIES
+    assert parsed.router_profile == "v1.0"
+    assert parsed.active_task_goal is None
+    assert parsed.active_task_status is None
     assert "曲库查询" in parsed.brain2_capabilities
+    raw["router_profile"] = "v0.9"
+    assert _request_from_json(raw).router_profile == "v0.9"
+    raw["router_profile"] = "v1.1"
+    raw["active_task_goal"] = "查询天气"
+    raw["active_task_status"] = "waiting_user"
+    parsed_v11 = _request_from_json(raw)
+    assert parsed_v11.router_profile == "v1.1"
+    assert parsed_v11.active_task_goal == "查询天气"
+    assert parsed_v11.active_task_status == "waiting_user"
+    raw["router_profile"] = "v1.2"
+    raw["active_task_family"] = "weather"
+    raw["active_task_phase"] = "waiting_user"
+    raw["active_task_awaiting_input"] = "details"
+    parsed_v12 = _request_from_json(raw)
+    assert parsed_v12.router_profile == "v1.2"
+    assert parsed_v12.active_task_family == "weather"
+    assert parsed_v12.active_task_phase == "waiting_user"
+    assert parsed_v12.active_task_awaiting_input == "details"
+    raw["router_profile"] = "unknown"
+    try:
+        _request_from_json(raw)
+    except ValueError as exc:
+        assert str(exc) == "unsupported turn-router profile"
+    else:
+        raise AssertionError("unknown router profiles must be rejected")
+    raw["router_profile"] = "v0.9"
     raw.pop("brain2_capabilities")
     try:
         _request_from_json(raw)

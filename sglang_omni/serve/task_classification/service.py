@@ -23,6 +23,8 @@ from sglang_omni.serve.streaming_request import (
 
 from .contracts import (
     CONTRACT_VERSION,
+    DEFAULT_ROUTER_PROFILE,
+    SUPPORTED_ROUTER_PROFILES,
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
@@ -73,6 +75,8 @@ def create_task_classification_app(
                 "ok": True,
                 "contract": f"turn-router.v{CONTRACT_VERSION}",
                 "contract_version": CONTRACT_VERSION,
+                "router_profiles": list(SUPPORTED_ROUTER_PROFILES),
+                "default_router_profile": DEFAULT_ROUTER_PROFILE,
             }
         )
 
@@ -257,6 +261,7 @@ def _timing_metadata(request: TaskClassificationRequest) -> dict[str, Any]:
         "input_revision": request.input_revision,
         "audio_count": len(request.media),
         "media_count": len(request.media),
+        "router_profile": request.router_profile,
         "stage": "router",
     }
 
@@ -353,7 +358,14 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         "pending_confirmation",
         "follow_up_required",
     }
-    if set(raw) != required_fields:
+    optional_fields = {
+        "router_profile",
+        "active_task_goal",
+        "active_task_status",
+    }
+    if not required_fields.issubset(raw) or not set(raw).issubset(
+        required_fields | optional_fields
+    ):
         raise ValueError("turn-router request fields are invalid")
     media_raw = raw["media"]
     if not isinstance(media_raw, list):
@@ -377,6 +389,13 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         has_active_agent=_boolean(raw, "has_active_agent"),
         pending_confirmation=_boolean(raw, "pending_confirmation"),
         follow_up_required=_boolean(raw, "follow_up_required"),
+        active_task_goal=_optional_string(raw, "active_task_goal"),
+        active_task_status=_optional_string(raw, "active_task_status"),
+        router_profile=(
+            _string(raw, "router_profile")
+            if "router_profile" in raw
+            else DEFAULT_ROUTER_PROFILE
+        ),
         contract_version=_integer(raw, "contract_version"),
     )
 

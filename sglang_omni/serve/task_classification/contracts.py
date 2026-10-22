@@ -10,6 +10,8 @@ from typing import Any
 
 
 CONTRACT_VERSION = 6
+DEFAULT_ROUTER_PROFILE = "v1.0"
+SUPPORTED_ROUTER_PROFILES = ("v1.0", "v0.9", "v1.1", "v1.2")
 DEFAULT_BRAIN1_CAPABILITIES = (
     "普通聊天、简单问答、计算、下游用户视频理解；"
     "不处理应用能力、曲库或媒体播放查询"
@@ -70,6 +72,8 @@ ROUTE_CODE_REQUIREMENTS = {
     1: (True, False),
     2: (False, True),
     3: (True, True),
+    4: (True, False),
+    5: (True, True),
 }
 
 
@@ -171,6 +175,12 @@ class TaskClassificationRequest:
     has_active_agent: bool = False
     pending_confirmation: bool = False
     follow_up_required: bool = False
+    active_task_goal: str | None = None
+    active_task_status: str | None = None
+    active_task_family: str | None = None
+    active_task_phase: str | None = None
+    active_task_awaiting_input: str | None = None
+    router_profile: str = DEFAULT_ROUTER_PROFILE
     contract_version: int = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -181,6 +191,17 @@ class TaskClassificationRequest:
             raise ValueError("turn-router revisions must be non-negative")
         if self.contract_version != CONTRACT_VERSION:
             raise ValueError("unsupported turn-router contract version")
+        if self.router_profile not in SUPPORTED_ROUTER_PROFILES:
+            raise ValueError("unsupported turn-router profile")
+        for name, value in (
+            ("active_task_goal", self.active_task_goal),
+            ("active_task_status", self.active_task_status),
+            ("active_task_family", self.active_task_family),
+            ("active_task_phase", self.active_task_phase),
+            ("active_task_awaiting_input", self.active_task_awaiting_input),
+        ):
+            if value is not None and not value.strip():
+                raise ValueError(f"{name} cannot be blank")
         has_text = bool((self.text or "").strip())
         if has_text == bool(self.media):
             raise ValueError("turn-router request needs exactly one of text or audio")
@@ -223,7 +244,7 @@ class TaskClassificationResult:
         ):
             _required(name, value)
         if self.route_code not in ROUTE_CODE_REQUIREMENTS:
-            raise ValueError("turn-router code must be 0, 1, 2, or 3")
+            raise ValueError("turn-router code must be 0, 1, 2, 3, 4, or 5")
         expected_mcp, expected_multimodal = ROUTE_CODE_REQUIREMENTS[self.route_code]
         if (self.needs_mcp, self.needs_multimodal) != (
             expected_mcp,

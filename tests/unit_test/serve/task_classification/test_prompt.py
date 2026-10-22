@@ -33,6 +33,14 @@ def test_v09_prompt_uses_rule_only_capability_scope() -> None:
     assert "证据不足时必须为 0" in SINGLE_TURN_SYSTEM_PROMPT
     assert "社交性对话、寒暄、问候" in SINGLE_TURN_SYSTEM_PROMPT
     assert "短句不能仅因语义不完整" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "这、这个、这些、这样、这种" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "没有在当前文本或历史中被唯一明确给出" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "不得降级为纯文本" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "待计算操作数" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "不得把指示表达本身视为已经给出了实体或数值" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "没有文本或历史先行词的裸指示表达默认指向用户当前摄像头画面" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "计算、比较、选择或组合关系" in SINGLE_TURN_SYSTEM_PROMPT
+    assert "不能当成已经知道内容的文本操作数" in SINGLE_TURN_SYSTEM_PROMPT
 
 
 def test_prompt_requires_exact_single_character_output() -> None:
@@ -50,6 +58,9 @@ def test_prompt_requires_exact_single_character_output() -> None:
     assert "应输出 3 而不是 2" in str(parts)
     assert "明确限定在过去或假设的愿望" in str(parts)
     assert "仅评价能力或功能本身" in str(parts)
+    assert "不得按纯文本任务处理" in str(parts)
+    assert "裸指示表达之间存在计算、比较、选择或组合关系" in str(parts)
+    assert "不能当成已知文本操作数" in str(parts)
     assert "MULTI_TURN_STATE_MACHINE" not in str(parts)
     assert "TRANSITION_TABLE" not in str(parts)
 

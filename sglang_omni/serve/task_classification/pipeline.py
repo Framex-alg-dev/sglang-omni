@@ -1,4 +1,4 @@
-"""Strict four-code capability routing pipeline around model-1."""
+"""Strict profile-aware capability routing pipeline around model-1."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from .contracts import (
     BrainRoute,
     MediaDirective,
     OutputDirective,
+    ROUTE_CODE_REQUIREMENTS,
     RouteToken,
     TaskClassificationRequest,
     TaskClassificationResult,
@@ -30,7 +31,7 @@ class InvalidRouteOutput(ValueError):
 
 
 class TaskClassificationPipeline:
-    """Enforce Router v0.7's exact one-character output vocabulary."""
+    """Enforce each Router profile's exact one-character output vocabulary."""
 
     def __init__(self, model: TaskClassificationModel) -> None:
         self._model = model
@@ -45,13 +46,32 @@ class TaskClassificationPipeline:
         request: TaskClassificationRequest,
     ) -> TaskClassificationResult:
         raw = await self._model.classify(request)
-        if raw not in {"0", "1", "2", "3"}:
+        version_resolver = getattr(self._model, "model_version_for", None)
+        model_version = (
+            version_resolver(request)
+            if callable(version_resolver)
+            else self._model.model_version
+        )
+        allowed = (
+            {"0", "1", "2", "3", "4", "5"}
+            if request.router_profile in {"v1.1", "v1.2"}
+            else {"0", "1", "2", "3"}
+        )
+        if raw not in allowed:
+            vocabulary = ", ".join(sorted(allowed))
             raise InvalidRouteOutput(
-                "turn-router model must output exactly one of 0, 1, 2, or 3"
+                f"turn-router model must output exactly one of {vocabulary}"
             )
         route_code = int(raw)
-        needs_mcp = bool(route_code & 1)
-        needs_multimodal = bool(route_code & 2)
+        if (
+            request.router_profile == "v1.2"
+            and route_code in {4, 5}
+            and not request.has_active_agent
+        ):
+            raise InvalidRouteOutput(
+                "turn-router continuation code requires an active MCP task"
+            )
+        needs_mcp, needs_multimodal = ROUTE_CODE_REQUIREMENTS[route_code]
         route_token = RouteToken.DELEGATE if needs_mcp else RouteToken.DIRECT
         route = BrainRoute.BRAIN2 if needs_mcp else BrainRoute.BRAIN1
         try:
@@ -72,7 +92,7 @@ class TaskClassificationPipeline:
                 response_locale=_response_locale(request.text),
                 request_cue=None,
                 model_id=self._model.model_id,
-                model_version=self._model.model_version,
+                model_version=model_version,
             )
         except ValueError as exc:
             raise InvalidRouteOutput(

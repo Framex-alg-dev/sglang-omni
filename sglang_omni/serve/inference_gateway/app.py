@@ -365,7 +365,11 @@ class _Session:
             if (
                 self.config.adaptive_plain_reply_speech
                 and speech_speculation[5]
-                in {"plain", "plain_with_user_turn_v1"}
+                in {
+                    "plain",
+                    "plain_with_user_turn_v1",
+                    "plain_with_user_transcript_v2",
+                }
                 and self.reply_speech is not None
             ):
                 self._open_adaptive_speculation(
@@ -415,6 +419,7 @@ class _Session:
             "plain",
             "reply_envelope_v1",
             "plain_with_user_turn_v1",
+            "plain_with_user_transcript_v2",
         }:
             raise ValueError("speech speculation text_mode is unsupported")
         if (
@@ -1361,7 +1366,12 @@ class _Session:
                 )
                 if speech_speculation is not None
                 and self.config.adaptive_plain_reply_speech
-                and speech_speculation[5] in {"plain", "plain_with_user_turn_v1"}
+                and speech_speculation[5]
+                in {
+                    "plain",
+                    "plain_with_user_turn_v1",
+                    "plain_with_user_transcript_v2",
+                }
                 and self.reply_speech is not None
                 else None
             )
@@ -1643,11 +1653,18 @@ class _ReplySpeechTextExtractor:
     def __init__(self, mode: str) -> None:
         self._mode = mode
         self._buffer = ""
-        self._started = mode in {"plain", "plain_with_user_turn_v1"}
+        self._started = mode in {
+            "plain",
+            "plain_with_user_turn_v1",
+            "plain_with_user_transcript_v2",
+        }
         self._stopped = False
 
     def feed(self, delta: str) -> tuple[str, ...]:
-        if self._mode == "plain_with_user_turn_v1":
+        if self._mode in {
+            "plain_with_user_turn_v1",
+            "plain_with_user_transcript_v2",
+        }:
             return self._feed_visible_before_metadata(delta)
         if self._started:
             return (delta,) if delta else ()
@@ -1675,7 +1692,10 @@ class _ReplySpeechTextExtractor:
     def finish(self) -> tuple[str, ...]:
         if self._mode == "reply_envelope_v1" and not self._started:
             raise ValueError("reply speech envelope did not contain a text marker")
-        if self._mode == "plain_with_user_turn_v1" and self._stopped:
+        if self._mode in {
+            "plain_with_user_turn_v1",
+            "plain_with_user_transcript_v2",
+        } and self._stopped:
             return ()
         if self._started and self._buffer:
             value = self._buffer
@@ -1686,7 +1706,11 @@ class _ReplySpeechTextExtractor:
     def _feed_visible_before_metadata(self, delta: str) -> tuple[str, ...]:
         if self._stopped or not delta:
             return ()
-        marker = "<<USER_TURN_TEXT>>"
+        marker = (
+            "<user_transcript>"
+            if self._mode == "plain_with_user_transcript_v2"
+            else "<<USER_TURN_TEXT>>"
+        )
         self._buffer += delta
         marker_index = self._buffer.find(marker)
         if marker_index >= 0:

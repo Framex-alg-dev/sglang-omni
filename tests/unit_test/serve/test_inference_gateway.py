@@ -149,6 +149,16 @@ def test_reply_speech_excludes_trailing_user_turn_metadata() -> None:
     assert extractor.finish() == ()
 
 
+def test_reply_speech_excludes_xml_user_transcript_metadata() -> None:
+    extractor = gateway_module._ReplySpeechTextExtractor(
+        "plain_with_user_transcript_v2"
+    )
+
+    assert extractor.feed("好的，我不说了。\n<user_trans") == ("好的，我不说了。",)
+    assert extractor.feed("cript>\n闭嘴\n</user_transcript>") == ()
+    assert extractor.finish() == ()
+
+
 def test_reply_speech_segmenter_keeps_short_text_whole() -> None:
     segmenter = gateway_module._ReplySpeechSegmenter(max_chars=12)
 
