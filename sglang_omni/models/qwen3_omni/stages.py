@@ -992,7 +992,9 @@ def create_image_encoder_executor(
     cache = StageOutputCache(
         max_size=QWEN3_ENCODER_CACHE_MAX_ENTRIES,
         max_bytes=QWEN3_ENCODER_CACHE_MAX_BYTES,
-        cache_device="cpu",
+        # Keep visual features on the encoder device to avoid blocking D2H
+        # copies of the main embedding and three DeepStack feature tensors.
+        cache_device=device,
         ttl_seconds=60,
         max_owner_bytes=512 << 20,
         owner_fn=lambda key: key.rsplit("|owner=", 1)[-1] if "|owner=" in key else None,
