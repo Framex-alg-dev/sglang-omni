@@ -1267,6 +1267,25 @@ def test_chat_request_does_not_mark_null_sampling_params_explicit() -> None:
     assert EXPLICIT_GENERATION_PARAMS_KEY not in gen_req.metadata
 
 
+def test_chat_request_propagates_compact_reply_grammar() -> None:
+    grammar = r"(1[NBEA]\n[\s\S]+|0[BEA]\n?)"
+    request = ChatCompletionRequest(
+        messages=[{"role": "user", "content": "hello"}], regex=grammar,
+    )
+    generated = _build_chat_generate_request(request)
+    assert generated.sampling.to_dict()["regex"] == grammar
+    assert generated.sampling.json_schema is None
+
+
+def test_chat_request_rejects_conflicting_output_grammars() -> None:
+    request = ChatCompletionRequest(
+        messages=[{"role": "user", "content": "hello"}], regex="1N",
+        response_format={"type": "json_object"},
+    )
+    with pytest.raises(ValueError, match="cannot both constrain"):
+        _build_chat_generate_request(request)
+
+
 def test_chat_request_propagates_strict_json_schema_to_sampling() -> None:
     schema = {
         "type": "object",
@@ -2232,3 +2251,22 @@ def test_stub_endpoint_checks_auth_before_501() -> None:
 
     resp = client.post("/update_weights_from_tensor", json={})
     assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("role", ["committed_reply", "speculative_reply", "tool_transition"])
+def test_reply_workload_class_reaches_the_runtime_admission(role):
+    request = ChatCompletionRequest(
+        model="qwen3-omni", messages=[{"role": "user", "content": "hi"}],
+        runtime_workload_class=role,
+    )
+    generated = _build_chat_generate_request(request)
+    assert generated.metadata["runtime_workload_class"] == role
+    assert "runtime_workload_class" not in request.model_dump()
+
+
+def test_unknown_reply_workload_class_is_rejected():
+    with pytest.raises(ValueError):
+        ChatCompletionRequest(
+            model="qwen3-omni", messages=[{"role": "user", "content": "hi"}],
+            runtime_workload_class="unregistered_workload",
+        )

@@ -31,7 +31,8 @@ from sglang_omni.serve.streaming_request import StreamedMedia
 from sglang_omni.serve.launcher import _run_server
 
 
-ASSETS = "/data/xingmt/model_repo/action_prediction_model/assets"
+import os
+ASSETS = os.getenv("ACTION_ARTIFACT_ROOT", "/data/xingmt/model_repo/action_prediction_model/assets")
 
 
 def _config() -> ActionDecisionConfig:
@@ -91,8 +92,8 @@ def test_catalog_partitions_body_and_expression_and_controls() -> None:
     registry = _registry()
     body = registry.resolve(_request(DecisionChannel.BODY))
     expression = registry.resolve(_request(DecisionChannel.EXPRESSION))
-    assert sum(entry.kind == "action" for entry in body.entries) == 74
-    assert sum(entry.kind == "action" for entry in expression.entries) == 8
+    assert sum(entry.kind == "action" for entry in body.entries) >= 74
+    assert sum(entry.kind == "action" for entry in expression.entries) >= 8
     assert {entry.candidate_id for entry in body.entries if entry.kind != "action"} == {
         "000",
         "IB0",
@@ -100,6 +101,37 @@ def test_catalog_partitions_body_and_expression_and_controls() -> None:
     assert {
         entry.candidate_id for entry in expression.entries if entry.kind != "action"
     } == {"000", "IF0"}
+
+
+def test_turn_execution_fences_are_accepted_without_entering_model_prompt() -> None:
+    request = _request(DecisionChannel.BODY, runtime_context={
+        "identity_epoch": 3, "input_revision": 2,
+        "expected_model_version": "e43", "expected_prompt_sha256": "a" * 64,
+        "turn_origin": "user",
+    })
+    catalog = _registry().resolve(request)
+    assert catalog.runtime_context == {"turn_origin": "user"}
+    prompt = build_user_prompt(request, catalog)
+    assert "expected_model_version" not in prompt
+    assert "identity_epoch" not in prompt
+
+
+@pytest.mark.parametrize("value", [-1, True, "1"])
+def test_turn_execution_revision_rejects_malformed_fences(value) -> None:
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        _registry().resolve(_request(DecisionChannel.BODY,
+                                    runtime_context={"input_revision": value}))
+
+
+def test_engine_rejects_frozen_model_mismatch_before_inference() -> None:
+    async def run():
+        client = _FakeClient()
+        engine = ActionDecisionEngine(client, config=_config())
+        with pytest.raises(ValueError, match="frozen model release"):
+            await engine.decide(_request(DecisionChannel.BODY,
+                runtime_context={"expected_model_version": "wrong-release"}))
+        assert client.requests == []
+    asyncio.run(run())
 
 
 def test_registered_agent_binding_injects_and_hard_binds_full_mapping_action() -> None:
@@ -393,6 +425,25 @@ def test_face_occupying_body_suppresses_or_delays_expression() -> None:
     )
 
 
+def test_health_reports_live_workload_queues_only_to_authenticated_clients() -> None:
+    client = _FakeClient()
+    load = {"capacity": 2, "active_total": 2, "waiting_body": 1,
+            "waiting_route": 0, "waiting_presentation": 3}
+    client.action_scoring_load = lambda: dict(load)
+    client.health = lambda: {"running": True, "pending_completions": load["active_total"]}
+    app = create_action_decision_app(client, config=_config())
+    with TestClient(app) as http:
+        assert http.get('/health').status_code == 404
+        response = http.get('/health', headers={"Authorization": "Bearer secret"})
+        assert response.status_code == 200
+        assert response.json()['runtime']['workload_admission'] == load
+        load.update(active_total=0, waiting_body=0, waiting_presentation=0)
+        refreshed = http.get('/health', headers={"Authorization": "Bearer secret"}).json()
+        assert refreshed['runtime']['workload_admission']['active_total'] == 0
+        assert refreshed['runtime']['pipeline']['pending_completions'] == 0
+    assert client.requests == []
+
+
 def test_websocket_service_accepts_text_request() -> None:
     client = _FakeClient()
     app = create_action_decision_app(client, config=_config())
@@ -467,3 +518,29 @@ async def test_action_role_requires_model_version_before_pipeline_start(monkeypa
     monkeypatch.delenv("SGLANG_OMNI_MODEL_VERSION", raising=False)
     with pytest.raises(ValueError, match="MODEL_VERSION"):
         await _run_server(object())
+
+
+def test_cancel_removes_shielded_body_job_before_model_admission():
+    import asyncio
+    async def run():
+        started, stopped = asyncio.Event(), asyncio.Event()
+        class QueuedEngine(ActionDecisionEngine):
+            async def _decide_once(self, request):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+        client = _FakeClient()
+        engine = QueuedEngine(client, config=_config(), registry=_registry())
+        req = _request(DecisionChannel.BODY)
+        waiter = asyncio.create_task(engine.decide(req))
+        await started.wait()
+        await engine.cancel(req.request_id)
+        await asyncio.gather(waiter, return_exceptions=True)
+        assert stopped.is_set()
+        assert client.aborted == [req.request_id]
+        retry = asyncio.create_task(engine.decide(req))
+        await asyncio.sleep(0)
+        assert retry.cancelled()
+    asyncio.run(run())

@@ -1214,6 +1214,8 @@ def _record_explicit_generation_params(
 
 def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
     """Convert a ChatCompletionRequest into a client GenerateRequest."""
+    if req.regex is not None and req.response_format is not None:
+        raise ValueError("regex and response_format cannot both constrain a reply")
     # Parse stop sequences
     stop: list[str] = []
     if isinstance(req.stop, str):
@@ -1233,6 +1235,7 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         stop=stop,
         seed=req.seed,
         max_new_tokens=req.effective_max_tokens,
+        regex=req.regex,
         json_schema=response_json_schema(req.response_format),
     )
 
@@ -1296,6 +1299,8 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         metadata["video_total_pixels"] = req.video_total_pixels
     if req.session_instance_id is not None:
         metadata["session_instance_id"] = req.session_instance_id
+    if req.runtime_workload_class is not None:
+        metadata["runtime_workload_class"] = req.runtime_workload_class
     if req.runtime_prompt_profile is not None:
         metadata["runtime_prompt_profile"] = req.runtime_prompt_profile
         metadata["runtime_prompt_language"] = req.runtime_prompt_language

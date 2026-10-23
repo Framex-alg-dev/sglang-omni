@@ -468,7 +468,7 @@ class Qwen3OmniPreprocessor:
             metadata = payload.request.metadata
             if (
                 isinstance(metadata, dict)
-                and metadata.get("task") == "action_suffix_scoring"
+                and metadata.get("task") in {"action_suffix_scoring", "action_direct"}
             ):
                 state = Qwen3OmniPipelineState.from_dict(result.data)
                 raw_inputs = state.raw_inputs if isinstance(state.raw_inputs, dict) else {}
@@ -484,7 +484,8 @@ class Qwen3OmniPreprocessor:
                     "event": "action_media_preprocess_completed",
                     "request_id": payload.request_id,
                     "session_id": metadata.get("session_id"),
-                    "action_stage": metadata.get("action_stage"),
+                    "action_stage": metadata.get("action_stage") or metadata.get("channel"),
+                    "turn_id": metadata.get("turn_id"),
                     "logical_request_id": metadata.get("logical_request_id"),
                     "elapsed_ms": round(elapsed_ms, 3),
                     "prompt_tokens": int(input_ids.numel())
@@ -732,9 +733,10 @@ class Qwen3OmniPreprocessor:
         # Media is private even when byte-identical across sessions. Requests
         # without a session instance only reuse inside their own request.
         owner = payload.request.metadata.get("session_instance_id") or payload.request_id
+        media_owner = payload.request.metadata.get("media_cache_owner") or owner
         for values in encoder_inputs.values():
             if values.get("cache_key"):
-                values["cache_key"] = _contextualize_cache_key(values["cache_key"], owner=owner)
+                values["cache_key"] = _contextualize_cache_key(values["cache_key"], owner=media_owner)
         state = Qwen3OmniPipelineState(
             raw_inputs=raw_inputs,
             mm_inputs=build_lightweight_mm_inputs(full_mm_inputs),
