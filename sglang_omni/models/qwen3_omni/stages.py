@@ -312,14 +312,14 @@ def _action_media_context(payload: StagePayload) -> dict[str, Any] | None:
     metadata = getattr(request, "metadata", None)
     if (
         not isinstance(metadata, dict)
-        or metadata.get("task") != "action_suffix_scoring"
+        or metadata.get("task") not in {"action_suffix_scoring", "action_direct"}
     ):
         return None
     logical_request_id = metadata.get("logical_request_id")
     logical_request_id = (
         str(logical_request_id) if logical_request_id is not None else None
     )
-    turn_id = None
+    turn_id = metadata.get("turn_id")
     if logical_request_id:
         match = re.search(r"-turn-(.+?)-action-", logical_request_id)
         if match:
@@ -327,7 +327,7 @@ def _action_media_context(payload: StagePayload) -> dict[str, Any] | None:
     return {
         "session_id": metadata.get("session_id"),
         "turn_id": turn_id,
-        "action_stage": metadata.get("action_stage"),
+        "action_stage": metadata.get("action_stage") or metadata.get("channel"),
         "logical_request_id": logical_request_id,
     }
 

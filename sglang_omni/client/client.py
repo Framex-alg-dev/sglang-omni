@@ -110,6 +110,11 @@ class _PriorityAdmissionGate:
         while self._active < self.capacity and self._waiters:
             now = time.monotonic()
             selected = min(range(len(self._waiters)), key=lambda i: (
+                # Workload class is strict; aging is only within a class.
+                # Queued Body (-100) always precedes new presentation scoring.
+                0 if self._waiters[i][0] == -100 else (
+                    1 if self._waiters[i][0] < 0 else 2
+                ),
                 self._waiters[i][0] - int((now - self._waiters[i][3]) / self.aging_seconds),
                 self._session_served.get(self._waiters[i][2], 0),
                 self._waiters[i][1],
@@ -124,6 +129,12 @@ class _PriorityAdmissionGate:
             self._session_served = {key: value for key, value in self._session_served.items()
                                     if key in pending_sessions or key == session}
             waiter.set_result(None)
+
+    def snapshot(self) -> dict[str, int]:
+        return {"active_total": self._active,
+                "waiting_body": sum(row[0] == -100 for row in self._waiters),
+                "waiting_route": sum(-100 < row[0] < 0 for row in self._waiters),
+                "waiting_presentation": sum(row[0] >= 0 for row in self._waiters)}
 
     async def acquire(self, priority: int, session: str | None = None) -> None:
         loop = asyncio.get_running_loop()
@@ -307,6 +318,7 @@ class Client:
         """Return API-process action admission load for resource telemetry."""
 
         return {
+            **self._action_scoring_gate.snapshot(),
             "capacity": self._action_scoring_capacity,
             "waiting": self._action_scoring_waiting,
             "inflight": self._action_scoring_inflight,
@@ -1201,6 +1213,8 @@ class Client:
             metadata["session_id"] = request.session_id
         if request.session_instance_id is not None:
             metadata["session_instance_id"] = request.session_instance_id
+        if request.media_cache_owner is not None:
+            metadata["media_cache_owner"] = request.media_cache_owner
         if request.avatar_state:
             metadata["avatar_state"] = dict(request.avatar_state)
         metadata["action_stage"] = request.stage
@@ -1258,6 +1272,31 @@ class Client:
         self,
         request: GenerateRequest,
         request_id: str | None = None,
+    ) -> AsyncIterator[GenerateChunk]:
+        metadata = request.metadata or {}
+        gpu0_work = metadata.get("task") in {"action_direct", "turn_intent", "turn_router"} or metadata.get("runtime_workload_class") is not None
+        if not gpu0_work:
+            async with aclosing(self._generate_unadmitted(request, request_id=request_id)) as stream:
+                async for chunk in stream:
+                    yield chunk
+            return
+        # This Client is owned once by the API launcher and shared by sessions.
+        # The same gate already admits score_action_suffixes (Performance).
+        priority = (-100 if metadata.get("task") == "action_direct"
+                    else -50 if metadata.get("task") in {"turn_intent", "turn_router"}
+                    or metadata.get("runtime_workload_class") == "tool_transition"
+                    else -25 if metadata.get("runtime_workload_class") == "committed_reply" else 3)
+        session = metadata.get("session_instance_id") or metadata.get("session_id")
+        queued_at = time.perf_counter()
+        async with self._action_scoring_gate.slot(priority, session):
+            logger.info("workload_admitted request_id=%s workload=%s queue_wait_ms=%.3f",
+                        request_id, metadata.get("task"), (time.perf_counter() - queued_at) * 1000)
+            async with aclosing(self._generate_unadmitted(request, request_id=request_id)) as stream:
+                async for chunk in stream:
+                    yield chunk
+
+    async def _generate_unadmitted(
+        self, request: GenerateRequest, request_id: str | None = None,
     ) -> AsyncIterator[GenerateChunk]:
         req_id = request_id or str(uuid.uuid4())
         omni_request = self._build_omni_request(request)

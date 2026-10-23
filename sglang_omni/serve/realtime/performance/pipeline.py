@@ -388,6 +388,7 @@ class PerformancePipeline:
             session_id=self.session_id,
             stage="performance",
             session_instance_id=self.session_instance_id,
+            media_cache_owner=getattr(self, "media_cache_owner", None),
             admission_priority=1,
             logical_request_id=turn.request_base,
             turn_origin=turn.turn_origin,

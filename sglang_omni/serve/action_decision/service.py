@@ -93,10 +93,13 @@ class ActionDecisionEngine:
         self._lock = asyncio.Lock()
         self._completed: OrderedDict[str, tuple[str, ActionDecision]] = OrderedDict()
         self._inflight: dict[str, tuple[str, asyncio.Task[ActionDecision]]] = {}
+        self._cancelled: OrderedDict[str, None] = OrderedDict()
 
     async def decide(self, request: ActionDecisionRequest) -> ActionDecision:
         digest = _request_digest(request)
         async with self._lock:
+            if request.request_id in self._cancelled:
+                raise asyncio.CancelledError("logical_body_request_cancelled")
             completed = self._completed.get(request.request_id)
             if completed is not None:
                 if completed[0] != digest:
@@ -162,6 +165,26 @@ class ActionDecisionEngine:
         await self._settle(request, digest, task)
         return decision
 
+    async def cancel(self, request_id: str) -> None:
+        """Remove API waiters as well as requests already in model scheduling."""
+        async with self._lock:
+            self._cancelled[request_id] = None
+            self._cancelled.move_to_end(request_id)
+            while len(self._cancelled) > self.config.idempotency_cache_size:
+                self._cancelled.popitem(last=False)
+            entry = self._inflight.get(request_id)
+            task = entry[1] if entry is not None else None
+            if task is not None:
+                task.cancel("logical_body_request_cancelled")
+        try:
+            await self._client.abort(request_id)
+        finally:
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+        emit_structured_log("action", "action_decision_cancel_terminal",
+                            component="action_decision", request_id=request_id,
+                            api_waiter_removed=True, model_abort_requested=True)
+
     async def _settle(
         self,
         request: ActionDecisionRequest,
@@ -181,6 +204,15 @@ class ActionDecisionEngine:
 
     async def _decide_once(self, request: ActionDecisionRequest) -> ActionDecision:
         started = time.perf_counter()
+        expected_version = request.runtime_context.get("expected_model_version")
+        if expected_version and expected_version != self.config.model_version:
+            raise ValueError("Body frozen model release does not match the running model")
+        expected_prompt = request.runtime_context.get("expected_prompt_sha256")
+        if expected_prompt:
+            from .prompt import _reference_system_prompt, reference_prompt_profile
+            profile = reference_prompt_profile(request)
+            if profile is None or hashlib.sha256(_reference_system_prompt(profile).encode()).hexdigest() != expected_prompt:
+                raise ValueError("Body frozen prompt digest does not match the running prompt")
         catalog = self.registry.resolve(request)
         emit_structured_log(
             "action",
@@ -235,6 +267,14 @@ class ActionDecisionEngine:
             "channel": request.channel.value,
             "output_modalities": ["text"],
         }
+        from sglang_omni.utils.turn_media_scope import turn_media_scope
+        media_owner = turn_media_scope(
+            request.session_id, request.turn_id,
+            request.runtime_context.get("identity_epoch"),
+            request.runtime_context.get("input_revision"),
+        )
+        if media_owner is not None:
+            metadata["media_cache_owner"] = media_owner
         audios = [media_data_uri(item) for item in request.media if item.kind == "audio"]
         images = [
             media_data_uri(item)
@@ -364,6 +404,13 @@ def create_action_decision_app(
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
         authenticate(request)
+        runtime: dict[str, Any] = {}
+        admission_load = getattr(client, "action_scoring_load", None)
+        if callable(admission_load):
+            runtime["workload_admission"] = admission_load()
+        pipeline_health = getattr(client, "health", None)
+        if callable(pipeline_health):
+            runtime["pipeline"] = pipeline_health()
         return JSONResponse(
             {
                 "ok": True,
@@ -373,6 +420,7 @@ def create_action_decision_app(
                 "model_version": config.model_version,
                 "catalog_version": engine.registry.catalog_version,
                 "mapping_version": engine.registry.mapping_version,
+                "runtime": runtime,
             }
         )
 
@@ -408,7 +456,7 @@ def create_action_decision_app(
             decision = await run_until_websocket_disconnect(
                 websocket,
                 engine.decide(decision_request),
-                abort=lambda: client.abort(request_id),
+                abort=lambda: engine.cancel(request_id),
             )
             await websocket.send_json(
                 {

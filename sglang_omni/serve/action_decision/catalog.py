@@ -273,6 +273,9 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     if not isinstance(value, Mapping):
         raise ValueError("runtime_context must be an object")
+    # These fields fence execution and idempotency, not model semantics. The
+    # engine validates the release fields before resolving this catalog.
+    fences = {"expected_model_version", "expected_prompt_sha256", "identity_epoch", "input_revision"}
     allowed = {
         "turn_origin", "trigger", "reply_status", "reply_prefix", "body_intent",
         "body_task", "visual_route", "scene_context", "scene_reply_guidance",
@@ -282,10 +285,14 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         "tool_name", "tool_status", "display_state", "required_action_candidate_id",
         "required_action_semantics", "expression_priority", "prompt_profile",
     }
-    unknown = sorted(set(value) - allowed)
+    unknown = sorted(set(value) - allowed - fences)
     if unknown:
         raise ValueError("unsupported runtime_context fields: " + ", ".join(unknown))
-    return {str(key): item for key, item in value.items() if item not in (None, "", [])}
+    for key in ("identity_epoch", "input_revision"):
+        if key in value and (type(value[key]) is not int or value[key] < 0):
+            raise ValueError(f"runtime_context {key} must be a nonnegative integer")
+    return {str(key): item for key, item in value.items()
+            if key not in fences and item not in (None, "", [])}
 
 
 def _validate_entries(entries: Iterable[ActionEntry]) -> None:

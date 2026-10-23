@@ -295,7 +295,7 @@ class _OmniIpcChannels:
 
 
 class _NoOpGrammarManager:
-    """Stub — OmniScheduler never uses constrained decoding."""
+    """No upstream grammar queue; model adapters attach compiled Req matchers."""
 
     grammar_queue: list = []
 
