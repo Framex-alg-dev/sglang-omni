@@ -1090,6 +1090,10 @@ class Qwen3OmniPreprocessor:
         if videos:
             # torchcodec backend expects a non-None device string
             videos_kwargs.setdefault("device", "cpu")
+        if os.environ.get("PARTIAL30_TRAIN_INPUT_PARITY") == "1":
+            # Partial30 already applies the training resize in load_video_path.
+            # A second HF resize would change its visual tokens and resolution.
+            videos_kwargs["do_resize"] = False
         processor_kwargs: dict[str, Any] = {}
         if videos_kwargs:
             processor_kwargs["videos_kwargs"] = videos_kwargs

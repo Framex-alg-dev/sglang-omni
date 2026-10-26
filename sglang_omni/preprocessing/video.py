@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -362,17 +363,22 @@ def load_video_path(
     )
     max_pixels_supposed = ele.get("max_pixels", max_pixels)
     max_pixels = min(max_pixels_supposed, max_pixels)
+    # Opt-in only for the dedicated Partial30 service. Other model services
+    # retain qwen-vl-utils' default patch grid.
+    image_factor = int(
+        os.environ.get("PARTIAL30_VIDEO_PATCH_FACTOR", qwen_vision.IMAGE_FACTOR)
+    )
     if "resized_height" in ele and "resized_width" in ele:
         resized_height, resized_width = qwen_vision.smart_resize(
             ele["resized_height"],
             ele["resized_width"],
-            factor=qwen_vision.IMAGE_FACTOR,
+            factor=image_factor,
         )
     else:
         resized_height, resized_width = qwen_vision.smart_resize(
             height,
             width,
-            factor=qwen_vision.IMAGE_FACTOR,
+            factor=image_factor,
             min_pixels=min_pixels,
             max_pixels=max_pixels,
         )

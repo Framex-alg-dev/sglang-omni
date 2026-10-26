@@ -4,6 +4,11 @@ GPU4 runs one standalone Qwen3-Omni timeline pipeline on port 18008. Its
 continuous audio/video windows are intentionally isolated from classifier,
 Brain, action and reply inference.
 
+For the opt-in Partial30 checkpoint-1750 profile with a 1-second cadence, see
+[GPU4_TIMELINE_PARTIAL30.md](GPU4_TIMELINE_PARTIAL30.md). Its integration assets
+do not automatically change or restart an existing service. The setup below
+describes the legacy default profile.
+
 | Capability | Endpoint | Scheduling |
 | --- | --- | --- |
 | timeline observer | `WS /v1/timeline` | video-driven sliding-window inference every 3 seconds |

@@ -18,6 +18,7 @@ from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from .catalog import EVENT_ID_SET
 from .contracts import TimelineMediaChunk
 from .parser import ModelOutputError, normalize_event_ids
+from .partial30 import PARTIAL30_EVENT_IDS, PARTIAL30_PROTOCOL, build_partial30_request
 from .window import EventDetectionWindow
 
 
@@ -102,6 +103,13 @@ class DirectE50Profile:
     confirmation_windows: int = 2
     rearm_absent_windows: int = 3
     silent_event_ids: frozenset[str] = DIRECT_E50_SILENT_EVENT_IDS
+    protocol: str = DIRECT_E50_PROTOCOL
+
+    @property
+    def allowed_event_ids(self) -> frozenset[str]:
+        if self.protocol == PARTIAL30_PROTOCOL:
+            return PARTIAL30_EVENT_IDS
+        return EVENT_ID_SET
 
     @classmethod
     def from_environment(cls) -> DirectE50Profile | None:
@@ -110,14 +118,15 @@ class DirectE50Profile:
         ).strip()
         if protocol == "v25-alias":
             return None
-        if protocol != DIRECT_E50_PROTOCOL:
+        if protocol not in {DIRECT_E50_PROTOCOL, PARTIAL30_PROTOCOL}:
             raise ValueError(
-                "SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL must be v25-alias or direct-e50"
+                "SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL must be v25-alias, direct-e50 or direct-partial30"
             )
         system_prompt = _read_prompt(
-            "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", "system"
+            "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", "system",
+            preserve_whitespace=protocol == PARTIAL30_PROTOCOL,
         )
-        user_prompt = _read_prompt(
+        user_prompt = "" if protocol == PARTIAL30_PROTOCOL else _read_prompt(
             "SGLANG_OMNI_TIMELINE_USER_PROMPT_PATH", "user"
         )
         prompt_version = os.environ.get(
@@ -129,7 +138,12 @@ class DirectE50Profile:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             prompt_version=prompt_version,
-            max_tokens=_positive_int("SGLANG_OMNI_TIMELINE_MAX_TOKENS", 8),
+            protocol=protocol,
+            max_tokens=_positive_int(
+                "SGLANG_OMNI_TIMELINE_MAX_TOKENS",
+                128 if protocol == PARTIAL30_PROTOCOL else 8,
+            ),
+            video_max_pixels=137_625 if protocol == PARTIAL30_PROTOCOL else 130_000,
             cooldown_ms=_positive_int(
                 "SGLANG_OMNI_TIMELINE_EVENT_COOLDOWN_MS", 15_000
             ),
@@ -348,7 +362,11 @@ class DirectE50FrequencyGate:
         self._confirmation_streaks.clear()
 
 
-def parse_direct_e50_output(raw_output: str) -> list[str]:
+def parse_direct_e50_output(
+    raw_output: str,
+    *,
+    allowed_event_ids: frozenset[str] = EVENT_ID_SET,
+) -> list[str]:
     """Validate the checkpoint's native E-code protocol without P-code fallback."""
 
     text = raw_output.strip()
@@ -359,7 +377,7 @@ def parse_direct_e50_output(raw_output: str) -> list[str]:
     tokens = text.split(",")
     if len(tokens) > 16:
         raise ModelOutputError("direct E50 output contains too many tokens")
-    invalid = next((token for token in tokens if token not in EVENT_ID_SET), None)
+    invalid = next((token for token in tokens if token not in allowed_event_ids), None)
     if invalid is not None or "E27" in tokens:
         raise ModelOutputError(f"invalid direct E50 token: {invalid or 'E27'}")
     if "E8" in tokens and "E50" in tokens:
@@ -434,7 +452,7 @@ def build_direct_e50_prefill_request(
         sampling=SamplingParams(
             temperature=0.0,
             top_p=1.0,
-            seed=0,
+            seed=42 if profile.protocol == PARTIAL30_PROTOCOL else 0,
             max_new_tokens=1,
         ),
         stream=False,
@@ -468,6 +486,13 @@ def build_direct_e50_request(
     observer_epoch: int,
     stream_epoch: int,
 ) -> GenerateRequest:
+    if profile.protocol == PARTIAL30_PROTOCOL:
+        return build_partial30_request(
+            profile=profile, model_id=model_id, session_id=session_id,
+            window=window, video_mp4=video_mp4,
+            logical_request_id=logical_request_id, contract_version=contract_version,
+            observer_epoch=observer_epoch, stream_epoch=stream_epoch,
+        )
     history_seconds = window.history_duration_ms / 1_000
     call_seconds = window.end_ms / 1_000
     history_frames = len(window.history_frames)
@@ -554,14 +579,19 @@ def build_direct_e50_request(
     )
 
 
-def _read_prompt(environment_name: str, label: str) -> str:
+def _read_prompt(
+    environment_name: str,
+    label: str,
+    *,
+    preserve_whitespace: bool = False,
+) -> str:
     raw_path = os.environ.get(environment_name, "").strip()
     if not raw_path:
         raise ValueError(f"direct-e50 requires a {label} prompt path")
-    value = Path(raw_path).read_text(encoding="utf-8").strip()
-    if not value:
+    value = Path(raw_path).read_text(encoding="utf-8")
+    if not value.strip():
         raise ValueError(f"direct-e50 {label} prompt is empty")
-    return value
+    return value if preserve_whitespace else value.strip()
 
 
 def _positive_int(environment_name: str, default: int) -> int:
