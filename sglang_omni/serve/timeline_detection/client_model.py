@@ -33,6 +33,7 @@ from .direct_e50 import (
     parse_direct_e50_output,
 )
 from .parser import ModelOutputError, parse_event_output
+from .partial30 import PARTIAL30_EVENT_SUMMARIES, PARTIAL30_PROTOCOL
 from .catalog import EVENT_ID_SET, OCCURRENCE_EVENT_IDS
 from .prompt import (
     EVENT_SUMMARIES,
@@ -478,7 +479,10 @@ class SglangClientTimelineDetectionModel:
             raw_output = str(result.text)
             try:
                 event_ids = (
-                    parse_direct_e50_output(raw_output)
+                    parse_direct_e50_output(
+                        raw_output,
+                        allowed_event_ids=self._direct_e50.allowed_event_ids,
+                    )
                     if self._direct_e50 is not None
                     else parse_event_output(raw_output)
                 )
@@ -542,6 +546,12 @@ class SglangClientTimelineDetectionModel:
                     model_id=self.model_id,
                     model_version=self.model_version,
                     prompt_version=self.prompt_version,
+                    summary=(
+                        PARTIAL30_EVENT_SUMMARIES[event_id]
+                        if self._direct_e50 is not None
+                        and self._direct_e50.protocol == PARTIAL30_PROTOCOL
+                        else None
+                    ),
                 )
                 for event_id in accepted_event_ids
             )
@@ -587,7 +597,9 @@ class SglangClientTimelineDetectionModel:
                         video_mp4=video_mp4,
                         image_jpegs=image_jpegs,
                         audio_wav=(
-                            work.window.audio_wav
+                            base64.b64decode(
+                                request.metadata["audios"][0].split(",", 1)[1]
+                            )
                             if request.metadata.get("audios")
                             else None
                         ),
@@ -772,6 +784,7 @@ def _observation(
     model_id: str,
     model_version: str,
     prompt_version: str,
+    summary: str | None = None,
 ) -> ObservationEvent:
     event_key = (
         f"{start.session_id}:{start.identity_epoch}:{stream_epoch}:"
@@ -786,7 +799,7 @@ def _observation(
         identity_epoch=start.identity_epoch,
         stream_epoch=stream_epoch,
         event_type=event_id,
-        summary=EVENT_SUMMARIES[event_id],
+        summary=summary or EVENT_SUMMARIES[event_id],
         evidence_start_ms=window.start_ms,
         evidence_end_ms=window.end_ms,
         model_id=model_id,

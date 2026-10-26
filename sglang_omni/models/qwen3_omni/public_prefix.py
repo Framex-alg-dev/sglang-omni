@@ -14,6 +14,10 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import load_runtime_act
 # scoring prompt assembled by task_classification.client_model.
 _PUBLISHED_EXTERNAL_PROMPT_SHA256 = frozenset(
     {
+        # Partial30 checkpoint-1750 frozen training system prompt, stripped.
+        "21a42acede3d203d0839936f0f113a519f427175d9129f12fb738f30392c512b",
+        # Exact training bytes, including the final newline.
+        "dae551e6bb93ab2d007f402bcc6157873e746c149aa4d1d46f8241e2198b3e17",
         # Turn-router v5 fixed-candidate scoring prompt.
         "ee2921ee7b1be5518c0ff8dd545d76e1b966c3e32d2c65787e7a54b8ec9da545",
         # Timeline detection V25 frozen 49-event system prompt. Timeline
