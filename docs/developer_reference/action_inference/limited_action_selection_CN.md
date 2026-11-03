@@ -4,7 +4,10 @@
 `sglang_omni/assets/character_limited_action_global_catalog.json`。
 目录保留原有 categories 结构作为动作元数据，但不进行类别评分。
 所有类别的动作按全局 candidate/action ID 去重后直接进入 `stage=single` 评分。
-当前目录包含 11 类、168 个不同动作；加上 `000`（不支持）决策项，实际评分候选为 169 个。
+当前目录包含 21 类、82 个不同动作；加上 `000`（不支持）决策项，实际评分候选为 83 个。
+2026-11-04 已以端口 18005 的实际进程、启动摘要和原生评分／预填充复核。精确候选 ID、文件与目录摘要、27 项显式英文规则及回退覆盖固定于 `tests/unit_test/fixtures/limited_action_catalog_contract.json`。
+
+本文的 Session 编排描述为历史协议说明，旧 `/v1/realtime` 会话入口已退役。当前限定目录用于 OpenAI worker 的启动／公共前缀及保留的原生评分能力；新版 D 身体动作由端口 18004 的 E67 `assets/e67_v116` 目录消费，不使用这份 82 项目录。
 `000` 不属于可执行动作，命中后返回 `UNSUPPORTED`、`execute=false`。
 
 ## 会话与协议

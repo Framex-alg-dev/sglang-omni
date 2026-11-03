@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -29,14 +31,26 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
 )
 
 
-def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action() -> None:
-    catalog_path = (
-        Path(__file__).parents[3]
-        / "sglang_omni/assets/character_limited_action_global_catalog.json"
-    )
-    catalog = load_global_action_catalog(catalog_path)
 
-    assert catalog.candidate_count == 117
+def _reviewed_limited_catalog():
+    root = Path(__file__).parents[3]
+    contract = json.loads(
+        (root / "tests/unit_test/fixtures/limited_action_catalog_contract.json").read_text()
+    )
+    path = root / contract["catalog_path"]
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == contract["file_sha256"]
+    catalog = load_global_action_catalog(path)
+    assert catalog.catalog_hash == contract["catalog_hash"]
+    assert catalog.catalog_version == contract["catalog_version"]
+    assert set(catalog.category_by_id) == set(contract["category_ids"])
+    assert set(catalog.candidate_by_id) == set(contract["candidate_ids"])
+    return catalog, contract
+
+
+def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action() -> None:
+    catalog, contract = _reviewed_limited_catalog()
+
+    assert catalog.candidate_count == len(contract["candidate_ids"])
     assert all(
         candidate.user_reaction_expression.strip()
         and candidate.proactive_expression.strip()
@@ -55,11 +69,7 @@ def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action()
 
 
 def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
-    catalog_path = (
-        Path(__file__).parents[3]
-        / "sglang_omni/assets/character_limited_action_global_catalog.json"
-    )
-    catalog = load_global_action_catalog(catalog_path)
+    catalog, contract = _reviewed_limited_catalog()
     idle = catalog.candidate_by_id["130"]
 
     zh_user = idle.effective_definition("user", "zh-CN")
@@ -73,10 +83,34 @@ def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
     assert en_proactive.startswith("Select only when no expressive goal")
     assert en_user in catalog.action_system_prompt_for("en-US", "user")
     assert en_user not in catalog.action_system_prompt_for("zh-CN", "user")
-    assert sum(
-        "en-US" in candidate.expressions_by_locale
+    assert {
+        candidate.candidate_id
         for candidate in catalog.candidate_by_id.values()
-    ) == 117
+        if "en-US" in candidate.expressions_by_locale
+    } == set(contract["english_expression_ids"])
+    raw = json.loads((Path(__file__).parents[3] / contract["catalog_path"]).read_text())
+    source = {
+        child["candidate_id"]: child
+        for category in raw["categories"]
+        for child in category["children"]
+    }
+    for locale in ("zh-CN", "en-US"):
+        for origin, field in (("user", "user_reaction_expression"),
+                              ("proactive", "proactive_expression")):
+            prompt = catalog.action_system_prompt_for(locale, origin)
+            for candidate_id, candidate in catalog.candidate_by_id.items():
+                original = source[candidate_id]
+                localized = original.get("expressions_by_locale", {}).get(locale, {})
+                expected = localized.get(field) or original[field]
+                assert candidate.effective_definition(origin, locale) == expected
+                label = original.get("prompt_text_by_locale", {}).get(locale, {}).get("label", original["source_label"])
+                row = (f"candidate_id={candidate_id} | action={label} | description={expected}"
+                       if locale == "en-US" else
+                       f"candidate_id={candidate_id}｜动作={label}｜说明={expected}")
+                assert row in prompt
+            assert set(re.findall(r"^candidate_id=(\d+)", prompt, re.MULTILINE)) == (
+                set(contract["candidate_ids"]) | {"000"}
+            )
 
 
 def test_action_prompts_do_not_include_cross_turn_action_history() -> None:
@@ -1059,3 +1093,54 @@ def _session_start_payload() -> dict:
             },
         ],
     }
+
+
+def test_runtime_startup_and_public_prefix_use_reviewed_limited_catalog(monkeypatch):
+    from sglang_omni.serve.launcher import _load_production_action_catalog_support
+    from sglang_omni.models.qwen3_omni import public_prefix
+
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_PATH", raising=False)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_CATALOG_MODE", "limited")
+    reviewed, contract = _reviewed_limited_catalog()
+    runtime, _ = _load_production_action_catalog_support()
+    assert runtime.direct_action_selection is True
+    assert runtime.catalog_hash == reviewed.catalog_hash
+    assert set(runtime.candidate_by_id) == set(contract["candidate_ids"])
+    public_prefix.published_prompts.cache_clear()
+    try:
+        expected = frozenset(
+            runtime.action_system_prompt_for(locale, origin)
+            for locale in ("zh-CN", "en-US")
+            for origin in ("user", "proactive")
+        )
+        assert public_prefix.published_prompts() == expected
+        assert all(public_prefix.is_published_prompt(prompt) for prompt in expected)
+        assert all(not public_prefix.is_published_prompt(prompt + "\nPRIVATE_ROLE")
+                   for prompt in expected)
+    finally:
+        public_prefix.published_prompts.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_runtime_limited_prewarm_covers_exact_candidates_and_locales(monkeypatch):
+    from sglang_omni.serve.launcher import _load_production_action_catalog_support
+
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_PATH", raising=False)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_CATALOG_MODE", "limited")
+    monkeypatch.setenv("SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S", "30")
+    _, contract = _reviewed_limited_catalog()
+    catalog, prewarm = _load_production_action_catalog_support()
+    client = _PrefillClient()
+    await prewarm(client, model="reviewed-runtime", catalog=catalog)
+    assert len(client.calls) == 4
+    for call, (locale, origin) in zip(
+        client.calls,
+        [(locale, origin) for locale in ("zh-CN", "en-US")
+         for origin in ("user", "proactive")],
+    ):
+        assert {c.candidate_id for c in call["candidates"]} == (
+            set(contract["candidate_ids"]) | {"000"}
+        )
+        assert call["system_prompt"] == catalog.action_system_prompt_for(locale, origin)
+        assert call["prefix_cache_namespace"] == catalog.action_cache_namespace(locale, origin)
+        assert call["stage"] == "single"
