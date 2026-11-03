@@ -183,10 +183,18 @@ class SessionActionProfile:
             if not isinstance(field_value, str):
                 raise ValueError(f"action_profile.{field_name} must be a string")
             normalized = field_value.strip()
-            if len(normalized) > MAX_ACTION_PROFILE_FIELD_CHARS:
+            # D supplies the complete chapters 1, 2 and 5 role context here.
+            # Use the existing role budget; category/action preferences keep
+            # their smaller limit and the aggregate profile remains bounded.
+            max_chars = (
+                MAX_CHARACTER_PROFILE_ROLE_CHARS
+                if field_name == "visual_behavior_preferences"
+                else MAX_ACTION_PROFILE_FIELD_CHARS
+            )
+            if len(normalized) > max_chars:
                 raise ValueError(
                     f"action_profile.{field_name} must contain at most "
-                    f"{MAX_ACTION_PROFILE_FIELD_CHARS} characters"
+                    f"{max_chars} characters"
                 )
             preferences[field_name] = normalized
 

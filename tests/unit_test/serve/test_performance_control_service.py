@@ -143,3 +143,55 @@ def test_performance_control_matches_session_fail_soft_default() -> None:
     assert response.json()["degraded"] is True
     assert response.json()["expression_id"] is None
     assert "自然平和" in response.json()["tts_instruction"]
+
+
+def test_full_behavior_role_context_reaches_model_without_truncation() -> None:
+    model = _Client()
+    payload = _payload()
+    context = (
+        "## 1. 身份与场景\n贴心生活助理。\n"
+        "## 2. 性格\n" + "亲切、细心、克制。" * 270
+        + "\n## 5. 行为规则\n鼓励用户时微笑；不擅自声称任务完成。"
+    )
+    assert 2048 < len(context) < 5000
+    payload["action_profile"]["visual_behavior_preferences"] = context
+    response = TestClient(_app(model)).post(
+        "/v1/performance-control", headers={"Authorization": "Bearer secret"},
+        json=payload,
+    )
+    assert response.status_code == 200
+    assert response.json()["expression_id"] == "154"
+    assert context in model.requests[0].system_prompt
+    assert "鼓励用户时微笑；不擅自声称任务完成。" in model.requests[0].system_prompt
+
+
+def test_behavior_role_budget_keeps_other_profile_fields_bounded() -> None:
+    from sglang_omni.serve.performance_control.context import SessionActionProfile
+
+    for field, text in (
+        ("visual_behavior_preferences", "x" * 5001),
+        ("category_preferences", "x" * 2049),
+        ("action_preferences", "x" * 2049),
+    ):
+        payload = _payload()
+        payload["action_profile"][field] = text
+        model = _Client()
+        try:
+            SessionActionProfile.from_payload(payload["action_profile"])
+        except ValueError as error:
+            assert field in str(error)
+        else:
+            raise AssertionError(f"oversized {field} was accepted")
+        assert not model.requests
+
+    # Valid individual fields still cannot overflow the aggregate contract.
+    try:
+        SessionActionProfile.from_payload({
+            "visual_behavior_preferences": "x" * 5000,
+            "category_preferences": "x" * 2000,
+            "action_preferences": "x" * 2000,
+        })
+    except ValueError as error:
+        assert "serialized characters" in str(error)
+    else:
+        raise AssertionError("oversized aggregate action profile was accepted")
