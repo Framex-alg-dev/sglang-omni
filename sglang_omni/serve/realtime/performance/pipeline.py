@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from sglang_omni.utils.mixed_instruction_policy import mixed_instruction_policy
 
+from .prompts import performance_rule
+
 import hashlib
 import time
 from dataclasses import dataclass
@@ -162,33 +164,9 @@ class PerformancePipeline:
             else ""
         )
         prompt = self._action_prompt(
-            zh=(
-                "你只负责判断当前这条消息要求的可视执行通道，并为当前角色选择脸部表情。"
-                "expression_only 表示用户只明确要求眉眼、口部或面颊构成的脸部表情；"
-                "body_only 表示只明确要求头部、视线、肩部、手臂、手部、躯干、姿态或物品交互；"
-                "both 表示同一请求明确要求脸部表情和身体动作；none 表示没有明确动作请求。"
-                "‘笑一个’‘做个惊讶表情’属于 expression_only；‘挥挥手’‘转一圈’属于 body_only；"
-                "‘笑着挥挥手’‘抱头并露出惊讶表情’属于 both。"
-                "不得根据用户外观猜测用户情绪。普通语言交流可以选择与角色将要表达的语气协调的"
-                "可选表情，也可以不改变表情。明确要求不在候选范围内的纯脸部表情选择不支持。"
-                "角色信息只用于选择符合角色表达方式的可选表情，不得覆盖用户明确提出的表情请求。"
-                "只能输出下列一个 decision_id，不要回答用户，也不要输出解释。\n"
-                f"{mapping}{persona_context_zh}"
-            ),
-            en=(
-                "Classify the execution channels explicitly requested by the current message "
-                "and select one facial expression for the character. expression_only means "
-                "only a facial expression made with eyes, brows, mouth, or cheeks is explicitly "
-                "requested. body_only means only head, gaze, shoulders, arms, hands, torso, pose, "
-                "or object interaction is requested. both means both layers are explicitly "
-                "requested. none means no explicit action request. Do not infer the user's "
-                "emotion from appearance. Ordinary speech may use a matching optional expression "
-                "or no change. Character information may shape only optional expression style and "
-                "must not override an explicit expression request. Output exactly one decision_id "
-                "from this list and no explanation.\n"
-                f"{mapping}{persona_context_en}"
-            ),
-        )
+            zh=performance_rule(getattr(self, "_prompt_snapshot", None), "system_rules.zh-CN"),
+            en=performance_rule(getattr(self, "_prompt_snapshot", None), "system_rules.en-US"),
+        ) + mapping + self._action_prompt(zh=persona_context_zh, en=persona_context_en)
         if visual_deictic_expression:
             prompt += self._action_prompt(
                 zh=(

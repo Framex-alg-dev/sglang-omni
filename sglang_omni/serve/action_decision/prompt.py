@@ -99,7 +99,7 @@ def _reference_system_prompt(profile: str) -> str:
     return prompt
 
 
-def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
+def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog, *, prompt_snapshot: dict[str, str] | None = None) -> str:
     if (
         request.character_prompt
         and len(request.character_prompt) > MAX_CHARACTER_PROMPT_CHARS
@@ -116,11 +116,27 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         raise ValueError("action decision text fields must not contain NUL")
     profile = reference_prompt_profile(request)
     if profile is not None:
-        return _reference_system_prompt(profile)
+        if prompt_snapshot is not None:
+            if profile != E67_REFERENCE_PROFILE or set(prompt_snapshot)!={"system_prompt"}:
+                raise ValueError("invalid E67 prompt snapshot")
+            base = prompt_snapshot["system_prompt"]
+        else:
+            base = _reference_system_prompt(profile)
+        if not request.character_prompt and not request.session_prompt:
+            return base
+        context = [base, "[TRUSTED_CHARACTER_BEHAVIOR]",
+            "以下角色行为规则约束当前身体动作的选择、克制度和禁止项。只决定身体动作通道；"
+            "角色背景不是用户本轮的新请求。遵守本轮明确请求和宿主的动作候选／通道约束，"
+            "普通伴随动作按角色行为规则选择，也可不做动作。仍只输出原协议要求的一个合法两-token code。"]
+        if request.character_prompt:
+            context.append(request.character_prompt)
+        if request.session_prompt:
+            context.extend(("[SESSION_POLICY]", request.session_prompt))
+        return "\n\n".join(context)
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [
-        E57_SYSTEM_RULES,
+        prompt_snapshot["system_rules"] if prompt_snapshot is not None else E57_SYSTEM_RULES,
         "[ACTIVE_CHANNEL]",
         f"本次只决定{target}通道；另一通道由一次独立模型调用决定。",
         f"没有充分证据改变本通道时选择 {neutral}。",
@@ -148,7 +164,7 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         lines.append(
             f"{entry.code} | {entry.candidate_id} | {entry.label} | {entry.definition}"
         )
-    lines.append(E57_FINAL_TASK_CONSTRAINTS)
+    lines.append(prompt_snapshot["final_constraints"] if prompt_snapshot is not None else E57_FINAL_TASK_CONSTRAINTS)
     return "\n".join(lines)
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .prompts import performance_rule
+
 import asyncio
 import json
 import logging
@@ -10,7 +12,7 @@ import secrets
 import time
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket
+from fastapi import FastAPI, Header, HTTPException, WebSocket, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.websockets import WebSocketDisconnect
 
@@ -176,13 +178,8 @@ class _StatelessPerformancePipeline(PerformancePipeline):
         if self.performance_intent is None:
             return prompt
         return prompt + self._action_prompt(
-            zh=("\n权威回复计划已经确定执行范围。以下 performance_intent 是角色当前回复的语义，"
-                "不是用户原话。按回复目的、表达行为及 voice_style 选择表情；用户媒体仅作上下文。"
-                "不得重新定义 REQUIRED 范围或修改正在合成的语音。\n"),
-            en=("\nThe host has frozen behavior obligations. performance_intent describes the "
-                "character's current reply, not the user's words. Select expression by reply "
-                "purpose, presentation act and voice style; user media is context only. "
-                "Do not redefine REQUIRED or change in-flight speech.\n"),
+            zh=performance_rule(getattr(self, "_prompt_snapshot", None), "host_intent_rules.zh-CN"),
+            en=performance_rule(getattr(self, "_prompt_snapshot", None), "host_intent_rules.en-US"),
         ) + json.dumps(self.performance_intent.model_dump(), ensure_ascii=False, separators=(",", ":"))
 
     async def _score_action_request(
@@ -233,6 +230,9 @@ def register_performance_control(
         if token is not None
         else os.environ.get(PERFORMANCE_CONTROL_TOKEN_ENV, "")
     ).strip()
+
+    from sglang_omni.serve.performance_prompt_debug import install_performance_debug
+    install_performance_debug(app, token=configured_token, response_factory=_performance_response)
 
     @app.post(
         "/v1/performance-control",
@@ -318,11 +318,17 @@ def register_performance_control(
 async def _performance_response(
     app: FastAPI,
     request: PerformanceControlRequest,
+    *, prompt_snapshot: dict[str, str] | None = None,
 ) -> PerformanceControlResponse:
     pipeline = _StatelessPerformancePipeline(
         client=app.state.client,
         request=request,
     )
+    runtime = getattr(app.state, 'performance_prompt_runtime', None)
+    if prompt_snapshot is not None:
+        pipeline._prompt_snapshot = dict(prompt_snapshot)
+    elif runtime is not None:
+        pipeline._prompt_snapshot = runtime.rules
     degraded = False
     try:
         decision = await pipeline.decide(request)

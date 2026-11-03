@@ -81,7 +81,10 @@ class ActionDecisionEngine:
         *,
         config: ActionDecisionConfig,
         registry: ActionCatalogRegistry | None = None,
+        prompt_snapshot: dict[str, str] | None = None,
     ) -> None:
+        self._prompt_snapshot = dict(prompt_snapshot) if prompt_snapshot is not None else None
+        self._runtime_prompt_bundles = {}
         self._client = client
         self.config = config
         self.registry = registry or ActionCatalogRegistry(
@@ -94,6 +97,17 @@ class ActionDecisionEngine:
         self._completed: OrderedDict[str, tuple[str, ActionDecision]] = OrderedDict()
         self._inflight: dict[str, tuple[str, asyncio.Task[ActionDecision]]] = {}
         self._cancelled: OrderedDict[str, None] = OrderedDict()
+
+    def _effective_prompt_snapshot(self, request):
+        if self._prompt_snapshot is not None:
+            return self._prompt_snapshot
+        from .prompt import reference_prompt_profile, E67_REFERENCE_PROFILE
+        reference = reference_prompt_profile(request)
+        if reference is not None and reference != E67_REFERENCE_PROFILE:
+            return None  # Preserve explicitly requested legacy reference profiles.
+        profile = 'e67' if reference == E67_REFERENCE_PROFILE else 'generic'
+        bundle = self._runtime_prompt_bundles.get(profile)
+        return bundle.rules if bundle is not None else None
 
     async def decide(self, request: ActionDecisionRequest) -> ActionDecision:
         digest = _request_digest(request)
@@ -296,7 +310,7 @@ class ActionDecisionEngine:
             GenerateRequest(
                 model=self.config.model_id,
                 messages=[
-                    Message(role="system", content=build_system_prompt(request, catalog)),
+                    Message(role="system", content=build_system_prompt(request, catalog, prompt_snapshot=self._effective_prompt_snapshot(request))),
                     Message(role="user", content=content),
                 ],
                 sampling=SamplingParams(
@@ -392,14 +406,25 @@ def create_action_decision_app(
     performance_token: str | None = None,
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
-    app = FastAPI(title="sglang-omni-action-decision", version="1")
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def lifespan(app):
+        from sglang_omni.serve.prompt_runtime import install_action_runtime
+        await install_action_runtime(app, engine, include_performance=performance_token is not None)
+        yield
+    app = FastAPI(title="sglang-omni-action-decision", version="1", lifespan=lifespan)
     app.state.action_decision_engine = engine
+
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
             request.headers.get("authorization", ""), f"Bearer {config.token}"
         ):
             raise HTTPException(status_code=404, detail="not found")
+
+    from sglang_omni.serve.prompt_debug import install_action_debug
+    install_action_debug(app, engine=engine, authenticate=authenticate, parser=_parse_request,
+                         factory=lambda capture, snapshot: ActionDecisionEngine(capture, config=config, registry=engine.registry, prompt_snapshot=snapshot))
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:

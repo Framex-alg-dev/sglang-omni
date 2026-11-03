@@ -34,3 +34,5 @@ PORT=8080 make serve
   - Reuse the launched server as much as possible to reduce server launch time.
 - Do not use absolute links (e.g., `https://docs.sglang-omni.ai/get_started/install.html`). Always prefer relative links (e.g., `../get_started/install.md`).
 - Follow the existing examples to learn how to launch a server, send a query and other common styles.
+
+- [Knowledge decision prompt debugging](developer_reference/knowledge_decision_prompt_debug.md): live-rule provenance, isolated trials, authentication and deployment.

@@ -112,7 +112,7 @@ class DirectE50Profile:
         return EVENT_ID_SET
 
     @classmethod
-    def from_environment(cls) -> DirectE50Profile | None:
+    def from_environment(cls, *, system_prompt_override: str | None = None, prompt_version_override: str | None = None) -> DirectE50Profile | None:
         protocol = os.environ.get(
             "SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL", "v25-alias"
         ).strip()
@@ -122,14 +122,14 @@ class DirectE50Profile:
             raise ValueError(
                 "SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL must be v25-alias, direct-e50 or direct-partial30"
             )
-        system_prompt = _read_prompt(
+        system_prompt = system_prompt_override if system_prompt_override is not None else _read_prompt(
             "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", "system",
             preserve_whitespace=protocol == PARTIAL30_PROTOCOL,
         )
         user_prompt = "" if protocol == PARTIAL30_PROTOCOL else _read_prompt(
             "SGLANG_OMNI_TIMELINE_USER_PROMPT_PATH", "user"
         )
-        prompt_version = os.environ.get(
+        prompt_version = prompt_version_override if prompt_version_override is not None else os.environ.get(
             "SGLANG_OMNI_TIMELINE_PROMPT_VERSION", ""
         ).strip()
         if not prompt_version:

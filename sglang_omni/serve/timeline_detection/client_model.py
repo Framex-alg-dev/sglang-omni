@@ -200,6 +200,7 @@ class SglangClientTimelineDetectionModel:
         start: TimelineSessionStart,
         *,
         model_version: str,
+        direct_profile: DirectE50Profile | None = None,
         max_attempts: int = 2,
         inference_interval_ms: int = 3_000,
         window_ms: int = 10_000,
@@ -217,7 +218,7 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline max_window_bytes must be positive")
         self._client = client
         self._start = start
-        self._direct_e50 = DirectE50Profile.from_environment()
+        self._direct_e50 = direct_profile if direct_profile is not None else DirectE50Profile.from_environment()
         self.model_id = start.model_id
         self.model_version = model_version
         self.prompt_version = (
