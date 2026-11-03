@@ -32,7 +32,11 @@ from sglang_omni.serve.launcher import _run_server
 
 
 import os
-ASSETS = os.getenv("ACTION_ARTIFACT_ROOT", "/data/xingmt/model_repo/action_prediction_model/assets")
+# Match deploy/launch_dual_gpu_dev.sh; callers can select an explicit artifact set.
+ASSETS = os.getenv(
+    "ACTION_ARTIFACT_ROOT",
+    "/data/xingmt/model_repo/action_prediction_model/assets/e67_v116",
+)
 
 
 def _config() -> ActionDecisionConfig:
