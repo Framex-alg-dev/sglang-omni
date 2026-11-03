@@ -36,3 +36,5 @@ PORT=8080 make serve
 - Follow the existing examples to learn how to launch a server, send a query and other common styles.
 
 - [Knowledge decision prompt debugging](developer_reference/knowledge_decision_prompt_debug.md): live-rule provenance, isolated trials, authentication and deployment.
+
+旧 Session Realtime 与文件 Prompt 覆盖已退役。当前独立 Performance、embedded TTS 和内部流式推理能力继续保留，见 `docs/developer_reference/prompt_retirement.md`。

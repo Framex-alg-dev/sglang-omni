@@ -50,7 +50,7 @@ def test_normal_action_and_performance_use_frozen_releases_until_restart(monkeyp
  from tests.unit_test.serve.test_performance_control_service import _Client,_payload
  from sglang_omni.serve.action_decision.service import create_action_decision_app
  import sglang_omni.serve.prompt_runtime as runtime
- from sglang_omni.serve.realtime.performance.prompts import PERFORMANCE_RULES
+ from sglang_omni.serve.performance_control.prompts import PERFORMANCE_RULES
  generation=['FIRST'];scorer=_Client();model=_FakeClient();model.score_action_suffixes=scorer.score_action_suffixes
  async def load(profile,**kwargs):
   rules=dict(PERFORMANCE_RULES) if profile=='performance' else {'system_prompt':'ACTUAL-'+generation[0]} if profile=='e67' else {'system_rules':'GENERIC-'+generation[0],'final_constraints':'constraints'}

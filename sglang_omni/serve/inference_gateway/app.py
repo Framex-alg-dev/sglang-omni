@@ -21,7 +21,7 @@ from sglang_omni.serve.inference_gateway.speech_synthesis import (
     GatewaySpeechError,
     GatewaySpeechSynthesizer,
 )
-from sglang_omni.serve.realtime.embedded_tts import (
+from sglang_omni.serve.embedded_tts import (
     EmbeddedTTSConfig,
     EmbeddedTTSConnection,
     EmbeddedTTSError,

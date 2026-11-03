@@ -515,7 +515,7 @@ def create_action_decision_app(
         normalized_performance_token = performance_token.strip()
         if not normalized_performance_token:
             raise ValueError("performance control token must not be empty")
-        from sglang_omni.serve.realtime.performance.service import (
+        from sglang_omni.serve.performance_control.service import (
             register_performance_control,
         )
 

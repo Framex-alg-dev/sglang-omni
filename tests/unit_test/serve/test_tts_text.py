@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from sglang_omni.serve.realtime.tts_text import StreamingTTSWhitespace, split_tts_append
+from sglang_omni.serve.tts_text import StreamingTTSWhitespace, split_tts_append
 
 
 def normalize(parts):

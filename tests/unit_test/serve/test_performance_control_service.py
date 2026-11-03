@@ -7,7 +7,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionSuffixScoreResult,
     CandidateScore,
 )
-from sglang_omni.serve.realtime.performance.service import (
+from sglang_omni.serve.performance_control.service import (
     register_performance_control,
 )
 

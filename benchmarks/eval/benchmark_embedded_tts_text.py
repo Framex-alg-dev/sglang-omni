@@ -15,7 +15,7 @@ import time
 import wave
 from pathlib import Path
 
-from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig, EmbeddedTTSConnection
+from sglang_omni.serve.embedded_tts import EmbeddedTTSConfig, EmbeddedTTSConnection
 from sglang_omni.utils.structured_logs import shutdown_structured_log_writer
 
 CASES = [

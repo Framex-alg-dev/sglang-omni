@@ -393,7 +393,6 @@ async def _run_server(
     model_name: str | None = None,
     log_level: str = "info",
     client_kwargs: dict[str, Any] | None = None,
-    enable_realtime: bool = False,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
@@ -797,7 +796,6 @@ async def _run_server(
                     pipeline_config.speech_reference_text_required
                 ),
                 additional_speech_languages=pipeline_config.additional_speech_languages,
-                enable_realtime=enable_realtime,
                 allowed_local_media_path=allowed_local_media_path,
                 allowed_media_domains=allowed_media_domains,
                 tts_batch_max_items=tts_batch_max_items,
@@ -809,7 +807,6 @@ async def _run_server(
             "lifecycle",
             "api_app_ready",
             backend="production",
-            realtime_enabled=enable_realtime,
             service_role=service_role,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
@@ -877,7 +874,6 @@ def launch_server(
     model_name: str | None = None,
     log_level: str = "info",
     client_kwargs: dict[str, Any] | None = None,
-    enable_realtime: bool = False,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
@@ -893,8 +889,6 @@ def launch_server(
         log_level: Uvicorn log level.
         client_kwargs: Extra keyword arguments forwarded to
             :class:`~sglang_omni.client.Client`.
-        enable_realtime: If True, mount the WebSocket ``/v1/realtime``
-            endpoint (OpenAI Realtime API).
         allowed_local_media_path: Directory allowed for ``file://`` media
             references in TTS requests.
         allowed_media_domains: Domains allowed for remote TTS reference audio.
@@ -910,7 +904,6 @@ def launch_server(
             model_name=model_name,
             log_level=log_level,
             client_kwargs=client_kwargs,
-            enable_realtime=enable_realtime,
             allowed_local_media_path=allowed_local_media_path,
             allowed_media_domains=allowed_media_domains,
             tts_batch_max_items=tts_batch_max_items,

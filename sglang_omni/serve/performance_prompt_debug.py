@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from .prompt_debug import _body, _state
-from .realtime.performance.prompts import PERFORMANCE_RULES
+from .performance_control.prompts import PERFORMANCE_RULES
 
 
 class ScoringPreviewCaptured(BaseException):
@@ -55,7 +55,7 @@ def install_performance_debug(app, *, token, response_factory):
         authenticate(request)
         current = state()
         data = await _body(request, current)
-        from .realtime.performance.service import PerformanceControlRequest
+        from .performance_control.service import PerformanceControlRequest
         try:
             native = PerformanceControlRequest.model_validate(data['payload'])
         except ValueError as exc:

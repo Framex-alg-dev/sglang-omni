@@ -25,7 +25,7 @@ Evaluation requires its exact state SHA-256, a complete rule set, and a native p
 Each trial uses an independent model/engine instance with the original registry and model
 client. No process-wide constant or runtime file is modified. Preview captures the real
 GenerateRequest before inference; run delegates to the existing model client and parser.
-Default inference entry points and shared realtime/performance/TTS modules remain in place.
+Default inference entry points remain. Performance now lives in serve/performance_control; embedded TTS and its text/buffer helpers live directly in serve. The old session Realtime entry and file overrides have retired.
 
 Router uses v1.0 platform scopes, not character persona. E67 uses its cached reference
 body; it does not interpolate dynamic character/session prompts. The generic proactive
