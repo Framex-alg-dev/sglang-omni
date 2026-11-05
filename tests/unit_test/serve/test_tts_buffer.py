@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from sglang_omni.serve.realtime.tts_buffer import buffered_appends, text_boundary
-from sglang_omni.serve.realtime.tts_text import TTSTextAppend
+from sglang_omni.serve.tts_buffer import buffered_appends, text_boundary
+from sglang_omni.serve.tts_text import TTSTextAppend
 
 
 def item(text, seq=1):

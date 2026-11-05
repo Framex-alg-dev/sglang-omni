@@ -20,7 +20,6 @@ from sglang_omni.models.qwen3_omni.action_token_mapping import (
 from sglang_omni.models.qwen3_omni.global_action_catalog import (
     load_global_action_catalog,
 )
-from sglang_omni.serve.realtime.action.decision import ACTION_DECISION_LABELS
 
 
 class FakeTokenizer:
@@ -184,42 +183,6 @@ def test_validation_rejects_tokenizer_drift_and_assignment_tampering() -> None:
         validate_mapping_manifest(tokenizer, tampered, parsed=parsed)
 
 
-def test_packaged_selection_mapping_covers_runtime_logical_ids() -> None:
-    mapping = load_selection_token_mapping()
-    catalog = load_global_action_catalog(
-        Path(__file__).resolve().parents[3]
-        / "sglang_omni/assets/character_limited_action_global_catalog.json"
-    )
-    expected = {
-        *catalog.candidate_by_id,
-        "000",
-        *ACTION_DECISION_LABELS,
-    }
-
-    mapping.validate_expected_ids(expected)
-    assert mapping.catalog_hash == catalog.catalog_hash
-    assert len(mapping.entries) == len(expected)
-    assert len({entry.text for entry in mapping.entries}) == len(expected)
-    assert len({entry.token_id for entry in mapping.entries}) == len(expected)
-    selection_tokens = {
-        candidate_id: entry.text
-        for candidate_id, entry in mapping.by_candidate_id.items()
-    }
-    shadow_prompt = catalog.action_system_prompt_for(
-        "zh-CN", selection_tokens=selection_tokens
-    )
-    enforce_prompt = catalog.action_system_prompt_for(
-        "zh-CN",
-        selection_tokens=selection_tokens,
-        output_selection_token=True,
-    )
-    first_id = next(iter(catalog.candidate_by_id))
-    assert (
-        f"selection_token={selection_tokens[first_id]} | candidate_id={first_id}"
-        in shadow_prompt
-    )
-    assert "selection_token 与 candidate_id 表示同一选择" in shadow_prompt
-    assert "选择一个 selection_token" in enforce_prompt
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])

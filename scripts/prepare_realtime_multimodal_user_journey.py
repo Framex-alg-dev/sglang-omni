@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from scipy.signal import resample_poly
 
-from sglang_omni.serve.realtime.embedded_tts import (
+from sglang_omni.serve.embedded_tts import (
     EmbeddedTTSConfig,
     EmbeddedTTSConnection,
 )

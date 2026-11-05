@@ -178,9 +178,14 @@ def build_cases(catalog_path: Path) -> tuple[dict, list[dict]]:
                 "source_label": action["source_label"],
             }
         )
+    excluded_natural_cases = []
     for case_id, text, candidate_id in NATURAL_CASES:
         if candidate_id not in action_by_id:
-            raise ValueError(f"unknown natural-case candidate_id: {candidate_id}")
+            excluded_natural_cases.append({
+                "case_id": f"natural-{case_id}", "text": text,
+                "absent_candidate_id": candidate_id,
+            })
+            continue
         category, action = action_by_id[candidate_id]
         cases.append(
             {
@@ -227,6 +232,7 @@ def build_cases(catalog_path: Path) -> tuple[dict, list[dict]]:
             "catalog_path": str(catalog_path.relative_to(ROOT)),
             "catalog_hash": catalog.catalog_hash,
             "catalog_candidate_count": catalog.candidate_count,
+            "excluded_natural_cases": excluded_natural_cases,
             "groups": {
                 "canonical_label": "One exact catalog-label command per action; measures catalog coverage.",
                 "natural_request": "Human-authored paraphrases; primary natural-language accuracy set.",

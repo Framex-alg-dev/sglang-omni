@@ -393,7 +393,6 @@ async def _run_server(
     model_name: str | None = None,
     log_level: str = "info",
     client_kwargs: dict[str, Any] | None = None,
-    enable_realtime: bool = False,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
@@ -643,11 +642,24 @@ async def _run_server(
                 "SGLANG_OMNI_TIMELINE_MODEL_VERSION",
                 os.environ.get("SGLANG_OMNI_MODEL_VERSION", ""),
             ).strip()
+            from sglang_omni.serve.prompt_runtime import load_runtime_bundle
+            from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
+            from sglang_omni.serve.timeline_prompt_debug import install_timeline_prompt_debug
+            timeline_bundle = await load_runtime_bundle('partial30', expected={
+                'model_id': model_name or pipeline_config.name, 'model_version': model_version,
+                'catalog_version': None, 'mapping_version': None,
+            })
+            # One immutable profile for every session, including prefix prefill.
+            timeline_profile = DirectE50Profile.from_environment(
+                system_prompt_override=timeline_bundle.rules['system_prompt'] if timeline_bundle else None,
+                prompt_version_override=timeline_bundle.release_id if timeline_bundle else None,
+            )
             app = create_timeline_detection_app(
                 lambda start: SglangClientTimelineDetectionModel(
                     client,
                     start,
                     model_version=model_version,
+                    direct_profile=timeline_profile,
                     inference_interval_ms=int(
                         os.environ.get(
                             "SGLANG_OMNI_TIMELINE_INFERENCE_INTERVAL_MS", "3000"
@@ -665,6 +677,9 @@ async def _run_server(
                 ),
                 token=token,
             )
+            install_timeline_prompt_debug(app, client=client, profile=timeline_profile,
+                bundle=timeline_bundle, model_id=model_name or pipeline_config.name,
+                model_version=model_version, token=token)
         elif service_role == "action-decision":
             from sglang_omni.serve.action_decision.service import (
                 ActionDecisionConfig,
@@ -781,7 +796,6 @@ async def _run_server(
                     pipeline_config.speech_reference_text_required
                 ),
                 additional_speech_languages=pipeline_config.additional_speech_languages,
-                enable_realtime=enable_realtime,
                 allowed_local_media_path=allowed_local_media_path,
                 allowed_media_domains=allowed_media_domains,
                 tts_batch_max_items=tts_batch_max_items,
@@ -793,7 +807,6 @@ async def _run_server(
             "lifecycle",
             "api_app_ready",
             backend="production",
-            realtime_enabled=enable_realtime,
             service_role=service_role,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
@@ -861,7 +874,6 @@ def launch_server(
     model_name: str | None = None,
     log_level: str = "info",
     client_kwargs: dict[str, Any] | None = None,
-    enable_realtime: bool = False,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
@@ -877,8 +889,6 @@ def launch_server(
         log_level: Uvicorn log level.
         client_kwargs: Extra keyword arguments forwarded to
             :class:`~sglang_omni.client.Client`.
-        enable_realtime: If True, mount the WebSocket ``/v1/realtime``
-            endpoint (OpenAI Realtime API).
         allowed_local_media_path: Directory allowed for ``file://`` media
             references in TTS requests.
         allowed_media_domains: Domains allowed for remote TTS reference audio.
@@ -894,7 +904,6 @@ def launch_server(
             model_name=model_name,
             log_level=log_level,
             client_kwargs=client_kwargs,
-            enable_realtime=enable_realtime,
             allowed_local_media_path=allowed_local_media_path,
             allowed_media_domains=allowed_media_domains,
             tts_batch_max_items=tts_batch_max_items,

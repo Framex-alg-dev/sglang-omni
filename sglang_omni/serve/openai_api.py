@@ -13,7 +13,6 @@ Provides the following endpoints:
 - GET  /v1/fs/list           — Browse filesystem directories
 - GET  /v1/fs/file           — Download a file
 - GET  /health               — Health check
-- WS   /v1/realtime          — OpenAI-compatible Realtime API (when enabled)
 """
 
 from __future__ import annotations
@@ -121,24 +120,10 @@ from sglang_omni.serve.protocol import (
     WeightsCheckerRequest,
 )
 from sglang_omni.serve.structured_output import response_json_schema
-from sglang_omni.serve.realtime.runtime_prompt_overrides import (
-    effective_runtime_prompt,
-    prompt_slot_payloads as realtime_prompt_slot_payloads,
-    write_runtime_prompt as write_realtime_prompt,
-)
 from sglang_omni.models.qwen3_omni.global_action_catalog import ACTION_INTENT_POLICY, ACTION_INTENT_POLICY_EN
-from sglang_omni.serve.realtime.proactive.policies import _POLICIES
-from sglang_omni.serve.realtime.performance.service import (
+from sglang_omni.serve.performance_control.service import (
     register_performance_control,
 )
-from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules
-from sglang_omni.serve.realtime.user_image_policy import (
-    USER_IMAGE_ACTION_RULES_ZH,
-    USER_IMAGE_ACTION_RULES_EN,
-    USER_IMAGE_REPLY_RULES_ZH,
-    USER_IMAGE_REPLY_RULES_EN,
-)
-from sglang_omni.serve.realtime.debug import register_realtime_debug_routes
 from sglang_omni.serve.speech_errors import (
     SpeechAPIError,
     bad_request,
@@ -262,7 +247,6 @@ def create_app(
     required_speech_reference_count: int | None = None,
     speech_reference_text_required: bool = False,
     additional_speech_languages: frozenset[str] = frozenset(),
-    enable_realtime: bool = False,
     allowed_local_media_path: str | None = None,
     allowed_media_domains: list[str] | None = None,
     admin_api_key: str | None = None,
@@ -286,8 +270,6 @@ def create_app(
         speech_reference_text_required: Whether each speech reference requires
             a transcript.
         additional_speech_languages: Pipeline-specific accepted languages.
-        enable_realtime: If True, mount the WebSocket ``/v1/realtime``
-            endpoint (OpenAI Realtime API).
         allowed_local_media_path: Directory allowed for ``file://`` TTS
             reference audio.
         allowed_media_domains: Domains allowed for remote TTS reference audio.
@@ -317,7 +299,6 @@ def create_app(
     app.state.client = client
     app.state.model_name = model_name or "sglang-omni"
     app.state.architectures = [a for a in (architectures or []) if a]
-    app.state.realtime_enabled = enable_realtime
     app.state.global_action_catalog = global_action_catalog
     app.state.global_action_prewarm = (
         global_action_prewarm or GlobalActionCatalogPrewarmStatus.not_run()
@@ -346,8 +327,6 @@ def create_app(
     _register_health(app)
     _register_models(app)
     _register_admin(app, resolved_key)
-    _register_runtime_prompt_overrides(app, resolved_key)
-    register_realtime_debug_routes(app, resolved_key)
     _register_chat_completions(app)
     _register_chat_completions_realtime(app)
     _register_action_scores(app)
@@ -358,66 +337,12 @@ def create_app(
     _register_speech_batch(app)
     _register_speech_ws(app)
     _register_transcriptions(app)
-    if enable_realtime:
-        _register_realtime(app)
     if enable_resource_monitor:
         _register_resource_monitor(app)
 
     return app
 
 
-def _register_runtime_prompt_overrides(
-    app: FastAPI,
-    admin_api_key: str | None = None,
-) -> None:
-    """Expose development prompt files through the existing admin boundary."""
-
-    auth = make_admin_auth_dependency(admin_api_key)
-
-    def prompt_defaults(locale: str) -> dict[str, str]:
-        english = locale == "en-US"
-        return {
-            "reply_rules": repository_reply_rules(locale),
-            "action_rules": ACTION_INTENT_POLICY_EN if english else ACTION_INTENT_POLICY,
-            "proactive_reply_rules": "\n\n".join(
-                f"[{trigger}]\n{policy.reply_policy_en if english else policy.reply_policy_zh}"
-                for trigger, policy in _POLICIES.items()
-            ),
-            "proactive_action_rules": "\n\n".join(
-                f"[{trigger}]\n{policy.default_action_guidance_en if english else policy.default_action_guidance_zh}"
-                for trigger, policy in _POLICIES.items()
-            ),
-            "user_image_reply_rules": USER_IMAGE_REPLY_RULES_EN if english else USER_IMAGE_REPLY_RULES_ZH,
-            "user_image_action_rules": USER_IMAGE_ACTION_RULES_EN if english else USER_IMAGE_ACTION_RULES_ZH,
-        }
-
-    @app.get("/admin/runtime-prompts", dependencies=[Depends(auth)])
-    async def list_runtime_prompts(locale: Literal["zh-CN", "en-US"] = "zh-CN") -> JSONResponse:
-        return JSONResponse(
-            content={"items": realtime_prompt_slot_payloads(prompt_defaults(locale), language=locale)}
-        )
-
-    @app.put("/admin/runtime-prompts/{key}", dependencies=[Depends(auth)])
-    async def update_runtime_prompt(key: str, request: Request, locale: Literal["zh-CN", "en-US"] = "zh-CN") -> JSONResponse:
-        try:
-            payload = await request.json()
-            if not isinstance(payload, dict) or set(payload) != {"content"}:
-                raise ValueError("request must contain only content")
-            content = payload.get("content")
-            if not isinstance(content, str):
-                raise ValueError("content must be a string")
-            write_realtime_prompt(key, content, language=locale)
-            item = next(
-                item
-                for item in realtime_prompt_slot_payloads(prompt_defaults(locale), language=locale)
-                if item["key"] == key
-            )
-            return JSONResponse(content=item)
-        except (ValueError, StopIteration) as exc:
-            return JSONResponse(
-                content={"error": "RUNTIME_PROMPT_INVALID", "detail": str(exc)},
-                status_code=422,
-            )
 
 
 def _register_voices(app: FastAPI) -> None:
@@ -1241,19 +1166,6 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
 
     # Convert messages
     messages = [Message(role=m.role, content=m.content) for m in req.messages]
-    if req.runtime_prompt_profile == "reply":
-        messages.insert(
-            0,
-            Message(
-                role="system",
-                content=effective_runtime_prompt(
-                    "reply_rules",
-                    repository_reply_rules(req.runtime_prompt_language),
-                    language=req.runtime_prompt_language,
-                ),
-            ),
-        )
-
     # Determine output modalities
     output_modalities = req.modalities or ["text"]  # e.g. ["text", "audio"]
 
@@ -1301,9 +1213,6 @@ def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:
         metadata["session_instance_id"] = req.session_instance_id
     if req.runtime_workload_class is not None:
         metadata["runtime_workload_class"] = req.runtime_workload_class
-    if req.runtime_prompt_profile is not None:
-        metadata["runtime_prompt_profile"] = req.runtime_prompt_profile
-        metadata["runtime_prompt_language"] = req.runtime_prompt_language
     _record_explicit_generation_params(
         metadata,
         _explicit_generation_params(req),
@@ -1519,23 +1428,6 @@ def _build_generate_response(
     return GenerateResponse(text=result.text, audio=audio, meta_info=meta_info)
 
 
-def _register_realtime(app: FastAPI) -> None:
-    """Mount the OpenAI-compatible WebSocket Realtime endpoint."""
-    from sglang_omni.serve.realtime import RealtimeSessionManager
-
-    client: Client = app.state.client
-    model_name: str = app.state.model_name
-    manager = RealtimeSessionManager(client=client, model_name=model_name)
-    app.state.realtime_manager = manager
-
-    @app.websocket("/v1/realtime")
-    async def realtime(websocket: WebSocket) -> None:
-        await websocket.accept()
-        session = manager.open(websocket)
-        try:
-            await session.run()
-        finally:
-            await manager.close(session.session_id)
 
 
 def _register_speech(app: FastAPI) -> None:

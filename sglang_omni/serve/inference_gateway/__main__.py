@@ -39,6 +39,7 @@ def main() -> None:
         "http://127.0.0.1:50001/v1/tts/stream",
     ).strip()
     config = InferenceGatewayConfig(
+        prompt_debug_token=os.environ.get("SGLANG_OMNI_PROMPT_DEBUG_TOKEN", ""),
         stages={
             "classifier": UpstreamStage(
                 os.environ.get(

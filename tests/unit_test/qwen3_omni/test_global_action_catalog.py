@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -27,17 +29,28 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     load_global_action_catalog,
     prewarm_global_action_catalog,
 )
-from sglang_omni.serve.realtime.multimodal import MultimodalSession
+
+
+
+def _reviewed_limited_catalog():
+    root = Path(__file__).parents[3]
+    contract = json.loads(
+        (root / "tests/unit_test/fixtures/limited_action_catalog_contract.json").read_text()
+    )
+    path = root / contract["catalog_path"]
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == contract["file_sha256"]
+    catalog = load_global_action_catalog(path)
+    assert catalog.catalog_hash == contract["catalog_hash"]
+    assert catalog.catalog_version == contract["catalog_version"]
+    assert set(catalog.category_by_id) == set(contract["category_ids"])
+    assert set(catalog.candidate_by_id) == set(contract["candidate_ids"])
+    return catalog, contract
 
 
 def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action() -> None:
-    catalog_path = (
-        Path(__file__).parents[3]
-        / "sglang_omni/assets/character_limited_action_global_catalog.json"
-    )
-    catalog = load_global_action_catalog(catalog_path)
+    catalog, contract = _reviewed_limited_catalog()
 
-    assert catalog.candidate_count == 117
+    assert catalog.candidate_count == len(contract["candidate_ids"])
     assert all(
         candidate.user_reaction_expression.strip()
         and candidate.proactive_expression.strip()
@@ -56,11 +69,7 @@ def test_limited_catalog_defines_user_and_proactive_semantics_for_every_action()
 
 
 def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
-    catalog_path = (
-        Path(__file__).parents[3]
-        / "sglang_omni/assets/character_limited_action_global_catalog.json"
-    )
-    catalog = load_global_action_catalog(catalog_path)
+    catalog, contract = _reviewed_limited_catalog()
     idle = catalog.candidate_by_id["130"]
 
     zh_user = idle.effective_definition("user", "zh-CN")
@@ -74,10 +83,34 @@ def test_limited_catalog_selects_candidate_expressions_by_locale() -> None:
     assert en_proactive.startswith("Select only when no expressive goal")
     assert en_user in catalog.action_system_prompt_for("en-US", "user")
     assert en_user not in catalog.action_system_prompt_for("zh-CN", "user")
-    assert sum(
-        "en-US" in candidate.expressions_by_locale
+    assert {
+        candidate.candidate_id
         for candidate in catalog.candidate_by_id.values()
-    ) == 117
+        if "en-US" in candidate.expressions_by_locale
+    } == set(contract["english_expression_ids"])
+    raw = json.loads((Path(__file__).parents[3] / contract["catalog_path"]).read_text())
+    source = {
+        child["candidate_id"]: child
+        for category in raw["categories"]
+        for child in category["children"]
+    }
+    for locale in ("zh-CN", "en-US"):
+        for origin, field in (("user", "user_reaction_expression"),
+                              ("proactive", "proactive_expression")):
+            prompt = catalog.action_system_prompt_for(locale, origin)
+            for candidate_id, candidate in catalog.candidate_by_id.items():
+                original = source[candidate_id]
+                localized = original.get("expressions_by_locale", {}).get(locale, {})
+                expected = localized.get(field) or original[field]
+                assert candidate.effective_definition(origin, locale) == expected
+                label = original.get("prompt_text_by_locale", {}).get(locale, {}).get("label", original["source_label"])
+                row = (f"candidate_id={candidate_id} | action={label} | description={expected}"
+                       if locale == "en-US" else
+                       f"candidate_id={candidate_id}｜动作={label}｜说明={expected}")
+                assert row in prompt
+            assert set(re.findall(r"^candidate_id=(\d+)", prompt, re.MULTILINE)) == (
+                set(contract["candidate_ids"]) | {"000"}
+            )
 
 
 def test_action_prompts_do_not_include_cross_turn_action_history() -> None:
@@ -1062,972 +1095,52 @@ def _session_start_payload() -> dict:
     }
 
 
-@pytest.mark.asyncio
-async def test_session_uses_global_prompts_and_dynamic_whitelists(tmp_path) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _ScoreClient()
-    ws = _WebSocket()
-    claimed = {}
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        action_category_top_k=1,
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: claimed.setdefault(
-            session_id, value
-        ),
-        release_session=lambda session_id, value: claimed.pop(session_id, None),
-    )
+def test_runtime_startup_and_public_prefix_use_reviewed_limited_catalog(monkeypatch):
+    from sglang_omni.serve.launcher import _load_production_action_catalog_support
+    from sglang_omni.models.qwen3_omni import public_prefix
 
-    await session.handle_session_start(_session_start_payload())
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-1",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-1",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "你好",
-        }
-    )
-
-    assert client.prefill_calls == 0
-    category_request, child_request = client.requests
-    assert category_request.system_prompt == catalog.category_system_prompt
-    assert "category_id=02" in category_request.system_prompt
-    assert "[本次会话允许选择的动作类别]" in category_request.prefix
-    assert "可用的真实 category_id：08、01" in category_request.prefix
-    assert "按优先级从高到低为：08（待机动作）" in category_request.prefix
-    assert "该列表只定义不支持判定后的可执行兜底顺序" in (
-        category_request.prefix
-    )
-    assert "不得把执行兜底类别当作已支持该请求的替代类别" in (
-        category_request.prefix
-    )
-    assert "PPL" not in category_request.prefix
-    assert "硬过滤" not in category_request.prefix
-    assert "02" not in category_request.prefix
-    assert [item.candidate_id for item in category_request.candidates] == [
-        "08",
-        "01",
-        UNSUPPORTED_CATEGORY_SCORE_ID,
-    ]
-    assert category_request.candidates[-1].suffix == "00"
-    assert category_request.candidates[-1].action_id == "UNSUPPORTED"
-    assert category_request.prefix_cache_namespace.startswith(
-        catalog.category_cache_namespace() + f":session:{session.session_instance_id}:"
-    )
-    category_omni_request = Client._build_action_scoring_request(
-        category_request
-    )
-    assert category_omni_request.params["action_scoring"][
-        "cache_static_system_only"
-    ] is True
-    assert child_request.system_prompt == catalog.child_system_prompts["01"]
-    assert "candidate_id=002" in child_request.system_prompt
-    assert "只允许从以下 candidate_id 中选择：001" in child_request.prefix
-    assert "即使当前类别也被列为执行兜底类别" in child_request.prefix
-    assert [item.candidate_id for item in child_request.candidates] == [
-        "001",
-        UNSUPPORTED_CHILD_SCORE_ID,
-    ]
-    assert child_request.candidates[-1].suffix == "000"
-    assert child_request.candidates[-1].action_id == "UNSUPPORTED"
-    assert child_request.prefix_cache_namespace.startswith(catalog.child_cache_namespace(
-        "01"
-    ) + f":session:{session.session_instance_id}:")
-    started = next(item for item in ws.events if item["type"] == "session.started")
-    assert started["fallback_category_ids"] == ["08"]
-    assert started["global_action_catalog_hash"] == catalog.catalog_hash
-    assert started["session_action_catalog_hash"] != catalog.catalog_hash
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"] == {
-        "action_id": "001",
-        "candidate_id": "001",
-            "category_id": "01",
-            "execute": True,
-            "support_status": "supported",
-            "fallback_applied": False,
-            "execution_binding": {"asset_id": "wave-1"},
-    }
-
-
-@pytest.mark.asyncio
-async def test_english_session_uses_isolated_english_prompts_without_translating_client_text(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _ScoreClient()
-    session = MultimodalSession(
-        _WebSocket(),
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        action_category_top_k=1,
-        global_action_catalog=catalog,
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["language"] = "en"
-    payload["action_profile"] = {
-        "persona": {"role": "海洋科学家"},
-        "category_preferences": "优先低打扰类别",
-        "action_preferences": "避免大幅位移",
-    }
-    await session.handle_session_start(payload)
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-en",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-en",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "你好",
-        }
-    )
-
-    category_request, child_request = client.requests
-    assert session.locale == "en-US"
-    assert category_request.language == "en"
-    assert category_request.system_prompt == catalog.category_system_prompt_for(
-        "en-US"
-    )
-    assert child_request.system_prompt == catalog.child_system_prompt_for(
-        "en-US", "01"
-    )
-    assert category_request.output_prompt == "Best matching category_id:"
-    assert child_request.output_prompt == "Best matching candidate_id:"
-    assert category_request.current_text == "你好"
-    assert child_request.current_text == "你好"
-    assert "Action categories allowed in this conversation" in category_request.prefix
-    assert "海洋科学家" in category_request.session_instruction
-    assert "优先低打扰类别" in category_request.session_instruction
-    assert "避免大幅位移" in child_request.session_instruction
-    assert session.action_prefix_cache_namespace == catalog.category_cache_namespace(
-        "en-US"
-    )
-
-
-@pytest.mark.asyncio
-async def test_chinese_and_english_sessions_cannot_share_localized_prefixes(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    sessions = [
-        MultimodalSession(
-            _WebSocket(),
-            client=_ScoreClient(),  # type: ignore[arg-type]
-            model_name="Qwen3-Omni",
-            global_action_catalog=catalog,
-            claim_session=lambda session_id, value: None,
-            release_session=lambda session_id, value: None,
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_PATH", raising=False)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_CATALOG_MODE", "limited")
+    reviewed, contract = _reviewed_limited_catalog()
+    runtime, _ = _load_production_action_catalog_support()
+    assert runtime.direct_action_selection is True
+    assert runtime.catalog_hash == reviewed.catalog_hash
+    assert set(runtime.candidate_by_id) == set(contract["candidate_ids"])
+    public_prefix.published_prompts.cache_clear()
+    try:
+        expected = frozenset(
+            runtime.action_system_prompt_for(locale, origin)
+            for locale in ("zh-CN", "en-US")
+            for origin in ("user", "proactive")
         )
-        for _ in range(2)
-    ]
-    zh_payload = _session_start_payload()
-    zh_payload.update({"session_id": "session-zh", "language": "zh"})
-    en_payload = _session_start_payload()
-    en_payload.update({"session_id": "session-en", "language": "en"})
-
-    await asyncio.gather(
-        sessions[0].handle_session_start(zh_payload),
-        sessions[1].handle_session_start(en_payload),
-    )
-
-    assert sessions[0].locale == "zh-CN"
-    assert sessions[1].locale == "en-US"
-    assert sessions[0].action_system_prompt == catalog.category_system_prompt_for(
-        "zh-CN"
-    )
-    assert sessions[1].action_system_prompt == catalog.category_system_prompt_for(
-        "en-US"
-    )
-    assert (
-        sessions[0].action_prefix_cache_namespace
-        != sessions[1].action_prefix_cache_namespace
-    )
+        assert public_prefix.published_prompts() == expected
+        assert all(public_prefix.is_published_prompt(prompt) for prompt in expected)
+        assert all(not public_prefix.is_published_prompt(prompt + "\nPRIVATE_ROLE")
+                   for prompt in expected)
+    finally:
+        public_prefix.published_prompts.cache_clear()
 
 
 @pytest.mark.asyncio
-async def test_hierarchical_action_scoring_omits_cross_turn_history(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(category="01", child="001")
-    session = MultimodalSession(
-        _WebSocket(),
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["modalities"] = ["text", "action"]
-    await session.handle_session_start(payload)
+async def test_runtime_limited_prewarm_covers_exact_candidates_and_locales(monkeypatch):
+    from sglang_omni.serve.launcher import _load_production_action_catalog_support
 
-    for turn_id, text in (("turn-1", "你好"), ("turn-2", "再来一次")):
-        await session.handle_turn_start(
-            {
-                "type": "turn.start",
-                "turn_id": turn_id,
-                "turn_origin": "user",
-                "text_role": "user_input",
-            }
-        )
-        await session.handle_turn_commit(
-            {
-                "type": "turn.commit",
-                "turn_id": turn_id,
-                "turn_origin": "user",
-                "text_role": "user_input",
-                "text": text,
-            }
-        )
-
-    action_requests = [
-        request
-        for request in client.requests
-        if request.stage in {"category", "child"}
-    ]
-    category_request, child_request = action_requests[2:]
-    for request in (category_request, child_request):
-        assert request.history_audios == []
-        assert request.history_images == []
-        assert request.history == []
-        assert request.avatar_state == {}
-
-
-@pytest.mark.asyncio
-async def test_category_00_still_recalls_real_category_and_child_decides_support(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(
-        category=UNSUPPORTED_CATEGORY_SCORE_ID,
-        category_runner_up="01",
-        child="001",
-    )
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["fallback_category_ids"] = ["01", "08"]
-    await session.handle_session_start(payload)
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-unsupported-category",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-unsupported-category",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "做个后空翻",
-        }
-    )
-
-    assert [item.stage for item in client.requests] == ["category", "child"]
-    assert [item.candidate_id for item in client.requests[1].candidates] == [
-        "001",
-        "008",
-        UNSUPPORTED_CHILD_SCORE_ID,
-    ]
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "01"
-    assert result["action"]["candidate_id"] == "001"
-    assert result["action"]["execute"] is True
-    assert result["action"]["support_status"] == "supported"
-    assert result["action"]["fallback_applied"] is False
-    context = result["media_summary"]["action_context"]
-    assert context["category_scoring_candidate_id"] == (
-        UNSUPPORTED_CATEGORY_SCORE_ID
-    )
-    assert context["category_decision_id"] == "01"
-
-
-@pytest.mark.asyncio
-async def test_category_00_waits_for_child_before_discarding_reply(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(
-        category=UNSUPPORTED_CATEGORY_SCORE_ID,
-        category_runner_up="01",
-        child=UNSUPPORTED_CHILD_SCORE_ID,
-        reply_route="R2",
-    )
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["modalities"] = ["text", "action"]
-    payload["instructions"] = "自然简洁地回复。"
-    payload["unsupported_action_text"] = "这个动作暂时做不了。"
-    await session.handle_session_start(payload)
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-unsupported-reply",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-unsupported-reply",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "做个后空翻",
-        }
-    )
-
-    assert len([r for r in client.completion_requests if r.metadata.get("task") != "session_turn_intent"]) == 2
-    reply_request = client.completion_requests[-1]
-    assert {"type": "text", "text": "做个后空翻"} in (
-        reply_request.messages[-1].content
-    )
-    resolved = next(
-        item
-        for item in ws.events
-        if item["type"] == "response.provisional.resolved"
-    )
-    assert resolved["status"] == "discarded"
-    assert resolved["reason"] == "child_unsupported"
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["reply"]["text"] == client.completion_text
-    assert result["reply"]["source"] == "generated"
-    assert result["action"]["support_status"] == "unsupported"
-    assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        result["reply"]["text"]
-    )
-    assert session.reply_history_turns[-1].model_visible is False
-    assert (
-        session.reply_history_turns[-1].history_kind
-        == "unsupported_action_notice"
-    )
-
-
-@pytest.mark.asyncio
-async def test_child_unsupported_routes_to_default_idle_action(tmp_path) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(
-        category="01",
-        child=UNSUPPORTED_CHILD_SCORE_ID,
-        reply_route="R2",
-    )
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        action_category_top_k=1,
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    await session.handle_session_start(_session_start_payload())
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-unsupported-child",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-unsupported-child",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "敬个军礼",
-        }
-    )
-
-    child_request = client.requests[1]
-    assert [item.candidate_id for item in child_request.candidates] == [
-        "001",
-        UNSUPPORTED_CHILD_SCORE_ID,
-    ]
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "08"
-    assert result["action"]["candidate_id"] == "008"
-    assert result["action"]["execute"] is True
-    assert result["action"]["support_status"] == "unsupported"
-    assert result["action"]["fallback_applied"] is True
-
-
-@pytest.mark.asyncio
-async def test_default_category_child_can_reject_explicit_action_request(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(
-        category="08", child=UNSUPPORTED_CHILD_SCORE_ID
-    )
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        action_category_top_k=1,
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    await session.handle_session_start(_session_start_payload())
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-default-child-unsupported",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-default-child-unsupported",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "做个后空翻",
-        }
-    )
-
-    child_request = client.requests[1]
-    assert [item.candidate_id for item in child_request.candidates] == [
-        "008",
-        UNSUPPORTED_CHILD_SCORE_ID,
-    ]
-    assert "即使当前类别也被列为执行兜底类别" in child_request.prefix
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "08"
-    assert result["action"]["candidate_id"] == "008"
-    assert result["action"]["support_status"] == "unsupported"
-    assert result["action"]["fallback_applied"] is True
-
-
-@pytest.mark.asyncio
-async def test_child_unsupported_discards_provisional_reply_and_records_fallback_text(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(
-        category="01",
-        child=UNSUPPORTED_CHILD_SCORE_ID,
-        reply_route="R2",
-    )
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["modalities"] = ["text", "action"]
-    payload["unsupported_action_text"] = "这个动作暂时做不了。"
-    await session.handle_session_start(payload)
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-child-unsupported-fusion",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-child-unsupported-fusion",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "敬个军礼",
-        }
-    )
-
-    resolved = next(
-        item
-        for item in ws.events
-        if item["type"] == "response.provisional.resolved"
-    )
-    assert resolved["status"] == "discarded"
-    assert resolved["reason"] == "child_unsupported"
-    assert not any(item["type"] == "response.text.delta" for item in ws.events)
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["modalities"]["text"] == "completed"
-    assert result["reply"] == {
-        "source": "generated",
-        "reason": "unsupported_action",
-        "text": client.completion_text,
-        "recorded_in_history": True,
-    }
-    assert result["action"]["support_status"] == "unsupported"
-    assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        result["reply"]["text"]
-    )
-    assert session.reply_history_turns[-1].model_visible is False
-    assert (
-        session.reply_history_turns[-1].history_kind
-        == "unsupported_action_notice"
-    )
-    assert "这个动作暂时做不了。" not in (
-        session.history_turns[-1].messages[-1]["content"]
-    )
-
-    # The notice remains auditable, but must not become an ordinary assistant
-    # example that a later supported reply can imitate.
-    client.category = "01"
-    client.child = "001"
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-after-unsupported",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-after-unsupported",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "向我挥手",
-        }
-    )
-    next_reply_messages = [
-        message.to_dict()
-        for message in client.completion_requests[-1].messages
-    ]
-    assert "这个动作暂时做不了。" not in json.dumps(
-        next_reply_messages, ensure_ascii=False
-    )
-
-
-@pytest.mark.asyncio
-async def test_language_required_reply_survives_unsupported_action(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(
-        category="01",
-        child=UNSUPPORTED_CHILD_SCORE_ID,
-        reply_route="R0",
-        completion_text="会呀，你想听什么风格的歌？",
-    )
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["modalities"] = ["text", "action"]
-    payload["unsupported_action_text"] = "这个动作暂时做不了。"
-    await session.handle_session_start(payload)
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-capability-question",
-            "turn_origin": "user",
-            "text_role": "user_input",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-capability-question",
-            "turn_origin": "user",
-            "text_role": "user_input",
-            "text": "你可以唱歌吗",
-        }
-    )
-
-    resolved = next(
-        item
-        for item in ws.events
-        if item["type"] == "response.provisional.resolved"
-    )
-    assert resolved["status"] == "promoted"
-    assert resolved["reason"] == "language_required"
-    assert any(item["type"] == "response.text.done" for item in ws.events)
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["modalities"]["text"] == "completed"
-    assert result["reply"] == {
-        "text": "会呀，你想听什么风格的歌？",
-        "source": "generated",
-    }
-    assert result["action"]["support_status"] == "unsupported"
-    assert session.reply_history_turns[-1].messages[-1]["content"] == (
-        "会呀，你想听什么风格的歌？"
-    )
-    assert session.reply_history_turns[-1].model_visible is True
-    assert session.reply_history_turns[-1].history_kind == "reply"
-    assert "这个动作暂时做不了。" not in json.dumps(
-        session.history_turns[-1].messages,
-        ensure_ascii=False,
-    )
-
-
-@pytest.mark.asyncio
-async def test_proactive_hard_candidate_exclusion_filters_conflicting_category(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = _DecisionScoreClient(category="08", child="001")
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws,
-        client=client,  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True,
-            frozenset({"08", "01", "02"}),
-            frozenset(),
-            1.0,
-        ),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    await session.handle_session_start(_session_start_payload())
-    await session.handle_turn_start(
-        {
-            "type": "turn.start",
-            "turn_id": "turn-proactive-no-idle",
-            "turn_origin": "proactive",
-            "text_role": "character_reply",
-            "trigger": "idle_timeout",
-        }
-    )
-    await session.handle_turn_commit(
-        {
-            "type": "turn.commit",
-            "turn_id": "turn-proactive-no-idle",
-            "turn_origin": "proactive",
-            "text_role": "character_reply",
-            "trigger": "idle_timeout",
-            "avatar_state": {
-                "state_description": (
-                    "选择一个清晰可见且有实际身体变化的后续动作。"
-                    "禁止：选择自然待机、自然呼吸或其他微动作。"
-                )
-            },
-            "action_excluded_candidate_ids": ["008"],
-        }
-    )
-
-    category_request = client.requests[0]
-    assert "08" not in {
-        candidate.candidate_id for candidate in category_request.candidates
-    }
-    assert "禁止：选择自然待机、自然呼吸或其他微动作" in (
-        category_request.avatar_state["state_description"]
-    )
-    assert "已从本轮可选集合移除：08" in category_request.prefix
-    result = next(item for item in ws.events if item["type"] == "turn.result")
-    assert result["action"]["category_id"] == "01"
-    assert result["action"]["candidate_id"] == "001"
-
-
-@pytest.mark.asyncio
-async def test_session_rejects_semantic_mismatch_against_global_catalog(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    payload = _session_start_payload()
-    payload["action_candidates"][1]["children"][0]["source_label"] = "客户端篡改名称"
-    session = MultimodalSession(
-        _WebSocket(),
-        client=_ScoreClient(),  # type: ignore[arg-type]
-        model_name="Qwen3-Omni",
-        global_action_catalog=catalog,
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-
-    with pytest.raises(ValueError, match="does not match the global catalog"):
-        await session.handle_session_start(payload)
-
-
-@pytest.mark.asyncio
-async def test_global_prefix_sharing_keeps_session_whitelists_and_bindings_isolated(
-    tmp_path,
-) -> None:
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    status = GlobalActionCatalogPrewarmStatus(
-        True,
-        frozenset({"08", "01", "02"}),
-        frozenset(),
-        1.0,
-    )
-
-    async def run_session(
-        *,
-        session_id: str,
-        category_id: str,
-        candidate_id: str,
-        asset_id: str,
-        persona_role: str,
+    monkeypatch.delenv("SGLANG_OMNI_ACTION_CATALOG_PATH", raising=False)
+    monkeypatch.setenv("SGLANG_OMNI_ACTION_CATALOG_MODE", "limited")
+    monkeypatch.setenv("SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S", "30")
+    _, contract = _reviewed_limited_catalog()
+    catalog, prewarm = _load_production_action_catalog_support()
+    client = _PrefillClient()
+    await prewarm(client, model="reviewed-runtime", catalog=catalog)
+    assert len(client.calls) == 4
+    for call, (locale, origin) in zip(
+        client.calls,
+        [(locale, origin) for locale in ("zh-CN", "en-US")
+         for origin in ("user", "proactive")],
     ):
-        client = _WhitelistScoreClient()
-        session = MultimodalSession(
-            _WebSocket(),
-                client=client,  # type: ignore[arg-type]
-                model_name="Qwen3-Omni",
-                action_category_top_k=1,
-                global_action_catalog=catalog,
-            global_action_prewarm=status,
-            claim_session=lambda claimed_id, value: None,
-            release_session=lambda claimed_id, value: None,
+        assert {c.candidate_id for c in call["candidates"]} == (
+            set(contract["candidate_ids"]) | {"000"}
         )
-        global_category = catalog.category_by_id[category_id]
-        global_candidate = catalog.candidate_by_id[candidate_id]
-        payload = _session_start_payload()
-        payload["session_id"] = session_id
-        payload["action_profile"] = {
-            "persona": {"role": persona_role},
-            "category_preferences": f"{persona_role}类目偏好",
-            "action_preferences": f"{persona_role}动作偏好",
-        }
-        payload["action_candidates"] = [
-            payload["action_candidates"][0],
-            {
-                "category_id": category_id,
-                "source_label": global_category.source_label,
-                "short_definition": global_category.short_definition,
-                "category_path": list(global_category.category_path),
-                "children": [
-                    {
-                        "candidate_id": candidate_id,
-                        "action_id": global_candidate.action_id,
-                        "source_label": global_candidate.source_label,
-                        "short_definition": global_candidate.source_short_definition,
-                        "execution_binding": {"asset_id": asset_id},
-                    }
-                ],
-            },
-        ]
-        await session.handle_session_start(payload)
-        await session.handle_turn_start(
-            {
-                "type": "turn.start",
-                "turn_id": "turn-1",
-                "turn_origin": "user",
-                "text_role": "user_input",
-            }
-        )
-        await session.handle_turn_commit(
-            {
-                "type": "turn.commit",
-                "turn_id": "turn-1",
-                "turn_origin": "user",
-                "text_role": "user_input",
-                "text": "测试",
-            }
-        )
-        return session, client
-
-    first, first_client = await run_session(
-        session_id="session-a",
-        category_id="01",
-        candidate_id="001",
-        asset_id="asset-a",
-        persona_role="海洋科学家",
-    )
-    second, second_client = await run_session(
-        session_id="session-b",
-        category_id="02",
-        candidate_id="003",
-        asset_id="asset-b",
-        persona_role="卡通主持人",
-    )
-
-    assert first.action_prefix_cache_namespace == second.action_prefix_cache_namespace
-    assert first.action_prefix_cache_namespace == catalog.category_cache_namespace()
-    assert first_client.requests[0].system_prompt == second_client.requests[0].system_prompt
-    assert (
-        "职业或角色定位=海洋科学家"
-        in first_client.requests[0].session_instruction
-    )
-    assert "卡通主持人" not in first_client.requests[0].session_instruction
-    assert (
-        "职业或角色定位=卡通主持人"
-        in second_client.requests[0].session_instruction
-    )
-    assert "海洋科学家" not in second_client.requests[0].session_instruction
-    assert (
-        first_client.requests[0].prefix_cache_namespace
-        != second_client.requests[0].prefix_cache_namespace
-    )
-    assert [item.candidate_id for item in first_client.requests[0].candidates] == [
-        "08",
-        "01",
-        UNSUPPORTED_CATEGORY_SCORE_ID,
-    ]
-    assert [item.candidate_id for item in second_client.requests[0].candidates] == [
-        "08",
-        "02",
-        UNSUPPORTED_CATEGORY_SCORE_ID,
-    ]
-    assert first_client.requests[1].prefix_cache_namespace.startswith(
-        catalog.child_cache_namespace("01") + ":session:"
-    )
-    assert (
-        "海洋科学家动作偏好"
-        in first_client.requests[1].session_instruction
-    )
-    assert "卡通主持人" not in first_client.requests[1].session_instruction
-    assert second_client.requests[1].prefix_cache_namespace.startswith(
-        catalog.child_cache_namespace("02") + ":session:"
-    )
-    assert (
-        "卡通主持人动作偏好"
-        in second_client.requests[1].session_instruction
-    )
-    assert "海洋科学家" not in second_client.requests[1].session_instruction
-    assert first.candidate_by_id["001"].execution_binding == {
-        "asset_id": "asset-a"
-    }
-    assert second.candidate_by_id["003"].execution_binding == {
-        "asset_id": "asset-b"
-    }
-    assert "003" not in first.candidate_by_id
-    assert "001" not in second.candidate_by_id
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cancel", [False, True])
-async def test_rejection_generation_does_not_block_fallback_action_or_emit_audio(tmp_path, cancel):
-    class GatedClient(_DecisionScoreClient):
-        def __init__(self):
-            super().__init__(category="01", child=UNSUPPORTED_CHILD_SCORE_ID, reply_route="R2")
-            self.rejection_started = asyncio.Event()
-            self.release_rejection = asyncio.Event()
-
-        async def completion(self, request, *, request_id):
-            if request.metadata.get("task") == "session_action_rejection":
-                self.rejection_started.set()
-                await self.release_rejection.wait()
-            return await super().completion(request, request_id=request_id)
-
-    catalog = load_global_action_catalog(_write_catalog(tmp_path))
-    client = GatedClient()
-    ws = _WebSocket()
-    session = MultimodalSession(
-        ws, client=client, model_name="Qwen3-Omni", global_action_catalog=catalog,
-        global_action_prewarm=GlobalActionCatalogPrewarmStatus(
-            True, frozenset({"08", "01", "02"}), frozenset(), 1.0),
-        claim_session=lambda session_id, value: None,
-        release_session=lambda session_id, value: None,
-    )
-    payload = _session_start_payload()
-    payload["modalities"] = ["text", "action"]
-    payload["unsupported_action_text"] = "固定兜底句"
-    await session.handle_session_start(payload)
-    await session.handle_turn_start({"type": "turn.start", "turn_id": "turn-gated",
-                                    "turn_origin": "user", "text_role": "user_input"})
-    task = asyncio.create_task(session.handle_turn_commit({
-        "type": "turn.commit", "turn_id": "turn-gated", "text": "请做个后空翻",
-        "turn_origin": "user", "text_role": "user_input"}))
-    await asyncio.wait_for(client.rejection_started.wait(), timeout=2)
-    actions = [e for e in ws.events if e["type"] == "turn.action.ready"]
-    assert len(actions) == 1
-    assert actions[0]["action"]["support_status"] == "unsupported"
-    assert actions[0]["action"]["fallback_applied"] is True
-    assert not any(e["type"] == "turn.result" for e in ws.events)
-    assert not any(e["type"] in {"response.text.delta", "response.audio.delta"} for e in ws.events)
-    if cancel:
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert not any(e["type"] == "turn.result" for e in ws.events)
-        assert not session.reply_history_turns
-    else:
-        client.release_rejection.set()
-        await task
-        result = next(e for e in ws.events if e["type"] == "turn.result")
-        assert result["reply"]["text"] == client.completion_text
-        assert session.reply_history_turns[-1].messages[-1]["content"] == result["reply"]["text"]
+        assert call["system_prompt"] == catalog.action_system_prompt_for(locale, origin)
+        assert call["prefix_cache_namespace"] == catalog.action_cache_namespace(locale, origin)
+        assert call["stage"] == "single"

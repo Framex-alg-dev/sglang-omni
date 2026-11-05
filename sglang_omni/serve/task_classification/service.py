@@ -47,6 +47,11 @@ def create_task_classification_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        from sglang_omni.serve.prompt_runtime import install_router_runtime
+        # Configuration disabled preserves other/legacy model adapters.
+        import os
+        if os.environ.get('KNOWLEDGE_PROMPT_ENABLED','false').lower() == 'true':
+            await install_router_runtime(pipeline)
         try:
             await pipeline.prewarm()
         except Exception:
@@ -66,6 +71,9 @@ def create_task_classification_app(
             request.headers.get("authorization", ""), f"Bearer {token}"
         ):
             raise HTTPException(status_code=404, detail="not found")
+
+    from sglang_omni.serve.prompt_debug import install_router_debug
+    install_router_debug(app, pipeline=pipeline, authenticate=authenticate, invoke=_classify_payload)
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:

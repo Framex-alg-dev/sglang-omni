@@ -59,7 +59,6 @@ Additional model guides, including experimental and research-oriented paths, are
 - [MOSS-Transcribe-Diarize cookbook](https://sgl-project.github.io/sglang-omni/cookbook/moss_transcribe_diarize.html)
 - [Omni router](https://sgl-project.github.io/sglang-omni/basic_usage/omni_router.html)
 - [Developer reference](https://sgl-project.github.io/sglang-omni/developer_reference/main.html)
-- [Session Realtime 客户端接入：文本回复与数字人动作](./docs/developer_reference/action_inference/realtime_reply_action_client_guide.md)
 - [Realtime Session 调试页面：Prompt 与端到端耗时](./docs/developer_reference/action_inference/realtime_session_debug.md)
 
 ## Community & Support
@@ -71,3 +70,5 @@ Organizations interested in supporting SGLang-Omni, TTS, or omni model serving c
 ## Acknowledgments
 
 SGLang-Omni builds on the SGLang ecosystem and on open model work from the TTS, speech, and omni-model communities. We thank the model teams, systems contributors, and partner organizations helping make open multimodal serving faster, more reliable, and easier to extend.
+
+旧 Session Realtime 与文件 Prompt 覆盖已退役。当前独立 Performance、embedded TTS 和内部流式推理能力继续保留，见 `docs/developer_reference/prompt_retirement.md`。

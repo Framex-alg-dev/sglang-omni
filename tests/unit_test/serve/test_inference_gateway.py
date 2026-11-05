@@ -17,7 +17,7 @@ from sglang_omni.serve.inference_gateway.app import (
 from sglang_omni.serve.inference_gateway.speech_synthesis import (
     GatewaySpeechConfig,
 )
-from sglang_omni.serve.realtime.embedded_tts import EmbeddedTTSConfig
+from sglang_omni.serve.embedded_tts import EmbeddedTTSConfig
 
 
 class _Upstream:

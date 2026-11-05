@@ -39,6 +39,18 @@ class ChatCompletionAudio(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    runtime_prompt_language: Literal["zh", "en", "zh-CN", "en-US"] = Field(
+        default="zh-CN",
+        exclude=True,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_prompt_profile(cls, value):
+        if isinstance(value, dict) and "runtime_prompt_profile" in value:
+            raise ValueError("runtime Prompt profiles have retired; send explicitly assembled messages")
+        return value
+
     """OpenAI-compatible chat completion request."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -105,14 +117,6 @@ class ChatCompletionRequest(BaseModel):
     # workers opt in so the same hot-reloadable service policy used by realtime
     # sessions also governs generated application replies.
     runtime_workload_class: Literal["committed_reply", "speculative_reply", "tool_transition"] | None = Field(default=None, exclude=True)
-    runtime_prompt_profile: Literal["reply"] | None = Field(
-        default=None,
-        exclude=True,
-    )
-    runtime_prompt_language: Literal["zh", "en", "zh-CN", "en-US"] = Field(
-        default="zh-CN",
-        exclude=True,
-    )
     # Internal cache namespace supplied by the authenticated inference gateway.
     # It is deliberately separate from ``user`` so application callers cannot
     # accidentally couple cache ownership to an end-user controlled label.
