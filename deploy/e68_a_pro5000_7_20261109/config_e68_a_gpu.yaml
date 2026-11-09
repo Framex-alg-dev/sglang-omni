@@ -1,0 +1,31 @@
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-e68-a-v116-step563-fp8
+model_path: /data/xingmt/e68_a_action_20261109/model
+
+runtime_overrides:
+  thinker:
+    server_args_overrides:
+      chunked_prefill_size: 8192
+      max_running_requests: 4
+  audio_encoder:
+    max_batch_wait_ms: 0
+  image_encoder:
+    max_batch_wait_ms: 0
+
+stage_overrides:
+  preprocessing:
+    runtime:
+      max_seq_len: 32768
+  image_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  audio_encoder:
+    runtime:
+      resources:
+        total_gpu_memory_fraction: 0.035
+  thinker:
+    runtime:
+      max_seq_len: 32768
+      resources:
+        total_gpu_memory_fraction: 0.78

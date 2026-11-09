@@ -3,7 +3,7 @@
 ## 接口定义
 
 ```http
-POST http://10.199.0.4:18048/v1/action-recall
+POST http://10.0.0.45:18048/v1/action-recall
 Content-Type: application/json
 Authorization: Bearer <服务鉴权值>
 ```

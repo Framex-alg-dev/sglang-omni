@@ -18,7 +18,7 @@ p.add_argument('--candidates', nargs='+', help='Omit to use all candidates in th
 p.add_argument('--last-candidate-id')
 p.add_argument('--last-status', choices=['sent', 'running', 'completed', 'failed', 'cancelled'])
 p.add_argument('--request-id')
-p.add_argument('--url', default='http://10.199.0.4:18048/v1/action-recall')
+p.add_argument('--url', default='http://10.0.0.45:18048/v1/action-recall')
 a = p.parse_args()
 body = {'mode': a.mode, 'channel': a.channel, 'character_prompt': a.persona}
 for group, field in [('user', 'user_input'), ('avatar', 'avatar_current'), ('history', 'avatar_history')]:

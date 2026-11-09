@@ -1,0 +1,22 @@
+[Unit]
+Description=E68-A step563 FP8 action recall on PRO5000-7 10.0.0.45 GPU5
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/data/xingmt/e68_a_action_20261109/code
+EnvironmentFile=/data/xingmt/e68_a_action_20261109/service.env
+ExecStart=/bin/bash /data/xingmt/e68_a_action_20261109/run_service.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=180
+KillMode=control-group
+LimitNOFILE=1048576
+StandardOutput=append:/data/xingmt/e68_a_action_20261109/logs/service.log
+StandardError=append:/data/xingmt/e68_a_action_20261109/logs/service.log
+
+[Install]
+WantedBy=default.target
