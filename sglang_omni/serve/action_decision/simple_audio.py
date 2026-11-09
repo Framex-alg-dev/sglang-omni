@@ -28,6 +28,54 @@ from .speech_window import PERSONA_AUDIO_PROFILE
 _FIELDS = {"text", "audio", "audio_source", "channel", "character_prompt", "allowed_candidate_ids",
            "context_audio", "user_context", "user_context_audio", "last_dispatched_action", "request_id"}
 _MAX_AUDIO_BYTES = 2 * 1024 * 1024
+_COMMON_FIELDS = {"channel", "character_prompt", "allowed_candidate_ids", "last_dispatched_action", "request_id"}
+_NAMED_FIELDS = {"mode", "user_input", "avatar_current", "avatar_history"}
+
+
+def _input_content(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) not in ({"text"}, {"audio"}):
+        raise ValueError(f"{name} requires exactly one of text or audio")
+    if "text" in value:
+        text = value["text"]
+        if not isinstance(text, str) or not text.strip() or len(text) > 4000 or "\x00" in text:
+            raise ValueError(f"{name}.text must be nonempty and at most 4000 characters")
+    elif not isinstance(value["audio"], dict):
+        raise ValueError(f"{name}.audio must be an audio object")
+    return value
+
+
+def _normalize_named_request(raw: dict[str, Any]) -> tuple[dict[str, Any], str | None, str | None]:
+    """Map the role-based public contract onto the existing evidence layout."""
+    unknown = set(raw) - _COMMON_FIELDS - _NAMED_FIELDS
+    if unknown:
+        raise ValueError("named and legacy input fields cannot be mixed: " + ", ".join(sorted(unknown)))
+    result = {key: value for key, value in raw.items() if key in _COMMON_FIELDS}
+    mode = raw.get("mode")
+    if mode == "user_reaction":
+        if raw.get("avatar_current") is not None or raw.get("avatar_history") is not None:
+            raise ValueError("user_reaction does not accept avatar_current or avatar_history")
+        user = _input_content(raw.get("user_input"), "user_input")
+        result.update(user)
+        if "audio" in user:
+            result["audio_source"] = "user_audio"
+        return result, None, None
+    if mode != "avatar_speech":
+        raise ValueError("mode must be user_reaction or avatar_speech")
+    current = _input_content(raw.get("avatar_current"), "avatar_current")
+    result["audio_source"] = "avatar_speech_audio"
+    if "audio" in current:
+        result["audio"] = current["audio"]
+    history_text = None
+    if raw.get("avatar_history") is not None:
+        history = _input_content(raw["avatar_history"], "avatar_history")
+        if "audio" in history:
+            result["context_audio"] = history["audio"]
+        else:
+            history_text = history["text"]
+    if raw.get("user_input") is not None:
+        user = _input_content(raw["user_input"], "user_input")
+        result["user_context_audio" if "audio" in user else "user_context"] = user.get("audio", user.get("text"))
+    return result, current.get("text"), history_text
 
 
 def _clip(raw: Any, *, role: str, start: int) -> StreamedMedia:
@@ -67,6 +115,9 @@ def parse_simple_audio_request(
 ) -> tuple[ActionDecisionRequest, str]:
     if not isinstance(raw, dict):
         raise ValueError("audio recall payload must be an object")
+    current_text = history_text = None
+    if set(raw) & _NAMED_FIELDS:
+        raw, current_text, history_text = _normalize_named_request(raw)
     if set(raw) - _FIELDS:
         raise ValueError("unsupported audio recall fields: " + ", ".join(sorted(set(raw) - _FIELDS)))
     channel = DecisionChannel(raw.get("channel"))
@@ -109,7 +160,7 @@ def parse_simple_audio_request(
     clips = []
     if raw.get("context_audio") is not None:
         clips.append(_clip(raw["context_audio"], role="avatar_speech_context", start=0))
-    if not text_request:
+    if not text_request and current_text is None:
         focus = _clip(raw.get("audio"), role=source, start=clips[-1].end_ms if clips else 0)
         clips.append(focus)
         if focus.end_ms > MAX_SPEECH_AUDIO_MS:
@@ -125,12 +176,14 @@ def parse_simple_audio_request(
     if channel is DecisionChannel.BODY:
         context["last_dispatched_action"] = previous
     if source == "avatar_speech_audio":
-        context.update(response_id=internal_id, output_epoch=0,
-                       speech_window={"window_id": "focus", "start_ms": focus.start_ms, "end_ms": focus.end_ms})
+        context.update(response_id=internal_id, output_epoch=0)
+        if current_text is None:
+            context["speech_window"] = {"window_id": "focus", "start_ms": focus.start_ms, "end_ms": focus.end_ms}
     req = ActionDecisionRequest(
         request_id=internal_id, session_id=internal_id, turn_id=internal_id, decision_point_id=internal_id,
         channel=channel, text=user_text if text_request else user_context, character_prompt=persona,
         allowed_candidate_ids=tuple(ids), runtime_context=context, media=tuple(clips), simple_audio=True,
+        avatar_current_text=current_text, avatar_history_text=history_text,
     )
     catalog = registry.resolve(req)
     real_ids = {entry.candidate_id for entry in catalog.entries if entry.kind == "action"}

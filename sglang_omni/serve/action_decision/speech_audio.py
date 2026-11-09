@@ -35,7 +35,14 @@ def validate_audio_request(request: ActionDecisionRequest) -> None:
     if not isinstance(revision, str) or not revision.strip() or len(revision) > 256 or "\x00" in revision:
         raise ValueError("persona-audio-window-v2 requires a bounded persona_revision")
     mode = context.get("decision_mode")
+    text_focus = request.avatar_current_text is not None
+    for value in (request.avatar_current_text, request.avatar_history_text):
+        if value is not None and (not request.simple_audio or not isinstance(value, str)
+                                  or not value.strip() or len(value) > 4000 or "\x00" in value):
+            raise ValueError("avatar text requires bounded nonempty service-owned input")
     if mode == "user_request":
+        if text_focus or request.avatar_history_text is not None:
+            raise ValueError("user_request cannot contain avatar text")
         if any(item.evidence_role not in {"user_audio", "user_camera"} for item in request.media):
             raise ValueError("user_request only accepts original user media")
         if any(item.kind not in {"image", "audio"} for item in request.media):
@@ -60,23 +67,29 @@ def validate_audio_request(request: ActionDecisionRequest) -> None:
     epoch = context.get("output_epoch")
     if type(epoch) is not int or epoch < 0:
         raise ValueError("speech_window requires a nonnegative output_epoch")
-    window = SpeechWindow.parse(context.get("speech_window"), require_text=False)
+    window = None if text_focus else SpeechWindow.parse(context.get("speech_window"), require_text=False)
+    if text_focus and "speech_window" in context:
+        raise ValueError("text focus must not carry an invented audio time range")
     user_context = request.media[:1] if request.media and request.media[0].evidence_role == USER_CONTEXT_AUDIO_ROLE else ()
     if user_context and request.text is not None:
         raise ValueError("user_context and user_context_audio are mutually exclusive")
     avatar_media = request.media[len(user_context):]
     roles = [item.evidence_role for item in avatar_media]
-    if roles not in ([AVATAR_FOCUS_ROLE], [AVATAR_CONTEXT_ROLE, AVATAR_FOCUS_ROLE]):
-        raise ValueError("speech_window requires focus audio, optionally preceded by context audio")
+    valid_roles = ([], [AVATAR_CONTEXT_ROLE]) if text_focus else ([AVATAR_FOCUS_ROLE], [AVATAR_CONTEXT_ROLE, AVATAR_FOCUS_ROLE])
+    if roles not in valid_roles:
+        raise ValueError("speech_window requires focus audio or text, optionally preceded by context audio")
+    if request.avatar_history_text is not None and AVATAR_CONTEXT_ROLE in roles:
+        raise ValueError("avatar history text and audio are mutually exclusive")
     if any(item.kind != "audio" for item in request.media):
         raise ValueError("speech_window only accepts labeled avatar audio and optional original-user context audio")
     for item in request.media:
         validate_avatar_audio_clip(item)
-    focus = request.media[-1]
-    if focus.start_ms != window.start_ms or focus.end_ms != window.end_ms:
-        raise ValueError("focus audio range must equal the target speech_window")
-    if len(avatar_media) == 2 and avatar_media[0].end_ms != focus.start_ms:
-        raise ValueError("context audio must immediately precede focus without overlap or gap")
+    if not text_focus:
+        focus = request.media[-1]
+        if focus.start_ms != window.start_ms or focus.end_ms != window.end_ms:
+            raise ValueError("focus audio range must equal the target speech_window")
+        if len(avatar_media) == 2 and avatar_media[0].end_ms != focus.start_ms:
+            raise ValueError("context audio must immediately precede focus without overlap or gap")
     if sum(item.end_ms - item.start_ms for item in request.media) > MAX_SPEECH_AUDIO_MS:
         raise ValueError("combined user context/avatar context/focus audio exceeds 30 seconds")
 

@@ -121,7 +121,7 @@ class ActionCatalogRegistry:
                 (request.text or "").strip() or any(item.kind == "audio" for item in request.media)
             ):
                 raise ValueError("user_request requires original user text or audio")
-        context = _normalize_context(request.runtime_context)
+        context = _normalize_context(request.runtime_context, text_focus=request.avatar_current_text is not None)
         if profile == PERSONA_AUDIO_PROFILE and request.channel is DecisionChannel.BODY:
             if "last_dispatched_action" not in request.runtime_context:
                 raise ValueError("body audio decisions require last_dispatched_action (null if unknown)")
@@ -329,7 +329,7 @@ def _ids(value: Any) -> set[str]:
     return {str(item) for item in value}
 
 
-def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
+def _normalize_context(value: Mapping[str, Any] | None, *, text_focus: bool = False) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
@@ -360,7 +360,7 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         mode = value.get("decision_mode")
         if mode not in DECISION_MODES or value.get("prompt_profile") not in PERSONA_PROFILES:
             raise ValueError("window decisions require a versioned persona profile and valid mode")
-        if mode == "speech_window":
+        if mode == "speech_window" and not text_focus:
             speech_window = SpeechWindow.parse(value.get("speech_window"),
                                                require_text=value.get("prompt_profile") != PERSONA_AUDIO_PROFILE)
         elif "speech_window" in value:

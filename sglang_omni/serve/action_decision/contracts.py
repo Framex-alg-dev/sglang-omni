@@ -36,6 +36,9 @@ class ActionDecisionRequest:
     # Service-owned adapter flag, not accepted from the legacy wire protocol.
     # Locally derived clip offsets must never look like executor timing evidence.
     simple_audio: bool = False
+    # Service-owned text evidence; never parsed from the legacy wire contract.
+    avatar_current_text: str | None = None
+    avatar_history_text: str | None = None
 
 
 @dataclass(frozen=True)

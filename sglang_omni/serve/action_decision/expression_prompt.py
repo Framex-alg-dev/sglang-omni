@@ -101,15 +101,29 @@ def build_expression_system_prompt(
 ) -> str:
     speech = catalog.runtime_context.get("decision_mode") == "speech_window"
     speech_scope = EXPRESSION_SPEECH_SCOPE
+    speech_task = EXPRESSION_SPEECH_TASK
+    decision_rules = EXPRESSION_DECISION_RULES
+    if request.avatar_current_text is not None or request.avatar_history_text is not None:
+        speech_scope = speech_scope.replace(
+            "1. avatar_speech_audio：数字人本次目标语音；avatar_speech_context：同一回复的前文，仅供理解。来源由可信标签区分，不按音色猜测说话者。",
+            "1. avatar_speech_audio / AVATAR_CURRENT_TEXT：数字人本次目标；avatar_speech_context / AVATAR_HISTORY_TEXT：同一回复前文，仅供理解。按可信标签区分主体，不把数字人内容当成用户发言。",
+        ).replace(
+            "4. 直接理解音频语义与语气，不需要ASR副本。",
+            "4. 以实际提供的文本或音频为依据；有音频时直接理解语义与语气，只有文本时按文字语义判断，不臆测声调或未提供的后文。",
+        )
+        decision_rules = decision_rules.replace("当前目标语音", "当前目标片段")
+        if request.avatar_current_text is not None:
+            speech_task = speech_task.replace("avatar_speech_audio 标记的当前目标语音片段", "AVATAR_CURRENT_TEXT 标记的当前待表达文本片段")
+            speech_task = speech_task.replace("语气与角色当前立场", "语义与角色当前立场")
     if any(item.evidence_role == USER_CONTEXT_AUDIO_ROLE for item in request.media):
         speech_scope = speech_scope.replace(
             "ORIGINAL_USER_CONTEXT：原用户语境，不是新的请求",
             "ORIGINAL_USER_CONTEXT / user_context_audio：原用户文字 / 原声语境，仅帮助理解原问题，不是新的请求或当前数字人片段",
         )
     rules = "\n\n".join((EXPRESSION_OUTPUT_RULES,
-                            EXPRESSION_SPEECH_TASK if speech else EXPRESSION_USER_TASK,
+                            speech_task if speech else EXPRESSION_USER_TASK,
                             speech_scope if speech else EXPRESSION_USER_SCOPE,
-                            EXPRESSION_DECISION_RULES))
+                            decision_rules))
     lines = [rules,
              "[ACTIVE_CHANNEL]", "expression",
              "[CHARACTER_PERSONA]", _json({"description": request.character_prompt})]
@@ -129,15 +143,21 @@ def build_expression_user_prompt(request: ActionDecisionRequest, catalog: Resolv
     # Body execution fields in the internal window are not expression state.
     context.pop("speech_window", None)
     if speech:
+        observation = ({"text": request.avatar_current_text} if request.avatar_current_text is not None
+                       else {"audio": "avatar_speech_audio：数字人当前目标语音；前文仅供理解"})
         lines = ["[TRUSTED_DECISION_CONTEXT]", _json({**context, "channel": "expression"}),
-                 "[AVATAR_SPEECH_OBSERVATION]", _json({"audio": "avatar_speech_audio：数字人当前目标语音；前文仅供理解"})]
+                 "[AVATAR_CURRENT_TEXT]" if request.avatar_current_text is not None else "[AVATAR_SPEECH_OBSERVATION]", _json(observation)]
+        if request.avatar_history_text is not None:
+            lines.extend(("[AVATAR_HISTORY_TEXT]", _json({"text": request.avatar_history_text})))
         if request.text:
             lines.extend(("[ORIGINAL_USER_CONTEXT]", _json({"typed_text": request.text})))
         elif any(item.evidence_role == USER_CONTEXT_AUDIO_ROLE for item in request.media):
             lines.extend(("[ORIGINAL_USER_CONTEXT]", _json({"audio": USER_CONTEXT_AUDIO_ROLE})))
+        target = ("本次目标文本 AVATAR_CURRENT_TEXT 的语义" if request.avatar_current_text is not None
+                  else "本次目标音频 avatar_speech_audio 的语义与语气")
         lines.extend((
             "[FINAL_TASK]",
-            "遵循上述规则，结合数字人人设、本次目标音频 avatar_speech_audio 的语义与语气及前文语境，从 EXPRESSION_CATALOG 中选择数字人本次讲话应呈现的一个面部表情；明确能力不支持按上述规则处理。只输出所选项的 code。",
+            f"遵循上述规则，结合数字人人设、{target}及前文语境，从 EXPRESSION_CATALOG 中选择数字人本次讲话应呈现的一个面部表情；明确能力不支持按上述规则处理。只输出所选项的 code。",
         ))
         return "\n".join(lines)
     observation = ({"audio": "user_audio：本轮用户原始音频，无ASR副本"}
