@@ -305,6 +305,9 @@ class Qwen3OmniPreprocessor:
                 local_files_only=False,
             )
             self.model_dir = str(resolve_model_path(model_path, local_files_only=False))
+        from .image_preprocess import optimize_image_processor
+
+        optimize_image_processor(getattr(self.processor, "image_processor", None))
         self.tokenizer = self.processor.tokenizer
         ensure_chat_template(
             self.tokenizer,
