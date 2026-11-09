@@ -27,11 +27,10 @@ from sglang_omni.utils.structured_logs import emit_structured_log
 
 from .catalog import ActionCatalogRegistry, ActionEntry, ResolvedCatalog
 from .contracts import ActionDecision, ActionDecisionRequest, DecisionChannel
-from .prompt import (
-    build_system_prompt,
-    build_user_prompt,
-    uses_reference_prompt,
-)
+from .prompt import build_system_prompt
+from .speech_window import PERSONA_PROFILES
+from .speech_audio import ACTION_AUDIO_ROLES
+from .model_input import user_message_content
 
 
 class CompletionClient(Protocol):
@@ -250,7 +249,8 @@ class ActionDecisionEngine:
             return self._decision(
                 request, catalog, entry, started, deterministic=True, reason_code=reason
             )
-        if catalog.hard_bound is not None:
+        persona_window = request.runtime_context.get("prompt_profile") in PERSONA_PROFILES
+        if catalog.hard_bound is not None and not persona_window:
             return self._decision(
                 request,
                 catalog,
@@ -260,16 +260,7 @@ class ActionDecisionEngine:
                 reason_code="required_action_binding",
             )
 
-        user_prompt = {"type": "text", "text": build_user_prompt(request, catalog)}
-        media_content = [
-            {"type": "audio" if item.kind == "audio" else "image"}
-            for item in request.media
-        ]
-        content: list[dict[str, str]] = (
-            [*media_content, user_prompt]
-            if uses_reference_prompt(request)
-            else [user_prompt, *media_content]
-        )
+        content = user_message_content(request, catalog)
         metadata: dict[str, Any] = {
             "task": "action_direct",
             "task_role": request.channel.value,
@@ -304,7 +295,7 @@ class ActionDecisionEngine:
                 for item in request.media
                 if item.kind in {"image", "video"}
             ]
-        legal_codes = tuple(entry.code for entry in catalog.entries)
+        legal_codes = (catalog.hard_bound.code,) if catalog.hard_bound is not None else tuple(entry.code for entry in catalog.entries)
         grammar = "(?:" + "|".join(re.escape(code) for code in legal_codes) + ")"
         result = await self._client.completion(
             GenerateRequest(
@@ -334,7 +325,7 @@ class ActionDecisionEngine:
         # some deployments decode control tokens to their canonical candidate
         # ID (for example ``IB0``). Both identify the same catalog entry.
         entry = catalog.by_code.get(code) or catalog.by_candidate_id.get(code)
-        if entry is None:
+        if entry is None or entry.code not in legal_codes:
             raise RuntimeError(f"action model returned code outside constrained catalog: {code!r}")
         usage = result.usage.to_dict() if result.usage is not None else None
         return self._decision(
@@ -471,6 +462,7 @@ def create_action_decision_app(
                 websocket,
                 expected_authorization=f"Bearer {config.token}",
                 max_total_bytes=config.max_body_bytes,
+                allowed_audio_roles=ACTION_AUDIO_ROLES | {"assistant_spoken"},
             )
             if streamed is None:
                 return
@@ -510,6 +502,23 @@ def create_action_decision_app(
                 {"type": "error", "code": "model_error", "detail": str(exc)}
             )
             await websocket.close(code=1011)
+
+    @app.post("/v1/action-recall")
+    async def recall_audio(request: Request) -> JSONResponse:
+        authenticate(request)
+        body = await request.body()
+        if len(body) > config.max_body_bytes:
+            raise HTTPException(status_code=413, detail="request body too large")
+        from .simple_audio import parse_simple_audio_request
+        try:
+            decision_request, public_id = parse_simple_audio_request(json.loads(body), engine.registry)
+            decision = await engine.decide(decision_request)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse({"request_id": public_id, "channel": decision.channel.value,
+                             "candidate_id": decision.candidate_id, "code": decision.code,
+                             "label": decision.label, "outcome": decision.outcome,
+                             "occupies_channels": list(decision.occupies_channels)})
 
     if performance_token is not None:
         normalized_performance_token = performance_token.strip()

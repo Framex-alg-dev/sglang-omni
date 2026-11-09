@@ -94,6 +94,7 @@ async def receive_streamed_request(
     max_media_items: int = 64,
     max_item_bytes: int = 32 * 1024 * 1024,
     max_total_bytes: int = 128 * 1024 * 1024,
+    allowed_audio_roles: frozenset[str] = frozenset({"user_audio", "assistant_spoken"}),
 ) -> StreamedRequest | None:
     """Accept one request, incrementally own its binary media, then commit it."""
 
@@ -145,7 +146,7 @@ async def receive_streamed_request(
                 evidence_role=_one_of(
                     message,
                     "evidence_role",
-                    {"user_audio", "user_camera", "avatar_state", "assistant_spoken"},
+                    {"user_camera", "avatar_state"} | set(allowed_audio_roles),
                 ),
             )
             if item.media_id in media_ids:
@@ -157,7 +158,7 @@ async def receive_streamed_request(
             actual_checksum = "sha256:" + hashlib.sha256(raw).hexdigest()
             if not hmac.compare_digest(actual_checksum, item.checksum):
                 raise ValueError("stream media checksum does not match payload")
-            _validate_evidence_role(item)
+            _validate_evidence_role(item, allowed_audio_roles=allowed_audio_roles)
             media.append(item)
             media_ids.add(item.media_id)
             await websocket.send_json(
@@ -221,9 +222,11 @@ def inject_openai_media(
     return result
 
 
-def _validate_evidence_role(item: StreamedMedia) -> None:
+def _validate_evidence_role(
+    item: StreamedMedia, *, allowed_audio_roles: frozenset[str] = frozenset({"user_audio", "assistant_spoken"}),
+) -> None:
     allowed = {
-        "audio": {"user_audio", "assistant_spoken"},
+        "audio": allowed_audio_roles,
         "video": {"user_camera"},
         "image": {"user_camera", "avatar_state"},
     }

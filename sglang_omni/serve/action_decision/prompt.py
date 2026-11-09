@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .catalog import ResolvedCatalog
 from .contracts import ActionDecisionRequest, DecisionChannel
+from .speech_window import PERSONA_PROFILES
+from .persona_prompt import build_persona_system_prompt, build_persona_user_prompt
 
 
 MAX_CHARACTER_PROMPT_CHARS = 32_000
@@ -133,6 +135,8 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         if request.session_prompt:
             context.extend(("[SESSION_POLICY]", request.session_prompt))
         return "\n\n".join(context)
+    if request.runtime_context.get("prompt_profile") in PERSONA_PROFILES:
+        return build_persona_system_prompt(request, catalog)
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [
@@ -170,6 +174,8 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
 
 def build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
     media_kinds = [item.kind for item in request.media]
+    if request.runtime_context.get("prompt_profile") in PERSONA_PROFILES:
+        return build_persona_user_prompt(request, catalog)
     if uses_reference_prompt(request):
         image_count = sum(kind in {"image", "video"} for kind in media_kinds)
         has_audio = "audio" in media_kinds

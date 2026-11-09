@@ -1,0 +1,880 @@
+{
+  "schema_version": 1,
+  "review_status": "draft_before_prediction",
+  "origin": "authored_semantic_contrasts_informed_by_existing_replay_issues_not_online_logs",
+  "purpose": "Review semantic definitions and prepare future held-out recall evaluation; not executed model predictions or approved training labels.",
+  "annotation_notes": [
+    "eligible candidate sets are authored before any prediction; natural accompaniment may allow keep and multiple candidates",
+    "trusted_context is review notation, not a ready-to-send production runtime_context object",
+    "keep is IB0 for body and IF0 for expression; do not use camera gaze as a universal negative label",
+    "all members of a contrast_group must remain in one data split if later used for training/evaluation"
+  ],
+  "cases": [
+    {
+      "id": "thumb-hand-count-single",
+      "contrast_group": "thumb-hand-count",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "只用一只手给我点个赞。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "000"
+        ],
+        "forbidden_candidate_ids": [
+          "271"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "thumb-hand-count-double",
+      "contrast_group": "thumb-hand-count",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "两只手一起给我点个赞。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "271"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "digit-vs-quote-perform",
+      "contrast_group": "digit-vs-quote",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "用手比一个三给我看。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "260"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "digit-vs-quote-quote",
+      "contrast_group": "digit-vs-quote",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "请朗读“用手比一个三给我看”这句话。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "260"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "refusal-vs-anger-refusal",
+      "contrast_group": "refusal-vs-anger",
+      "decision_time": "speech_window",
+      "channel": "expression",
+      "user_text": "你唱首歌吧。",
+      "avatar_upcoming_text": "我暂时不能唱歌，但可以陪你聊聊。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "163"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "refusal-vs-anger-anger",
+      "contrast_group": "refusal-vs-anger",
+      "decision_time": "user_request",
+      "channel": "expression",
+      "user_text": "表演一个生气的表情。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "163"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "tired-subject-user",
+      "contrast_group": "tired-subject",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我今天好累，想早点睡。",
+      "avatar_upcoming_text": "那你早点休息，明天再聊。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "449"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "tired-subject-avatar",
+      "contrast_group": "tired-subject",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "表演一下困得打哈欠。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "449"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "headache-subject-user",
+      "contrast_group": "headache-subject",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我头痛，需要你帮我梳理一下情况。",
+      "avatar_upcoming_text": "我们先把你描述的情况梳理清楚。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "450"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "headache-subject-avatar",
+      "contrast_group": "headache-subject",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "用手扶头，演一个头疼的动作。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "450"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "anger-attribution-reported",
+      "contrast_group": "anger-attribution",
+      "decision_time": "speech_window",
+      "channel": "expression",
+      "user_text": "他说自己很生气。",
+      "avatar_upcoming_text": "我听到了，你可以说说具体经过。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "163"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "anger-attribution-stance",
+      "contrast_group": "anger-attribution",
+      "decision_time": "speech_window",
+      "channel": "expression",
+      "user_text": "他们恶意欺骗了好多人。",
+      "avatar_upcoming_text": "这种恶意欺骗的行为太过分了，我对此很愤慨。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "163"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "confirmation-vs-praise-confirm",
+      "contrast_group": "confirmation-vs-praise",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "请确认你理解我说的步骤了。",
+      "avatar_upcoming_text": "我理解你的步骤了。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "661",
+          "272"
+        ],
+        "forbidden_candidate_ids": [
+          "271"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "confirmation-vs-praise-achievement",
+      "contrast_group": "confirmation-vs-praise",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我坚持训练一年，终于拿下全国冠军了。",
+      "avatar_upcoming_text": "这是非常了不起的成果，你的努力值得肯定！",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "271",
+          "304",
+          "307"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "encourage-vs-celebrate-before",
+      "contrast_group": "encourage-vs-celebrate",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我怕明天的比赛发挥不好。",
+      "avatar_upcoming_text": "稳住节奏，相信你的准备，我支持你。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "305",
+          "440"
+        ],
+        "forbidden_candidate_ids": [
+          "307"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "encourage-vs-celebrate-after",
+      "contrast_group": "encourage-vs-celebrate",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我们终于赢下决赛了！",
+      "avatar_upcoming_text": "太棒了，祝贺你们取得胜利！",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "304",
+          "307",
+          "271"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "static-vs-rotation-static",
+      "contrast_group": "static-vs-rotation",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "手心朝上，单手摊平展示，保持不动。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "237"
+        ],
+        "forbidden_candidate_ids": [
+          "253",
+          "660"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "static-vs-rotation-rotate",
+      "contrast_group": "static-vs-rotation",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "用一只手演示手心和手背的方向翻转。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "253"
+        ],
+        "forbidden_candidate_ids": [
+          "237"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "describe-vs-pickup-explain",
+      "contrast_group": "describe-vs-pickup",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "解释一下这个方案的一个要点。",
+      "avatar_upcoming_text": "先看这一点，它能减少重复操作。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "237"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "describe-vs-pickup-pickup",
+      "contrast_group": "describe-vs-pickup",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "把那个杯子拿起来给我看。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {
+        "allowed_candidate_ids": [
+          "237",
+          "238"
+        ]
+      },
+      "expectation": {
+        "eligible_candidate_ids": [
+          "000"
+        ],
+        "forbidden_candidate_ids": [
+          "237",
+          "238"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "v-hand-count-single",
+      "contrast_group": "v-hand-count",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "用一只手在脸旁比个耶。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "276"
+        ],
+        "forbidden_candidate_ids": [
+          "277"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "v-hand-count-double",
+      "contrast_group": "v-hand-count",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "两只手都放在脸旁比耶。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "277"
+        ],
+        "forbidden_candidate_ids": [
+          "276"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "digit-vs-photo-number",
+      "contrast_group": "digit-vs-photo",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "用手势回答一加一的结果。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "259"
+        ],
+        "forbidden_candidate_ids": [
+          "276",
+          "277"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "digit-vs-photo-photo",
+      "contrast_group": "digit-vs-photo",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "拍张可爱的照片，单手在脸旁比耶。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "276"
+        ],
+        "forbidden_candidate_ids": [
+          "259"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "digit-vs-open-hand-number",
+      "contrast_group": "digit-vs-open-hand",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "用数字手势表示五。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "262"
+        ],
+        "forbidden_candidate_ids": [
+          "662"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "digit-vs-open-hand-shape",
+      "contrast_group": "digit-vs-open-hand",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "把一只手的五根手指自然张开，不用表示数字。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "662"
+        ],
+        "forbidden_candidate_ids": [
+          "262"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "greeting-source-direct",
+      "contrast_group": "greeting-source",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "你好，我们第一次见面。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "649",
+          "189"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "greeting-source-quote",
+      "contrast_group": "greeting-source",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "朗读“你好，我们第一次见面”。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "649",
+          "289"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "completed-vs-wish-future",
+      "contrast_group": "completed-vs-wish",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我希望明年能拿冠军。",
+      "avatar_upcoming_text": "祝你准备顺利，继续加油。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "305",
+          "440"
+        ],
+        "forbidden_candidate_ids": [
+          "307"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "completed-vs-wish-past",
+      "contrast_group": "completed-vs-wish",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "我已经拿到冠军了。",
+      "avatar_upcoming_text": "祝贺你，努力终于有了回报！",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "304",
+          "271"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "irony-vs-praise-praise",
+      "contrast_group": "irony-vs-praise",
+      "decision_time": "user_request",
+      "channel": "expression",
+      "user_text": "你可真行，这个问题解决得太好了。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {
+        "tone": "真诚赞许"
+      },
+      "expectation": {
+        "eligible_candidate_ids": [
+          "154",
+          "655"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "irony-vs-praise-irony",
+      "contrast_group": "irony-vs-praise",
+      "decision_time": "user_request",
+      "channel": "expression",
+      "user_text": "你可真行，又把事情弄砸了。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {
+        "tone": "严肃不满，无玩笑许可"
+      },
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "154",
+          "155",
+          "656"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "thought-vs-social-hesitation-analysis",
+      "contrast_group": "thought-vs-social-hesitation",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "你觉得这两个方案各有什么利弊？",
+      "avatar_upcoming_text": "我需要比较一下各自的成本和收益。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "465"
+        ],
+        "forbidden_candidate_ids": [
+          "324"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "thought-vs-social-hesitation-awkward",
+      "contrast_group": "thought-vs-social-hesitation",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "刚刚是不是说错名字了？",
+      "avatar_upcoming_text": "啊，刚才是我一时说错了，有点不好意思。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "324",
+          "326"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "thinking-stage-ongoing",
+      "contrast_group": "thinking-stage",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "这个决定有两种选择。",
+      "avatar_upcoming_text": "我还在权衡两种选择各自的代价。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "465"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "thinking-stage-finished",
+      "contrast_group": "thinking-stage",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "刚才你已经比较完两个选择了。",
+      "avatar_upcoming_text": "结论已经明确，接下来直接执行第一种方案。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "465"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "window-greeting-current",
+      "contrast_group": "window-greeting",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "开始今天的交流吧。",
+      "avatar_upcoming_text": "你好，很高兴今天见到你。",
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "649",
+          "189"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "window-greeting-past",
+      "contrast_group": "window-greeting",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "开始今天的交流吧。",
+      "avatar_upcoming_text": "今天我们先介绍具体安排。",
+      "trusted_context": {
+        "previous_text": "你好，很高兴今天见到你。",
+        "fulfilled_action_ids": [
+          "649"
+        ]
+      },
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "649",
+          "289"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "window-occupancy-busy",
+      "contrast_group": "window-occupancy",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "请比一个三。",
+      "avatar_upcoming_text": "这个方法很好，我们继续。",
+      "trusted_context": {
+        "state_at_ms": 3000,
+        "start_ms": 4000,
+        "current_action_id": "260",
+        "current_action_remaining_ms": 1800,
+        "user_action_status": "running"
+      },
+      "expectation": {
+        "eligible_candidate_ids": [
+          "IB0"
+        ],
+        "forbidden_candidate_ids": [
+          "661",
+          "271"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "window-occupancy-free",
+      "contrast_group": "window-occupancy",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "请比一个三。",
+      "avatar_upcoming_text": "这个方法很好，我们继续。",
+      "trusted_context": {
+        "current_action_id": null,
+        "user_action_status": "completed",
+        "fulfilled_action_ids": [
+          "260"
+        ]
+      },
+      "expectation": {
+        "eligible_candidate_ids": [
+          "661"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "fulfillment-vs-new-goal-review",
+      "contrast_group": "fulfillment-vs-new-goal",
+      "decision_time": "speech_window",
+      "channel": "body",
+      "user_text": "请比一个三。",
+      "avatar_upcoming_text": "刚才已经把三演示给你了，我们看下一步。",
+      "trusted_context": {
+        "user_action_status": "completed",
+        "fulfilled_action_ids": [
+          "260"
+        ]
+      },
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "260"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "fulfillment-vs-new-goal-repeat-request",
+      "contrast_group": "fulfillment-vs-new-goal",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "请再给我比一次三。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "260"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "pinch-overlap-small",
+      "contrast_group": "pinch-overlap",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "比划一下，只有很小很小的一点。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "363",
+          "659"
+        ],
+        "forbidden_candidate_ids": [
+          "272"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "pinch-overlap-ok",
+      "contrast_group": "pinch-overlap",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "比个 OK 手势，表示一切准备好了。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "272"
+        ],
+        "forbidden_candidate_ids": [
+          "363",
+          "659"
+        ],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "negation-scope-prohibit",
+      "contrast_group": "negation-scope",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "不要对我双手点赞。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [],
+        "forbidden_candidate_ids": [
+          "271"
+        ],
+        "allow_keep": true
+      }
+    },
+    {
+      "id": "negation-scope-request",
+      "contrast_group": "negation-scope",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "别光说，给我双手点个赞。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {},
+      "expectation": {
+        "eligible_candidate_ids": [
+          "271"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "pose-vs-transition-stand-pose",
+      "contrast_group": "pose-vs-transition",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "保持双脚自然站立的姿势。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {
+        "avatar_state": "可信状态：已站立且姿态可执行"
+      },
+      "expectation": {
+        "eligible_candidate_ids": [
+          "376"
+        ],
+        "forbidden_candidate_ids": [],
+        "allow_keep": false
+      }
+    },
+    {
+      "id": "pose-vs-transition-stand-up",
+      "contrast_group": "pose-vs-transition",
+      "decision_time": "user_request",
+      "channel": "body",
+      "user_text": "从现在的坐姿站起来。",
+      "avatar_upcoming_text": null,
+      "trusted_context": {
+        "allowed_candidate_ids": [
+          "376",
+          "378"
+        ],
+        "avatar_state": "可信状态：坐姿，无已登记起身转场动作"
+      },
+      "expectation": {
+        "eligible_candidate_ids": [
+          "000"
+        ],
+        "forbidden_candidate_ids": [
+          "376",
+          "378"
+        ],
+        "allow_keep": false
+      }
+    }
+  ]
+}

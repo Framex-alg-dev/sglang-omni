@@ -1,0 +1,4023 @@
+{
+  "action_entries": [
+    {
+      "action_id": "106",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 0,
+      "candidate_id": "106",
+      "canonical_category_id": "10",
+      "category_index": 2,
+      "category_token": "_c",
+      "category_token_id": 666,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "106",
+      "local_action_index": 6,
+      "output_text": "_c_g",
+      "referenced_category_ids": [
+        "10"
+      ],
+      "short_definition": "背部微靠椅背，双肩自然下沉放松。",
+      "source_label": "放松坐姿",
+      "token_ids": [
+        666,
+        1889
+      ],
+      "training_action_id": "action_100_voice"
+    },
+    {
+      "action_id": "127",
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 1,
+      "candidate_id": "127",
+      "canonical_category_id": "11",
+      "category_index": 3,
+      "category_token": "_d",
+      "category_token_id": 814,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "127",
+      "local_action_index": 4,
+      "output_text": "_d_e",
+      "referenced_category_ids": [
+        "11"
+      ],
+      "short_definition": "双脚蹬地使身体腾空离开地面的爆发性动作。",
+      "source_label": "跳跃",
+      "token_ids": [
+        814,
+        2204
+      ],
+      "training_action_id": "action_167_voice"
+    },
+    {
+      "action_id": "133",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 2,
+      "candidate_id": "133",
+      "canonical_category_id": "13",
+      "category_index": 5,
+      "category_token": "_f",
+      "category_token_id": 761,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "133",
+      "local_action_index": 3,
+      "output_text": "_f_d",
+      "referenced_category_ids": [
+        "13"
+      ],
+      "short_definition": "坐姿下借助腰腿发力，带动椅座左右往复旋转。",
+      "source_label": "左右转动椅子",
+      "token_ids": [
+        761,
+        814
+      ],
+      "training_action_id": "action_015_voice"
+    },
+    {
+      "action_id": "137",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 3,
+      "candidate_id": "137",
+      "canonical_category_id": "15",
+      "category_index": 7,
+      "category_token": "_h",
+      "category_token_id": 1523,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "137",
+      "local_action_index": 1,
+      "output_text": "_h_b",
+      "referenced_category_ids": [
+        "15"
+      ],
+      "short_definition": "头部自正视前方的初始状态启动，颈部带动向前下方弯曲。",
+      "source_label": "低头",
+      "token_ids": [
+        1523,
+        880
+      ],
+      "training_action_id": "action_113_voice"
+    },
+    {
+      "action_id": "138",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 4,
+      "candidate_id": "138",
+      "canonical_category_id": "16",
+      "category_index": 8,
+      "category_token": "_i",
+      "category_token_id": 5318,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "138",
+      "local_action_index": 0,
+      "output_text": "_i_a",
+      "referenced_category_ids": [
+        "16"
+      ],
+      "short_definition": "头部保持端正不偏转，双眼眼球同步调整。",
+      "source_label": "看镜头",
+      "token_ids": [
+        5318,
+        4306
+      ],
+      "training_action_id": "action_110_voice"
+    },
+    {
+      "action_id": "140",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 5,
+      "candidate_id": "140",
+      "canonical_category_id": "16",
+      "category_index": 8,
+      "category_token": "_i",
+      "category_token_id": 5318,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "140",
+      "local_action_index": 2,
+      "output_text": "_i_c",
+      "referenced_category_ids": [
+        "16"
+      ],
+      "short_definition": "头部保持正前，仅眼球转向右侧。",
+      "source_label": "看右侧（仅眼球）",
+      "token_ids": [
+        5318,
+        666
+      ],
+      "training_action_id": "action_017_voice"
+    },
+    {
+      "action_id": "142",
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 6,
+      "candidate_id": "142",
+      "canonical_category_id": "16",
+      "category_index": 8,
+      "category_token": "_i",
+      "category_token_id": 5318,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "142",
+      "local_action_index": 4,
+      "output_text": "_i_e",
+      "referenced_category_ids": [
+        "16"
+      ],
+      "short_definition": "眼球下转，视线投向下方。",
+      "source_label": "看下方",
+      "token_ids": [
+        5318,
+        2204
+      ],
+      "training_action_id": "action_019_voice"
+    },
+    {
+      "action_id": "154",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 7,
+      "candidate_id": "154",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "154",
+      "local_action_index": 0,
+      "output_text": "_l_a",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "嘴角两侧上扬，眼部随之轻微上挑的愉悦表情。",
+      "source_label": "微笑",
+      "token_ids": [
+        907,
+        4306
+      ],
+      "training_action_id": "action_108_voice"
+    },
+    {
+      "action_id": "155",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 8,
+      "candidate_id": "155",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "155",
+      "local_action_index": 1,
+      "output_text": "_l_b",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "嘴部大幅张开，肩部随笑意起伏的开怀表情。",
+      "source_label": "大笑",
+      "token_ids": [
+        907,
+        880
+      ],
+      "training_action_id": "action_078_voice"
+    },
+    {
+      "action_id": "157",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 9,
+      "candidate_id": "157",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "157",
+      "local_action_index": 3,
+      "output_text": "_l_d",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "眉毛快速上扬，双眼睁大嘴微张的意外表情。",
+      "source_label": "惊讶",
+      "token_ids": [
+        907,
+        814
+      ],
+      "training_action_id": "action_077_voice"
+    },
+    {
+      "action_id": "160",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 10,
+      "candidate_id": "160",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "160",
+      "local_action_index": 6,
+      "output_text": "_l_g",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "嘴角下撇，眉头微皱眼眶泛红的表情。",
+      "source_label": "委屈",
+      "token_ids": [
+        907,
+        1889
+      ],
+      "training_action_id": "action_127_voice"
+    },
+    {
+      "action_id": "161",
+      "action_token": "_h",
+      "action_token_id": 1523,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 11,
+      "candidate_id": "161",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "161",
+      "local_action_index": 7,
+      "output_text": "_l_h",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "眉头内聚下垂，嘴角下拉眼神黯淡的表情。",
+      "source_label": "悲伤",
+      "token_ids": [
+        907,
+        1523
+      ],
+      "training_action_id": "action_138_voice"
+    },
+    {
+      "action_id": "162",
+      "action_token": "_i",
+      "action_token_id": 5318,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 12,
+      "candidate_id": "162",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "162",
+      "local_action_index": 8,
+      "output_text": "_l_i",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "单眉上挑，嘴角微歪头部略侧的表情。",
+      "source_label": "疑惑",
+      "token_ids": [
+        907,
+        5318
+      ],
+      "training_action_id": "action_126_voice"
+    },
+    {
+      "action_id": "163",
+      "action_token": "_j",
+      "action_token_id": 5374,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 13,
+      "candidate_id": "163",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "163",
+      "local_action_index": 9,
+      "output_text": "_l_j",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "眉头紧锁下压，鼻翼微张嘴角绷紧的愤怒表情伴随瞪眼。",
+      "source_label": "生气",
+      "token_ids": [
+        907,
+        5374
+      ],
+      "training_action_id": "action_139_voice"
+    },
+    {
+      "action_id": "651",
+      "action_token": "_l",
+      "action_token_id": 907,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 14,
+      "candidate_id": "651",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 11,
+      "output_text": "_l_l",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "嘴唇向前噘起，形成清楚的嘟嘴表情，头和身体基本不动。",
+      "source_label": "嘟嘴",
+      "token_ids": [
+        907,
+        907
+      ],
+      "training_action_id": "action_027_voice"
+    },
+    {
+      "action_id": "652",
+      "action_token": "_m",
+      "action_token_id": 717,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 15,
+      "candidate_id": "652",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 12,
+      "output_text": "_l_m",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "保持头部基本稳定，以柔和目光和轻微微笑表达宠溺。",
+      "source_label": "宠溺眼神",
+      "token_ids": [
+        907,
+        717
+      ],
+      "training_action_id": "action_028_voice"
+    },
+    {
+      "action_id": "653",
+      "action_token": "_n",
+      "action_token_id": 1089,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 16,
+      "candidate_id": "653",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 13,
+      "output_text": "_l_n",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "眉眼收紧、神情不安，形成清楚但不过度夸张的担忧表情。",
+      "source_label": "担忧",
+      "token_ids": [
+        907,
+        1089
+      ],
+      "training_action_id": "action_029_voice"
+    },
+    {
+      "action_id": "654",
+      "action_token": "_o",
+      "action_token_id": 14179,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 17,
+      "candidate_id": "654",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 14,
+      "output_text": "_l_o",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "保持头部基本稳定，单眼闭合后迅速睁开，完成一次眨眼。",
+      "source_label": "wink",
+      "token_ids": [
+        907,
+        14179
+      ],
+      "training_action_id": "action_030_voice"
+    },
+    {
+      "action_id": "655",
+      "action_token": "_p",
+      "action_token_id": 620,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 18,
+      "candidate_id": "655",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 15,
+      "output_text": "_l_p",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "微笑时双眼自然眯起，形成温暖、明显的笑眼表情。",
+      "source_label": "眯眼睛笑",
+      "token_ids": [
+        907,
+        620
+      ],
+      "training_action_id": "action_033_voice"
+    },
+    {
+      "action_id": "656",
+      "action_token": "_q",
+      "action_token_id": 8976,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 19,
+      "candidate_id": "656",
+      "canonical_category_id": "19",
+      "category_index": 11,
+      "category_token": "_l",
+      "category_token_id": 907,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 16,
+      "output_text": "_l_q",
+      "referenced_category_ids": [
+        "19"
+      ],
+      "short_definition": "嘴角偏向一侧上扬并轻微歪头，形成不对称的狡黠笑容。",
+      "source_label": "坏笑",
+      "token_ids": [
+        907,
+        8976
+      ],
+      "training_action_id": "action_034_voice"
+    },
+    {
+      "action_id": "170",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 20,
+      "candidate_id": "170",
+      "canonical_category_id": "21",
+      "category_index": 13,
+      "category_token": "_n",
+      "category_token_id": 1089,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "170",
+      "local_action_index": 0,
+      "output_text": "_n_a",
+      "referenced_category_ids": [
+        "21"
+      ],
+      "short_definition": "上身髋部带动整体向前倾斜。",
+      "source_label": "身体前倾",
+      "token_ids": [
+        1089,
+        4306
+      ],
+      "training_action_id": "action_091_voice"
+    },
+    {
+      "action_id": "171",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 21,
+      "candidate_id": "171",
+      "canonical_category_id": "21",
+      "category_index": 13,
+      "category_token": "_n",
+      "category_token_id": 1089,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "171",
+      "local_action_index": 1,
+      "output_text": "_n_b",
+      "referenced_category_ids": [
+        "21"
+      ],
+      "short_definition": "上身髋部带动整体向后倾仰。",
+      "source_label": "身体后仰",
+      "token_ids": [
+        1089,
+        880
+      ],
+      "training_action_id": "action_021_voice"
+    },
+    {
+      "action_id": "657",
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 22,
+      "candidate_id": "657",
+      "canonical_category_id": "21",
+      "category_index": 13,
+      "category_token": "_n",
+      "category_token_id": 1089,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 4,
+      "output_text": "_n_e",
+      "referenced_category_ids": [
+        "21"
+      ],
+      "short_definition": "头和上身向前轻探并略微低头，随后回到直立姿态。",
+      "source_label": "向前探头",
+      "token_ids": [
+        1089,
+        2204
+      ],
+      "training_action_id": "action_035_voice"
+    },
+    {
+      "action_id": "174",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 23,
+      "candidate_id": "174",
+      "canonical_category_id": "22",
+      "category_index": 14,
+      "category_token": "_o",
+      "category_token_id": 14179,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "174",
+      "local_action_index": 0,
+      "output_text": "_o_a",
+      "referenced_category_ids": [
+        "22"
+      ],
+      "short_definition": "上身腰部带动向左侧倾斜停留。",
+      "source_label": "上身左倾",
+      "token_ids": [
+        14179,
+        4306
+      ],
+      "training_action_id": "action_170_voice"
+    },
+    {
+      "action_id": "175",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 24,
+      "candidate_id": "175",
+      "canonical_category_id": "22",
+      "category_index": 14,
+      "category_token": "_o",
+      "category_token_id": 14179,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "175",
+      "local_action_index": 1,
+      "output_text": "_o_b",
+      "referenced_category_ids": [
+        "22"
+      ],
+      "short_definition": "上身腰部带动向右侧倾斜停留。",
+      "source_label": "上身右倾",
+      "token_ids": [
+        14179,
+        880
+      ],
+      "training_action_id": "action_171_voice"
+    },
+    {
+      "action_id": "176",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 25,
+      "candidate_id": "176",
+      "canonical_category_id": "22",
+      "category_index": 14,
+      "category_token": "_o",
+      "category_token_id": 14179,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "176",
+      "local_action_index": 2,
+      "output_text": "_o_c",
+      "referenced_category_ids": [
+        "22"
+      ],
+      "short_definition": "上身腰部带动转向左侧停留。",
+      "source_label": "上身左转",
+      "token_ids": [
+        14179,
+        666
+      ],
+      "training_action_id": "action_172_voice"
+    },
+    {
+      "action_id": "177",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 26,
+      "candidate_id": "177",
+      "canonical_category_id": "22",
+      "category_index": 14,
+      "category_token": "_o",
+      "category_token_id": 14179,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "177",
+      "local_action_index": 3,
+      "output_text": "_o_d",
+      "referenced_category_ids": [
+        "22"
+      ],
+      "short_definition": "上身腰部带动转向右侧停留。",
+      "source_label": "上身右转",
+      "token_ids": [
+        14179,
+        814
+      ],
+      "training_action_id": "action_173_voice"
+    },
+    {
+      "action_id": "178",
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 27,
+      "candidate_id": "178",
+      "canonical_category_id": "22",
+      "category_index": 14,
+      "category_token": "_o",
+      "category_token_id": 14179,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "178",
+      "local_action_index": 4,
+      "output_text": "_o_e",
+      "referenced_category_ids": [
+        "22"
+      ],
+      "short_definition": "上身腰部带动左右连续摆动。",
+      "source_label": "上身左右摆动",
+      "token_ids": [
+        14179,
+        2204
+      ],
+      "training_action_id": "action_022_voice"
+    },
+    {
+      "action_id": "189",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 28,
+      "candidate_id": "189",
+      "canonical_category_id": "24",
+      "category_index": 16,
+      "category_token": "_q",
+      "category_token_id": 8976,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "189",
+      "local_action_index": 0,
+      "output_text": "_q_a",
+      "referenced_category_ids": [
+        "24"
+      ],
+      "short_definition": "头部与上身同步小幅前倾致意。",
+      "source_label": "轻微点头致意",
+      "token_ids": [
+        8976,
+        4306
+      ],
+      "training_action_id": "action_092_voice"
+    },
+    {
+      "action_id": "190",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 29,
+      "candidate_id": "190",
+      "canonical_category_id": "24",
+      "category_index": 16,
+      "category_token": "_q",
+      "category_token_id": 8976,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "190",
+      "local_action_index": 1,
+      "output_text": "_q_b",
+      "referenced_category_ids": [
+        "24"
+      ],
+      "short_definition": "上身髋部带动 45°-90° 前倾，双手自然垂放身体两侧。",
+      "source_label": "正式鞠躬",
+      "token_ids": [
+        8976,
+        880
+      ],
+      "training_action_id": "action_174_voice"
+    },
+    {
+      "action_id": "661",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 30,
+      "candidate_id": "661",
+      "canonical_category_id": "24",
+      "category_index": 16,
+      "category_token": "_q",
+      "category_token_id": 8976,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 3,
+      "output_text": "_q_d",
+      "referenced_category_ids": [
+        "24"
+      ],
+      "short_definition": "头部向下再回正，完成一次清楚的点头。",
+      "source_label": "点头",
+      "token_ids": [
+        8976,
+        814
+      ],
+      "training_action_id": "action_103_voice"
+    },
+    {
+      "action_id": "200",
+      "action_token": "_i",
+      "action_token_id": 5318,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 31,
+      "candidate_id": "200",
+      "canonical_category_id": "25",
+      "category_index": 17,
+      "category_token": "_r",
+      "category_token_id": 1710,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "200",
+      "local_action_index": 8,
+      "output_text": "_r_i",
+      "referenced_category_ids": [
+        "25"
+      ],
+      "short_definition": "单手向前抬起伸展，指尖轻缓抚摸最上方区域，动作柔和舒缓。",
+      "source_label": "伸手摸摸头",
+      "token_ids": [
+        1710,
+        5318
+      ],
+      "training_action_id": "action_095_voice"
+    },
+    {
+      "action_id": "211",
+      "action_token": "_j",
+      "action_token_id": 5374,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 32,
+      "candidate_id": "211",
+      "canonical_category_id": "26",
+      "category_index": 18,
+      "category_token": "_s",
+      "category_token_id": 643,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "211",
+      "local_action_index": 9,
+      "output_text": "_s_j",
+      "referenced_category_ids": [
+        "26"
+      ],
+      "short_definition": "双臂屈肘交叠，手部交叠于小腹前。",
+      "source_label": "手臂交叠",
+      "token_ids": [
+        643,
+        5374
+      ],
+      "training_action_id": "action_150_voice"
+    },
+    {
+      "action_id": "225",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 33,
+      "candidate_id": "225",
+      "canonical_category_id": "29",
+      "category_index": 21,
+      "category_token": "_v",
+      "category_token_id": 2273,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "225",
+      "local_action_index": 0,
+      "output_text": "_v_a",
+      "referenced_category_ids": [
+        "29"
+      ],
+      "short_definition": "单手食指伸出，手臂前伸指向的指示动作。",
+      "source_label": "指向前方",
+      "token_ids": [
+        2273,
+        4306
+      ],
+      "training_action_id": "action_038_voice"
+    },
+    {
+      "action_id": "237",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 34,
+      "candidate_id": "237",
+      "canonical_category_id": "30",
+      "category_index": 22,
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "237",
+      "local_action_index": 0,
+      "output_text": "_w_a",
+      "referenced_category_ids": [
+        "30"
+      ],
+      "short_definition": "单手手掌自然张开，掌心向上完全摊平，保持姿态静止定格。",
+      "source_label": "单手摊开展示",
+      "token_ids": [
+        1670,
+        4306
+      ],
+      "training_action_id": "action_096_voice"
+    },
+    {
+      "action_id": "238",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 35,
+      "candidate_id": "238",
+      "canonical_category_id": "30",
+      "category_index": 22,
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "238",
+      "local_action_index": 1,
+      "output_text": "_w_b",
+      "referenced_category_ids": [
+        "30"
+      ],
+      "short_definition": "用于空手介绍范围或方向；双手掌心向上摊平，不持握或操作具体物品。",
+      "source_label": "双手摊开展示",
+      "token_ids": [
+        1670,
+        880
+      ],
+      "training_action_id": "action_099_voice"
+    },
+    {
+      "action_id": "253",
+      "action_token": "_q",
+      "action_token_id": 8976,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 36,
+      "candidate_id": "253",
+      "canonical_category_id": "30",
+      "category_index": 22,
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "253",
+      "local_action_index": 16,
+      "output_text": "_w_q",
+      "referenced_category_ids": [
+        "30"
+      ],
+      "short_definition": "单手依靠手腕平稳旋转，可由手背朝上翻转为掌心朝上。",
+      "source_label": "单手翻手",
+      "token_ids": [
+        1670,
+        8976
+      ],
+      "training_action_id": "action_141_voice"
+    },
+    {
+      "action_id": "255",
+      "action_token": "_s",
+      "action_token_id": 643,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 37,
+      "candidate_id": "255",
+      "canonical_category_id": "30",
+      "category_index": 22,
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "255",
+      "local_action_index": 18,
+      "output_text": "_w_s",
+      "referenced_category_ids": [
+        "30"
+      ],
+      "short_definition": "左右双手五指舒展张开，掌心两两相对，指尖一一抵靠。",
+      "source_label": "双手五指张开相对",
+      "token_ids": [
+        1670,
+        643
+      ],
+      "training_action_id": "action_134_voice"
+    },
+    {
+      "action_id": "256",
+      "action_token": "_t",
+      "action_token_id": 528,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 38,
+      "candidate_id": "256",
+      "canonical_category_id": "30",
+      "category_index": 22,
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "256",
+      "local_action_index": 19,
+      "output_text": "_w_t",
+      "referenced_category_ids": [
+        "30"
+      ],
+      "short_definition": "双手掌心贴合前后快速相互摩擦揉搓。",
+      "source_label": "搓手",
+      "token_ids": [
+        1670,
+        528
+      ],
+      "training_action_id": "action_040_voice"
+    },
+    {
+      "action_id": "660",
+      "action_token": "_u",
+      "action_token_id": 7300,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 39,
+      "candidate_id": "660",
+      "canonical_category_id": "30",
+      "category_index": 22,
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 20,
+      "output_text": "_w_u",
+      "referenced_category_ids": [
+        "30"
+      ],
+      "short_definition": "单手通过手腕翻转至掌心向上，同时自然张开手指。",
+      "source_label": "翻手",
+      "token_ids": [
+        1670,
+        7300
+      ],
+      "training_action_id": "action_101_voice"
+    },
+    {
+      "action_id": "258",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 40,
+      "candidate_id": "258",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "258",
+      "local_action_index": 1,
+      "output_text": "_x_b",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手食指伸直，其余四指弯曲收拢。",
+      "source_label": "数字一手势",
+      "token_ids": [
+        3212,
+        880
+      ],
+      "training_action_id": "action_069_voice"
+    },
+    {
+      "action_id": "259",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 41,
+      "candidate_id": "259",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "259",
+      "local_action_index": 2,
+      "output_text": "_x_c",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手食指和中指伸直，其余三指弯曲收拢。",
+      "source_label": "数字二手势",
+      "token_ids": [
+        3212,
+        666
+      ],
+      "training_action_id": "action_070_voice"
+    },
+    {
+      "action_id": "260",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 42,
+      "candidate_id": "260",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "260",
+      "local_action_index": 3,
+      "output_text": "_x_d",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手食指、中指和无名指伸直，拇指和小指弯曲收拢。",
+      "source_label": "数字三手势",
+      "token_ids": [
+        3212,
+        814
+      ],
+      "training_action_id": "action_071_voice"
+    },
+    {
+      "action_id": "261",
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 43,
+      "candidate_id": "261",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "261",
+      "local_action_index": 4,
+      "output_text": "_x_e",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手食指、中指、无名指和小指并拢伸直，拇指弯曲内扣。",
+      "source_label": "数字四手势",
+      "token_ids": [
+        3212,
+        2204
+      ],
+      "training_action_id": "action_072_voice"
+    },
+    {
+      "action_id": "262",
+      "action_token": "_f",
+      "action_token_id": 761,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 44,
+      "candidate_id": "262",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "262",
+      "local_action_index": 5,
+      "output_text": "_x_f",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手五指全部伸直并张开。",
+      "source_label": "数字五手势",
+      "token_ids": [
+        3212,
+        761
+      ],
+      "training_action_id": "action_073_voice"
+    },
+    {
+      "action_id": "263",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 45,
+      "candidate_id": "263",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "263",
+      "local_action_index": 6,
+      "output_text": "_x_g",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手拇指和小指伸直，其余三指弯曲收拢。",
+      "source_label": "数字六手势",
+      "token_ids": [
+        3212,
+        1889
+      ],
+      "training_action_id": "action_074_voice"
+    },
+    {
+      "action_id": "264",
+      "action_token": "_h",
+      "action_token_id": 1523,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 46,
+      "candidate_id": "264",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "264",
+      "local_action_index": 7,
+      "output_text": "_x_h",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手拇指、食指和中指的指尖捏合，无名指和小指弯曲收拢。",
+      "source_label": "数字七手势",
+      "token_ids": [
+        3212,
+        1523
+      ],
+      "training_action_id": "action_143_voice"
+    },
+    {
+      "action_id": "265",
+      "action_token": "_i",
+      "action_token_id": 5318,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 47,
+      "candidate_id": "265",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "265",
+      "local_action_index": 8,
+      "output_text": "_x_i",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手拇指和食指伸直形成 L 形，中指、无名指和小指弯曲收拢。",
+      "source_label": "数字八手势",
+      "token_ids": [
+        3212,
+        5318
+      ],
+      "training_action_id": "action_075_voice"
+    },
+    {
+      "action_id": "266",
+      "action_token": "_j",
+      "action_token_id": 5374,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 48,
+      "candidate_id": "266",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "266",
+      "local_action_index": 9,
+      "output_text": "_x_j",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手食指弯曲成钩状，中指、无名指和小指收拢，拇指内扣贴于掌心。",
+      "source_label": "数字九手势",
+      "token_ids": [
+        3212,
+        5374
+      ],
+      "training_action_id": "action_076_voice"
+    },
+    {
+      "action_id": "267",
+      "action_token": "_k",
+      "action_token_id": 4698,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 49,
+      "candidate_id": "267",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "267",
+      "local_action_index": 10,
+      "output_text": "_x_k",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "双手各自握拳并伸出食指，两根食指交叉。",
+      "source_label": "数字十手势",
+      "token_ids": [
+        3212,
+        4698
+      ],
+      "training_action_id": "action_144_voice"
+    },
+    {
+      "action_id": "271",
+      "action_token": "_o",
+      "action_token_id": 14179,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 50,
+      "candidate_id": "271",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "271",
+      "local_action_index": 14,
+      "output_text": "_x_o",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "双手握拳，拇指同步竖起向前的点赞手势。",
+      "source_label": "双手点赞",
+      "token_ids": [
+        3212,
+        14179
+      ],
+      "training_action_id": "action_131_voice"
+    },
+    {
+      "action_id": "272",
+      "action_token": "_p",
+      "action_token_id": 620,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 51,
+      "candidate_id": "272",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "272",
+      "local_action_index": 15,
+      "output_text": "_x_p",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "拇指食指相扣成圈，其余三指展开的OK手势。",
+      "source_label": "OK 手势",
+      "token_ids": [
+        3212,
+        620
+      ],
+      "training_action_id": "action_079_voice"
+    },
+    {
+      "action_id": "273",
+      "action_token": "_q",
+      "action_token_id": 8976,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 52,
+      "candidate_id": "273",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "273",
+      "local_action_index": 16,
+      "output_text": "_x_q",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "双手拇指食指相扣，同步比出圆圈的OK手势。",
+      "source_label": "双手 OK 手势",
+      "token_ids": [
+        3212,
+        8976
+      ],
+      "training_action_id": "action_041_voice"
+    },
+    {
+      "action_id": "276",
+      "action_token": "_t",
+      "action_token_id": 528,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 53,
+      "candidate_id": "276",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "276",
+      "local_action_index": 19,
+      "output_text": "_x_t",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手比出V字，抬至脸颊一侧的比耶手势。",
+      "source_label": "脸旁比耶",
+      "token_ids": [
+        3212,
+        528
+      ],
+      "training_action_id": "action_146_voice"
+    },
+    {
+      "action_id": "277",
+      "action_token": "_u",
+      "action_token_id": 7300,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 54,
+      "candidate_id": "277",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "277",
+      "local_action_index": 20,
+      "output_text": "_x_u",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "双手比出V字，分置脸颊两侧的比耶手势。",
+      "source_label": "双手脸旁比耶",
+      "token_ids": [
+        3212,
+        7300
+      ],
+      "training_action_id": "action_152_voice"
+    },
+    {
+      "action_id": "283",
+      "action_token": "_A",
+      "action_token_id": 1566,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 55,
+      "candidate_id": "283",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "283",
+      "local_action_index": 26,
+      "output_text": "_x_A",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "单手大拇指与食指交错捏合呈X状，呈现的姿态。",
+      "source_label": "单手指心",
+      "token_ids": [
+        3212,
+        1566
+      ],
+      "training_action_id": "action_149_voice"
+    },
+    {
+      "action_id": "286",
+      "action_token": "_D",
+      "action_token_id": 1557,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 56,
+      "candidate_id": "286",
+      "canonical_category_id": "31",
+      "category_index": 23,
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "286",
+      "local_action_index": 29,
+      "output_text": "_x_D",
+      "referenced_category_ids": [
+        "31"
+      ],
+      "short_definition": "双臂高举过头，弯曲相扣指尖朝向头部比出爱心的比心手势。",
+      "source_label": "头顶大爱心",
+      "token_ids": [
+        3212,
+        1557
+      ],
+      "training_action_id": "action_147_voice"
+    },
+    {
+      "action_id": "289",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 57,
+      "candidate_id": "289",
+      "canonical_category_id": "32",
+      "category_index": 24,
+      "category_token": "_y",
+      "category_token_id": 4178,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "289",
+      "local_action_index": 1,
+      "output_text": "_y_b",
+      "referenced_category_ids": [
+        "32"
+      ],
+      "short_definition": "双手抬起位于身前或举高，手掌面向外部左右摆动的打招呼动作。",
+      "source_label": "双手挥手",
+      "token_ids": [
+        4178,
+        880
+      ],
+      "training_action_id": "action_129_voice"
+    },
+    {
+      "action_id": "649",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 58,
+      "candidate_id": "649",
+      "canonical_category_id": "32",
+      "category_index": 24,
+      "category_token": "_y",
+      "category_token_id": 4178,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 2,
+      "output_text": "_y_c",
+      "referenced_category_ids": [
+        "32"
+      ],
+      "short_definition": "抬起单手面向用户挥动，完成问候后自然放下手臂。",
+      "source_label": "打招呼手势",
+      "token_ids": [
+        4178,
+        666
+      ],
+      "training_action_id": "action_023_voice"
+    },
+    {
+      "action_id": "291",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 59,
+      "candidate_id": "291",
+      "canonical_category_id": "33",
+      "category_index": 25,
+      "category_token": "_z",
+      "category_token_id": 6415,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "291",
+      "local_action_index": 1,
+      "output_text": "_z_b",
+      "referenced_category_ids": [
+        "33"
+      ],
+      "short_definition": "双手掌心向下，同步短促下压停顿的强调动作。",
+      "source_label": "双手下压强调",
+      "token_ids": [
+        6415,
+        880
+      ],
+      "training_action_id": "action_102_voice"
+    },
+    {
+      "action_id": "302",
+      "action_token": "_m",
+      "action_token_id": 717,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 60,
+      "candidate_id": "302",
+      "canonical_category_id": "33",
+      "category_index": 25,
+      "category_token": "_z",
+      "category_token_id": 6415,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "302",
+      "local_action_index": 12,
+      "output_text": "_z_m",
+      "referenced_category_ids": [
+        "33"
+      ],
+      "short_definition": "双臂交叉成叉，置于胸前定格的拒绝动作。",
+      "source_label": "双手交叉拒绝",
+      "token_ids": [
+        6415,
+        717
+      ],
+      "training_action_id": "action_107_voice"
+    },
+    {
+      "action_id": "304",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 61,
+      "candidate_id": "304",
+      "canonical_category_id": "34",
+      "category_index": 26,
+      "category_token": "_A",
+      "category_token_id": 1566,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "304",
+      "local_action_index": 0,
+      "output_text": "_A_a",
+      "referenced_category_ids": [
+        "34"
+      ],
+      "short_definition": "双臂抬至胸腹前，双手掌心两两相对交替往复拍击，拍击幅度中等。",
+      "source_label": "鼓掌",
+      "token_ids": [
+        1566,
+        4306
+      ],
+      "training_action_id": "action_042_voice"
+    },
+    {
+      "action_id": "305",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 62,
+      "candidate_id": "305",
+      "canonical_category_id": "34",
+      "category_index": 26,
+      "category_token": "_A",
+      "category_token_id": 1566,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "305",
+      "local_action_index": 1,
+      "output_text": "_A_b",
+      "referenced_category_ids": [
+        "34"
+      ],
+      "short_definition": "单手握拳前举，手臂短促用力挥动的加油动作。",
+      "source_label": "握拳加油",
+      "token_ids": [
+        1566,
+        880
+      ],
+      "training_action_id": "action_020_voice"
+    },
+    {
+      "action_id": "307",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 63,
+      "candidate_id": "307",
+      "canonical_category_id": "34",
+      "category_index": 26,
+      "category_token": "_A",
+      "category_token_id": 1566,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "307",
+      "local_action_index": 3,
+      "output_text": "_A_d",
+      "referenced_category_ids": [
+        "34"
+      ],
+      "short_definition": "双臂高举过头，用力挥舞欢呼庆祝的欢呼动作。",
+      "source_label": "振臂欢呼",
+      "token_ids": [
+        1566,
+        814
+      ],
+      "training_action_id": "action_176_voice"
+    },
+    {
+      "action_id": "318",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 64,
+      "candidate_id": "318",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "318",
+      "local_action_index": 0,
+      "output_text": "_D_a",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手贴颈后缓慢摩挲，头部随动作轻微左右晃动。",
+      "source_label": "摸脖子",
+      "token_ids": [
+        1557,
+        4306
+      ],
+      "training_action_id": "action_142_voice"
+    },
+    {
+      "action_id": "321",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 65,
+      "candidate_id": "321",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "321",
+      "local_action_index": 3,
+      "output_text": "_D_d",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手指尖沿喉结锁骨缓慢下滑，脖颈同步后仰垂首。",
+      "source_label": "摸喉结",
+      "token_ids": [
+        1557,
+        814
+      ],
+      "training_action_id": "action_112_voice"
+    },
+    {
+      "action_id": "323",
+      "action_token": "_f",
+      "action_token_id": 761,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 66,
+      "candidate_id": "323",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "323",
+      "local_action_index": 5,
+      "output_text": "_D_f",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手指尖轻捏，摩挲耳廓与耳垂。",
+      "source_label": "摸耳朵",
+      "token_ids": [
+        1557,
+        761
+      ],
+      "training_action_id": "action_117_voice"
+    },
+    {
+      "action_id": "324",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 67,
+      "candidate_id": "324",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "324",
+      "local_action_index": 6,
+      "output_text": "_D_g",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单侧手臂抬起，使用手指在耳廓后方及周边区域进行反复摩擦或抓挠。",
+      "source_label": "摸耳后",
+      "token_ids": [
+        1557,
+        1889
+      ],
+      "training_action_id": "action_154_voice"
+    },
+    {
+      "action_id": "326",
+      "action_token": "_i",
+      "action_token_id": 5318,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 68,
+      "candidate_id": "326",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "326",
+      "local_action_index": 8,
+      "output_text": "_D_i",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手手掌完整覆于前额，轻轻按压摩挲。",
+      "source_label": "摸额头",
+      "token_ids": [
+        1557,
+        5318
+      ],
+      "training_action_id": "action_083_voice"
+    },
+    {
+      "action_id": "331",
+      "action_token": "_n",
+      "action_token_id": 1089,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 69,
+      "candidate_id": "331",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "331",
+      "local_action_index": 13,
+      "output_text": "_D_n",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手指尖轻抓手臂，腰侧，胸前等身体肌肤小幅抓挠。",
+      "source_label": "挠挠身体",
+      "token_ids": [
+        1557,
+        1089
+      ],
+      "training_action_id": "action_045_voice"
+    },
+    {
+      "action_id": "332",
+      "action_token": "_o",
+      "action_token_id": 14179,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 70,
+      "candidate_id": "332",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "332",
+      "local_action_index": 14,
+      "output_text": "_D_o",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手指尖轻抠下眼睑皮肤，幅度轻柔。",
+      "source_label": "挠眼下",
+      "token_ids": [
+        1557,
+        14179
+      ],
+      "training_action_id": "action_046_voice"
+    },
+    {
+      "action_id": "333",
+      "action_token": "_p",
+      "action_token_id": 620,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 71,
+      "candidate_id": "333",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "333",
+      "local_action_index": 15,
+      "output_text": "_D_p",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手指尖轻贴眼角，向两侧横向拭去泪水的情绪动作。",
+      "source_label": "单手擦眼泪",
+      "token_ids": [
+        1557,
+        620
+      ],
+      "training_action_id": "action_047_voice"
+    },
+    {
+      "action_id": "335",
+      "action_token": "_r",
+      "action_token_id": 1710,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 72,
+      "candidate_id": "335",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "335",
+      "local_action_index": 17,
+      "output_text": "_D_r",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
+      "source_label": "单手摸脸",
+      "token_ids": [
+        1557,
+        1710
+      ],
+      "training_action_id": "action_093_voice"
+    },
+    {
+      "action_id": "336",
+      "action_token": "_s",
+      "action_token_id": 643,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 73,
+      "candidate_id": "336",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "336",
+      "local_action_index": 18,
+      "output_text": "_D_s",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "双手手掌贴合脸颊，面部，手指自然舒展触摸面部。",
+      "source_label": "双手摸脸",
+      "token_ids": [
+        1557,
+        643
+      ],
+      "training_action_id": "action_116_voice"
+    },
+    {
+      "action_id": "337",
+      "action_token": "_t",
+      "action_token_id": 528,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 74,
+      "candidate_id": "337",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "337",
+      "local_action_index": 19,
+      "output_text": "_D_t",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单根指尖轻点戳向自己脸颊，力度轻柔的可爱小动作。",
+      "source_label": "戳脸颊",
+      "token_ids": [
+        1557,
+        528
+      ],
+      "training_action_id": "action_094_voice"
+    },
+    {
+      "action_id": "339",
+      "action_token": "_v",
+      "action_token_id": 2273,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 75,
+      "candidate_id": "339",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "339",
+      "local_action_index": 21,
+      "output_text": "_D_v",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手抬手抓住侧边长发，手指缠绕，拨弄发丝的细微肢体动作。",
+      "source_label": "玩头发",
+      "token_ids": [
+        1557,
+        2273
+      ],
+      "training_action_id": "action_048_voice"
+    },
+    {
+      "action_id": "345",
+      "action_token": "_B",
+      "action_token_id": 1668,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 76,
+      "candidate_id": "345",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "345",
+      "local_action_index": 27,
+      "output_text": "_D_B",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单腿抬起离地，单手俯身触碰，轻揉脚踝。",
+      "source_label": "手摸脚踝",
+      "token_ids": [
+        1557,
+        1668
+      ],
+      "training_action_id": "action_177_voice"
+    },
+    {
+      "action_id": "347",
+      "action_token": "_D",
+      "action_token_id": 1557,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 77,
+      "candidate_id": "347",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "347",
+      "local_action_index": 29,
+      "output_text": "_D_D",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手握拳伸食指，指尖指向另一手摊开的掌心，双手抬于身前。",
+      "source_label": "手指指手心",
+      "token_ids": [
+        1557,
+        1557
+      ],
+      "training_action_id": "action_133_voice"
+    },
+    {
+      "action_id": "348",
+      "action_token": "_E",
+      "action_token_id": 2089,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 78,
+      "candidate_id": "348",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "348",
+      "local_action_index": 30,
+      "output_text": "_D_E",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "轻咬大拇指指尖凝神思考。",
+      "source_label": "咬手指",
+      "token_ids": [
+        1557,
+        2089
+      ],
+      "training_action_id": "action_153_voice"
+    },
+    {
+      "action_id": "351",
+      "action_token": "_H",
+      "action_token_id": 2039,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 79,
+      "candidate_id": "351",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "351",
+      "local_action_index": 33,
+      "output_text": "_D_H",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单手食指指尖点向耳侧的示意动作。",
+      "source_label": "指向耳朵请听",
+      "token_ids": [
+        1557,
+        2039
+      ],
+      "training_action_id": "action_115_voice"
+    },
+    {
+      "action_id": "352",
+      "action_token": "_I",
+      "action_token_id": 7959,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 80,
+      "candidate_id": "352",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "352",
+      "local_action_index": 34,
+      "output_text": "_D_I",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单臂肘部弯曲抬起，手掌平直贴合单侧耳廓，头部同步向同侧偏斜。",
+      "source_label": "侧耳倾听",
+      "token_ids": [
+        1557,
+        7959
+      ],
+      "training_action_id": "action_090_voice"
+    },
+    {
+      "action_id": "353",
+      "action_token": "_J",
+      "action_token_id": 10598,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 81,
+      "candidate_id": "353",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "353",
+      "local_action_index": 35,
+      "output_text": "_D_J",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "单侧手臂弯曲抬起，掌心贴住脸颊承托。",
+      "source_label": "手托脸颊",
+      "token_ids": [
+        1557,
+        10598
+      ],
+      "training_action_id": "action_089_voice"
+    },
+    {
+      "action_id": "354",
+      "action_token": "_K",
+      "action_token_id": 10102,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 82,
+      "candidate_id": "354",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "354",
+      "local_action_index": 36,
+      "output_text": "_D_K",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "双手屈肘抬起，掌心分托脸颊两侧。",
+      "source_label": "双手托腮",
+      "token_ids": [
+        1557,
+        10102
+      ],
+      "training_action_id": "action_121_voice"
+    },
+    {
+      "action_id": "356",
+      "action_token": "_M",
+      "action_token_id": 1245,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 83,
+      "candidate_id": "356",
+      "canonical_category_id": "37",
+      "category_index": 29,
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "356",
+      "local_action_index": 38,
+      "output_text": "_D_M",
+      "referenced_category_ids": [
+        "37"
+      ],
+      "short_definition": "双臂弯曲向上抬起同时将双手手掌按压自身胸部位置或放置在自。",
+      "source_label": "双手捂胸口",
+      "token_ids": [
+        1557,
+        1245
+      ],
+      "training_action_id": "action_084_voice"
+    },
+    {
+      "action_id": "363",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 84,
+      "candidate_id": "363",
+      "canonical_category_id": "38",
+      "category_index": 30,
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "363",
+      "local_action_index": 6,
+      "output_text": "_E_g",
+      "referenced_category_ids": [
+        "38"
+      ],
+      "short_definition": "单手的拇指与食指相对，捏合成钳状。",
+      "source_label": "两指捏合",
+      "token_ids": [
+        2089,
+        1889
+      ],
+      "training_action_id": "action_053_voice"
+    },
+    {
+      "action_id": "364",
+      "action_token": "_h",
+      "action_token_id": 1523,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 85,
+      "candidate_id": "364",
+      "canonical_category_id": "38",
+      "category_index": 30,
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "364",
+      "local_action_index": 7,
+      "output_text": "_E_h",
+      "referenced_category_ids": [
+        "38"
+      ],
+      "short_definition": "单手的手指贴合表面，缓慢滑行移动。",
+      "source_label": "手指滑动",
+      "token_ids": [
+        2089,
+        1523
+      ],
+      "training_action_id": "action_054_voice"
+    },
+    {
+      "action_id": "369",
+      "action_token": "_m",
+      "action_token_id": 717,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 86,
+      "candidate_id": "369",
+      "canonical_category_id": "38",
+      "category_index": 30,
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "369",
+      "local_action_index": 12,
+      "output_text": "_E_m",
+      "referenced_category_ids": [
+        "38"
+      ],
+      "short_definition": "双臂抬起置于身前左右两侧，双手掌心明确朝向正前方。",
+      "source_label": "打双引号手势",
+      "token_ids": [
+        2089,
+        717
+      ],
+      "training_action_id": "action_055_voice"
+    },
+    {
+      "action_id": "375",
+      "action_token": "_s",
+      "action_token_id": 643,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 87,
+      "candidate_id": "375",
+      "canonical_category_id": "38",
+      "category_index": 30,
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "375",
+      "local_action_index": 18,
+      "output_text": "_E_s",
+      "referenced_category_ids": [
+        "38"
+      ],
+      "short_definition": "单手的食指伸出左右摇摆表示不可的否定动作。",
+      "source_label": "食指左右摇摆否定",
+      "token_ids": [
+        2089,
+        643
+      ],
+      "training_action_id": "action_156_voice"
+    },
+    {
+      "action_id": "659",
+      "action_token": "_t",
+      "action_token_id": 528,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 88,
+      "candidate_id": "659",
+      "canonical_category_id": "38",
+      "category_index": 30,
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 19,
+      "output_text": "_E_t",
+      "referenced_category_ids": [
+        "38"
+      ],
+      "short_definition": "单手拇指与食指指尖靠拢捏合，其余手指自然弯曲。",
+      "source_label": "手指捏合",
+      "token_ids": [
+        2089,
+        528
+      ],
+      "training_action_id": "action_098_voice"
+    },
+    {
+      "action_id": "662",
+      "action_token": "_u",
+      "action_token_id": 7300,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 89,
+      "candidate_id": "662",
+      "canonical_category_id": "38",
+      "category_index": 30,
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 20,
+      "output_text": "_E_u",
+      "referenced_category_ids": [
+        "38"
+      ],
+      "short_definition": "单手抬起并把五指自然分开张开，掌心朝向前方。",
+      "source_label": "手指张开",
+      "token_ids": [
+        2089,
+        7300
+      ],
+      "training_action_id": "action_104_voice"
+    },
+    {
+      "action_id": "376",
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 90,
+      "candidate_id": "376",
+      "canonical_category_id": "39",
+      "category_index": 31,
+      "category_token": "_F",
+      "category_token_id": 1400,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "376",
+      "local_action_index": 0,
+      "output_text": "_F_a",
+      "referenced_category_ids": [
+        "39"
+      ],
+      "short_definition": "双脚分开与肩同宽，自然站立。",
+      "source_label": "双脚自然站立",
+      "token_ids": [
+        1400,
+        4306
+      ],
+      "training_action_id": "action_178_voice"
+    },
+    {
+      "action_id": "378",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 91,
+      "candidate_id": "378",
+      "canonical_category_id": "39",
+      "category_index": 31,
+      "category_token": "_F",
+      "category_token_id": 1400,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "378",
+      "local_action_index": 2,
+      "output_text": "_F_c",
+      "referenced_category_ids": [
+        "39"
+      ],
+      "short_definition": "双脚左右分开，稳定站立的开阔站姿。",
+      "source_label": "双脚分开站立",
+      "token_ids": [
+        1400,
+        666
+      ],
+      "training_action_id": "action_179_voice"
+    },
+    {
+      "action_id": "382",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 92,
+      "candidate_id": "382",
+      "canonical_category_id": "39",
+      "category_index": 31,
+      "category_token": "_F",
+      "category_token_id": 1400,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "382",
+      "local_action_index": 6,
+      "output_text": "_F_g",
+      "referenced_category_ids": [
+        "39"
+      ],
+      "short_definition": "单侧腿部主动发力，膝关节弯曲将大腿向前上方抬起。",
+      "source_label": "单腿向前提膝",
+      "token_ids": [
+        1400,
+        1889
+      ],
+      "training_action_id": "action_183_voice"
+    },
+    {
+      "action_id": "395",
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 93,
+      "candidate_id": "395",
+      "canonical_category_id": "42",
+      "category_index": 34,
+      "category_token": "_I",
+      "category_token_id": 7959,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "395",
+      "local_action_index": 1,
+      "output_text": "_I_b",
+      "referenced_category_ids": [
+        "42"
+      ],
+      "short_definition": "双腿同时弯曲下蹲，臀部接近脚跟，膝盖完全折叠的深度蹲姿。",
+      "source_label": "全蹲",
+      "token_ids": [
+        7959,
+        880
+      ],
+      "training_action_id": "action_198_voice"
+    },
+    {
+      "action_id": "405",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 94,
+      "candidate_id": "405",
+      "canonical_category_id": "44",
+      "category_index": 36,
+      "category_token": "_K",
+      "category_token_id": 10102,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "405",
+      "local_action_index": 2,
+      "output_text": "_K_c",
+      "referenced_category_ids": [
+        "44"
+      ],
+      "short_definition": "头部伸向前方，单侧手臂向前伸展，掌心示意前方引路的引导动作。",
+      "source_label": "引导向前",
+      "token_ids": [
+        10102,
+        666
+      ],
+      "training_action_id": "action_209_voice"
+    },
+    {
+      "action_id": "438",
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 95,
+      "candidate_id": "438",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "438",
+      "local_action_index": 2,
+      "output_text": "_N_c",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "双手叉腰，挺胸抬头并将下巴微微扬起。",
+      "source_label": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）",
+      "token_ids": [
+        1604,
+        666
+      ],
+      "training_action_id": "action_088_voice"
+    },
+    {
+      "action_id": "439",
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 96,
+      "candidate_id": "439",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "439",
+      "local_action_index": 3,
+      "output_text": "_N_d",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "低头垂手，或单手轻拍额头后摇头回应。",
+      "source_label": "遗憾（低头，双手自然垂下，或单手缓缓拍一下自己的额头，随后轻轻摇头）",
+      "token_ids": [
+        1604,
+        814
+      ],
+      "training_action_id": "action_163_voice"
+    },
+    {
+      "action_id": "440",
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 97,
+      "candidate_id": "440",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "440",
+      "local_action_index": 4,
+      "output_text": "_N_e",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "双拳胸前交替敲击后同时下顿并点头。",
+      "source_label": "鼓励（双手握拳，屈臂举在胸前，双拳交替上下小幅度敲击两次，随后双拳同时向下用力一顿，同时重重地点一下头，眼神坚定地看向前方）",
+      "token_ids": [
+        1604,
+        2204
+      ],
+      "training_action_id": "action_062_voice"
+    },
+    {
+      "action_id": "441",
+      "action_token": "_f",
+      "action_token_id": 761,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 98,
+      "candidate_id": "441",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "441",
+      "local_action_index": 5,
+      "output_text": "_N_f",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "头部歪斜眨眼，同时脚跟快速轻颠的俏皮动作。",
+      "source_label": "俏皮（歪头眨眼轻颠跺脚）",
+      "token_ids": [
+        1604,
+        761
+      ],
+      "training_action_id": "action_063_voice"
+    },
+    {
+      "action_id": "442",
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 99,
+      "candidate_id": "442",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "442",
+      "local_action_index": 6,
+      "output_text": "_N_g",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "用于明确要求卖萌、装可爱或做可爱动作；双手做猫爪托腮并歪头，区别于装可怜和娇羞。",
+      "source_label": "卖萌（双手猫爪托腮歪头）",
+      "token_ids": [
+        1604,
+        1889
+      ],
+      "training_action_id": "action_159_voice"
+    },
+    {
+      "action_id": "443",
+      "action_token": "_h",
+      "action_token_id": 1523,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 100,
+      "candidate_id": "443",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "443",
+      "local_action_index": 7,
+      "output_text": "_N_h",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "上身左右轻微高频摇晃下身保持不动。",
+      "source_label": "撒娇（低头身子摇晃，双手向前锤）",
+      "token_ids": [
+        1604,
+        1523
+      ],
+      "training_action_id": "action_064_voice"
+    },
+    {
+      "action_id": "444",
+      "action_token": "_i",
+      "action_token_id": 5318,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 101,
+      "candidate_id": "444",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "444",
+      "local_action_index": 8,
+      "output_text": "_N_i",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "低头双手捂脸，身体左右轻轻晃动。",
+      "source_label": "娇羞（低头双手捂脸，身体左右轻晃）",
+      "token_ids": [
+        1604,
+        5318
+      ],
+      "training_action_id": "action_130_voice"
+    },
+    {
+      "action_id": "449",
+      "action_token": "_n",
+      "action_token_id": 1089,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 102,
+      "candidate_id": "449",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "449",
+      "local_action_index": 13,
+      "output_text": "_N_n",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "单手捂嘴，身体随张口向后微仰。",
+      "source_label": "打哈欠（单手捂嘴身体后仰）",
+      "token_ids": [
+        1604,
+        1089
+      ],
+      "training_action_id": "action_160_voice"
+    },
+    {
+      "action_id": "450",
+      "action_token": "_o",
+      "action_token_id": 14179,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 103,
+      "candidate_id": "450",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "450",
+      "local_action_index": 14,
+      "output_text": "_N_o",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "手扶头部，眉头紧皱的疼痛表情。",
+      "source_label": "头疼",
+      "token_ids": [
+        1604,
+        14179
+      ],
+      "training_action_id": "action_125_voice"
+    },
+    {
+      "action_id": "453",
+      "action_token": "_r",
+      "action_token_id": 1710,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 104,
+      "candidate_id": "453",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "453",
+      "local_action_index": 17,
+      "output_text": "_N_r",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "上身前倾凑近镜头，嘟嘴做亲吻。",
+      "source_label": "亲亲镜头（凑近亲吻）",
+      "token_ids": [
+        1604,
+        1710
+      ],
+      "training_action_id": "action_148_voice"
+    },
+    {
+      "action_id": "455",
+      "action_token": "_t",
+      "action_token_id": 528,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 105,
+      "candidate_id": "455",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "455",
+      "local_action_index": 19,
+      "output_text": "_N_t",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "单手掌心覆面，头部微低的无奈动作。",
+      "source_label": "单手捂脸无奈",
+      "token_ids": [
+        1604,
+        528
+      ],
+      "training_action_id": "action_136_voice"
+    },
+    {
+      "action_id": "457",
+      "action_token": "_v",
+      "action_token_id": 2273,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 106,
+      "candidate_id": "457",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "457",
+      "local_action_index": 21,
+      "output_text": "_N_v",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "单手掌心捂住嘴部，眼睛同步睁大的惊讶动作。",
+      "source_label": "单手捂嘴惊讶",
+      "token_ids": [
+        1604,
+        2273
+      ],
+      "training_action_id": "action_161_voice"
+    },
+    {
+      "action_id": "458",
+      "action_token": "_w",
+      "action_token_id": 1670,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 107,
+      "candidate_id": "458",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "458",
+      "local_action_index": 22,
+      "output_text": "_N_w",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "双手掌心捂住嘴部，眼睛同步睁大的惊讶动作。",
+      "source_label": "双手捂嘴惊讶",
+      "token_ids": [
+        1604,
+        1670
+      ],
+      "training_action_id": "action_119_voice"
+    },
+    {
+      "action_id": "459",
+      "action_token": "_x",
+      "action_token_id": 3212,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 108,
+      "candidate_id": "459",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "459",
+      "local_action_index": 23,
+      "output_text": "_N_x",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "双手掌心向上摊开，肩部略耸的无奈动作。",
+      "source_label": "摊手无奈",
+      "token_ids": [
+        1604,
+        3212
+      ],
+      "training_action_id": "action_162_voice"
+    },
+    {
+      "action_id": "462",
+      "action_token": "_A",
+      "action_token_id": 1566,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 109,
+      "candidate_id": "462",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "462",
+      "local_action_index": 26,
+      "output_text": "_N_A",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "单手捂住嘴巴，抑制笑意的表情动作。",
+      "source_label": "单手捂嘴笑",
+      "token_ids": [
+        1604,
+        1566
+      ],
+      "training_action_id": "action_114_voice"
+    },
+    {
+      "action_id": "465",
+      "action_token": "_D",
+      "action_token_id": 1557,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 110,
+      "candidate_id": "465",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "465",
+      "local_action_index": 29,
+      "output_text": "_N_D",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "视线移开，单指沿下巴轻轻抚过。",
+      "source_label": "单指轻抚下巴表示思考",
+      "token_ids": [
+        1604,
+        1557
+      ],
+      "training_action_id": "action_087_voice"
+    },
+    {
+      "action_id": "650",
+      "action_token": "_M",
+      "action_token_id": 1245,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 111,
+      "candidate_id": "650",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 38,
+      "output_text": "_N_M",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "头和上身轻微靠近镜头并歪头，保持眼神接触和轻微暧昧微笑。",
+      "source_label": "魅惑探头",
+      "token_ids": [
+        1604,
+        1245
+      ],
+      "training_action_id": "action_025_voice"
+    },
+    {
+      "action_id": "658",
+      "action_token": "_N",
+      "action_token_id": 1604,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 112,
+      "candidate_id": "658",
+      "canonical_category_id": "47",
+      "category_index": 39,
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "code_origin": "new_assignment",
+      "legacy_candidate_id": null,
+      "local_action_index": 39,
+      "output_text": "_N_N",
+      "referenced_category_ids": [
+        "47"
+      ],
+      "short_definition": "靠近镜头、闭上双眼并嘟嘴，做直接亲吻镜头的动作，双手保持放下。",
+      "source_label": "闭眼睛靠近亲吻",
+      "token_ids": [
+        1604,
+        1604
+      ],
+      "training_action_id": "action_036_voice"
+    },
+    {
+      "action_id": "624",
+      "action_token": "_D",
+      "action_token_id": 1557,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 113,
+      "candidate_id": "624",
+      "canonical_category_id": "57",
+      "category_index": 49,
+      "category_token": "_X",
+      "category_token_id": 6859,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "624",
+      "local_action_index": 29,
+      "output_text": "_X_D",
+      "referenced_category_ids": [
+        "57"
+      ],
+      "short_definition": "单侧手臂弯曲抬起至胸前，手掌自然张开或微曲。",
+      "source_label": "单手抚胸",
+      "token_ids": [
+        6859,
+        1557
+      ],
+      "training_action_id": "action_085_voice"
+    },
+    {
+      "action_id": "629",
+      "action_token": "_I",
+      "action_token_id": 7959,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 114,
+      "candidate_id": "629",
+      "canonical_category_id": "57",
+      "category_index": 49,
+      "category_token": "_X",
+      "category_token_id": 6859,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "629",
+      "local_action_index": 34,
+      "output_text": "_X_I",
+      "referenced_category_ids": [
+        "57"
+      ],
+      "short_definition": "双手捏住领口，轻拉展示衣物细节。",
+      "source_label": "扯低领口（脱衣诱惑）",
+      "token_ids": [
+        6859,
+        7959
+      ],
+      "training_action_id": "action_067_voice"
+    },
+    {
+      "action_id": "631",
+      "action_token": "_K",
+      "action_token_id": 10102,
+      "active": true,
+      "alias_category_ids": [],
+      "allocation_index": 115,
+      "candidate_id": "631",
+      "canonical_category_id": "57",
+      "category_index": 49,
+      "category_token": "_X",
+      "category_token_id": 6859,
+      "code_origin": "legacy_exact",
+      "legacy_candidate_id": "631",
+      "local_action_index": 36,
+      "output_text": "_X_K",
+      "referenced_category_ids": [
+        "57"
+      ],
+      "short_definition": "双手同时拉开衣料，露出局部肌肤。",
+      "source_label": "双手轻拉衬衫露出肌肉（性感暧昧）",
+      "token_ids": [
+        6859,
+        10102
+      ],
+      "training_action_id": "action_068_voice"
+    }
+  ],
+  "assignment_sha256": "sha256:dc9986c06a1e679c64567f1e69900565936c351ea5767d69b1285573976bf33b",
+  "catalog_hash": "sha256:aeb617e2d6c0741ee5f911c3f997f56a90ed5b75e2a28677b6da5e8f9022a076",
+  "category_entries": [
+    {
+      "active": true,
+      "allocation_index": 0,
+      "canonical_action_count": 0,
+      "category_id": "01",
+      "category_token": "_a",
+      "category_token_id": 4306,
+      "referenced_action_count": 0,
+      "short_definition": "用于回复文本需要手势伴随时，涵盖陈述、强调、列举、邀请和指向；区别于独立情绪或静默动作，常见为展示、指示和加强语气。",
+      "source_label": "语言表达伴随"
+    },
+    {
+      "active": true,
+      "allocation_index": 1,
+      "canonical_action_count": 0,
+      "category_id": "02",
+      "category_token": "_b",
+      "category_token_id": 880,
+      "referenced_action_count": 0,
+      "short_definition": "用于没有明确动作目标或需要保持安静时，涵盖呼吸、视线和低幅姿态调整；区别于表达性手势，常见为待机、观察和轻微复位。",
+      "source_label": "静默与低扰伴随"
+    },
+    {
+      "active": true,
+      "allocation_index": 2,
+      "canonical_action_count": 1,
+      "category_id": "10",
+      "category_token": "_c",
+      "category_token_id": 666,
+      "referenced_action_count": 1,
+      "short_definition": "需要保持或完成站、坐、跪、卧等整体体态或姿态转换时选择；涵盖正式/放松站坐、支撑站立、跪坐、盘腿、侧卧、抱膝、躺下与睡眠；区别于仅移重心、待机微调和行走。",
+      "source_label": "基础姿态"
+    },
+    {
+      "active": true,
+      "allocation_index": 3,
+      "canonical_action_count": 1,
+      "category_id": "11",
+      "category_token": "_d",
+      "category_token_id": 814,
+      "referenced_action_count": 1,
+      "short_definition": "强调身体支撑点或重心前后左右变化，或短暂离地时选择；涵盖四向移重心、跳跃等不构成完整位移的变化；区别于坐站躺等姿态转换和连续行走。",
+      "source_label": "重心变化"
+    },
+    {
+      "active": true,
+      "allocation_index": 4,
+      "canonical_action_count": 0,
+      "category_id": "12",
+      "category_token": "_e",
+      "category_token_id": 2204,
+      "referenced_action_count": 0,
+      "short_definition": "表达从静止启动、动作收尾或回到正面中立时选择；涵盖起势、复位和头部回正；区别于持续待机、重复摆动及一般转身。",
+      "source_label": "起止与复位"
+    },
+    {
+      "active": true,
+      "allocation_index": 5,
+      "canonical_action_count": 1,
+      "category_id": "13",
+      "category_token": "_f",
+      "category_token_id": 761,
+      "referenced_action_count": 1,
+      "short_definition": "没有明确表意目标，只维持自然状态或做非定向小幅调整时选择；涵盖呼吸、身体轻晃、臀部小幅挪动式坐姿微调和椅子转动；若上身明确前倾、后仰、探身或回正，选择躯干前后动作；区别于有意表达的手势、情绪动作和定向移动。",
+      "source_label": "待机动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 6,
+      "canonical_action_count": 0,
+      "category_id": "14",
+      "category_token": "_g",
+      "category_token_id": 1889,
+      "referenced_action_count": 0,
+      "short_definition": "以头部连续点动或左右摇摆表达持续回应时选择；涵盖连续点头、连续摇头等重复往返动作；区别于单次抬头低头、头眼转向和全身摆动。",
+      "source_label": "摆头类"
+    },
+    {
+      "active": true,
+      "allocation_index": 7,
+      "canonical_action_count": 1,
+      "category_id": "15",
+      "category_token": "_h",
+      "category_token_id": 1523,
+      "referenced_action_count": 1,
+      "short_definition": "只改变头部上下朝向时选择；涵盖单纯抬头和低头。“抬头勾引”等同时包含明确情绪或交际目的的请求，选择复合情绪动作。",
+      "source_label": "俯仰类"
+    },
+    {
+      "active": true,
+      "allocation_index": 8,
+      "canonical_action_count": 3,
+      "category_id": "16",
+      "category_token": "_i",
+      "category_token_id": 5318,
+      "referenced_action_count": 3,
+      "short_definition": "只改变眼球视线、头部保持基本不动时选择；涵盖看镜头、凝视、注视、望向用户及上下左右定向视线；区别于头眼同步转向和身体转动。",
+      "source_label": "视线类"
+    },
+    {
+      "active": true,
+      "allocation_index": 9,
+      "canonical_action_count": 0,
+      "category_id": "17",
+      "category_token": "_j",
+      "category_token_id": 5374,
+      "referenced_action_count": 0,
+      "short_definition": "头部与眼球协同转向目标时选择；涵盖左右转头、回头、环视及看向手中物品、屏幕区域或对话对象；区别于只动眼球、只改变身体朝向和手势指向。",
+      "source_label": "头眼协同"
+    },
+    {
+      "active": true,
+      "allocation_index": 10,
+      "canonical_action_count": 0,
+      "category_id": "18",
+      "category_token": "_k",
+      "category_token_id": 4698,
+      "referenced_action_count": 0,
+      "short_definition": "以眉毛和眼周局部变化传递惊讶、疑惑或担忧时选择；涵盖挑眉、皱眉等不带明显口型、下颌或身体协同的动作；区别于完整面部表情和复合情绪姿态。",
+      "source_label": "眉眼动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 11,
+      "canonical_action_count": 13,
+      "category_id": "19",
+      "category_token": "_l",
+      "category_token_id": 907,
+      "referenced_action_count": 13,
+      "short_definition": "仅以面部口周、眉眼和面颊表达基础情绪时选择；若用户明确要求手臂、手部、抱头、捂脸、摊手或身体协同，选择相应复合情绪动作。",
+      "source_label": "基础表情"
+    },
+    {
+      "active": true,
+      "allocation_index": 12,
+      "canonical_action_count": 0,
+      "category_id": "20",
+      "category_token": "_m",
+      "category_token_id": 717,
+      "referenced_action_count": 0,
+      "short_definition": "肩部耸起、回落、展开、收拢或单侧运动，躯干整体角度基本不变；用于单纯肩部调整或耸肩表达；若动作同时明确要求摊手、捂脸等复合情绪姿态，选择对应情绪动作类别。",
+      "source_label": "肩部动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 13,
+      "canonical_action_count": 3,
+      "category_id": "21",
+      "category_token": "_n",
+      "category_token_id": 1089,
+      "referenced_action_count": 3,
+      "short_definition": "上身以腰髋为轴整体前倾、后仰、向镜头或画面边缘探身、随后回正，肩胯相对同向且脚下不发生位移时选择；涵盖身体凑近、靠近镜头和向前探身。臀部小幅挪动而躯干无明确前后运动时选择待机动作；区别于左右侧倾、胸腰分段扭动、礼仪鞠躬和完整移重心。",
+      "source_label": "躯干前后动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 14,
+      "canonical_action_count": 5,
+      "category_id": "22",
+      "category_token": "_o",
+      "category_token_id": 14179,
+      "referenced_action_count": 5,
+      "short_definition": "胸腰胯作为整体向左右侧倾、转向或连续往返摆动时选择；涵盖上身左右倾斜、旋转和摆动；区别于胸廓与骨盆分段扭动、只转头、全身转身、连续位移及舞蹈编排。",
+      "source_label": "躯干左右动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 15,
+      "canonical_action_count": 0,
+      "category_id": "23",
+      "category_token": "_p",
+      "category_token_id": 620,
+      "referenced_action_count": 0,
+      "short_definition": "胸廓与骨盆分段联动、错位旋转或弯折时选择；涵盖挺胸、含胸、扭腰、转胸、扭胯和左右弯腰；用于律动、风格化表演或姿态展示；区别于整体侧倾、前后倾和规范鞠躬。",
+      "source_label": "胸腰联动"
+    },
+    {
+      "active": true,
+      "allocation_index": 16,
+      "canonical_action_count": 3,
+      "category_id": "24",
+      "category_token": "_q",
+      "category_token_id": 8976,
+      "referenced_action_count": 3,
+      "short_definition": "以单次轻微点头致意，或躯干从髋部前屈、低点停顿后恢复来表达规范礼仪时选择；连续点头选择摆头类，合十、抱拳、敬礼或鞠躬合手选择礼仪与感谢；区别于自由前倾和胸腰扭动。",
+      "source_label": "鞠躬与礼仪"
+    },
+    {
+      "active": true,
+      "allocation_index": 17,
+      "canonical_action_count": 1,
+      "category_id": "25",
+      "category_token": "_r",
+      "category_token_id": 1710,
+      "referenced_action_count": 1,
+      "short_definition": "以一侧大臂或前臂抬起、伸展、弯举、叉腰或收至目标位姿为主要结果，手部不形成独立指向或操作语义时选择；涵盖举手、哑铃弯举及明确的“伸手摸摸头”；手指或手掌指向目标选择指向类，其他对头面身体的触碰整理选择身体触碰；区别于双臂成对动作和连续挥臂。",
+      "source_label": "单臂抬起"
+    },
+    {
+      "active": true,
+      "allocation_index": 18,
+      "canonical_action_count": 1,
+      "category_id": "26",
+      "category_token": "_s",
+      "category_token_id": 643,
+      "referenced_action_count": 1,
+      "short_definition": "双臂成对同步或交替抬起、伸展、收回、交叠或叉腰时选择；涵盖前举、侧展、举手、举高、抱胸、打开、收回和双臂弯举；区别于单臂动作、连续挥动及以情绪为核心的复合姿态。",
+      "source_label": "双臂抬起"
+    },
+    {
+      "active": true,
+      "allocation_index": 19,
+      "canonical_action_count": 0,
+      "category_id": "27",
+      "category_token": "_t",
+      "category_token_id": 528,
+      "referenced_action_count": 0,
+      "short_definition": "单臂或双臂沿前后、左右或弧线连续摆动、挥击时选择；涵盖自然摆臂、挥拳和双臂左右挥手；区别于固定位置抬臂、肘部局部运动及打招呼的稳定小幅挥手。",
+      "source_label": "手臂摆动"
+    },
+    {
+      "active": true,
+      "allocation_index": 20,
+      "canonical_action_count": 0,
+      "category_id": "28",
+      "category_token": "_u",
+      "category_token_id": 7300,
+      "referenced_action_count": 0,
+      "short_definition": "以肘关节为主要活动点完成前臂屈伸、收展或支撑时选择；涵盖屈肘、伸肘、开合肘、手肘支撑和反手支撑；区别于肩带动的整体摆臂、手指精细动作和身体前倾。",
+      "source_label": "肘部动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 21,
+      "canonical_action_count": 1,
+      "category_id": "29",
+      "category_token": "_v",
+      "category_token_id": 2273,
+      "referenced_action_count": 1,
+      "short_definition": "用手指或定向手掌明确、静态地指向单一方向、位置、物体或自身时选择；涵盖单/双手上下左右指向、指向黑板、自指和双手相对指示；开放手掌扫过范围、画圈或介绍空间选择展示类；区别于物品展示及连续挥手。",
+      "source_label": "指向类"
+    },
+    {
+      "active": true,
+      "allocation_index": 22,
+      "canonical_action_count": 6,
+      "category_id": "30",
+      "category_token": "_w",
+      "category_token_id": 1670,
+      "referenced_action_count": 6,
+      "short_definition": "用空手摊掌、摊开、横向扫动、翻掌、画圈或比划大小来展示范围、方向和空间关系时选择；动作目标是一片区域或介绍过程，而非静态指向单一目标；不操作具体物品，也不用于表达无奈、惊讶等独立情绪。",
+      "source_label": "展示类"
+    },
+    {
+      "active": true,
+      "allocation_index": 23,
+      "canonical_action_count": 17,
+      "category_id": "31",
+      "category_token": "_x",
+      "category_token_id": 3212,
+      "referenced_action_count": 17,
+      "short_definition": "以手指屈伸、交叉、相扣或特定组合形成数字、字母、图形和约定手型时选择；飞吻、抛飞吻、送飞吻 → 31；直接亲吻、亲亲镜头、凑近亲吻 → 47；区别于一般指向、展示和其他情绪复合姿态。",
+      "source_label": "符号化手势"
+    },
+    {
+      "active": true,
+      "allocation_index": 24,
+      "canonical_action_count": 2,
+      "category_id": "32",
+      "category_token": "_y",
+      "category_token_id": 4178,
+      "referenced_action_count": 2,
+      "short_definition": "面向他人以手掌向外做小幅稳定往复摆动，表达打招呼、问候、告别、回应、自我介绍、说明身份或初次建立关系时选择；涵盖单手和双手挥手；区别于请求靠近的招引、手臂大幅挥击及单纯动作展示。",
+      "source_label": "打招呼与告别"
+    },
+    {
+      "active": true,
+      "allocation_index": 25,
+      "canonical_action_count": 2,
+      "category_id": "33",
+      "category_token": "_z",
+      "category_token_id": 6415,
+      "referenced_action_count": 2,
+      "short_definition": "以短促下压、握拳、拍击、数指、推掌或交叉拒绝来强化口头立场、讲解、停止或否定时选择；即使使用握拳或手指动作，只要核心目的是加强话语就归本类；无表达目的的局部手指操作选择手指精细动作，鼓劲欢呼选择鼓励与庆祝。",
+      "source_label": "强调类"
+    },
+    {
+      "active": true,
+      "allocation_index": 26,
+      "canonical_action_count": 3,
+      "category_id": "34",
+      "category_token": "_A",
+      "category_token_id": 1566,
+      "referenced_action_count": 3,
+      "short_definition": "以拍手、握拳、挥臂或击掌这一主要手势表达鼓励、欢呼或庆祝时选择；涵盖鼓掌、加油、振臂欢呼和击掌；若双脚、头部、表情与双手按顺序组成完整情绪表演，选择情绪动作；区别于强调、请求引导及无情绪的手臂抬举。",
+      "source_label": "鼓励与庆祝"
+    },
+    {
+      "active": true,
+      "allocation_index": 27,
+      "canonical_action_count": 0,
+      "category_id": "35",
+      "category_token": "_B",
+      "category_token_id": 1668,
+      "referenced_action_count": 0,
+      "short_definition": "以手掌向内招引或横向指示，表达请求靠近、邀请、召唤或跟随时选择；涵盖单/双手招手靠近和邀请；区别于问候告别、单一目标指向及礼仪手势。",
+      "source_label": "请求与引导"
+    },
+    {
+      "active": true,
+      "allocation_index": 28,
+      "canonical_action_count": 0,
+      "category_id": "36",
+      "category_token": "_C",
+      "category_token_id": 920,
+      "referenced_action_count": 0,
+      "short_definition": "以合十、抱拳、敬礼等规范手型和停留表达致谢、问候、致意或道歉时选择；鞠躬合手仍归本类，只有单次点头或不带规范手型的躯干鞠躬选择鞠躬与礼仪；区别于挥手问候、身体触碰和情绪化复合表演。",
+      "source_label": "礼仪与感谢"
+    },
+    {
+      "active": true,
+      "allocation_index": 29,
+      "canonical_action_count": 20,
+      "category_id": "37",
+      "category_token": "_D",
+      "category_token_id": 1557,
+      "referenced_action_count": 20,
+      "short_definition": "手部直接接触自身皮肤、头发或身体部位，或请求明确命中舔舌头、嘘、勾引手势、侧耳倾听等本类固定局部动作时选择；涵盖摸、擦、挠、托、捂、撩发及拍胸。衣物或配饰是直接目标时选择穿戴与佩戴；由面部、手势、躯干等多个部位按顺序组成完整情绪表演时选择情绪动作。",
+      "source_label": "身体触碰"
+    },
+    {
+      "active": true,
+      "allocation_index": 30,
+      "canonical_action_count": 6,
+      "category_id": "38",
+      "category_token": "_E",
+      "category_token_id": 2089,
+      "referenced_action_count": 6,
+      "short_definition": "手指、指尖或手掌在不接触身体、实体物品或真实乐器时完成局部收拢、展开、捏合、滑动、弹击、交握、敲击或模拟弹奏时选择；约定数字或图形手型选择符号化手势，强化话语选择强调类，明确操作真实乐器选择舞台表现。",
+      "source_label": "手指精细动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 31,
+      "canonical_action_count": 3,
+      "category_id": "39",
+      "category_token": "_F",
+      "category_token_id": 1400,
+      "referenced_action_count": 3,
+      "short_definition": "保持站立时只调整双脚间距、脚尖朝向或完成单次踏步、提膝时选择；涵盖并拢/分开站立、前踏、后撤、交叠和脚步预备；区别于连续行进、蹲起、脚尖局部细节及完整姿态转换。",
+      "source_label": "站立脚步"
+    },
+    {
+      "active": true,
+      "allocation_index": 32,
+      "canonical_action_count": 0,
+      "category_id": "40",
+      "category_token": "_G",
+      "category_token_id": 2646,
+      "referenced_action_count": 0,
+      "short_definition": "双脚交替形成连续行进或位置转移时选择；涵盖前进、后退、左右移动、原地踏步、转身行走、走出画面及风格化走姿；区别于原地转身、单次踏步和舞蹈编排。",
+      "source_label": "行走类"
+    },
+    {
+      "active": true,
+      "allocation_index": 33,
+      "canonical_action_count": 0,
+      "category_id": "41",
+      "category_token": "_H",
+      "category_token_id": 2039,
+      "referenced_action_count": 0,
+      "short_definition": "以单脚或双脚为轴改变全身左右朝向，完成后停住且不持续行进时选择；涵盖左转身、右转身；区别于转身行走、头部转向、上身局部旋转和连续位移。",
+      "source_label": "转身类"
+    },
+    {
+      "active": true,
+      "allocation_index": 34,
+      "canonical_action_count": 1,
+      "category_id": "42",
+      "category_token": "_I",
+      "category_token_id": 7959,
+      "referenced_action_count": 1,
+      "short_definition": "以膝髋屈伸使臀部升降，在站立与蹲姿间转换或保持下蹲时选择；涵盖起身、全蹲、单腿蹲和迈步蹲；区别于脚部微调、坐下及连续行走。",
+      "source_label": "蹲起类"
+    },
+    {
+      "active": true,
+      "allocation_index": 35,
+      "canonical_action_count": 0,
+      "category_id": "43",
+      "category_token": "_J",
+      "category_token_id": 10598,
+      "referenced_action_count": 0,
+      "short_definition": "只用脚踝、脚掌或脚尖完成轻触、抬跟、转向、点动或小步微移时选择；涵盖脚尖点地、踮脚、脚步轻移和单双脚尖转向；区别于髋部带动的蹲起、行走和整体重心变化。",
+      "source_label": "脚部细节"
+    },
+    {
+      "active": true,
+      "allocation_index": 36,
+      "canonical_action_count": 1,
+      "category_id": "44",
+      "category_token": "_K",
+      "category_token_id": 10102,
+      "referenced_action_count": 1,
+      "short_definition": "头部、手臂、躯干至少两处协同，并让视线与手部共同朝向目标以欢迎或介绍时选择；涵盖左右/向前引导和介绍空间位置；区别于单一指向、单部位动作及舞台编排。",
+      "source_label": "欢迎与引导"
+    },
+    {
+      "active": true,
+      "allocation_index": 37,
+      "canonical_action_count": 0,
+      "category_id": "45",
+      "category_token": "_L",
+      "category_token_id": 2351,
+      "referenced_action_count": 0,
+      "short_definition": "明确执行舞蹈、舞台技艺、翻腾转圈或真实乐器演奏时选择；涵盖民族舞、现代舞、街舞、芭蕾、翻跟头、钢琴、吉他、小提琴和吹奏。明确出现乐器或琴键时即使只动单手也归本类；无实体乐器的手指模拟弹奏选择手指精细动作；区别于运动训练和情绪反应。",
+      "source_label": "舞台表现"
+    },
+    {
+      "active": true,
+      "allocation_index": 38,
+      "canonical_action_count": 0,
+      "category_id": "46",
+      "category_token": "_M",
+      "category_token_id": 1245,
+      "referenced_action_count": 0,
+      "short_definition": "借助器械、场地或自身力量完成训练、比赛、对抗或爆发性全身活动时选择；涵盖台球、篮球、扣篮、跑步、开合跳和平板支撑；区别于舞台表演、日常走路和情绪动作。",
+      "source_label": "运动"
+    },
+    {
+      "active": true,
+      "allocation_index": 39,
+      "canonical_action_count": 18,
+      "category_id": "47",
+      "category_token": "_N",
+      "category_token_id": 1604,
+      "referenced_action_count": 18,
+      "short_definition": "面部、头部、手势、躯干或下肢中至少两处协同，或多个动作按顺序组成完整情绪、亲昵、思考或反应表演时选择；涵盖卖萌、撒娇、抱头惊讶、摊手无奈、复合庆祝鼓励、抚下巴思考、亲吻和复合勾引表演。只有单一面部变化、单一鼓励手势或目录已明确收录的局部身体动作时，选择对应基础类别。",
+      "source_label": "情绪动作"
+    },
+    {
+      "active": true,
+      "allocation_index": 40,
+      "canonical_action_count": 0,
+      "category_id": "48",
+      "category_token": "_O",
+      "category_token_id": 2232,
+      "referenced_action_count": 0,
+      "short_definition": "手部未持有实体设备，直接对屏幕平面或虚拟界面执行点击、滑动、缩放和页面切换时选择；明确手持手机、遥控器或操作实体键盘时选择工具与日用品使用；没有屏幕语境的“翻页”默认理解为实体书翻页。",
+      "source_label": "屏幕交互"
+    },
+    {
+      "active": true,
+      "allocation_index": 41,
+      "canonical_action_count": 0,
+      "category_id": "49",
+      "category_token": "_P",
+      "category_token_id": 1088,
+      "referenced_action_count": 0,
+      "short_definition": "手部在无实体界面或虚拟空间中沿前后纵深、环绕或拖拽轨迹操控目标时选择；涵盖拉开/推开面板、拖拽元素、关闭元素和环绕展示空间；区别于屏幕平面操作、现实物品交互和空手展示。",
+      "source_label": "虚拟空间操作"
+    },
+    {
+      "active": true,
+      "allocation_index": 42,
+      "canonical_action_count": 0,
+      "category_id": "50",
+      "category_token": "_Q",
+      "category_token_id": 13337,
+      "referenced_action_count": 0,
+      "short_definition": "动作开始时尚未持有物品，随后建立抓握并使物品脱离桌面、手边、下方、左右、背后、口袋、包、盒子或架上时选择；若物品起初已在手中并从画外带入画面，选择隐藏与收纳；取得后重点是持续持稳或携带时选择持握与携带。",
+      "source_label": "拿取与取出"
+    },
+    {
+      "active": true,
+      "allocation_index": 43,
+      "canonical_action_count": 0,
+      "category_id": "51",
+      "category_token": "_R",
+      "category_token_id": 2568,
+      "referenced_action_count": 0,
+      "short_definition": "动作重点是物品已经与手或手臂绑定并进入持稳、抱住、夹住、提袋提箱、端托或携带姿态时选择；明确从支撑面或容器首次抓取并脱离原位选择拿取与取出，改变角度向他人介绍选择展示与讲解；区别于递交及物品功能使用。",
+      "source_label": "持握与携带"
+    },
+    {
+      "active": true,
+      "allocation_index": 44,
+      "canonical_action_count": 0,
+      "category_id": "52",
+      "category_token": "_S",
+      "category_token_id": 1098,
+      "referenced_action_count": 0,
+      "short_definition": "完整动作的最终目的是向观察者展示或讲解物品、细节或稿件内容时选择；涵盖托举、前伸、举高、靠近镜头、旋转、翻面、尺寸比划、持稿阅读，以及打开包装后立即取出展示。只打开包装选择物品开合；先从他人处接收再展示选择递交与接收；区别于空手展示和单纯持有。",
+      "source_label": "展示与讲解"
+    },
+    {
+      "active": true,
+      "allocation_index": 45,
+      "canonical_action_count": 0,
+      "category_id": "53",
+      "category_token": "_T",
+      "category_token_id": 1139,
+      "referenced_action_count": 0,
+      "short_definition": "物品在自己与明确的他人之间发生递出、接过或交接时选择；只要动作链以人与人交接开始，即使随后查看或展示物品仍归本类；从桌面、容器等原处取得选择拿取与取出，直接向观察者展示选择展示与讲解；区别于放置、持有和功能使用。",
+      "source_label": "递交与接收"
+    },
+    {
+      "active": true,
+      "allocation_index": 46,
+      "canonical_action_count": 0,
+      "category_id": "54",
+      "category_token": "_U",
+      "category_token_id": 6665,
+      "referenced_action_count": 0,
+      "short_definition": "把物品放到可见的支撑面、架子、开放盒子或指定位置并调整排列时选择；涵盖放下、摆正、推拉远近、左右移动、放回架上、入盒、并排和堆叠。放入口袋、包、背后或画外使其不再显露时选择隐藏与收纳；区别于递交和取出。",
+      "source_label": "放置与整理"
+    },
+    {
+      "active": true,
+      "allocation_index": 47,
+      "canonical_action_count": 0,
+      "category_id": "55",
+      "category_token": "_V",
+      "category_token_id": 2334,
+      "referenced_action_count": 0,
+      "short_definition": "动作核心是改变物品的可见性：放入背后、口袋、包、遮挡处或画外使其消失，掀开遮挡使其显露，或把已经持有的物品从画外带入画面时选择；从口袋、包、盒子等位置首次抓取物品选择拿取与取出；放入可见盒子或支撑面选择放置与整理。",
+      "source_label": "隐藏与收纳"
+    },
+    {
+      "active": true,
+      "allocation_index": 48,
+      "canonical_action_count": 0,
+      "category_id": "56",
+      "category_token": "_W",
+      "category_token_id": 2763,
+      "referenced_action_count": 0,
+      "short_definition": "借助现实工具或日用品完成其明确功能时选择；涵盖书写、实体书翻开翻页、喝口水或喝点水、通话、麦克风讲话、手持手机、遥控器或键盘操作、开伞、戴上耳机、闻、涂抹、看表、挤压、进食和摸宠物；未指定容器的喝水默认使用杯子。戴上耳机归本类，调整已经佩戴的耳机归穿戴与佩戴；翻书、开伞和设备控制键按功能归本类，纯盒盖、瓶盖、抽屉、拉链或包装开合归物品开合。",
+      "source_label": "工具与日用品使用"
+    },
+    {
+      "active": true,
+      "allocation_index": 49,
+      "canonical_action_count": 3,
+      "category_id": "57",
+      "category_token": "_X",
+      "category_token_id": 6859,
+      "referenced_action_count": 3,
+      "short_definition": "以衣物、配饰、防护用品或背包等穿戴物为直接对象，改变、整理或展示其位置、形态或穿戴关系时选择，即使表现为触碰、抓取、拉扯或拨动也优先归本类；涵盖帽子、眼镜、口罩、背包、衣领袖口、领带围巾、已佩戴耳机、口袋、项链戒指及露肌肉造型。戴上耳机选择工具与日用品使用，调整已戴耳机选择本类；手插兜归本类，物品放入口袋归隐藏与收纳，物品从口袋取出归拿取与取出；穿着中的扣子和拉链归本类。现有“手拿鲜花叼嘴上/刁嘴上”作为本类固定造型处理。",
+      "source_label": "穿戴与佩戴"
+    },
+    {
+      "active": true,
+      "allocation_index": 50,
+      "canonical_action_count": 0,
+      "category_id": "58",
+      "category_token": "_Y",
+      "category_token_id": 10626,
+      "referenced_action_count": 0,
+      "short_definition": "完整动作只为改变实体物体的开合或结构状态，结果是打开、关闭、拧紧、拉合、撕开或折断时选择；涵盖盒盖、瓶盖、独立实体按钮、抽屉、非穿着物拉链、包装和掰拧物体。翻开书、开伞和设备控制键选择工具与日用品使用；穿着中衣物扣子或拉链选择穿戴与佩戴；打开包装后继续展示选择展示与讲解。",
+      "source_label": "物品开合与状态操作"
+    },
+    {
+      "active": true,
+      "allocation_index": 51,
+      "canonical_action_count": 0,
+      "category_id": "59",
+      "category_token": "_Z",
+      "category_token_id": 12302,
+      "referenced_action_count": 0,
+      "short_definition": "完整动作目的是对物品进行摇晃混匀、表面擦拭清洁或条码扫描识别时选择；即使扫描借助手机或扫描设备，只要目标是识别物品条码仍归本类；区别于单纯使用设备、开合物品和摆放物品。",
+      "source_label": "复杂物品场景"
+    }
+  ],
+  "control_entries": [
+    {
+      "action_token": "_a",
+      "action_token_id": 4306,
+      "active": true,
+      "allocation_index": 0,
+      "candidate_id": "000",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "unsupported",
+      "output_text": "_ctrl_a",
+      "source_label": "不支持的具体动作",
+      "token_ids": [
+        22667,
+        4306
+      ]
+    },
+    {
+      "action_token": "_b",
+      "action_token_id": 880,
+      "active": true,
+      "allocation_index": 1,
+      "candidate_id": "IB0",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_b",
+      "source_label": "IB0",
+      "token_ids": [
+        22667,
+        880
+      ]
+    },
+    {
+      "action_token": "_c",
+      "action_token_id": 666,
+      "active": true,
+      "allocation_index": 2,
+      "candidate_id": "IB1",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_c",
+      "source_label": "IB1",
+      "token_ids": [
+        22667,
+        666
+      ]
+    },
+    {
+      "action_token": "_d",
+      "action_token_id": 814,
+      "active": true,
+      "allocation_index": 3,
+      "candidate_id": "IB2",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_d",
+      "source_label": "IB2",
+      "token_ids": [
+        22667,
+        814
+      ]
+    },
+    {
+      "action_token": "_e",
+      "action_token_id": 2204,
+      "active": true,
+      "allocation_index": 4,
+      "candidate_id": "IB3",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_e",
+      "source_label": "IB3",
+      "token_ids": [
+        22667,
+        2204
+      ]
+    },
+    {
+      "action_token": "_f",
+      "action_token_id": 761,
+      "active": true,
+      "allocation_index": 5,
+      "candidate_id": "IF0",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_f",
+      "source_label": "IF0",
+      "token_ids": [
+        22667,
+        761
+      ]
+    },
+    {
+      "action_token": "_g",
+      "action_token_id": 1889,
+      "active": true,
+      "allocation_index": 6,
+      "candidate_id": "IF1",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_g",
+      "source_label": "IF1",
+      "token_ids": [
+        22667,
+        1889
+      ]
+    },
+    {
+      "action_token": "_h",
+      "action_token_id": 1523,
+      "active": true,
+      "allocation_index": 7,
+      "candidate_id": "IR0",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_h",
+      "source_label": "IR0",
+      "token_ids": [
+        22667,
+        1523
+      ]
+    },
+    {
+      "action_token": "_i",
+      "action_token_id": 5318,
+      "active": true,
+      "allocation_index": 8,
+      "candidate_id": "IR1",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_i",
+      "source_label": "IR1",
+      "token_ids": [
+        22667,
+        5318
+      ]
+    },
+    {
+      "action_token": "_j",
+      "action_token_id": 5374,
+      "active": true,
+      "allocation_index": 9,
+      "candidate_id": "IR2",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_j",
+      "source_label": "IR2",
+      "token_ids": [
+        22667,
+        5374
+      ]
+    },
+    {
+      "action_token": "_k",
+      "action_token_id": 4698,
+      "active": true,
+      "allocation_index": 10,
+      "candidate_id": "IR3",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_k",
+      "source_label": "IR3",
+      "token_ids": [
+        22667,
+        4698
+      ]
+    },
+    {
+      "action_token": "_l",
+      "action_token_id": 907,
+      "active": true,
+      "allocation_index": 11,
+      "candidate_id": "IR4",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_l",
+      "source_label": "IR4",
+      "token_ids": [
+        22667,
+        907
+      ]
+    },
+    {
+      "action_token": "_m",
+      "action_token_id": 717,
+      "active": true,
+      "allocation_index": 12,
+      "candidate_id": "IR5",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_m",
+      "source_label": "IR5",
+      "token_ids": [
+        22667,
+        717
+      ]
+    },
+    {
+      "action_token": "_n",
+      "action_token_id": 1089,
+      "active": true,
+      "allocation_index": 13,
+      "candidate_id": "IV00",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_n",
+      "source_label": "IV00",
+      "token_ids": [
+        22667,
+        1089
+      ]
+    },
+    {
+      "action_token": "_o",
+      "action_token_id": 14179,
+      "active": true,
+      "allocation_index": 14,
+      "candidate_id": "IV01",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_o",
+      "source_label": "IV01",
+      "token_ids": [
+        22667,
+        14179
+      ]
+    },
+    {
+      "action_token": "_p",
+      "action_token_id": 620,
+      "active": true,
+      "allocation_index": 15,
+      "candidate_id": "IV11",
+      "category_token": "_ctrl",
+      "category_token_id": 22667,
+      "entry_kind": "decision",
+      "output_text": "_ctrl_p",
+      "source_label": "IV11",
+      "token_ids": [
+        22667,
+        620
+      ]
+    }
+  ],
+  "counts": {
+    "action_references": 116,
+    "actions_per_category_capacity": 52,
+    "active_actions": 116,
+    "categories": 52,
+    "category_capacity": 1608,
+    "controls": 16,
+    "duplicate_action_references": 0,
+    "legacy_exact_actions": 102,
+    "max_canonical_actions_in_category": 20,
+    "new_actions": 14,
+    "total_outputs": 132,
+    "unique_catalog_actions": 116
+  },
+  "mapping_kind": "hierarchical_action_selection",
+  "mapping_version": "pair-v1-dmd-v116-legacy-compatible-20261012-dvideo-short-id",
+  "policy": {
+    "action_token_format": "_{symbol}",
+    "candidate_filter_mapping": null,
+    "canonical_category_immutable": true,
+    "category_symbols": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "category_token_order": "length_then_lowercase_then_uppercase",
+    "category_token_pattern": "_[A-Za-z]{1,3}",
+    "control_category_token": "_ctrl",
+    "existing_codes_immutable": true,
+    "legacy_assignment_sha256": "sha256:756e8dd1cc73616c781021a7a79109470036567f3cf14c681a329d328f328b3e",
+    "legacy_mapping_version": "pair-v1-full",
+    "new_codes_use_unoccupied_legacy_full_map_suffixes": true,
+    "output_format": "{category_token}{action_token}",
+    "output_token_count": 2,
+    "vocabulary_extension": false
+  },
+  "schema_version": 2,
+  "tokenizer": {
+    "bos_token_id": null,
+    "class": "Qwen2Tokenizer",
+    "eos_token_id": 151645,
+    "fingerprint": "sha256:2faf54aee879d0c4992147d6d3dbd49c2854f29fbd1cf610b6e6b7c0abf433f8",
+    "model_path": "/data/models/Qwen3-Omni-30B-A3B-Instruct",
+    "pad_token_id": 151643,
+    "special_ids": [
+      151643,
+      151645,
+      151652,
+      151653,
+      151655,
+      151656,
+      151669,
+      151670,
+      151675
+    ],
+    "vocab_size": 151676
+  }
+}

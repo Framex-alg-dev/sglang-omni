@@ -33,6 +33,9 @@ class ActionDecisionRequest:
     prohibited: bool = False
     turn_origin: str = "user"
     media: tuple[StreamedMedia, ...] = ()
+    # Service-owned adapter flag, not accepted from the legacy wire protocol.
+    # Locally derived clip offsets must never look like executor timing evidence.
+    simple_audio: bool = False
 
 
 @dataclass(frozen=True)
