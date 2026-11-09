@@ -153,3 +153,40 @@ def test_compat_encoder_preserves_transformers_5_12_output_contract() -> None:
     assert output.pooler_output.shape == (4, 16)
     assert len(output.deepstack_features) == 1
     assert output.deepstack_features[0].shape == (4, 16)
+
+
+@pytest.mark.parametrize("inference", [False, True])
+def test_cached_interpolation_stays_exact_after_weight_update(inference) -> None:
+    encoder = _make_encoder()
+    grid = torch.tensor([[1, 4, 6], [2, 6, 8]])
+    context = torch.inference_mode if inference else torch.no_grad
+    with context():
+        for delta in (0, 0.125):
+            encoder.pos_embed.weight.add_(delta)
+            expected = _transformers_5_6_pos_embed_interpolate(encoder, grid)
+            for _ in range(2):
+                assert torch.equal(encoder._legacy_pos_embed_interpolate(grid), expected)
+    assert len(encoder._interpolation_cache) == 1
+    # Cached inference tensors must not break a later autograd-enabled call.
+    encoder._legacy_pos_embed_interpolate(grid).sum().backward()
+    assert encoder.pos_embed.weight.grad is not None
+
+
+def test_interpolation_cache_limits_and_dtype_change() -> None:
+    encoder = _make_encoder()
+    encoder._interpolation_cache_max_entries = 2
+    with torch.no_grad():
+        for width in (4, 6, 8):
+            encoder._legacy_pos_embed_interpolate(torch.tensor([[1, 4, width]]))
+        assert len(encoder._interpolation_cache) == 2
+        encoder.to(torch.float32)
+        assert not encoder._interpolation_cache
+        grid = torch.tensor([[1, 4, 8]])
+        assert torch.equal(
+            encoder._legacy_pos_embed_interpolate(grid),
+            _transformers_5_6_pos_embed_interpolate(encoder, grid),
+        )
+        encoder.clear_interpolation_cache()
+        encoder._interpolation_cache_max_bytes = 1
+        encoder._legacy_pos_embed_interpolate(grid)
+        assert not encoder._interpolation_cache
