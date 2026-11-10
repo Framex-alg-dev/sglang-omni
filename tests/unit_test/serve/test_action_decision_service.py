@@ -267,6 +267,18 @@ def test_e67_reference_profile_uses_frozen_v116_training_prompt() -> None:
     )
 
 
+def test_e67_reply_window_text_is_not_labeled_as_user_input():
+    request=_request(DecisionChannel.BODY,turn_origin="assistant",text="我们先核对权限。",
+        reply_prefix="上一段已确认方案。",runtime_context={"prompt_profile":"e67_v116_step695_fp8",
+            "response_id":"reply-1","input_source":"assistant_segment","window_index":1,"audio_start_ms":4000})
+    text=build_user_prompt(request,_registry().resolve(request))
+    assert "assistant_reply_text：我们先核对权限。" in text
+    assert "turn_origin=assistant" in text
+    assert "trigger=assistant_reply_window" in text
+    assert "previous_reply_context：上一段已确认方案。" in text
+    assert "typed_user_text" not in text
+
+
 def test_character_prompt_rejects_only_above_d_stage_response_budget() -> None:
     request = _request(DecisionChannel.BODY, character_prompt="角" * 32_001)
     with pytest.raises(ValueError, match="exceeds 32000 characters"):

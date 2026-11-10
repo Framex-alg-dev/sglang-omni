@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _STAGES = frozenset(
     {"classifier", "brain", "reply", "body", "expression", "performance"}
 )
-_EVIDENCE_ROLES = frozenset({"user_audio", "user_camera", "avatar_state"})
+_EVIDENCE_ROLES = frozenset({"user_audio", "user_camera", "avatar_state", "assistant_spoken"})
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ class _SpeechSpeculation:
 
 def _validate_evidence_role(item: _Media) -> None:
     allowed = {
-        "audio": {"user_audio"},
+        "audio": {"user_audio", "assistant_spoken"},
         "video": {"user_camera"},
         "image": {"user_camera", "avatar_state"},
     }
@@ -144,6 +144,14 @@ def _validate_evidence_role(item: _Media) -> None:
         "image/jpeg",
     }:
         raise ValueError("gateway avatar_state evidence must be a JPEG image")
+
+
+def _validate_action_stream_media(stage, payload, media) -> None:
+    for item in media:
+        if item.evidence_role == "assistant_spoken" and not (
+            stage == "body" and payload.get("turn_origin") == "assistant"
+        ):
+            raise ValueError("assistant audio is restricted to assistant body-action windows")
 
 
 class _Session:
@@ -359,6 +367,7 @@ class _Session:
                 }
             )
             return
+        _validate_action_stream_media(stage, payload, (self.media[key] for key in media_refs))
         for media_id in media_refs:
             self.media_refcounts[media_id] += 1
         if speech_speculation is not None:

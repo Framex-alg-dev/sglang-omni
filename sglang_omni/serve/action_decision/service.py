@@ -534,6 +534,10 @@ def _parse_request(
         raise ValueError("action decision payload must be an object")
     channel = DecisionChannel(_required_string(raw, "channel"))
     request_id = _required_string(raw, "request_id")
+    if any(item.evidence_role == "assistant_spoken" for item in media) and not (
+        channel is DecisionChannel.BODY and raw.get("turn_origin") == "assistant"
+    ):
+        raise ValueError("assistant audio requires an assistant body-action request")
     return ActionDecisionRequest(
         request_id=request_id,
         session_id=_required_string(raw, "session_id"),

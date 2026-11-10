@@ -145,7 +145,7 @@ async def receive_streamed_request(
                 evidence_role=_one_of(
                     message,
                     "evidence_role",
-                    {"user_audio", "user_camera", "avatar_state"},
+                    {"user_audio", "user_camera", "avatar_state", "assistant_spoken"},
                 ),
             )
             if item.media_id in media_ids:
@@ -223,7 +223,7 @@ def inject_openai_media(
 
 def _validate_evidence_role(item: StreamedMedia) -> None:
     allowed = {
-        "audio": {"user_audio"},
+        "audio": {"user_audio", "assistant_spoken"},
         "video": {"user_camera"},
         "image": {"user_camera", "avatar_state"},
     }

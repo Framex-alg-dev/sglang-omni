@@ -275,7 +275,8 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         raise ValueError("runtime_context must be an object")
     # These fields fence execution and idempotency, not model semantics. The
     # engine validates the release fields before resolving this catalog.
-    fences = {"expected_model_version", "expected_prompt_sha256", "identity_epoch", "input_revision"}
+    fences = {"expected_model_version", "expected_prompt_sha256", "identity_epoch", "input_revision",
+              "response_id", "window_index", "audio_start_ms", "input_source"}
     allowed = {
         "turn_origin", "trigger", "reply_status", "reply_prefix", "body_intent",
         "body_task", "visual_route", "scene_context", "scene_reply_guidance",
@@ -288,9 +289,13 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
     unknown = sorted(set(value) - allowed - fences)
     if unknown:
         raise ValueError("unsupported runtime_context fields: " + ", ".join(unknown))
-    for key in ("identity_epoch", "input_revision"):
+    for key in ("identity_epoch", "input_revision", "window_index", "audio_start_ms"):
         if key in value and (type(value[key]) is not int or value[key] < 0):
             raise ValueError(f"runtime_context {key} must be a nonnegative integer")
+    if "input_source" in value and value["input_source"] not in {"user_reaction", "assistant_segment"}:
+        raise ValueError("runtime_context input_source is invalid")
+    if "response_id" in value and (not isinstance(value["response_id"],str) or len(value["response_id"])>256):
+        raise ValueError("runtime_context response_id is invalid")
     return {str(key): item for key, item in value.items()
             if key not in fences and item not in (None, "", [])}
 

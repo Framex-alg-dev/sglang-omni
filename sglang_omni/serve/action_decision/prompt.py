@@ -174,18 +174,22 @@ def build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) 
         image_count = sum(kind in {"image", "video"} for kind in media_kinds)
         has_audio = "audio" in media_kinds
         parts = []
+        assistant = request.turn_origin == "assistant"
         if image_count:
             parts.append("user_video：按时间顺序提供的用户侧画面；不是数字人输出画面。")
         if has_audio:
-            parts.append("user_audio：这是本轮用户原始音频，请直接理解语义和语气。")
+            parts.append("assistant_audio：这是数字人本轮正在表达的回复音频片段。" if assistant else
+                         "user_audio：这是本轮用户原始音频，请直接理解语义和语气。")
         if request.text and not has_audio:
-            parts.append(f"typed_user_text：{request.text}")
+            parts.append(f"assistant_reply_text：{request.text}" if assistant else f"typed_user_text：{request.text}")
+        if assistant and request.reply_prefix:
+            parts.append(f"previous_reply_context：{request.reply_prefix}")
         parts.extend(
             (
                 "[RUNTIME_CONTEXT]",
                 "source=trusted_orchestrator",
-                "turn_origin=user",
-                "trigger=user_input",
+                f"turn_origin={request.turn_origin}",
+                "trigger=assistant_reply_window" if assistant else "trigger=user_input",
                 "现在只输出一个合法的两-token动作 code。",
             )
         )
