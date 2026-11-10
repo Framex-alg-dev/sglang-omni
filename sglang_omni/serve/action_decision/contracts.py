@@ -39,6 +39,8 @@ class ActionDecisionRequest:
     # Service-owned text evidence; never parsed from the legacy wire contract.
     avatar_current_text: str | None = None
     avatar_history_text: str | None = None
+    # Explicit next-action request, never an extra catalog definition.
+    requested_action: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

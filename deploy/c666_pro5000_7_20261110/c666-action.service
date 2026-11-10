@@ -1,0 +1,19 @@
+[Unit]
+Description=C666 step666 FP8 action and expression recall on PRO5000-7
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data/xingmt/c666_action_20261110/code
+EnvironmentFile=/data/xingmt/e68_a_action_20261109/service.env
+Environment=ACTION_SERVICE_PORT=18048
+ExecStart=/data/xingmt/c666_action_20261110/run_service.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+KillMode=control-group
+StandardOutput=append:/data/xingmt/c666_action_20261110/logs/service.log
+StandardError=append:/data/xingmt/c666_action_20261110/logs/service.log
+
+[Install]
+WantedBy=default.target

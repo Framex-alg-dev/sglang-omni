@@ -1,0 +1,15 @@
+{
+  "model": "foundation-C-step666-fp8",
+  "date": "2026-11-10",
+  "active_real_actions": 111,
+  "source": "Frozen r1 semantic definitions, projected through business111 codebook",
+  "mapping_assignment_sha256": "sha256:cc79cccf1063f23f270dc472585997aba6751a3a35cb2085f62dcb8db088946d",
+  "files": {
+    "action_pair_token_map_full.json": "b73caf7157036b6191880e9328aedf7ade45562fdffa5e5586eab7a43a7bf017",
+    "action_pair_token_map_business111.json": "71f934fac21fead46ffb68e2fd3dcd56f05473c2ccc94c13d573aae7cc48db19",
+    "agent_action_policy.json": "1d611460e11a115b017ecb251371331cf1dd50764c5d9be792ac8e7e5e10a88d",
+    "action_pair_token_map_current.json": "e985efff3b8ae73cbceec16d30a6fc13c582ae9189e8dcba48ff68a8b8a582b4",
+    "action_catalog.json": "a78ec9c1772d080ff40c3d831a8fc7982f03d957f1f2bd5ba4c31d8790b873e0"
+  },
+  "changes": "111 covered action identities use C666 output strings/token pairs; five out-of-release actions excluded. Motion and scene prose unchanged."
+}

@@ -31,6 +31,8 @@ from .prompt import build_system_prompt
 from .speech_window import PERSONA_PROFILES
 from .speech_audio import ACTION_AUDIO_ROLES
 from .model_input import user_message_content
+from .requested_action import parse_requested_action
+from .recall_audit import input_snapshot, recall_variant
 
 
 class CompletionClient(Protocol):
@@ -237,6 +239,8 @@ class ActionDecisionEngine:
             decision_point_id=request.decision_point_id,
             channel=request.channel.value,
             candidate_count=len(catalog.entries),
+            recall_variant=recall_variant(request),
+            requested_action=request.requested_action,
             media_count=len(request.media),
             model_id=self.config.model_id,
             model_version=self.config.model_version,
@@ -261,6 +265,13 @@ class ActionDecisionEngine:
             )
 
         content = user_message_content(request, catalog)
+        system_prompt = build_system_prompt(request, catalog, prompt_snapshot=self._effective_prompt_snapshot(request))
+        snapshot = await asyncio.to_thread(input_snapshot, request, catalog, system_prompt, content)
+        emit_structured_log("action", "action_recall_model_input", component="action_decision",
+                            request_id=request.request_id, session_id=request.session_id,
+                            turn_id=request.turn_id, channel=request.channel.value,
+                            model_id=self.config.model_id, model_version=self.config.model_version,
+                            **snapshot)
         metadata: dict[str, Any] = {
             "task": "action_direct",
             "task_role": request.channel.value,
@@ -301,7 +312,7 @@ class ActionDecisionEngine:
             GenerateRequest(
                 model=self.config.model_id,
                 messages=[
-                    Message(role="system", content=build_system_prompt(request, catalog, prompt_snapshot=self._effective_prompt_snapshot(request))),
+                    Message(role="system", content=system_prompt),
                     Message(role="user", content=content),
                 ],
                 sampling=SamplingParams(
@@ -385,6 +396,7 @@ class ActionDecisionEngine:
             "action",
             "action_decision_completed",
             component="action_decision",
+            recall_variant=recall_variant(request),
             **decision.to_dict(),
         )
         return decision
@@ -512,6 +524,9 @@ def create_action_decision_app(
         from .simple_audio import parse_simple_audio_request
         try:
             decision_request, public_id = parse_simple_audio_request(json.loads(body), engine.registry)
+            emit_structured_log("action", "action_recall_received", component="action_decision",
+                                request_id=decision_request.request_id, public_request_id=public_id,
+                                recall_variant=recall_variant(decision_request))
             decision = await engine.decide(decision_request)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -547,6 +562,7 @@ def _parse_request(
         channel is DecisionChannel.BODY and raw.get("turn_origin") == "assistant"
     ):
         raise ValueError("assistant audio requires an assistant body-action request")
+    runtime_context = _object_field(raw, "runtime_context")
     return ActionDecisionRequest(
         request_id=request_id,
         session_id=_required_string(raw, "session_id"),
@@ -558,13 +574,19 @@ def _parse_request(
         character_prompt=_optional_string(raw, "character_prompt"),
         session_prompt=_optional_string(raw, "session_prompt"),
         reply_prefix=_optional_string(raw, "reply_prefix"),
-        runtime_context=_object_field(raw, "runtime_context"),
+        runtime_context=runtime_context,
         allowed_candidate_ids=_string_array(raw, "allowed_candidate_ids"),
         excluded_candidate_ids=_string_array(raw, "excluded_candidate_ids"),
         channel_enabled=_boolean(raw, "channel_enabled", True),
         prohibited=_boolean(raw, "prohibited", False),
         turn_origin=_optional_string(raw, "turn_origin") or "user",
         media=media,
+        requested_action=parse_requested_action(raw.get("requested_action")),
+        # User-reaction media has no executor timeline. Match the frozen r1
+        # text/audio/image renderer without exposing transport frame ordinals
+        # as meaningful millisecond evidence. Speech windows retain timing.
+        simple_audio=(runtime_context.get("prompt_profile") == "persona-audio-window-v2"
+                      and runtime_context.get("decision_mode") == "user_request"),
     )
 
 

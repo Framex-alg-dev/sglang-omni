@@ -54,8 +54,9 @@ def validate_audio_request(request: ActionDecisionRequest) -> None:
             item.kind == "image" for item in request.media
         ) > 5:
             raise ValueError("user_request permits one user audio and five user frames")
-        if not (request.text or "").strip() and not any(item.kind == "audio" for item in request.media):
-            raise ValueError("user_request requires original user text or audio")
+        if (not (request.text or "").strip() and not any(item.kind == "audio" for item in request.media)
+                and request.requested_action is None):
+            raise ValueError("user_request requires original user text, audio or requested_action")
         if any(key in context for key in ("response_id", "output_epoch")):
             raise ValueError("user_request must not contain reply-window identity")
         return

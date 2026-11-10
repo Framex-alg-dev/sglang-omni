@@ -101,6 +101,11 @@ class ActionCatalogRegistry:
 
     def resolve(self, request: ActionDecisionRequest) -> ResolvedCatalog:
         profile = request.runtime_context.get("prompt_profile")
+        if request.requested_action is not None:
+            from .requested_action import parse_requested_action
+            parse_requested_action(request.requested_action)
+            if profile != PERSONA_AUDIO_PROFILE:
+                raise ValueError("requested_action requires persona-audio-window-v2")
         if any(item.evidence_role in SPEECH_WINDOW_AUDIO_ROLES for item in request.media) and profile != PERSONA_AUDIO_PROFILE:
             raise ValueError("avatar audio requires persona-audio-window-v2")
         if profile in PERSONA_PROFILES:

@@ -9,6 +9,7 @@ positions; the simple_audio flag keeps them out of model-visible evidence.
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 import binascii
 import hashlib
 import io
@@ -23,12 +24,13 @@ from .catalog import ActionCatalogRegistry
 from .contracts import ActionDecisionRequest, DecisionChannel
 from .speech_audio import MAX_SPEECH_AUDIO_MS, USER_CONTEXT_AUDIO_ROLE, validate_avatar_audio_clip
 from .speech_window import PERSONA_AUDIO_PROFILE
+from .requested_action import parse_requested_action
 
 
 _FIELDS = {"text", "audio", "audio_source", "channel", "character_prompt", "allowed_candidate_ids",
-           "context_audio", "user_context", "user_context_audio", "last_dispatched_action", "request_id"}
+           "context_audio", "user_context", "user_context_audio", "last_dispatched_action", "request_id", "requested_action"}
 _MAX_AUDIO_BYTES = 2 * 1024 * 1024
-_COMMON_FIELDS = {"channel", "character_prompt", "allowed_candidate_ids", "last_dispatched_action", "request_id"}
+_COMMON_FIELDS = {"channel", "character_prompt", "allowed_candidate_ids", "last_dispatched_action", "request_id", "requested_action"}
 _NAMED_FIELDS = {"mode", "user_input", "avatar_current", "avatar_history"}
 
 
@@ -54,7 +56,8 @@ def _normalize_named_request(raw: dict[str, Any]) -> tuple[dict[str, Any], str |
     if mode == "user_reaction":
         if raw.get("avatar_current") is not None or raw.get("avatar_history") is not None:
             raise ValueError("user_reaction does not accept avatar_current or avatar_history")
-        user = _input_content(raw.get("user_input"), "user_input")
+        user = ({"text": ""} if raw.get("user_input") is None and raw.get("requested_action") is not None
+                else _input_content(raw.get("user_input"), "user_input"))
         result.update(user)
         if "audio" in user:
             result["audio_source"] = "user_audio"
@@ -121,10 +124,11 @@ def parse_simple_audio_request(
     if set(raw) - _FIELDS:
         raise ValueError("unsupported audio recall fields: " + ", ".join(sorted(set(raw) - _FIELDS)))
     channel = DecisionChannel(raw.get("channel"))
+    requested_action = parse_requested_action(raw.get("requested_action"))
     user_text = raw.get("text")
     text_request = "text" in raw
     if text_request:
-        if not isinstance(user_text, str) or not user_text.strip() or len(user_text) > 4000 or "\x00" in user_text:
+        if not isinstance(user_text, str) or (not user_text.strip() and requested_action is None) or len(user_text) > 4000 or "\x00" in user_text:
             raise ValueError("text must be a nonempty user input string of at most 4000 characters")
         if set(raw) & {"audio", "audio_source", "context_audio", "user_context", "user_context_audio"}:
             raise ValueError("user text requires text alone; omit audio, audio_source, context_audio, user_context and user_context_audio")
@@ -184,7 +188,21 @@ def parse_simple_audio_request(
         channel=channel, text=user_text if text_request else user_context, character_prompt=persona,
         allowed_candidate_ids=tuple(ids), runtime_context=context, media=tuple(clips), simple_audio=True,
         avatar_current_text=current_text, avatar_history_text=history_text,
+        requested_action=requested_action,
     )
+    if ids or previous is not None:
+        # Preserve the deployed transport-code adapter; model identities remain
+        # registered candidate IDs, including prior actions outside the subset.
+        lookup_context = {**context, "last_dispatched_action": None} if channel is DecisionChannel.BODY else context
+        available = registry.resolve(replace(req, allowed_candidate_ids=(), runtime_context=lookup_context))
+        by_code = {entry.code: entry.candidate_id for entry in available.entries if entry.kind == "action"}
+        ids = [by_code.get(value, value) for value in ids]
+        if len(set(ids)) != len(ids):
+            raise ValueError("allowed_candidate_ids must identify unique registered actions")
+        if isinstance(previous, dict) and isinstance(previous.get("candidate_id"), str):
+            previous = {**previous, "candidate_id": by_code.get(previous["candidate_id"], previous["candidate_id"])}
+            req = replace(req, runtime_context={**context, "last_dispatched_action": previous})
+        req = replace(req, allowed_candidate_ids=tuple(ids))
     catalog = registry.resolve(req)
     real_ids = {entry.candidate_id for entry in catalog.entries if entry.kind == "action"}
     unsupported = set(ids) - real_ids

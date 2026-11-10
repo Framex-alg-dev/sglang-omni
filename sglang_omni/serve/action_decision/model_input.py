@@ -26,6 +26,9 @@ def user_message_content(request: ActionDecisionRequest, catalog: ResolvedCatalo
                 "avatar_speech_context": "数字人前文音频，仅供理解，不为这段前文重新选择表情。",
                 "avatar_speech_audio": "数字人本次目标语音focus，为这段当前表达选择一个面部表情。",
             })
+        if request.requested_action is not None:
+            descriptions = {role: f"来源为{role}的对话或画面背景，不是本次要执行的目标；明确动作目标见 USER_REQUESTED_ACTION。"
+                            for role in descriptions}
         parts = []
         for item, part in zip(request.media, media):
             evidence = {"source": item.evidence_role}
