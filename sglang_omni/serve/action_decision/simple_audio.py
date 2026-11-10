@@ -53,6 +53,21 @@ def _normalize_named_request(raw: dict[str, Any]) -> tuple[dict[str, Any], str |
         raise ValueError("named and legacy input fields cannot be mixed: " + ", ".join(sorted(unknown)))
     result = {key: value for key, value in raw.items() if key in _COMMON_FIELDS}
     mode = raw.get("mode")
+    if mode == "action_request":
+        if raw.get("avatar_current") is not None or raw.get("avatar_history") is not None:
+            raise ValueError("action_request does not accept avatar_current or avatar_history")
+        if raw.get("requested_action") is not None:
+            raise ValueError("action_request uses user_input.text; omit requested_action")
+        user = _input_content(raw.get("user_input"), "user_input")
+        if "text" not in user:
+            raise ValueError("action_request requires user_input.text with name: definition")
+        parts = re.split(r"[:：]", user["text"], maxsplit=1)
+        if len(parts) != 2:
+            raise ValueError("action_request requires user_input.text with name: definition")
+        result["requested_action"] = parse_requested_action({"name": parts[0], "definition": parts[1]})
+        # The supplied text is the explicit target, not a second conversation.
+        result["text"] = ""
+        return result, None, None
     if mode == "user_reaction":
         if raw.get("avatar_current") is not None or raw.get("avatar_history") is not None:
             raise ValueError("user_reaction does not accept avatar_current or avatar_history")
@@ -63,7 +78,7 @@ def _normalize_named_request(raw: dict[str, Any]) -> tuple[dict[str, Any], str |
             result["audio_source"] = "user_audio"
         return result, None, None
     if mode != "avatar_speech":
-        raise ValueError("mode must be user_reaction or avatar_speech")
+        raise ValueError("mode must be user_reaction, avatar_speech or action_request")
     current = _input_content(raw.get("avatar_current"), "avatar_current")
     result["audio_source"] = "avatar_speech_audio"
     if "audio" in current:

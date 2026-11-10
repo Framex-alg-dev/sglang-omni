@@ -17,6 +17,6 @@ cp -a deploy/c666_pro5000_7_20261110/usage_scenarios/. "$release_root/code/sglan
 
 运行脚本、配置和用户级 systemd 单元随附。模型权重及现有鉴权文件不入库；单元沿用 `/data/xingmt/e68_a_action_20261109/service.env` 的认证配置。模型使用 GPU6、`max_running_requests=1`，禁用 radix/shared cache。不要将示例目录与其他版本权重混用。
 
-同一接口 `POST /v1/action-recall` 支持身体／表情、用户文本／音频、数字人当前及历史文本／音频，以及 `requested_action` 明确下一刻目标。完整参数见 [接口说明](../../docs/developer_reference/action_inference/speech_action_recall_agent_CN.md)。未改 Agent 服务。
+同一接口 `POST /v1/action-recall` 支持身体／表情、用户文本／音频、数字人当前及历史文本／音频，以及 `mode=action_request` 时使用 `user_input.text` 指定下一刻目标。完整参数见 [接口说明](../../docs/developer_reference/action_inference/speech_action_recall_agent_CN.md)。未改 Agent 服务。
 
 变基验证：`codex/speech-action-windows` 基于 `codex/character-action-sequences@84fd3d8`。独立测试实例使用当前 C666 权重和本目录资产，6种实际文本／音频调用通过；16条指定目标诊断正确15条，单手点赞误选双手点赞仍是已知语义问题。35条视觉回归输出与同约束解码的源 C666 逐条一致：计算15/16、模仿5/7、识别9/12。这些是固定回归结果，不是独立泛化指标。

@@ -523,10 +523,13 @@ def create_action_decision_app(
             raise HTTPException(status_code=413, detail="request body too large")
         from .simple_audio import parse_simple_audio_request
         try:
-            decision_request, public_id = parse_simple_audio_request(json.loads(body), engine.registry)
+            payload = json.loads(body)
+            decision_request, public_id = parse_simple_audio_request(payload, engine.registry)
             emit_structured_log("action", "action_recall_received", component="action_decision",
                                 request_id=decision_request.request_id, public_request_id=public_id,
-                                recall_variant=recall_variant(decision_request))
+                                recall_variant=recall_variant(decision_request),
+                                input_mode=payload.get("mode"),
+                                target_text=payload["user_input"]["text"] if payload.get("mode") == "action_request" else None)
             decision = await engine.decide(decision_request)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

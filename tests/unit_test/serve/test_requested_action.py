@@ -189,3 +189,44 @@ def test_rebased_prompt_snapshot_is_used_in_model_and_replay_log(registry,tmp_pa
     logged=next(x for x in records if x['event']=='action_recall_model_input')
     assert logged['system_prompt']==completion.calls[0].messages[0].content==snapshot['system_prompt']
     structured_logs.shutdown_structured_log_writer()
+
+
+@pytest.mark.parametrize('channel,ids',[('body',['271','138']),('expression',['655','154'])])
+def test_action_request_mode_reuses_the_exact_explicit_target_prompts(registry,channel,ids):
+    name='双手点赞' if channel=='body' else '笑眼'
+    definition='双手握拳，两个拇指一起竖起。' if channel=='body' else '微笑时双眼自然眯起。'
+    original,_=parse_simple_audio_request(payload(channel=channel,allowed_candidate_ids=ids,
+        requested_action=dict(name=name,definition=definition)),registry)
+    supplied=payload(mode='action_request',channel=channel,allowed_candidate_ids=ids,
+        user_input={'text':name+'：'+definition})
+    supplied.pop('requested_action')
+    current,_=parse_simple_audio_request(supplied,registry)
+    assert current.requested_action==original.requested_action
+    assert build_system_prompt(current,registry.resolve(current))==build_system_prompt(original,registry.resolve(original))
+    assert build_user_prompt(current,registry.resolve(current))==build_user_prompt(original,registry.resolve(original))
+
+
+@pytest.mark.parametrize('user_input',[None,{}, {'text':'点赞'}, {'text':'：定义'},
+    {'text':'点赞：'}, {'audio':{'data':'AA=='}}, {'text':'点赞：定义','audio':{}}])
+def test_action_request_mode_rejects_missing_or_ambiguous_target(registry,user_input):
+    supplied=payload(mode='action_request',user_input=user_input);supplied.pop('requested_action')
+    with pytest.raises(ValueError):parse_simple_audio_request(supplied,registry)
+
+
+def test_action_request_mode_http_and_original_text_audit(registry,tmp_path,monkeypatch):
+    from sglang_omni.utils import structured_logs
+    structured_logs.shutdown_structured_log_writer()
+    monkeypatch.setenv('SGLANG_OMNI_REALTIME_LOG_DIR',str(tmp_path))
+    supplied=payload(mode='action_request',user_input={'text':'棒棒哒:双手握拳，两个拇指一起竖起。'})
+    supplied.pop('requested_action')
+    with TestClient(create_action_decision_app(Client(),config=config())) as client:
+        response=client.post('/v1/action-recall',headers={'Authorization':'Bearer offline-test'},json=supplied)
+        assert response.status_code==200 and response.json()['candidate_id']=='271'
+        invalid=client.post('/v1/action-recall',headers={'Authorization':'Bearer offline-test'},
+            json={**supplied,'requested_action':TARGET})
+        assert invalid.status_code==422
+    structured_logs.get_structured_log_writer().flush()
+    rows=[json.loads(line) for p in tmp_path.rglob('*.jsonl') for line in p.read_text().splitlines()]
+    received=next(x for x in rows if x['event']=='action_recall_received')
+    assert received['input_mode']=='action_request' and received['target_text']==supplied['user_input']['text']
+    structured_logs.shutdown_structured_log_writer()
