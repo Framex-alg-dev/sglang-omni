@@ -33,6 +33,7 @@ from .speech_audio import ACTION_AUDIO_ROLES
 from .model_input import user_message_content
 from .requested_action import parse_requested_action
 from .recall_audit import input_snapshot, recall_variant
+from .simple_audio import MAX_RECALL_AUDIO_BYTES, parse_simple_audio_request
 
 
 class CompletionClient(Protocol):
@@ -521,22 +522,71 @@ def create_action_decision_app(
         body = await request.body()
         if len(body) > config.max_body_bytes:
             raise HTTPException(status_code=413, detail="request body too large")
-        from .simple_audio import parse_simple_audio_request
         try:
-            payload = json.loads(body)
-            decision_request, public_id = parse_simple_audio_request(payload, engine.registry)
-            emit_structured_log("action", "action_recall_received", component="action_decision",
-                                request_id=decision_request.request_id, public_request_id=public_id,
-                                recall_variant=recall_variant(decision_request),
-                                input_mode=payload.get("mode"),
-                                target_text=payload["user_input"]["text"] if payload.get("mode") == "action_request" else None)
+            decision_request, public_id = parse_recall(json.loads(body))
             decision = await engine.decide(decision_request)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse({"request_id": public_id, "channel": decision.channel.value,
-                             "candidate_id": decision.candidate_id, "code": decision.code,
-                             "label": decision.label, "outcome": decision.outcome,
-                             "occupies_channels": list(decision.occupies_channels)})
+        return JSONResponse(_recall_response(public_id, decision))
+
+    def parse_recall(payload: Any, media: tuple[StreamedMedia, ...] = ()):
+        decision_request, public_id = parse_simple_audio_request(
+            payload, engine.registry, media=media,
+        )
+        mode = payload.get("mode")
+        emit_structured_log(
+            "action", "action_recall_received", component="action_decision",
+            request_id=decision_request.request_id, public_request_id=public_id,
+            recall_variant=recall_variant(decision_request), input_mode=mode,
+            target_text=payload["user_input"]["text"] if mode == "action_request" else None,
+        )
+        return decision_request, public_id
+
+    @app.websocket("/v1/action-recall")
+    async def recall_audio_realtime(websocket: WebSocket) -> None:
+        request_id = ""
+        try:
+            streamed = await receive_streamed_request(
+                websocket,
+                expected_authorization=f"Bearer {config.token}",
+                max_media_items=3,
+                max_item_bytes=MAX_RECALL_AUDIO_BYTES,
+                max_total_bytes=config.max_body_bytes,
+                allowed_audio_roles=ACTION_AUDIO_ROLES,
+            )
+            if streamed is None:
+                return
+            request_id = streamed.request_id
+            payload = dict(streamed.payload)
+            if payload.setdefault("request_id", request_id) != request_id:
+                raise ValueError("recall payload request_id must match request.start")
+            decision_request, public_id = parse_recall(payload, streamed.media)
+            decision = await run_until_websocket_disconnect(
+                websocket,
+                engine.decide(decision_request),
+                abort=lambda: engine.cancel(decision_request.request_id),
+            )
+            await websocket.send_json({
+                "type": "response.completed",
+                "request_id": request_id,
+                "response": _recall_response(public_id, decision),
+            })
+        except WebSocketDisconnect:
+            return
+        except (TypeError, ValueError) as exc:
+            await websocket.send_json({
+                "type": "error", "code": "invalid_request", "detail": str(exc),
+            })
+            await websocket.close(code=4400)
+        except Exception as exc:
+            emit_structured_log(
+                "error", "action_decision_failed", component="action_decision",
+                request_id=request_id, error_type=type(exc).__name__, detail=str(exc),
+            )
+            await websocket.send_json({
+                "type": "error", "code": "model_error", "detail": "recall failed",
+            })
+            await websocket.close(code=1011)
 
     if performance_token is not None:
         normalized_performance_token = performance_token.strip()
@@ -550,6 +600,18 @@ def create_action_decision_app(
         register_performance_control(app, token=normalized_performance_token)
 
     return app
+
+
+def _recall_response(request_id: str, decision: ActionDecision) -> dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "channel": decision.channel.value,
+        "candidate_id": decision.candidate_id,
+        "code": decision.code,
+        "label": decision.label,
+        "outcome": decision.outcome,
+        "occupies_channels": list(decision.occupies_channels),
+    }
 
 
 def _parse_request(

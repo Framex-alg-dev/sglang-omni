@@ -22,14 +22,20 @@ from sglang_omni.serve.streaming_request import StreamedMedia
 
 from .catalog import ActionCatalogRegistry
 from .contracts import ActionDecisionRequest, DecisionChannel
-from .speech_audio import MAX_SPEECH_AUDIO_MS, USER_CONTEXT_AUDIO_ROLE, validate_avatar_audio_clip
+from .speech_audio import (
+    AVATAR_CONTEXT_ROLE,
+    AVATAR_FOCUS_ROLE,
+    MAX_SPEECH_AUDIO_MS,
+    USER_CONTEXT_AUDIO_ROLE,
+    validate_avatar_audio_clip,
+)
 from .speech_window import PERSONA_AUDIO_PROFILE
 from .requested_action import parse_requested_action
 
 
 _FIELDS = {"text", "audio", "audio_source", "channel", "character_prompt", "allowed_candidate_ids",
            "context_audio", "user_context", "user_context_audio", "last_dispatched_action", "request_id", "requested_action"}
-_MAX_AUDIO_BYTES = 2 * 1024 * 1024
+MAX_RECALL_AUDIO_BYTES = 2 * 1024 * 1024
 _COMMON_FIELDS = {"channel", "character_prompt", "allowed_candidate_ids", "last_dispatched_action", "request_id", "requested_action"}
 _NAMED_FIELDS = {"mode", "user_input", "avatar_current", "avatar_history"}
 
@@ -41,7 +47,7 @@ def _input_content(value: Any, name: str) -> dict[str, Any]:
         text = value["text"]
         if not isinstance(text, str) or not text.strip() or len(text) > 4000 or "\x00" in text:
             raise ValueError(f"{name}.text must be nonempty and at most 4000 characters")
-    elif not isinstance(value["audio"], dict):
+    elif not isinstance(value["audio"], (dict, StreamedMedia)):
         raise ValueError(f"{name}.audio must be an audio object")
     return value
 
@@ -96,17 +102,45 @@ def _normalize_named_request(raw: dict[str, Any]) -> tuple[dict[str, Any], str |
     return result, current.get("text"), history_text
 
 
+def _attach_streamed_audio(
+    raw: dict[str, Any], media: tuple[StreamedMedia, ...],
+) -> dict[str, Any]:
+    slots = {
+        "user_reaction": {"user_audio": "user_input"},
+        "avatar_speech": {
+            USER_CONTEXT_AUDIO_ROLE: "user_input",
+            AVATAR_CONTEXT_ROLE: "avatar_history",
+            AVATAR_FOCUS_ROLE: "avatar_current",
+        },
+    }.get(raw.get("mode"), {}) if isinstance(raw.get("mode"), str) else {}
+    result = dict(raw)
+    for item in media:
+        field = slots.get(item.evidence_role)
+        if item.kind != "audio" or field is None:
+            raise ValueError("streamed media role is not valid for this recall mode")
+        if result.get(field) is not None:
+            raise ValueError(f"{field} already has content")
+        validate_avatar_audio_clip(item)
+        result[field] = {"audio": item}
+    return result
+
+
 def _clip(raw: Any, *, role: str, start: int) -> StreamedMedia:
+    if isinstance(raw, StreamedMedia):
+        duration = raw.end_ms - raw.start_ms
+        if len(raw.payload) > MAX_RECALL_AUDIO_BYTES or duration > MAX_SPEECH_AUDIO_MS:
+            raise ValueError("streamed audio exceeds the size or duration limit")
+        return replace(raw, media_id=role, start_ms=start, end_ms=start + duration)
     if not isinstance(raw, dict) or set(raw) - {"data", "format"}:
         raise ValueError("audio must contain base64 data and optional format")
     data = raw.get("data")
-    if not isinstance(data, str) or not data or len(data) > 4 * ((_MAX_AUDIO_BYTES + 2) // 3):
+    if not isinstance(data, str) or not data or len(data) > 4 * ((MAX_RECALL_AUDIO_BYTES + 2) // 3):
         raise ValueError("audio.data must be bounded nonempty base64")
     try:
         payload = base64.b64decode(data, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise ValueError("audio.data is not valid base64") from exc
-    if not payload or len(payload) > _MAX_AUDIO_BYTES:
+    if not payload or len(payload) > MAX_RECALL_AUDIO_BYTES:
         raise ValueError("decoded audio exceeds the size limit or is empty")
     encoding = raw.get("format", "wav")
     if encoding == "wav":
@@ -129,10 +163,12 @@ def _clip(raw: Any, *, role: str, start: int) -> StreamedMedia:
 
 
 def parse_simple_audio_request(
-    raw: Any, registry: ActionCatalogRegistry,
+    raw: Any, registry: ActionCatalogRegistry, *, media: tuple[StreamedMedia, ...] = (),
 ) -> tuple[ActionDecisionRequest, str]:
     if not isinstance(raw, dict):
         raise ValueError("audio recall payload must be an object")
+    if media:
+        raw = _attach_streamed_audio(raw, media)
     current_text = history_text = None
     if set(raw) & _NAMED_FIELDS:
         raw, current_text, history_text = _normalize_named_request(raw)
