@@ -1,4 +1,6 @@
+import asyncio
 import base64
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,22 +15,22 @@ PATH = "/v1/action-recall"
 REQUEST_ID = "recall-websocket-1"
 
 
-def _start(socket, payload):
+def _start(socket, payload, request_id=REQUEST_ID):
     socket.send_json({
         "type": "request.start", "contract_version": 2,
-        "request_id": REQUEST_ID, "payload": payload,
+        "request_id": request_id, "payload": payload,
     })
     assert socket.receive_json() == {
-        "type": "request.ready", "contract_version": 2, "request_id": REQUEST_ID,
+        "type": "request.ready", "contract_version": 2, "request_id": request_id,
     }
 
 
-def _send_audio(socket, role):
+def _send_audio(socket, role, request_id=REQUEST_ID):
     item = audio(role)
-    socket.send_json({"type": "input.media", "request_id": REQUEST_ID, **item.header()})
+    socket.send_json({"type": "input.media", "request_id": request_id, **item.header()})
     socket.send_bytes(item.payload)
     assert socket.receive_json() == {
-        "type": "input.media.ack", "request_id": REQUEST_ID, **item.header(),
+        "type": "input.media.ack", "request_id": request_id, **item.header(),
     }
     return item
 
@@ -75,5 +77,57 @@ def test_body_rejects_avatar_audio_in_user_reaction():
                 "character_prompt": "沉稳、耐心的老师",
             })
             _send_audio(socket, "avatar_speech_audio")
-            assert _commit(socket)["code"] == "invalid_request"
-        assert not model.calls
+            error = _commit(socket)
+            assert error["code"] == "invalid_request"
+            assert error["request_id"] == REQUEST_ID
+            assert not model.calls
+            next_id = "recall-after-error"
+            _start(socket, {
+                "mode": "user_reaction", "channel": "body",
+                "character_prompt": "沉稳、耐心的老师",
+                "user_input": {"text": "打个招呼"},
+                "allowed_candidate_ids": ["661"],
+            }, next_id)
+            socket.send_json({"type": "request.commit", "request_id": next_id})
+            assert socket.receive_json()["type"] == "response.completed"
+
+
+def test_one_socket_handles_multiple_pairs_with_parallel_model_calls():
+    class PairedClient:
+        def __init__(self):
+            self.waiting = []
+
+        async def completion(self, req, **kwargs):
+            gate = asyncio.Event()
+            self.waiting.append(gate)
+            if len(self.waiting) == 2:
+                for pending in self.waiting:
+                    pending.set()
+                self.waiting.clear()
+            await asyncio.wait_for(gate.wait(), timeout=2)
+            code = "_q_d" if req.metadata["channel"] == "body" else "_l_a"
+            return SimpleNamespace(text=code, usage=None, weight_version="mock")
+
+    with TestClient(create_action_decision_app(PairedClient(), config=config())) as client:
+        with client.websocket_connect(PATH, headers=AUTH) as socket:
+            for index in range(3):
+                expected = {}
+                for channel, candidate_id in (("body", "661"), ("expression", "154")):
+                    request_id = f"recall-{index}-{channel}"
+                    expected[request_id] = (channel, candidate_id)
+                    _start(socket, {
+                        "mode": "avatar_speech", "channel": channel,
+                        "character_prompt": "沉稳、耐心的老师",
+                        "allowed_candidate_ids": [candidate_id],
+                    }, request_id)
+                for request_id in expected:
+                    _send_audio(socket, "avatar_speech_audio", request_id)
+                for request_id in expected:
+                    socket.send_json({"type": "request.commit", "request_id": request_id})
+                received = {}
+                for _ in range(2):
+                    event = socket.receive_json()
+                    assert event["type"] == "response.completed", event
+                    response = event["response"]
+                    received[event["request_id"]] = (response["channel"], response["candidate_id"])
+                assert received == expected

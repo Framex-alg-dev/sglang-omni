@@ -19,9 +19,11 @@ from starlette.websockets import WebSocketDisconnect
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.serve.streaming_request import (
     StreamedMedia,
+    StreamedRequest,
     media_data_uri,
     receive_streamed_request,
     run_until_websocket_disconnect,
+    serve_streamed_requests,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log
 
@@ -544,49 +546,25 @@ def create_action_decision_app(
 
     @app.websocket("/v1/action-recall")
     async def recall_audio_realtime(websocket: WebSocket) -> None:
-        request_id = ""
-        try:
-            streamed = await receive_streamed_request(
-                websocket,
-                expected_authorization=f"Bearer {config.token}",
-                max_media_items=3,
-                max_item_bytes=MAX_RECALL_AUDIO_BYTES,
-                max_total_bytes=config.max_body_bytes,
-                allowed_audio_roles=ACTION_AUDIO_ROLES,
-            )
-            if streamed is None:
-                return
-            request_id = streamed.request_id
+        async def recall(streamed: StreamedRequest) -> dict[str, Any]:
             payload = dict(streamed.payload)
-            if payload.setdefault("request_id", request_id) != request_id:
+            if payload.setdefault("request_id", streamed.request_id) != streamed.request_id:
                 raise ValueError("recall payload request_id must match request.start")
             decision_request, public_id = parse_recall(payload, streamed.media)
-            decision = await run_until_websocket_disconnect(
-                websocket,
-                engine.decide(decision_request),
-                abort=lambda: engine.cancel(decision_request.request_id),
-            )
-            await websocket.send_json({
-                "type": "response.completed",
-                "request_id": request_id,
-                "response": _recall_response(public_id, decision),
-            })
-        except WebSocketDisconnect:
-            return
-        except (TypeError, ValueError) as exc:
-            await websocket.send_json({
-                "type": "error", "code": "invalid_request", "detail": str(exc),
-            })
-            await websocket.close(code=4400)
-        except Exception as exc:
-            emit_structured_log(
-                "error", "action_decision_failed", component="action_decision",
-                request_id=request_id, error_type=type(exc).__name__, detail=str(exc),
-            )
-            await websocket.send_json({
-                "type": "error", "code": "model_error", "detail": "recall failed",
-            })
-            await websocket.close(code=1011)
+            try:
+                decision = await engine.decide(decision_request)
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    await engine.cancel(decision_request.request_id)
+                    raise
+                raise ValueError("recall request was cancelled") from None
+            return _recall_response(public_id, decision)
+
+        await serve_streamed_requests(
+            websocket, recall, expected_authorization=f"Bearer {config.token}",
+            max_requests=4, max_media_items=3, max_item_bytes=MAX_RECALL_AUDIO_BYTES,
+            max_total_bytes=config.max_body_bytes, allowed_audio_roles=ACTION_AUDIO_ROLES,
+        )
 
     if performance_token is not None:
         normalized_performance_token = performance_token.strip()
