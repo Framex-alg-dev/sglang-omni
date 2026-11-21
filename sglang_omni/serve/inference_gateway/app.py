@@ -1413,6 +1413,21 @@ class _Session:
             while True:
                 event = _json_object(await socket.recv())
                 event_type = event.get("type")
+                if event_type == "response.model_input":
+                    model_input = event.get("model_input")
+                    if not isinstance(model_input, dict):
+                        raise RuntimeError(
+                            "model stage returned invalid model input"
+                        )
+                    await self.send(
+                        {
+                            "type": "stage.model_input",
+                            "request_id": request_id,
+                            "stage": stage,
+                            "model_input": model_input,
+                        }
+                    )
+                    continue
                 if event_type == "response.delta":
                     if speech_speculation is not None:
                         delta = _reply_delta_text(event.get("response"))

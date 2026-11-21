@@ -112,10 +112,14 @@ class ActionCatalogRegistry:
                     raise ValueError(f"runtime_context conflicts with registered {key}")
                 context[key] = value
 
+        role_pool_body = (
+            request.channel is DecisionChannel.BODY
+            and context.get("action_candidate_prompt_mode") == "role_pool_v1"
+        )
         product_ids = {
             candidate_id
             for candidate_id, channel in self._product_channel.items()
-            if channel is request.channel
+            if role_pool_body or channel is request.channel
         }
         injected_for_channel = {
             item
@@ -222,7 +226,10 @@ class ActionCatalogRegistry:
             code=str(raw["output_text"]),
             token_ids=tuple(int(item) for item in raw["token_ids"]),
             kind=str(raw.get("entry_kind", "action")),
-            occupies_channels=("face",) if candidate_id in _FACE_OCCUPYING_BODY_IDS else (),
+            occupies_channels=("face",)
+            if candidate_id in _FACE_OCCUPYING_BODY_IDS
+            or str(category_id) == "19"
+            else (),
         )
 
     def _channel_for_mapping(self, candidate_id: str) -> DecisionChannel:
@@ -281,6 +288,7 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         "entity_state", "script_state", "agent_event", "agent_task", "agent_phase",
         "tool_name", "tool_status", "display_state", "required_action_candidate_id",
         "required_action_semantics", "expression_priority", "prompt_profile",
+        "action_candidate_prompt_mode",
     }
     unknown = sorted(set(value) - allowed)
     if unknown:

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -847,6 +848,109 @@ def test_chat_websocket_accepts_binary_media_then_commits() -> None:
     assert model.requests[0].metadata["images"][0].startswith(
         "data:image/jpeg;base64,"
     )
+
+
+def test_chat_websocket_logs_final_model_input_without_binary_media(
+    monkeypatch,
+    caplog,
+) -> None:
+    monkeypatch.setenv("SGLANG_OMNI_LOG_FULL_CHAT_INPUTS", "1")
+    monkeypatch.setattr(
+        "sglang_omni.serve.openai_api.effective_runtime_prompt",
+        lambda key, default, *, language: (
+            f"effective:{key}:{language}:{bool(default)}"
+        ),
+    )
+    model = SuccessfulChatClient()
+    raw_image = b"jpeg-frame-that-must-not-appear-in-text-logs"
+    encoded_image = base64.b64encode(raw_image).decode("ascii")
+    client = TestClient(create_app(model, model_name="qwen3-omni"))
+
+    with caplog.at_level(logging.INFO, logger="sglang_omni.serve.openai_api"):
+        with client.websocket_connect("/v1/chat/completions/realtime") as socket:
+            socket.send_json(
+                {
+                    "type": "request.start",
+                    "contract_version": 2,
+                    "request_id": "request-log-input",
+                    "payload": {
+                        "model": "qwen3-omni",
+                        "messages": [
+                            {"role": "system", "content": "application contract"},
+                            {"role": "user", "content": "完整用户输入"},
+                        ],
+                        "runtime_prompt_profile": "reply",
+                        "runtime_prompt_language": "zh-CN",
+                        "temperature": 0.6,
+                        "top_p": 0.95,
+                        "top_k": 20,
+                    },
+                }
+            )
+            assert socket.receive_json()["type"] == "request.ready"
+            socket.send_json(
+                {
+                    "type": "input.media",
+                    "request_id": "request-log-input",
+                    "media_id": "image-log-1",
+                    "kind": "image",
+                    "start_ms": 0,
+                    "end_ms": 100,
+                    "encoding": "image/jpeg",
+                    "checksum": "sha256:" + hashlib.sha256(raw_image).hexdigest(),
+                    "payload_bytes": len(raw_image),
+                    "evidence_role": "user_camera",
+                }
+            )
+            socket.send_bytes(raw_image)
+            assert socket.receive_json()["type"] == "input.media.ack"
+            socket.send_json(
+                {"type": "request.commit", "request_id": "request-log-input"}
+            )
+            model_input_event = socket.receive_json()
+            assert model_input_event["type"] == "response.model_input"
+            assert socket.receive_json()["type"] == "response.completed"
+
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("CHAT_MODEL_FULL_INPUT ")
+    )
+    logged = json.loads(message.removeprefix("CHAT_MODEL_FULL_INPUT "))
+    assert logged["request_id"] == "request-log-input"
+    assert logged["request"]["messages"][:3] == [
+        {
+            "role": "system",
+            "content": "effective:reply_rules:zh-CN:True",
+        },
+        {"role": "system", "content": "application contract"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "完整用户输入"},
+                {"type": "image"},
+            ],
+        },
+    ]
+    assert logged["request"]["sampling"]["temperature"] == 0.6
+    assert logged["request"]["sampling"]["top_p"] == 0.95
+    assert logged["request"]["sampling"]["top_k"] == 20
+    assert logged["request"]["metadata"]["images"] == [
+        {
+            "data_uri_omitted": True,
+            "media_type": "image/jpeg",
+            "base64_characters": len(encoded_image),
+        }
+    ]
+    assert logged["media"][0]["checksum"] == (
+        "sha256:" + hashlib.sha256(raw_image).hexdigest()
+    )
+    assert model_input_event == {
+        "type": "response.model_input",
+        "request_id": "request-log-input",
+        "model_input": logged,
+    }
+    assert encoded_image not in message
 
 
 def test_chat_websocket_streams_output_deltas() -> None:

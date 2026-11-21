@@ -36,6 +36,53 @@ class ActionDecisionRequest:
 
 
 @dataclass(frozen=True)
+class ActionPrefixPrefillRequest:
+    request_id: str
+    session_id: str
+    channel: DecisionChannel
+    language: str = "zh-CN"
+    character_prompt: str | None = None
+    session_prompt: str | None = None
+    runtime_context: dict[str, Any] = field(default_factory=dict)
+    allowed_candidate_ids: tuple[str, ...] = ()
+    excluded_candidate_ids: tuple[str, ...] = ()
+
+    def as_decision_request(self) -> ActionDecisionRequest:
+        return ActionDecisionRequest(
+            request_id=self.request_id,
+            session_id=self.session_id,
+            turn_id="prefix-prefill",
+            decision_point_id="prefix-prefill",
+            channel=self.channel,
+            language=self.language,
+            character_prompt=self.character_prompt,
+            session_prompt=self.session_prompt,
+            runtime_context=dict(self.runtime_context),
+            allowed_candidate_ids=self.allowed_candidate_ids,
+            excluded_candidate_ids=self.excluded_candidate_ids,
+        )
+
+
+@dataclass(frozen=True)
+class ActionPrefixPrefillResult:
+    contract_version: int
+    request_id: str
+    session_id: str
+    channel: DecisionChannel
+    prompt_hash: str
+    cache_key: str
+    candidate_count: int
+    cached: bool
+    model_id: str
+    model_version: str
+
+    def to_dict(self) -> dict[str, Any]:
+        value = dict(self.__dict__)
+        value["channel"] = self.channel.value
+        return value
+
+
+@dataclass(frozen=True)
 class ActionDecision:
     contract_version: int
     request_id: str

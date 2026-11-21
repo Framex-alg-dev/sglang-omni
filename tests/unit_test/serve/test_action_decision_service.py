@@ -12,6 +12,7 @@ from sglang_omni.serve.action_decision.catalog import ActionCatalogRegistry
 from sglang_omni.serve.action_decision.contracts import (
     ActionDecision,
     ActionDecisionRequest,
+    ActionPrefixPrefillRequest,
     DecisionChannel,
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
@@ -73,6 +74,7 @@ class _FakeClient:
     def __init__(self, code: str = "_ctrl_b") -> None:
         self.code = code
         self.requests = []
+        self.prefill_requests = []
         self.aborted = []
 
     async def completion(self, request, *, request_id, audio_format="wav"):
@@ -85,6 +87,10 @@ class _FakeClient:
 
     async def abort(self, request_id):
         self.aborted.append(request_id)
+
+    async def prefill_completion_prefix(self, request, *, request_id):
+        self.prefill_requests.append((request_id, request))
+        return True
 
 
 def test_catalog_partitions_body_and_expression_and_controls() -> None:
@@ -100,6 +106,24 @@ def test_catalog_partitions_body_and_expression_and_controls() -> None:
     assert {
         entry.candidate_id for entry in expression.entries if entry.kind != "action"
     } == {"000", "IF0"}
+
+
+def test_role_pool_body_catalog_keeps_explicit_expression_actions() -> None:
+    catalog = _registry().resolve(
+        _request(
+            DecisionChannel.BODY,
+            allowed_candidate_ids=("138", "157"),
+            runtime_context={"action_candidate_prompt_mode": "role_pool_v1"},
+        )
+    )
+
+    assert {entry.candidate_id for entry in catalog.entries} == {
+        "000",
+        "138",
+        "157",
+        "IB0",
+    }
+    assert catalog.by_candidate_id["157"].occupies_channels == ("face",)
 
 
 def test_registered_agent_binding_injects_and_hard_binds_full_mapping_action() -> None:
@@ -228,6 +252,70 @@ def test_e67_reference_profile_uses_frozen_v116_training_prompt() -> None:
     assert build_system_prompt(request, catalog) == expected_system
     assert hashlib.sha256(expected_system.encode()).hexdigest() == (
         "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
+    )
+
+
+def test_e67_role_pool_prompt_filters_catalog_without_appending_a_constraint() -> None:
+    request = _request(
+        DecisionChannel.BODY,
+        allowed_candidate_ids=("138", "157"),
+        runtime_context={
+            "prompt_profile": "e67_v116_step695_fp8",
+            "action_candidate_prompt_mode": "role_pool_v1",
+        },
+    )
+    catalog = _registry().resolve(request)
+
+    prompt = build_system_prompt(request, catalog)
+
+    assert "[GOAL_ROUTING]" in prompt
+    assert "类别：视线类\n_i_a | 看镜头 |" in prompt
+    assert "_i_c | 看右侧（仅眼球） |" not in prompt
+    assert "类别：基础姿态" not in prompt
+    assert catalog.by_candidate_id["157"].code in prompt
+    assert "_ctrl_a | 不支持的具体动作 |" in prompt
+    assert "本轮仅这些动作可用" not in prompt
+
+
+def test_role_pool_prefill_is_deduplicated_by_exact_prompt_and_catalog() -> None:
+    async def run():
+        client = _FakeClient()
+        engine = ActionDecisionEngine(client, config=_config())
+        context = {
+            "prompt_profile": "e67_v116_step695_fp8",
+            "action_candidate_prompt_mode": "role_pool_v1",
+        }
+        first = await engine.prefill(
+            ActionPrefixPrefillRequest(
+                request_id="prefill-1",
+                session_id="session-1",
+                channel=DecisionChannel.BODY,
+                runtime_context=context,
+                allowed_candidate_ids=("138",),
+            )
+        )
+        second = await engine.prefill(
+            ActionPrefixPrefillRequest(
+                request_id="prefill-2",
+                session_id="session-2",
+                channel=DecisionChannel.BODY,
+                runtime_context=context,
+                allowed_candidate_ids=("138",),
+            )
+        )
+        return client, first, second
+
+    client, first, second = asyncio.run(run())
+
+    assert len(client.prefill_requests) == 1
+    assert first.cached is False
+    assert second.cached is True
+    assert first.prompt_hash == second.prompt_hash
+    assert first.cache_key == second.cache_key
+    assert first.candidate_count == 3
+    prefetched = client.prefill_requests[0][1]
+    assert hashlib.sha256(prefetched.messages[0].content.encode()).hexdigest() == (
+        first.prompt_hash
     )
 
 
@@ -420,6 +508,40 @@ def test_websocket_service_accepts_text_request() -> None:
         response = socket.receive_json()
     assert response["type"] == "response.completed"
     assert response["response"]["channel"] == "body"
+
+
+def test_websocket_service_accepts_role_pool_prefill() -> None:
+    client = _FakeClient()
+    app = create_action_decision_app(client, config=_config())
+    with TestClient(app).websocket_connect(
+        "/v1/action-decision/realtime",
+        headers={"Authorization": "Bearer secret"},
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "request.start",
+                "contract_version": 2,
+                "request_id": "prefill-1",
+                "payload": {
+                    "operation": "prefill",
+                    "request_id": "prefill-1",
+                    "session_id": "s1",
+                    "channel": "body",
+                    "allowed_candidate_ids": ["138"],
+                    "runtime_context": {
+                        "prompt_profile": "e67_v116_step695_fp8",
+                        "action_candidate_prompt_mode": "role_pool_v1",
+                    },
+                },
+            }
+        )
+        assert socket.receive_json()["type"] == "request.ready"
+        socket.send_json({"type": "request.commit", "request_id": "prefill-1"})
+        response = socket.receive_json()
+    assert response["type"] == "response.completed"
+    assert response["response"]["cached"] is False
+    assert response["response"]["candidate_count"] == 3
+    assert len(client.prefill_requests) == 1
 
 
 def test_action_service_mounts_authenticated_performance_control() -> None:

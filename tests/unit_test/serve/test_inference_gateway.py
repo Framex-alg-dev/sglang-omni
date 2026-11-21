@@ -62,6 +62,27 @@ class _Upstream:
         elif message["type"] == "input.media":
             self.media_header = message
         elif message["type"] == "request.commit":
+            if (
+                isinstance(self.request_payload, dict)
+                and self.request_payload.get("emit_model_input")
+            ):
+                await self.events.put(
+                    json.dumps(
+                        {
+                            "type": "response.model_input",
+                            "request_id": message["request_id"],
+                            "model_input": {
+                                "request_id": message["request_id"],
+                                "request": {
+                                    "messages": [
+                                        {"role": "user", "content": "hello"}
+                                    ]
+                                },
+                                "media": [],
+                            },
+                        }
+                    )
+                )
             if isinstance(self.request_payload, dict) and self.request_payload.get("stream"):
                 await self.events.put(
                     json.dumps(
@@ -400,6 +421,45 @@ def test_reply_stage_overwrites_cache_owner_with_gateway_session(monkeypatch) ->
 
     request_start = json.loads(upstreams[0].sent[0])
     assert request_start["payload"]["session_instance_id"] == "s1"
+
+
+def test_reply_stage_forwards_exact_model_input_event(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gateway_module.websockets,
+        "connect",
+        lambda *_args, **_kwargs: _Upstream(),
+    )
+    client = TestClient(create_inference_gateway_app(_config()))
+    with client.websocket_connect("/v1/inference-session") as socket:
+        socket.send_json(
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
+        )
+        socket.receive_json()
+        socket.send_json(
+            {
+                "type": "stage.request",
+                "request_id": "reply-input-1",
+                "stage": "reply",
+                "payload": {"emit_model_input": True},
+                "media_refs": [],
+            }
+        )
+        assert socket.receive_json()["type"] == "stage.accepted"
+        model_input = socket.receive_json()
+        assert socket.receive_json()["type"] == "stage.completed"
+
+    assert model_input == {
+        "type": "stage.model_input",
+        "request_id": "reply-input-1",
+        "stage": "reply",
+        "model_input": {
+            "request_id": "reply-input-1",
+            "request": {
+                "messages": [{"role": "user", "content": "hello"}]
+            },
+            "media": [],
+        },
+    }
 
 
 def test_reply_reserves_speculation_id_until_stage_finishes(monkeypatch) -> None:

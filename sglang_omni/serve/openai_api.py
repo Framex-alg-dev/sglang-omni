@@ -26,6 +26,7 @@ import io
 import json
 import logging
 import math
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -837,6 +838,11 @@ def _register_chat_completions(app: FastAPI) -> None:
         model = req.model or default_model
 
         gen_req = _build_chat_generate_request(req)
+        _log_full_chat_model_input(
+            request_id=request_id,
+            request=gen_req,
+            media_headers=(),
+        )
 
         # Determine audio format from request
         audio_format = "wav"
@@ -893,6 +899,20 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             response_id = f"chatcmpl-{request_id}"
             created = int(time.time())
             model = req.model or default_model
+            gen_req = _build_chat_generate_request(req)
+            model_input = _log_full_chat_model_input(
+                request_id=request_id,
+                request=gen_req,
+                media_headers=tuple(item.header() for item in streamed.media),
+            )
+            if model_input is not None:
+                await websocket.send_json(
+                    {
+                        "type": "response.model_input",
+                        "request_id": streamed.request_id,
+                        "model_input": model_input,
+                    }
+                )
             audio_format = "wav"
             if req.audio and isinstance(req.audio, dict):
                 audio_format = req.audio.get("format", "wav")
@@ -902,6 +922,7 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                     websocket=websocket,
                     client=client,
                     req=req,
+                    gen_req=gen_req,
                     request_id=request_id,
                     outer_request_id=streamed.request_id,
                     response_id=response_id,
@@ -944,6 +965,7 @@ async def _send_chat_websocket_response(
     websocket: WebSocket,
     client: Client,
     req: ChatCompletionRequest,
+    gen_req: GenerateRequest,
     request_id: str,
     outer_request_id: str,
     response_id: str,
@@ -954,7 +976,7 @@ async def _send_chat_websocket_response(
     if req.stream:
         async for event in _chat_stream(
             client,
-            _build_chat_generate_request(req),
+            gen_req,
             request_id,
             response_id,
             created,
@@ -982,7 +1004,7 @@ async def _send_chat_websocket_response(
         return
     response = await _chat_non_stream(
         client,
-        _build_chat_generate_request(req),
+        gen_req,
         request_id,
         response_id,
         created,
@@ -1210,6 +1232,53 @@ def _record_explicit_generation_params(
 ) -> None:
     if explicit_fields:
         metadata[EXPLICIT_GENERATION_PARAMS_KEY] = explicit_fields
+
+
+def _log_full_chat_model_input(
+    *,
+    request_id: str,
+    request: GenerateRequest,
+    media_headers: tuple[dict[str, object], ...],
+) -> dict[str, Any] | None:
+    """Log and return the final request while keeping binary media out of logs."""
+
+    if os.environ.get("SGLANG_OMNI_LOG_FULL_CHAT_INPUTS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
+    record = {
+        "request_id": request_id,
+        "request": _replace_data_uris_for_log(request.to_dict()),
+        "media": list(media_headers),
+    }
+    logger.info(
+        "CHAT_MODEL_FULL_INPUT %s",
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+    )
+    return record
+
+
+def _replace_data_uris_for_log(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _replace_data_uris_for_log(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_replace_data_uris_for_log(item) for item in value]
+    if isinstance(value, tuple):
+        return [_replace_data_uris_for_log(item) for item in value]
+    if isinstance(value, str) and value.startswith("data:") and ";base64," in value:
+        descriptor, encoded = value.split(",", 1)
+        return {
+            "data_uri_omitted": True,
+            "media_type": descriptor[5:].removesuffix(";base64"),
+            "base64_characters": len(encoded),
+        }
+    return value
 
 
 def _build_chat_generate_request(req: ChatCompletionRequest) -> GenerateRequest:

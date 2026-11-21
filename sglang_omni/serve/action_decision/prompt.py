@@ -28,6 +28,7 @@ REFERENCE_SYSTEM_PROMPT_PATHS = {
     E66_REFERENCE_PROFILE: E66_REFERENCE_SYSTEM_PROMPT_PATH,
     E67_REFERENCE_PROFILE: E67_REFERENCE_SYSTEM_PROMPT_PATH,
 }
+ROLE_POOL_PROMPT_MODE = "role_pool_v1"
 
 
 # E57-A was trained with this action-selection protocol. Keep the stable rules
@@ -116,6 +117,17 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         raise ValueError("action decision text fields must not contain NUL")
     profile = reference_prompt_profile(request)
     if profile is not None:
+        prompt_mode = request.runtime_context.get("action_candidate_prompt_mode")
+        if prompt_mode is not None:
+            if prompt_mode != ROLE_POOL_PROMPT_MODE:
+                raise ValueError(
+                    f"unsupported action_candidate_prompt_mode: {prompt_mode!r}"
+                )
+            if profile != E67_REFERENCE_PROFILE:
+                raise ValueError(
+                    "role_pool_v1 is only supported by the E67 reference prompt"
+                )
+            return _filtered_reference_system_prompt(profile, catalog)
         return _reference_system_prompt(profile)
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
@@ -150,6 +162,60 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         )
     lines.append(E57_FINAL_TASK_CONSTRAINTS)
     return "\n".join(lines)
+
+
+def _filtered_reference_system_prompt(
+    profile: str,
+    catalog: ResolvedCatalog,
+) -> str:
+    source = _reference_system_prompt(profile)
+    lines = source.splitlines()
+    try:
+        catalog_index = lines.index("[ACTION_CATALOG]")
+    except ValueError as exc:
+        raise ValueError(f"{profile} reference prompt has no ACTION_CATALOG") from exc
+
+    legal_by_code = {entry.code: entry for entry in catalog.entries}
+    retained = lines[: catalog_index + 1]
+    pending_category: str | None = None
+    found_action_codes: set[str] = set()
+    for line in lines[catalog_index + 1 :]:
+        if line.startswith("类别："):
+            pending_category = line
+            continue
+        code = _reference_catalog_code(line)
+        if code is None:
+            pending_category = None
+            retained.append(line)
+            continue
+        entry = legal_by_code.get(code)
+        if entry is None:
+            continue
+        if entry.kind == "action":
+            if pending_category is not None:
+                retained.append(pending_category)
+            found_action_codes.add(code)
+        pending_category = None
+        retained.append(line)
+
+    expected_action_codes = {
+        entry.code for entry in catalog.entries if entry.kind == "action"
+    }
+    missing = sorted(expected_action_codes - found_action_codes)
+    if missing:
+        raise ValueError(
+            "role action candidates are absent from the E67 reference prompt: "
+            + ", ".join(missing)
+        )
+    suffix = "\n" if source.endswith("\n") else ""
+    return "\n".join(retained) + suffix
+
+
+def _reference_catalog_code(line: str) -> str | None:
+    head, separator, _ = line.partition(" | ")
+    if not separator or not head or any(character.isspace() for character in head):
+        return None
+    return head
 
 
 def build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:

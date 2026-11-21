@@ -12,6 +12,9 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import load_global_acti
 from sglang_omni.serve.openai_api import _register_runtime_prompt_overrides
 from sglang_omni.serve.realtime.action.decision import category_gate_prompt
 from sglang_omni.serve.realtime.performance.pipeline import _Choice
+from sglang_omni.serve.realtime.audio_buffer import RealtimeAudioBuffer
+from sglang_omni.serve.realtime.protocol.models import TurnBuffer
+from sglang_omni.serve.realtime.reply.prompts import repository_reply_rules
 from sglang_omni.serve.realtime.proactive.policies import proactive_scene_policy
 from sglang_omni.serve.realtime.runtime_prompt_overrides import (
     effective_runtime_prompt,
@@ -51,6 +54,33 @@ def test_reply_and_action_overrides_are_independent(reply_language, action_langu
     assert f"action_rules-{action_language}" in action
     assert f"user_image_action_rules-{action_language}" in action
     assert f"action_rules-{'en' if action_language == 'zh' else 'zh'}" not in action
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("origin", ["user", "proactive"])
+def test_identity_awareness_follows_persona_in_native_reply_requests(language, origin):
+    session = make_session(FakeWebSocket(), FakeClient())
+    session.language = language
+    session.instructions = "Name: Mira, a teacher."
+    turn = TurnBuffer(
+        turn_id="identity-test", started_at=0.0, audio=RealtimeAudioBuffer(),
+        images=[], audio_seqs=set(), image_seqs=set(), turn_origin=origin,
+        text_role="user_input" if origin == "user" else "character_reply",
+        trigger="session_enter" if origin == "proactive" else None,
+    )
+    request, _ = session._build_reply_request(turn, [], [], [], None)
+    system = request.messages[0].content
+    heading = "[身份认知]" if language == "zh" else "[Identity awareness]"
+    fragments = (
+        ("你的身份以角色设定为准", "即使用户明确询问底层模型", "也必须保持角色设定中的身份和口吻", "应说明不清楚", "不得依据默认自我认知或历史回复自行补全")
+        if language == "zh" else
+        ("Your identity is defined by the character profile", "Even when the user explicitly asks about the underlying model", "you must remain in character", "say that you do not", "do not fill it in from default self-knowledge")
+    )
+    assert system.count(heading) == 1
+    assert system.index(session.instructions) < system.index(heading)
+    for fragment in fragments:
+        assert fragment in system
+        assert fragment in repository_reply_rules(language)
 
 
 def test_missing_empty_and_updated_english_override_never_reads_chinese():

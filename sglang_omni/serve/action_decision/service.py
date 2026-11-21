@@ -27,6 +27,7 @@ from sglang_omni.utils.structured_logs import emit_structured_log
 
 from .catalog import ActionCatalogRegistry, ActionEntry, ResolvedCatalog
 from .contracts import ActionDecision, ActionDecisionRequest, DecisionChannel
+from .contracts import ActionPrefixPrefillRequest, ActionPrefixPrefillResult
 from .prompt import (
     build_system_prompt,
     build_user_prompt,
@@ -44,6 +45,13 @@ class CompletionClient(Protocol):
     ) -> Any: ...
 
     async def abort(self, request_id: str) -> Any: ...
+
+    async def prefill_completion_prefix(
+        self,
+        request: GenerateRequest,
+        *,
+        request_id: str,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,13 @@ class ActionDecisionConfig:
             raise ValueError("action-decision limits must be positive")
 
 
+@dataclass(frozen=True)
+class _PrefillArtifact:
+    prompt_hash: str
+    cache_key: str
+    candidate_count: int
+
+
 class ActionDecisionEngine:
     def __init__(
         self,
@@ -93,6 +108,9 @@ class ActionDecisionEngine:
         self._lock = asyncio.Lock()
         self._completed: OrderedDict[str, tuple[str, ActionDecision]] = OrderedDict()
         self._inflight: dict[str, tuple[str, asyncio.Task[ActionDecision]]] = {}
+        self._prefill_lock = asyncio.Lock()
+        self._prefilled: OrderedDict[str, _PrefillArtifact] = OrderedDict()
+        self._prefill_inflight: dict[str, asyncio.Task[_PrefillArtifact]] = {}
 
     async def decide(self, request: ActionDecisionRequest) -> ActionDecision:
         digest = _request_digest(request)
@@ -179,6 +197,137 @@ class ActionDecisionEngine:
             while len(self._completed) > self.config.idempotency_cache_size:
                 self._completed.popitem(last=False)
 
+    async def prefill(
+        self,
+        request: ActionPrefixPrefillRequest,
+    ) -> ActionPrefixPrefillResult:
+        decision_request = request.as_decision_request()
+        catalog = self.registry.resolve(decision_request)
+        system_prompt = build_system_prompt(decision_request, catalog)
+        prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
+        cache_payload = json.dumps(
+            {
+                "model_id": self.config.model_id,
+                "model_version": self.config.model_version,
+                "channel": request.channel.value,
+                "prompt_hash": prompt_hash,
+                "catalog_version": catalog.catalog_version,
+                "mapping_hash": catalog.mapping_hash,
+                "candidate_ids": [
+                    entry.candidate_id for entry in catalog.entries
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
+
+        async with self._prefill_lock:
+            completed = self._prefilled.get(cache_key)
+            if completed is not None:
+                self._prefilled.move_to_end(cache_key)
+                return self._prefill_result(request, completed, cached=True)
+            task = self._prefill_inflight.get(cache_key)
+            joined = task is not None
+            if task is None:
+                task = asyncio.create_task(
+                    self._prefill_once(
+                        decision_request,
+                        catalog,
+                        prompt_hash=prompt_hash,
+                        cache_key=cache_key,
+                    ),
+                    name=f"action-prefix-prefill:{request.channel.value}:{cache_key[:12]}",
+                )
+                self._prefill_inflight[cache_key] = task
+        try:
+            artifact = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            emit_structured_log(
+                "action",
+                "action_prefix_prefill_waiter_cancelled",
+                component="action_decision",
+                request_id=request.request_id,
+                session_id=request.session_id,
+                channel=request.channel.value,
+                cache_key=cache_key,
+            )
+            raise
+        return self._prefill_result(request, artifact, cached=joined)
+
+    async def _prefill_once(
+        self,
+        request: ActionDecisionRequest,
+        catalog: ResolvedCatalog,
+        *,
+        prompt_hash: str,
+        cache_key: str,
+    ) -> _PrefillArtifact:
+        started = time.perf_counter()
+        try:
+            prefill = getattr(self._client, "prefill_completion_prefix", None)
+            if not callable(prefill):
+                raise RuntimeError(
+                    "action completion client does not support prefix prefill"
+                )
+            ready = bool(
+                await prefill(
+                    self._generate_request(request, catalog),
+                    request_id=request.request_id,
+                )
+            )
+            if not ready:
+                raise RuntimeError("action prefix prefill was not accepted")
+            artifact = _PrefillArtifact(
+                prompt_hash=prompt_hash,
+                cache_key=cache_key,
+                candidate_count=len(catalog.entries),
+            )
+            async with self._prefill_lock:
+                self._prefilled[cache_key] = artifact
+                self._prefilled.move_to_end(cache_key)
+                while len(self._prefilled) > self.config.idempotency_cache_size:
+                    self._prefilled.popitem(last=False)
+            emit_structured_log(
+                "action",
+                "action_prefix_prefill_completed",
+                component="action_decision",
+                request_id=request.request_id,
+                session_id=request.session_id,
+                channel=request.channel.value,
+                prompt_hash=prompt_hash,
+                cache_key=cache_key,
+                candidate_count=len(catalog.entries),
+                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+            )
+            return artifact
+        finally:
+            async with self._prefill_lock:
+                current = self._prefill_inflight.get(cache_key)
+                if current is asyncio.current_task():
+                    self._prefill_inflight.pop(cache_key, None)
+
+    def _prefill_result(
+        self,
+        request: ActionPrefixPrefillRequest,
+        artifact: _PrefillArtifact,
+        *,
+        cached: bool,
+    ) -> ActionPrefixPrefillResult:
+        return ActionPrefixPrefillResult(
+            contract_version=1,
+            request_id=request.request_id,
+            session_id=request.session_id,
+            channel=request.channel,
+            prompt_hash=artifact.prompt_hash,
+            cache_key=artifact.cache_key,
+            candidate_count=artifact.candidate_count,
+            cached=cached,
+            model_id=self.config.model_id,
+            model_version=self.config.model_version,
+        )
+
     async def _decide_once(self, request: ActionDecisionRequest) -> ActionDecision:
         started = time.perf_counter()
         catalog = self.registry.resolve(request)
@@ -214,6 +363,34 @@ class ActionDecisionEngine:
                 reason_code="required_action_binding",
             )
 
+        result = await self._client.completion(
+            self._generate_request(request, catalog),
+            request_id=request.request_id,
+        )
+        code = str(result.text)
+        # Constrained backends normally return the assigned two-token code, but
+        # some deployments decode control tokens to their canonical candidate
+        # ID (for example ``IB0``). Both identify the same catalog entry.
+        entry = catalog.by_code.get(code) or catalog.by_candidate_id.get(code)
+        if entry is None:
+            raise RuntimeError(f"action model returned code outside constrained catalog: {code!r}")
+        usage = result.usage.to_dict() if result.usage is not None else None
+        return self._decision(
+            request,
+            catalog,
+            entry,
+            started,
+            deterministic=False,
+            reason_code="model_selected",
+            weight_version=result.weight_version,
+            usage=usage,
+        )
+
+    def _generate_request(
+        self,
+        request: ActionDecisionRequest,
+        catalog: ResolvedCatalog,
+    ) -> GenerateRequest:
         user_prompt = {"type": "text", "text": build_user_prompt(request, catalog)}
         media_content = [
             {"type": "audio" if item.kind == "audio" else "image"}
@@ -252,46 +429,25 @@ class ActionDecisionEngine:
             ]
         legal_codes = tuple(entry.code for entry in catalog.entries)
         grammar = "(?:" + "|".join(re.escape(code) for code in legal_codes) + ")"
-        result = await self._client.completion(
-            GenerateRequest(
-                model=self.config.model_id,
-                messages=[
-                    Message(role="system", content=build_system_prompt(request, catalog)),
-                    Message(role="user", content=content),
-                ],
-                sampling=SamplingParams(
-                    temperature=0.0,
-                    top_p=1.0,
-                    seed=0,
-                    max_new_tokens=2,
-                    min_new_tokens=2,
-                    ignore_eos=True,
-                    regex=grammar,
-                ),
-                stream=False,
-                max_tokens=2,
-                output_modalities=["text"],
-                metadata=metadata,
+        return GenerateRequest(
+            model=self.config.model_id,
+            messages=[
+                Message(role="system", content=build_system_prompt(request, catalog)),
+                Message(role="user", content=content),
+            ],
+            sampling=SamplingParams(
+                temperature=0.0,
+                top_p=1.0,
+                seed=0,
+                max_new_tokens=2,
+                min_new_tokens=2,
+                ignore_eos=True,
+                regex=grammar,
             ),
-            request_id=request.request_id,
-        )
-        code = str(result.text)
-        # Constrained backends normally return the assigned two-token code, but
-        # some deployments decode control tokens to their canonical candidate
-        # ID (for example ``IB0``). Both identify the same catalog entry.
-        entry = catalog.by_code.get(code) or catalog.by_candidate_id.get(code)
-        if entry is None:
-            raise RuntimeError(f"action model returned code outside constrained catalog: {code!r}")
-        usage = result.usage.to_dict() if result.usage is not None else None
-        return self._decision(
-            request,
-            catalog,
-            entry,
-            started,
-            deterministic=False,
-            reason_code="model_selected",
-            weight_version=result.weight_version,
-            usage=usage,
+            stream=False,
+            max_tokens=2,
+            output_modalities=["text"],
+            metadata=metadata,
         )
 
     def _decision(
@@ -373,6 +529,7 @@ def create_action_decision_app(
                 "model_version": config.model_version,
                 "catalog_version": engine.registry.catalog_version,
                 "mapping_version": engine.registry.mapping_version,
+                "capabilities": ["prefix_prefill_v1"],
             }
         )
 
@@ -384,11 +541,18 @@ def create_action_decision_app(
             raise HTTPException(status_code=413, detail="request body too large")
         try:
             raw = json.loads(body)
-            decision_request = _parse_request(raw, media=())
-            decision = await engine.decide(decision_request)
+            if not isinstance(raw, dict):
+                raise ValueError("action decision payload must be an object")
+            operation = raw.get("operation", "decide")
+            if operation == "prefill":
+                result = await engine.prefill(_parse_prefill_request(raw))
+            elif operation == "decide":
+                result = await engine.decide(_parse_request(raw, media=()))
+            else:
+                raise ValueError(f"unsupported action operation: {operation!r}")
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse(decision.to_dict())
+        return JSONResponse(result.to_dict())
 
     @app.websocket("/v1/action-decision/realtime")
     async def decide_realtime(websocket: WebSocket) -> None:
@@ -404,17 +568,28 @@ def create_action_decision_app(
             request_id = streamed.request_id
             payload = dict(streamed.payload)
             payload.setdefault("request_id", request_id)
-            decision_request = _parse_request(payload, media=streamed.media)
-            decision = await run_until_websocket_disconnect(
-                websocket,
-                engine.decide(decision_request),
-                abort=lambda: client.abort(request_id),
-            )
+            operation = payload.get("operation", "decide")
+            if operation == "prefill":
+                if streamed.media:
+                    raise ValueError("action prefix prefill does not accept media")
+                operation_result = await run_until_websocket_disconnect(
+                    websocket,
+                    engine.prefill(_parse_prefill_request(payload)),
+                    abort=lambda: client.abort(request_id),
+                )
+            elif operation == "decide":
+                operation_result = await run_until_websocket_disconnect(
+                    websocket,
+                    engine.decide(_parse_request(payload, media=streamed.media)),
+                    abort=lambda: client.abort(request_id),
+                )
+            else:
+                raise ValueError(f"unsupported action operation: {operation!r}")
             await websocket.send_json(
                 {
                     "type": "response.completed",
                     "request_id": request_id,
-                    "response": decision.to_dict(),
+                    "response": operation_result.to_dict(),
                 }
             )
         except WebSocketDisconnect:
@@ -480,6 +655,27 @@ def _parse_request(
         turn_origin=_optional_string(raw, "turn_origin") or "user",
         media=media,
     )
+
+
+def _parse_prefill_request(raw: Any) -> ActionPrefixPrefillRequest:
+    if not isinstance(raw, dict):
+        raise ValueError("action prefix prefill payload must be an object")
+    request = ActionPrefixPrefillRequest(
+        request_id=_required_string(raw, "request_id"),
+        session_id=_required_string(raw, "session_id"),
+        channel=DecisionChannel(_required_string(raw, "channel")),
+        language=_optional_string(raw, "language") or "zh-CN",
+        character_prompt=_optional_string(raw, "character_prompt"),
+        session_prompt=_optional_string(raw, "session_prompt"),
+        runtime_context=_object_field(raw, "runtime_context"),
+        allowed_candidate_ids=_string_array(raw, "allowed_candidate_ids"),
+        excluded_candidate_ids=_string_array(raw, "excluded_candidate_ids"),
+    )
+    if request.runtime_context.get("action_candidate_prompt_mode") != "role_pool_v1":
+        raise ValueError(
+            "action prefix prefill requires action_candidate_prompt_mode=role_pool_v1"
+        )
+    return request
 
 
 def _required_string(raw: dict[str, Any], key: str) -> str:
