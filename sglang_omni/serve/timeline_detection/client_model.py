@@ -10,14 +10,16 @@ import logging
 import time
 from collections import Counter, OrderedDict, deque
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE, WindowEvent
 from PIL import Image, ImageOps
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 
 from .artifacts import TimelineArtifactRecorder, observation_records
+from .diagnostics import log_diagnostic
 from .contracts import (
     ObservationEvent,
     TimelineDiscontinuity,
@@ -34,6 +36,7 @@ from .direct_e50 import (
 )
 from .parser import ModelOutputError, parse_event_output
 from .partial30 import PARTIAL30_EVENT_SUMMARIES, PARTIAL30_PROTOCOL
+from .event1115 import EVENT1115_PROTOCOL, event1115_names, parse_event1115_output
 from .catalog import EVENT_ID_SET, OCCURRENCE_EVENT_IDS
 from .prompt import (
     EVENT_SUMMARIES,
@@ -76,6 +79,7 @@ class _WindowWork:
     generation: int
     stream_epoch: int
     window: EventDetectionWindow
+    enqueued_at: float = field(default_factory=time.perf_counter)
 
 
 @dataclass(frozen=True)
@@ -83,7 +87,14 @@ class _ModelFailure:
     error: BaseException
 
 
-_ModelOutput = tuple[ObservationEvent, ...] | _ModelFailure
+_DetectionResult = tuple[ObservationEvent, ...] | DetectionWindow
+_ModelOutput = _DetectionResult | _ModelFailure
+
+
+@dataclass(frozen=True)
+class _QueuedOutput:
+    generation: int
+    output: _ModelOutput
 
 
 class _EventEdgeLatch:
@@ -209,15 +220,27 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline model_version is required")
         if max_attempts <= 0:
             raise ValueError("timeline max_attempts must be positive")
-        if inference_interval_ms not in {1_000, 3_000} or window_ms != 10_000:
+        direct_profile = DirectE50Profile.from_environment()
+        first_hit_1s = direct_profile is not None and direct_profile.protocol == EVENT1115_PROTOCOL
+        allowed_intervals = {500} if first_hit_1s else {1_000, 3_000}
+        if inference_interval_ms not in allowed_intervals or window_ms != 10_000:
+            expected_intervals = ", ".join(
+                str(value) for value in sorted(allowed_intervals)
+            )
             raise ValueError(
-                "the V25 detector requires a 1s or 3s cadence and 10s H/C window"
+                "timeline cadence must be one of "
+                f"[{expected_intervals}] ms with a 10000 ms history window"
             )
         if max_window_bytes <= 0:
             raise ValueError("timeline max_window_bytes must be positive")
         self._client = client
         self._start = start
-        self._direct_e50 = DirectE50Profile.from_environment()
+        self._direct_e50 = direct_profile
+        self._raw_windows = start.result_mode == RAW_WINDOW_MODE
+        if self._raw_windows and self._direct_e50 is None:
+            raise ValueError("raw windows require a direct event model")
+        self._inference_interval_ms = inference_interval_ms
+        self._event1115_names = event1115_names(direct_profile.system_prompt) if first_hit_1s else None
         self.model_id = start.model_id
         self.model_version = model_version
         self.prompt_version = (
@@ -232,23 +255,27 @@ class SglangClientTimelineDetectionModel:
         )
         # V25/R10 was trained with the complete trailing C=(T-3s,T] as the
         # decision range, even though the service is called every second.
-        self._attribution_duration_ms = 3_000
+        self._attribution_duration_ms = 1_000 if first_hit_1s else 3_000
         self._max_attempts = max_attempts
         self._assembler = EventWindowAssembler(
             audio_format=start.audio_format,
-            current_duration_ms=3_000,
-            history_duration_ms=window_ms - 3_000,
+            current_duration_ms=self._attribution_duration_ms,
+            history_duration_ms=window_ms - self._attribution_duration_ms,
+            current_frame_count=2 if first_hit_1s else 6,
+            allow_frame_reuse=True,
+            allow_stale_current_frame_fallback=not first_hit_1s,
             window_stride_ms=inference_interval_ms,
             max_buffer_bytes=max_window_bytes,
             window_event_sink=self._artifacts.record_window_event,
         )
-        self._event_edges = (
+        self._event_edges = None if self._raw_windows else (
             DirectE50FrequencyGate(
                 cooldown_ms=self._direct_e50.cooldown_ms,
                 control_cooldown_ms=self._direct_e50.control_cooldown_ms,
                 confirmation_windows=self._direct_e50.confirmation_windows,
                 rearm_absent_windows=self._direct_e50.rearm_absent_windows,
                 silent_event_ids=self._direct_e50.silent_event_ids,
+                **({"allowed_event_ids": self._direct_e50.allowed_event_ids} if first_hit_1s else {}),
             )
             if self._direct_e50 is not None
             else _EventEdgeLatch(
@@ -264,8 +291,9 @@ class SglangClientTimelineDetectionModel:
         # so those retained frames do not repeat CPU decode/resize/encode work.
         # The cache is instance-local and is cleared on every stream epoch.
         self._normalized_frames: OrderedDict[tuple[int, int], bytes] = OrderedDict()
+        self._decoded_video_frames: OrderedDict[tuple[int, int], Image.Image] = OrderedDict()
         self._windows: asyncio.Queue[_WindowWork] = asyncio.Queue(maxsize=1)
-        self._outputs: asyncio.Queue[_ModelOutput] = asyncio.Queue(maxsize=1)
+        self._outputs: asyncio.Queue[_QueuedOutput] = asyncio.Queue(maxsize=1)
         self._worker: asyncio.Task[None] | None = None
         self._generation = 0
         self._started = False
@@ -341,14 +369,25 @@ class SglangClientTimelineDetectionModel:
                 _WindowWork(self._generation, chunk.stream_epoch, window)
             )
 
-    async def next_observations(self) -> tuple[ObservationEvent, ...]:
-        output = await self._outputs.get()
-        self._outputs.task_done()
+    async def next_observations(self) -> _DetectionResult:
+        while True:
+            queued = await self._outputs.get()
+            self._outputs.task_done()
+            if queued.generation == self._generation:
+                break
+        output = queued.output
         if isinstance(output, _ModelFailure):
             raise RuntimeError("timeline event inference failed") from output.error
         return output
 
     async def discontinuity(self, event: TimelineDiscontinuity) -> None:
+        log_diagnostic(
+            "discontinuity", session_id=self._start.session_id,
+            observer_epoch=self._start.observer_epoch,
+            stream_epoch=event.new_stream_epoch,
+            old_stream_epoch=event.old_stream_epoch, reason=event.reason,
+            pending_windows=self._windows.qsize(),
+        )
         self._artifacts.record_window_event(
             {
                 "status": "discontinuity",
@@ -359,9 +398,11 @@ class SglangClientTimelineDetectionModel:
         )
         self._generation += 1
         self._assembler.clear()
-        self._event_edges.clear()
+        if self._event_edges is not None:
+            self._event_edges.clear()
         self._compatibility.clear()
         self._normalized_frames.clear()
+        self._decoded_video_frames.clear()
         _drain(self._windows)
         _drain(self._outputs)
 
@@ -371,6 +412,7 @@ class SglangClientTimelineDetectionModel:
         self._closed = True
         self._assembler.clear()
         self._normalized_frames.clear()
+        self._decoded_video_frames.clear()
         worker = self._worker
         if worker is not None:
             worker.cancel()
@@ -381,12 +423,18 @@ class SglangClientTimelineDetectionModel:
         await asyncio.to_thread(self._artifacts.close)
 
     def _replace_pending_window(self, work: _WindowWork) -> None:
+        self._log_work("window_enqueued", work)
         try:
             self._windows.put_nowait(work)
             return
         except asyncio.QueueFull:
             replaced = self._windows.get_nowait()
             self._windows.task_done()
+            self._log_work(
+                "window_skipped", replaced, reason="superseded_before_inference",
+                replacement_window_id=work.window.end_ms,
+                queue_wait_ms=(time.perf_counter() - replaced.enqueued_at) * 1000,
+            )
             self._artifacts.record_window_event(
                 {
                     "status": "skipped",
@@ -403,21 +451,41 @@ class SglangClientTimelineDetectionModel:
         try:
             while True:
                 work = await self._windows.get()
+                self._log_work(
+                    "inference_started", work,
+                    queue_wait_ms=(time.perf_counter() - work.enqueued_at) * 1000,
+                )
                 try:
                     observations = await self._detect(work)
                     if work.generation == self._generation:
-                        self._replace_output(observations)
+                        await self._publish_output(work.generation, observations)
+                    else:
+                        self._log_work(
+                            "inference_result_discarded", work,
+                            reason="stream_generation_changed",
+                        )
                 except asyncio.CancelledError:
+                    self._log_work("inference_cancelled", work)
                     raise
                 except BaseException as exc:
+                    self._log_work(
+                        "inference_failed", work, error_type=type(exc).__name__,
+                    )
                     if work.generation == self._generation:
-                        self._replace_output(_ModelFailure(exc))
+                        await self._publish_output(work.generation, _ModelFailure(exc))
                 finally:
                     self._windows.task_done()
         except asyncio.CancelledError:
             raise
 
-    def _replace_output(self, output: _ModelOutput) -> None:
+    async def _publish_output(self, generation: int, result: _ModelOutput) -> None:
+        output = _QueuedOutput(generation, result)
+        if self._raw_windows:
+            await self._outputs.put(output)
+        else:
+            self._replace_legacy_output(output)
+
+    def _replace_legacy_output(self, output: _QueuedOutput) -> None:
         try:
             self._outputs.put_nowait(output)
             return
@@ -426,7 +494,19 @@ class SglangClientTimelineDetectionModel:
             self._outputs.task_done()
         self._outputs.put_nowait(output)
 
-    async def _detect(self, work: _WindowWork) -> tuple[ObservationEvent, ...]:
+    def _log_work(self, stage: str, work: _WindowWork, **fields: Any) -> None:
+        log_diagnostic(
+            stage, session_id=self._start.session_id,
+            observer_epoch=self._start.observer_epoch, stream_epoch=work.stream_epoch,
+            window_id=work.window.end_ms,
+            request_id=(
+                f"timeline:{self._start.session_id}:{self._start.observer_epoch}:"
+                f"{work.stream_epoch}:{work.window.end_ms}"
+            ),
+            **fields,
+        )
+
+    async def _detect(self, work: _WindowWork) -> _DetectionResult:
         last_error: ModelOutputError | None = None
         logical_request_id = (
             f"timeline:{self._start.session_id}:{self._start.observer_epoch}:"
@@ -436,7 +516,10 @@ class SglangClientTimelineDetectionModel:
         frames = (*work.window.history_frames, *work.window.current_frames)
         if self._direct_e50 is not None:
             video_mp4 = encode_hc_video_mp4(
-                frames, fps=self._direct_e50.video_fps
+                frames,
+                fps=self._direct_e50.video_fps,
+                preset="ultrafast" if self._event1115_names is not None else "veryfast",
+                frame_cache=self._decoded_video_frames if self._event1115_names is not None else None,
             )
             image_jpegs: tuple[bytes, ...] = ()
         else:
@@ -470,24 +553,72 @@ class SglangClientTimelineDetectionModel:
                     stream_epoch=work.stream_epoch,
                     attribution_duration_ms=self._attribution_duration_ms,
                 )
-            inference_started = time.perf_counter()
-            result = await self._client.completion(
-                request,
-                request_id=f"{logical_request_id}:{attempt + 1}",
+            self._log_work(
+                "model_request_submitted", work, attempt=attempt + 1,
+                prompt_version=self.prompt_version, model_version=self.model_version,
+                start_ms=work.window.start_ms,
+                current_start_ms=work.window.current_start_ms,
+                first_frame_ms=frames[0].start_ms if frames else None,
+                last_frame_ms=frames[-1].start_ms if frames else None,
+                history_frames=len(work.window.history_frames),
+                current_frames=len(work.window.current_frames),
+                audio_status=work.window.audio_status.value,
+                assembled_audio_start_ms=work.window.audio_start_ms,
+                submitted_audio=bool(request.metadata.get("audios")),
+                submitted_audio_start_ms=request.metadata.get("audio_start_ms"),
+                submitted_videos=len(request.metadata.get("videos", [])),
+                submitted_images=len(request.metadata.get("images", [])),
+                input_build_ms=round(input_build_ms, 1),
             )
+            inference_started = time.perf_counter()
+            self._artifacts.record_attempt_input(
+                stream_epoch=work.stream_epoch, window=work.window,
+                attempt=attempt + 1, request=request,
+                video_mp4=video_mp4, image_jpegs=image_jpegs,
+            )
+            try:
+                result = await self._client.completion(
+                    request,
+                    request_id=f"{logical_request_id}:{attempt + 1}",
+                )
+            except (Exception, asyncio.CancelledError) as exc:
+                self._artifacts.record_attempt_result(
+                    stream_epoch=work.stream_epoch, window=work.window,
+                    attempt=attempt + 1,
+                    result={
+                        "status": "cancelled" if isinstance(exc, asyncio.CancelledError) else "model_failure",
+                        "error_type": type(exc).__name__,
+                        "request_id": f"{logical_request_id}:{attempt + 1}",
+                        "raw_output": None,
+                    },
+                )
+                raise
             inference_ms = (time.perf_counter() - inference_started) * 1_000
             raw_output = str(result.text)
             try:
-                event_ids = (
-                    parse_direct_e50_output(
-                        raw_output,
-                        allowed_event_ids=self._direct_e50.allowed_event_ids,
-                    )
-                    if self._direct_e50 is not None
-                    else parse_event_output(raw_output)
-                )
+                if self._event1115_names is not None:
+                    event_ids = parse_event1115_output(raw_output)
+                elif self._direct_e50 is not None:
+                    event_ids = parse_direct_e50_output(raw_output, allowed_event_ids=self._direct_e50.allowed_event_ids)
+                else:
+                    event_ids = parse_event_output(raw_output)
             except ModelOutputError as exc:
                 last_error = exc
+                self._artifacts.record_attempt_result(
+                    stream_epoch=work.stream_epoch, window=work.window,
+                    attempt=attempt + 1,
+                    result={
+                        "status": "invalid_output", "raw_output": raw_output,
+                        "error_type": type(exc).__name__,
+                        "request_id": f"{logical_request_id}:{attempt + 1}",
+                        "inference_ms": inference_ms,
+                    },
+                )
+                self._log_work(
+                    "inference_invalid_output", work, attempt=attempt + 1,
+                    raw_output=raw_output[:512], error_type=type(exc).__name__,
+                    inference_ms=round(inference_ms, 1),
+                )
                 logger.warning(
                     "timeline invalid output request_id=%s attempt=%d prompt=%s error=%s",
                     logical_request_id,
@@ -520,7 +651,11 @@ class SglangClientTimelineDetectionModel:
                 input_build_ms + inference_ms,
                 raw_output,
             )
-            if self._direct_e50 is not None:
+            if self._raw_windows:
+                frequency_decision = None
+                accepted_event_ids = event_ids
+            elif self._direct_e50 is not None:
+                assert isinstance(self._event_edges, DirectE50FrequencyGate)
                 frequency_decision = self._event_edges.evaluate(
                     event_ids, end_ms=work.window.end_ms
                 )
@@ -533,6 +668,7 @@ class SglangClientTimelineDetectionModel:
                     )
             else:
                 frequency_decision = None
+                assert isinstance(self._event_edges, _EventEdgeLatch)
                 accepted_event_ids = self._compatibility.translate(
                     self._event_edges.accept(event_ids),
                     end_ms=work.window.end_ms,
@@ -547,9 +683,10 @@ class SglangClientTimelineDetectionModel:
                     model_version=self.model_version,
                     prompt_version=self.prompt_version,
                     summary=(
-                        PARTIAL30_EVENT_SUMMARIES[event_id]
-                        if self._direct_e50 is not None
-                        and self._direct_e50.protocol == PARTIAL30_PROTOCOL
+                        self._event1115_names[event_id]
+                        if self._event1115_names is not None
+                        else PARTIAL30_EVENT_SUMMARIES[event_id]
+                        if self._direct_e50 is not None and self._direct_e50.protocol == PARTIAL30_PROTOCOL
                         else None
                     ),
                 )
@@ -562,9 +699,27 @@ class SglangClientTimelineDetectionModel:
                 for event_id, count in suppressed_counts.items()
                 for _ in range(max(0, count))
             ]
+            detection_window = (
+                DetectionWindow(
+                    session_id=self._start.session_id,
+                    identity_epoch=self._start.identity_epoch,
+                    observer_epoch=self._start.observer_epoch,
+                    stream_epoch=work.stream_epoch,
+                    window_sequence=work.window.end_ms // self._inference_interval_ms,
+                    evidence_start_ms=work.window.start_ms,
+                    evidence_end_ms=work.window.end_ms,
+                    model_id=self.model_id,
+                    model_version=self.model_version,
+                    evidence_mode=work.window.evidence_mode,
+                    audio_status=work.window.audio_status.value,
+                    events=tuple(WindowEvent(event.event_type, event.summary) for event in observations),
+                )
+                if self._raw_windows else None
+            )
             artifact_result = {
                 "status": (
-                    "emitted"
+                    "raw_events" if self._raw_windows and event_ids
+                    else "emitted"
                     if accepted_event_ids
                     else "frequency_suppressed"
                     if event_ids
@@ -584,10 +739,33 @@ class SglangClientTimelineDetectionModel:
                     else None
                 ),
                 "weight_version": getattr(result, "weight_version", None),
+                "window_result": detection_window.to_wire() if detection_window is not None else None,
             }
             if frequency_decision is not None:
                 artifact_result["frequency_gate"] = frequency_decision.to_record()
-            if event_ids:
+            self._log_work(
+                "inference_result", work, attempt=attempt + 1,
+                status=artifact_result["status"], raw_output=raw_output[:512],
+                parsed_event_ids=event_ids,
+                accepted_event_ids=list(accepted_event_ids),
+                suppressed_event_ids=suppressed_event_ids,
+                frequency_gate=(
+                    frequency_decision.to_record() if frequency_decision is not None
+                    else None
+                ),
+                input_build_ms=round(input_build_ms, 1),
+                inference_ms=round(inference_ms, 1),
+                total_ms=round(input_build_ms + inference_ms, 1),
+                enqueued_to_result_ms=round(
+                    (time.perf_counter() - work.enqueued_at) * 1000, 1
+                ),
+            )
+            if self._artifacts.record_all:
+                self._artifacts.record_attempt_result(
+                    stream_epoch=work.stream_epoch, window=work.window,
+                    attempt=attempt + 1, result=artifact_result,
+                )
+            elif event_ids:
                 try:
                     self._artifacts.record_event_call(
                         stream_epoch=work.stream_epoch,
@@ -597,9 +775,7 @@ class SglangClientTimelineDetectionModel:
                         video_mp4=video_mp4,
                         image_jpegs=image_jpegs,
                         audio_wav=(
-                            base64.b64decode(
-                                request.metadata["audios"][0].split(",", 1)[1]
-                            )
+                            base64.b64decode(request.metadata["audios"][0].split(",", 1)[1])
                             if request.metadata.get("audios")
                             else None
                         ),
@@ -612,7 +788,15 @@ class SglangClientTimelineDetectionModel:
                         logical_request_id,
                         attempt + 1,
                     )
+            if detection_window is not None:
+                return detection_window
             return observations
+        if self._event1115_names is not None and not self._raw_windows:
+            logger.warning(
+                "timeline window rejected invalid model output request_id=%s",
+                logical_request_id,
+            )
+            return ()
         raise ModelOutputError(
             f"model did not return usable event JSON after {self._max_attempts} "
             f"attempts: {last_error}"

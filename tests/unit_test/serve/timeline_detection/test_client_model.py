@@ -355,7 +355,7 @@ def test_accepts_one_second_sliding_cadence() -> None:
 
 
 def test_rejects_non_event_window_timing() -> None:
-    with pytest.raises(ValueError, match="1s or 3s cadence"):
+    with pytest.raises(ValueError, match=r"\[1000, 3000\] ms"):
         SglangClientTimelineDetectionModel(
             Client([]),
             start(),

@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE, LEGACY_OBSERVATION_MODE
+
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
@@ -21,6 +23,7 @@ from .contracts import (
     TimelineSessionStart,
 )
 from .session import TimelineDetectionModel, TimelineDetectionSession
+from .diagnostics import TimelineIngressDiagnostics
 
 
 TimelineModelFactory = Callable[[TimelineSessionStart], TimelineDetectionModel]
@@ -71,6 +74,8 @@ def create_timeline_detection_app(
         session: TimelineDetectionSession | None = None
         worker: asyncio.Task[None] | None = None
         observation_worker: asyncio.Task[None] | None = None
+        diagnostic_worker: asyncio.Task[None] | None = None
+        diagnostics: TimelineIngressDiagnostics | None = None
         work_queue: asyncio.Queue[_Work] = asyncio.Queue(max_pending_chunks)
         send_lock = asyncio.Lock()
         pending_bytes = 0
@@ -109,8 +114,12 @@ def create_timeline_detection_app(
                     try:
                         if isinstance(work, _MediaWork):
                             await session.append(work.chunk)
+                            if diagnostics is not None:
+                                diagnostics.processed(work.chunk)
                         else:
                             await session.discontinuity(work.event)
+                            if diagnostics is not None:
+                                diagnostics.reset(work.event.new_stream_epoch)
                             if not work.applied.done():
                                 work.applied.set_result(None)
                     except Exception as exc:
@@ -135,8 +144,11 @@ def create_timeline_detection_app(
             try:
                 while True:
                     events = await session.next_observations()
-                    for event in events:
-                        await send_json(_event_to_json(event))
+                    if isinstance(events, DetectionWindow):
+                        await send_json(events.to_wire())
+                    else:
+                        for event in events:
+                            await send_json(_event_to_json(event))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -148,6 +160,11 @@ def create_timeline_detection_app(
             start = _start_from_json(_object(first, "session.start"))
             session = TimelineDetectionSession(start, model_factory(start))
             await session.start()
+            diagnostics = TimelineIngressDiagnostics(start)
+            diagnostic_worker = asyncio.create_task(
+                diagnostics.run(lambda: (work_queue.qsize(), pending_bytes)),
+                name=f"timeline-ingress-diagnostics-{start.session_id}",
+            )
             worker = asyncio.create_task(
                 run_model(),
                 name=f"timeline-media-{start.session_id}",
@@ -165,6 +182,7 @@ def create_timeline_detection_app(
                     "stream_epoch": start.stream_epoch,
                     "next_sequence": start.next_sequence,
                     "contract_version": start.contract_version,
+                    **({"result_mode": RAW_WINDOW_MODE} if start.result_mode == RAW_WINDOW_MODE else {}),
                 }
             )
             while True:
@@ -187,6 +205,7 @@ def create_timeline_detection_app(
                             "timeline pending media queue is full"
                         ) from exc
                     pending_bytes += declared_bytes
+                    diagnostics.received(chunk)
                     await send_json(
                         {
                             "type": "media.ack",
@@ -239,6 +258,14 @@ def create_timeline_detection_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         finally:
+            if diagnostic_worker is not None:
+                diagnostic_worker.cancel()
+                await asyncio.gather(diagnostic_worker, return_exceptions=True)
+            if diagnostics is not None:
+                diagnostics.report(
+                    reason="closed", pending_chunks=work_queue.qsize(),
+                    pending_bytes=pending_bytes,
+                )
             if observation_worker is not None:
                 observation_worker.cancel()
                 await asyncio.gather(observation_worker, return_exceptions=True)
@@ -264,6 +291,7 @@ def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
         observer_epoch=_integer(raw, "observer_epoch"),
         next_sequence=_integer(raw, "next_sequence"),
         contract_version=_integer(raw, "contract_version"),
+        result_mode=raw.get("result_mode", LEGACY_OBSERVATION_MODE),
     )
 
 

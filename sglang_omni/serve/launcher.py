@@ -665,6 +665,34 @@ async def _run_server(
                 ),
                 token=token,
             )
+            if os.environ.get("SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL") == "direct-1115-v1":
+                from sglang_omni.serve.timeline_detection.direct_e50 import (
+                    DirectE50Profile,
+                    build_direct_e50_prefill_request,
+                )
+
+                profile = DirectE50Profile.from_environment()
+
+                async def prewarm_timeline_prefix() -> None:
+                    request_id = "timeline:1115-v1:startup-prefix"
+                    request = build_direct_e50_prefill_request(
+                        profile=profile,
+                        model_id=model_name or pipeline_config.name,
+                        session_id="1115-v1-startup",
+                        logical_request_id=request_id,
+                    )
+                    try:
+                        ready = await asyncio.wait_for(
+                            client.prefill_completion_prefix(request, request_id=request_id),
+                            timeout=60,
+                        )
+                    except TimeoutError:
+                        await client.abort(request_id)
+                        logger.warning("1115_v1 timeline startup prefix prefill timed out")
+                    else:
+                        logger.info("1115_v1 timeline startup prefix prefill ready=%s", ready)
+
+                app.router.add_event_handler("startup", prewarm_timeline_prefix)
         elif service_role == "action-decision":
             from sglang_omni.serve.action_decision.service import (
                 ActionDecisionConfig,

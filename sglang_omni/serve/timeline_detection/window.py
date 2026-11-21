@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .contracts import MediaKind, TimelineMediaChunk
+from .diagnostics import log_diagnostic
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,8 @@ class EventWindowAssembler:
         window_stride_ms: int | None = None,
         current_frame_count: int = 6,
         audio_grace_ms: int = 350,
+        allow_frame_reuse: bool = True,
+        allow_stale_current_frame_fallback: bool = True,
         max_buffer_bytes: int = 32 * 1024 * 1024,
         window_event_sink: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
@@ -77,6 +80,10 @@ class EventWindowAssembler:
         self._window_stride_ms = stride_ms
         self._current_frame_count = current_frame_count
         self._audio_grace_ms = audio_grace_ms
+        self._allow_frame_reuse = allow_frame_reuse
+        self._allow_stale_current_frame_fallback = (
+            allow_stale_current_frame_fallback
+        )
         self._max_buffer_bytes = max_buffer_bytes
         self._window_event_sink = window_event_sink
         self._buffered_bytes = 0
@@ -85,6 +92,8 @@ class EventWindowAssembler:
         self._origin_ms: int | None = None
         self._next_end_ms: int | None = None
         self._session_id: str | None = None
+        self._observer_epoch: int | None = None
+        self._stream_epoch: int | None = None
         self._window_attempts = 0
         self._window_built = 0
         self._window_discarded = 0
@@ -93,6 +102,8 @@ class EventWindowAssembler:
     def append(self, chunk: TimelineMediaChunk) -> tuple[EventDetectionWindow, ...]:
         if self._session_id is None:
             self._session_id = chunk.session_id
+        self._observer_epoch = chunk.observer_epoch
+        self._stream_epoch = chunk.stream_epoch
         if chunk.kind is MediaKind.AUDIO:
             _require_encoding(chunk.encoding, {"pcm16", "pcm_s16le", "audio/l16"})
             self._append_ordered(self._audio, chunk)
@@ -181,10 +192,18 @@ class EventWindowAssembler:
         )
         current_sampling = "exact"
         if current_frames is None:
+            if not self._allow_frame_reuse:
+                self._log_discarded_window(
+                    end_ms=end_ms, reason="insufficient_current_frames",
+                    current_candidates=len(current_candidates), history_candidates=0,
+                )
+                return None
             current_frames, current_sampling = _resample_window_frames(
                 current_candidates,
-                fallback_candidates=tuple(
-                    item for item in self._video if item.start_ms <= end_ms
+                fallback_candidates=(
+                    tuple(item for item in self._video if item.start_ms <= end_ms)
+                    if self._allow_stale_current_frame_fallback
+                    else ()
                 ),
                 start_ms=current_start_ms,
                 end_ms=end_ms,
@@ -201,7 +220,7 @@ class EventWindowAssembler:
                 return None
 
         history_duration_ms = current_start_ms - start_ms
-        history_count = min(14, history_duration_ms // 500)
+        history_count = min(20 - self._current_frame_count, history_duration_ms // 500)
         history_candidates = tuple(
             item
             for item in self._video
@@ -216,6 +235,16 @@ class EventWindowAssembler:
             right_aligned=True,
         )
         history_sampling = "exact"
+        if history_frames is None and not self._allow_frame_reuse:
+            history_frames = _select_nearest_frames(
+                history_candidates,
+                start_ms=start_ms,
+                end_ms=current_start_ms,
+                count=min(history_count, len(history_candidates)),
+                maximum_distance_ms=None,
+                right_aligned=True,
+            )
+            history_sampling = "distinct_available"
         if history_frames is None:
             history_frames, history_sampling = _resample_window_frames(
                 history_candidates,
@@ -257,6 +286,8 @@ class EventWindowAssembler:
         self._record_window_event(
             {
                 "status": "ready",
+                "start_ms": start_ms,
+                "current_start_ms": current_start_ms,
                 "end_ms": end_ms,
                 "current_candidates": len(current_candidates),
                 "current_selected": len(current_frames),
@@ -264,6 +295,16 @@ class EventWindowAssembler:
                 "history_candidates": len(history_candidates),
                 "history_selected": len(history_frames),
                 "history_sampling": history_sampling,
+                "current_selection": _selection_diagnostic(
+                    current_frames, candidates=len(current_candidates),
+                    sampling=current_sampling, start_ms=current_start_ms,
+                    end_ms=end_ms,
+                ),
+                "history_selection": _selection_diagnostic(
+                    history_frames, candidates=len(history_candidates),
+                    sampling=history_sampling, start_ms=start_ms,
+                    end_ms=current_start_ms,
+                ),
                 "evidence_mode": (
                     "audio_video" if audio_wav is not None else "video_only"
                 ),
@@ -345,6 +386,11 @@ class EventWindowAssembler:
         )
 
     def _record_window_event(self, event: dict[str, object]) -> None:
+        log_diagnostic(
+            "window_selection", session_id=self._session_id,
+            observer_epoch=self._observer_epoch, stream_epoch=self._stream_epoch,
+            window_id=event.get("end_ms"), **event,
+        )
         if self._window_event_sink is None:
             return
         try:
@@ -570,6 +616,37 @@ def _resample_window_frames(
         for target in targets
     )
     return selected, "duplicated"
+
+
+def _selection_diagnostic(
+    frames: tuple[TimelineMediaChunk, ...], *, candidates: int,
+    sampling: str, start_ms: int, end_ms: int,
+) -> dict[str, object]:
+    unique = len({(frame.stream_epoch, frame.sequence) for frame in frames})
+    reason = (
+        "no_frames_required" if not frames
+        else "within_target_tolerance" if sampling == "exact"
+        else "no_in_window_frames_borrowed_history" if candidates == 0
+        else "insufficient_distinct_frames" if sampling == "duplicated"
+        else "target_tolerance_relaxed"
+    )
+    return {
+        "reason": reason,
+        "unique_frames": unique,
+        "reused_slots": len(frames) - unique,
+        "outside_window_slots": sum(
+            not (start_ms < frame.start_ms <= end_ms) for frame in frames
+        ),
+        "selected": [
+            {"sequence": frame.sequence, "start_ms": frame.start_ms,
+             "end_ms": frame.end_ms, "stream_epoch": frame.stream_epoch,
+             "target_ms": start_ms + (end_ms - start_ms) * (index + 1) // len(frames),
+             "offset_from_target_ms": frame.start_ms - (
+                 start_ms + (end_ms - start_ms) * (index + 1) // len(frames)
+             )}
+            for index, frame in enumerate(frames)
+        ],
+    }
 
 
 def _parse_audio_format(value: str) -> tuple[int, int]:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE
+
 from .contracts import (
     ObservationEvent,
     TimelineDiscontinuity,
@@ -20,7 +22,7 @@ class TimelineDetectionModel(Protocol):
 
     async def append(self, chunk: TimelineMediaChunk) -> None: ...
 
-    async def next_observations(self) -> tuple[ObservationEvent, ...]: ...
+    async def next_observations(self) -> tuple[ObservationEvent, ...] | DetectionWindow: ...
 
     async def discontinuity(self, event: TimelineDiscontinuity) -> None: ...
 
@@ -57,8 +59,15 @@ class TimelineDetectionSession:
         self._last_sequence = chunk.sequence
         self._max_media_end_ms = accepted_media_end_ms
 
-    async def next_observations(self) -> tuple[ObservationEvent, ...]:
+    async def next_observations(self) -> tuple[ObservationEvent, ...] | DetectionWindow:
         observations = await self._model.next_observations()
+        if isinstance(observations, DetectionWindow):
+            if self._start.result_mode != RAW_WINDOW_MODE:
+                raise ValueError("raw window received in observation mode")
+            self._validate_window(observations)
+            return observations
+        if self._start.result_mode == RAW_WINDOW_MODE:
+            raise ValueError("observation received in raw window mode")
         for observation in observations:
             self._validate_observation(
                 observation,
@@ -99,6 +108,19 @@ class TimelineDetectionSession:
             raise ValueError("timeline chunk has a stale stream epoch")
         if chunk.sequence != self._last_sequence + 1:
             raise ValueError("timeline chunks must be contiguous")
+
+    def _validate_window(self, window: DetectionWindow) -> None:
+        if (
+            window.session_id != self._start.session_id
+            or window.identity_epoch != self._start.identity_epoch
+            or window.observer_epoch != self._start.observer_epoch
+            or window.stream_epoch != self._stream_epoch
+        ):
+            raise ValueError("raw detection window has a stale session or epoch")
+        if window.model_id != self._model.model_id or window.model_version != self._model.model_version:
+            raise ValueError("raw detection window has a different model")
+        if window.evidence_end_ms > self._max_media_end_ms:
+            raise ValueError("raw detection window cites media that the service has not received")
 
     def _validate_observation(
         self,

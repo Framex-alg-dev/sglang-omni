@@ -10,6 +10,7 @@ import wave
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 
 from .catalog import EVENT_SUMMARIES
+from .event1115 import EVENT1115_PROTOCOL
 from .window import EventDetectionWindow
 
 if TYPE_CHECKING:
@@ -67,8 +68,9 @@ def build_partial30_request(
 ) -> GenerateRequest:
     tagged_frames = [*(('H', frame) for frame in window.history_frames),
                      *(('C', frame) for frame in window.current_frames)]
-    if not 6 <= len(tagged_frames) <= 20:
-        raise ValueError("Partial30 requires 6 to 20 ordered native video frames")
+    first_hit_1s = profile.protocol == EVENT1115_PROTOCOL
+    if not (2 if first_hit_1s else 6) <= len(tagged_frames) <= 20:
+        raise ValueError("Invalid number of native timeline video frames")
     rows = [
         f"F{index:02d}|{(frame.start_ms - window.end_ms) / 1000:.3f}|{region}"
         for index, (region, frame) in enumerate(tagged_frames, 1)
@@ -85,6 +87,17 @@ def build_partial30_request(
         + "\n".join(rows)
         + "\n</request_window>\n"
     )
+    if first_hit_1s:
+        request_window = (
+            "<request_window>\n"
+            "时间单位：秒；本轮请求末端为相对时间0。\n"
+            f"实际输入{len(tagged_frames)}帧，目标2fps；H帧{len(window.history_frames)}，"
+            f"C帧{len(window.current_frames)}。\n"
+            "C=(-1,0]为本轮最近1秒；H是更早的已提供历史。完整动作和持续时间用H+C核验，"
+            "只有首次达标点属于C才输出。\n"
+            "按输入顺序给出每帧真实媒体观测时间，不能按压缩视频播放时间判断。\n"
+            "帧号|相对时间|区域\n" + "\n".join(rows) + "\n</request_window>\n"
+        )
     audio = _aligned_audio(window, first_frame_ms)
     content: list[dict[str, str]] = [
         {"type": "text", "text": request_window},
@@ -101,6 +114,9 @@ def build_partial30_request(
     else:
         content.append({"type": "text", "text": "\n【本轮未提供有效音频】"})
     content.append({"type": "text", "text": (
+        "\n结合完整H+C确认事件成立并定位首次达标点，只输出首次达标点属于C的合法E码。"
+        "首次达标点只在H、尚未达到条件或证据不足时输出N。"
+        if first_hit_1s else
         "\n结合完整H+C确认事件成立并定位触发点，只输出触发点属于C的合法E码。"
         "触发点只在H、尚未达到条件或证据不足时输出N。"
     )})
@@ -112,7 +128,7 @@ def build_partial30_request(
         "stream_epoch": stream_epoch, "prompt_version": profile.prompt_version,
         "input_layout": "single_continuous_hc_native_video",
         "frame_manifest": rows,
-        "attribution_duration_ms": 3000,
+        "attribution_duration_ms": 1000 if first_hit_1s else 3000,
         "history_frame_count": len(window.history_frames),
         "current_frame_count": len(window.current_frames),
         "videos": ["data:video/mp4;base64," + base64.b64encode(video_mp4).decode("ascii")],

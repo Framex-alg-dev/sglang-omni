@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from framex_event_policy.windows import LEGACY_OBSERVATION_MODE, RAW_WINDOW_MODE
+
+from .event1115 import EVENT1115_IDS
 from .prompt import EVENT_IDS
 
 
@@ -34,6 +37,7 @@ class TimelineSessionStart:
     observer_epoch: int = 0
     next_sequence: int = 1
     contract_version: int = CONTRACT_VERSION
+    result_mode: str = LEGACY_OBSERVATION_MODE
 
     def __post_init__(self) -> None:
         _required("session_id", self.session_id)
@@ -46,6 +50,8 @@ class TimelineSessionStart:
             raise ValueError("timeline next_sequence must be positive")
         if self.contract_version != CONTRACT_VERSION:
             raise ValueError("unsupported timeline contract version")
+        if self.result_mode not in (LEGACY_OBSERVATION_MODE, RAW_WINDOW_MODE):
+            raise ValueError("unsupported timeline result mode")
 
 
 @dataclass(frozen=True)
@@ -123,7 +129,7 @@ class ObservationEvent:
             raise ValueError("observation evidence range is invalid")
         if self.observer_epoch < 0:
             raise ValueError("timeline observer_epoch must be non-negative")
-        if self.event_type not in EVENT_IDS:
+        if self.event_type not in EVENT_IDS and self.event_type not in EVENT1115_IDS:
             raise ValueError("observation event_type is outside the timeline catalog")
         if self.evidence_mode not in {"audio_video", "video_only"}:
             raise ValueError("observation evidence_mode is invalid")
