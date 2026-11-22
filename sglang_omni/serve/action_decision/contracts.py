@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 from sglang_omni.serve.streaming_request import StreamedMedia
+from sglang_omni.serve.agent_prompt_snapshot import ActionPromptSnapshot
 
 
 class DecisionChannel(str, Enum):
@@ -41,6 +42,8 @@ class ActionDecisionRequest:
     avatar_history_text: str | None = None
     # Explicit next-action request, never an extra catalog definition.
     requested_action: dict[str, str] | None = None
+    # Agent-owned immutable rules. The service only renders request/catalog data.
+    prompt_snapshot: ActionPromptSnapshot | None = None
 
 
 @dataclass(frozen=True)

@@ -103,6 +103,8 @@ class ActionDecisionEngine:
         self._cancelled: OrderedDict[str, None] = OrderedDict()
 
     def _effective_prompt_snapshot(self, request):
+        if request.prompt_snapshot is not None:
+            return dict(request.prompt_snapshot.rules)
         if self._prompt_snapshot is not None:
             return self._prompt_snapshot
         from .prompt import reference_prompt_profile, E67_REFERENCE_PROFILE
@@ -468,13 +470,7 @@ def create_action_decision_app(
     performance_token: str | None = None,
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
-    from contextlib import asynccontextmanager
-    @asynccontextmanager
-    async def lifespan(app):
-        from sglang_omni.serve.prompt_runtime import install_action_runtime
-        await install_action_runtime(app, engine, include_performance=performance_token is not None)
-        yield
-    app = FastAPI(title="sglang-omni-action-decision", version="1", lifespan=lifespan)
+    app = FastAPI(title="sglang-omni-action-decision", version="1")
     app.state.action_decision_engine = engine
 
 
@@ -485,7 +481,8 @@ def create_action_decision_app(
             raise HTTPException(status_code=404, detail="not found")
 
     from sglang_omni.serve.prompt_debug import install_action_debug
-    install_action_debug(app, engine=engine, authenticate=authenticate, parser=_parse_request,
+    install_action_debug(app, engine=engine, authenticate=authenticate,
+                         parser=lambda raw, *, media: _parse_request(raw, media=media, config=config),
                          factory=lambda capture, snapshot: ActionDecisionEngine(capture, config=config, registry=engine.registry, prompt_snapshot=snapshot))
 
     @app.get("/health")
@@ -519,11 +516,11 @@ def create_action_decision_app(
             raise HTTPException(status_code=413, detail="request body too large")
         try:
             raw = json.loads(body)
-            decision_request = _parse_request(raw, media=())
+            decision_request = _parse_request(raw, media=(), config=config)
             decision = await engine.decide(decision_request)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse(decision.to_dict())
+        return JSONResponse(_with_prompt_receipt(decision.to_dict(), decision_request))
 
     @app.websocket("/v1/action-decision/realtime")
     async def decide_realtime(websocket: WebSocket) -> None:
@@ -540,7 +537,7 @@ def create_action_decision_app(
             request_id = streamed.request_id
             payload = dict(streamed.payload)
             payload.setdefault("request_id", request_id)
-            decision_request = _parse_request(payload, media=streamed.media)
+            decision_request = _parse_request(payload, media=streamed.media, config=config)
             decision = await run_until_websocket_disconnect(
                 websocket,
                 engine.decide(decision_request),
@@ -550,7 +547,9 @@ def create_action_decision_app(
                 {
                     "type": "response.completed",
                     "request_id": request_id,
-                    "response": decision.to_dict(),
+                    "response": _with_prompt_receipt(
+                        decision.to_dict(), decision_request
+                    ),
                 }
             )
         except WebSocketDisconnect:
@@ -585,11 +584,12 @@ def create_action_decision_app(
             decision = await engine.decide(decision_request)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse(_recall_response(public_id, decision))
+        return JSONResponse(_recall_response(public_id, decision, decision_request))
 
     def parse_recall(payload: Any, media: tuple[StreamedMedia, ...] = ()):
         decision_request, public_id = parse_simple_audio_request(
             payload, engine.registry, media=media,
+            model_id=config.model_id, model_version=config.model_version,
         )
         mode = payload.get("mode")
         emit_structured_log(
@@ -614,7 +614,7 @@ def create_action_decision_app(
                     await engine.cancel(decision_request.request_id)
                     raise
                 raise ValueError("recall request was cancelled") from None
-            return _recall_response(public_id, decision)
+            return _recall_response(public_id, decision, decision_request)
 
         await serve_streamed_requests(
             websocket, recall, expected_authorization=f"Bearer {config.token}",
@@ -636,8 +636,12 @@ def create_action_decision_app(
     return app
 
 
-def _recall_response(request_id: str, decision: ActionDecision) -> dict[str, Any]:
-    return {
+def _recall_response(
+    request_id: str,
+    decision: ActionDecision,
+    request: ActionDecisionRequest,
+) -> dict[str, Any]:
+    return _with_prompt_receipt({
         "request_id": request_id,
         "channel": decision.channel.value,
         "candidate_id": decision.candidate_id,
@@ -645,6 +649,19 @@ def _recall_response(request_id: str, decision: ActionDecision) -> dict[str, Any
         "label": decision.label,
         "outcome": decision.outcome,
         "occupies_channels": list(decision.occupies_channels),
+    }, request)
+
+
+def _with_prompt_receipt(
+    payload: dict[str, Any], request: ActionDecisionRequest,
+) -> dict[str, Any]:
+    snapshot = request.prompt_snapshot
+    if snapshot is None:
+        return payload
+    return {
+        **payload,
+        "prompt_release_id": snapshot.release_id,
+        "prompt_bundle_sha256": snapshot.bundle_sha256,
     }
 
 
@@ -652,6 +669,7 @@ def _parse_request(
     raw: Any,
     *,
     media: tuple[StreamedMedia, ...],
+    config: ActionDecisionConfig,
 ) -> ActionDecisionRequest:
     if not isinstance(raw, dict):
         raise ValueError("action decision payload must be an object")
@@ -662,6 +680,15 @@ def _parse_request(
     ):
         raise ValueError("assistant audio requires an assistant body-action request")
     runtime_context = _object_field(raw, "runtime_context")
+    from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
+    prompt_snapshot = (
+        decode_action_prompt_snapshot(
+            raw["prompt_snapshot"],
+            model_id=config.model_id,
+            model_version=config.model_version,
+        )
+        if raw.get("prompt_snapshot") is not None else None
+    )
     return ActionDecisionRequest(
         request_id=request_id,
         session_id=_required_string(raw, "session_id"),
@@ -681,6 +708,7 @@ def _parse_request(
         turn_origin=_optional_string(raw, "turn_origin") or "user",
         media=media,
         requested_action=parse_requested_action(raw.get("requested_action")),
+        prompt_snapshot=prompt_snapshot,
         # User-reaction media has no executor timeline. Match the frozen r1
         # text/audio/image renderer without exposing transport frame ordinals
         # as meaningful millisecond evidence. Speech windows retain timing.
@@ -735,7 +763,15 @@ def _outcome(channel: DecisionChannel, candidate_id: str) -> str:
 def _request_digest(request: ActionDecisionRequest) -> str:
     value = {
         "request": {
-            key: (item.value if isinstance(item, DecisionChannel) else item)
+            key: (
+                item.value if isinstance(item, DecisionChannel)
+                else {
+                    "release_id": item.release_id,
+                    "bundle_sha256": item.bundle_sha256,
+                    "system_prompt_sha256": item.system_prompt_sha256,
+                } if key == "prompt_snapshot" and item is not None
+                else item
+            )
             for key, item in request.__dict__.items()
             if key != "media"
         },

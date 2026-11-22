@@ -36,7 +36,12 @@ from .direct_e50 import (
 )
 from .parser import ModelOutputError, parse_event_output
 from .partial30 import PARTIAL30_EVENT_SUMMARIES, PARTIAL30_PROTOCOL
-from .event1115 import EVENT1115_PROTOCOL, event1115_names, parse_event1115_output
+from .event1115 import (
+    EVENT1115_PROTOCOL,
+    event1115_names,
+    event1115_names_from_agent_snapshot,
+    parse_event1115_output,
+)
 from .catalog import EVENT_ID_SET, OCCURRENCE_EVENT_IDS
 from .prompt import (
     EVENT_SUMMARIES,
@@ -220,7 +225,15 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline model_version is required")
         if max_attempts <= 0:
             raise ValueError("timeline max_attempts must be positive")
-        direct_profile = DirectE50Profile.from_environment()
+        direct_profile = (
+            DirectE50Profile.from_environment(
+                start.prompt_snapshot,
+                model_id=start.model_id,
+                model_version=model_version,
+            )
+            if start.prompt_snapshot is not None
+            else DirectE50Profile.from_environment()
+        )
         first_hit_1s = direct_profile is not None and direct_profile.protocol == EVENT1115_PROTOCOL
         allowed_intervals = {500} if first_hit_1s else {1_000, 3_000}
         if inference_interval_ms not in allowed_intervals or window_ms != 10_000:
@@ -240,7 +253,16 @@ class SglangClientTimelineDetectionModel:
         if self._raw_windows and self._direct_e50 is None:
             raise ValueError("raw windows require a direct event model")
         self._inference_interval_ms = inference_interval_ms
-        self._event1115_names = event1115_names(direct_profile.system_prompt) if first_hit_1s else None
+        self._event1115_names = (
+            event1115_names_from_agent_snapshot(
+                direct_profile.system_prompt,
+                start.prompt_snapshot.event_registry_json,
+                start.prompt_snapshot.event_codebook_csv,
+            )
+            if first_hit_1s and start.prompt_snapshot is not None
+            else event1115_names(direct_profile.system_prompt) if first_hit_1s
+            else None
+        )
         self.model_id = start.model_id
         self.model_version = model_version
         self.prompt_version = (
@@ -597,7 +619,10 @@ class SglangClientTimelineDetectionModel:
             raw_output = str(result.text)
             try:
                 if self._event1115_names is not None:
-                    event_ids = parse_event1115_output(raw_output)
+                    event_ids = parse_event1115_output(
+                        raw_output,
+                        allowed_event_ids=frozenset(self._event1115_names),
+                    )
                 elif self._direct_e50 is not None:
                     event_ids = parse_direct_e50_output(raw_output, allowed_event_ids=self._direct_e50.allowed_event_ids)
                 else:

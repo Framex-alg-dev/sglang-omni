@@ -36,3 +36,8 @@ release.
 Use `run_service.sh` after providing a Python environment, model directory, GPU
 selection, and token. The defaults retain the active model identity and port;
 deployment-specific paths can be supplied through environment variables.
+
+For Agent-managed deployments, every recall payload includes a validated
+`prompt_snapshot`. Its policy text is authoritative; this service renders only
+the current channel, persona and allowed catalog beneath it. The bundled prompt
+modules remain a compatibility fallback for older clients and offline tests.

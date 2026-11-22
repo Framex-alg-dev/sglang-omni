@@ -106,18 +106,31 @@ class DirectE50Profile:
     rearm_absent_windows: int = 3
     silent_event_ids: frozenset[str] = DIRECT_E50_SILENT_EVENT_IDS
     protocol: str = DIRECT_E50_PROTOCOL
+    event_ids: frozenset[str] | None = None
 
     @property
     def allowed_event_ids(self) -> frozenset[str]:
         if self.protocol == EVENT1115_PROTOCOL:
-            return frozenset(event1115_names(self.system_prompt))
+            return (
+                self.event_ids
+                if self.event_ids is not None
+                else frozenset(event1115_names(self.system_prompt))
+            )
         return PARTIAL30_EVENT_IDS if self.protocol == PARTIAL30_PROTOCOL else EVENT_ID_SET
 
     @classmethod
-    def from_environment(cls) -> DirectE50Profile | None:
+    def from_environment(
+        cls,
+        prompt_snapshot=None,
+        *,
+        model_id: str | None = None,
+        model_version: str | None = None,
+    ) -> DirectE50Profile | None:
         protocol = os.environ.get(
             "SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL", "v25-alias"
         ).strip()
+        if protocol == "v25-alias" and prompt_snapshot is not None:
+            raise ValueError("Agent timeline prompt requires direct-1115-v1")
         if protocol == "v25-alias":
             return None
         if protocol not in {DIRECT_E50_PROTOCOL, PARTIAL30_PROTOCOL, EVENT1115_PROTOCOL}:
@@ -125,18 +138,36 @@ class DirectE50Profile:
                 "Unsupported SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL"
             )
         native_video = protocol in {PARTIAL30_PROTOCOL, EVENT1115_PROTOCOL}
-        system_prompt = _read_prompt(
-            "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", "system",
-            preserve_whitespace=native_video,
-        )
-        if protocol == EVENT1115_PROTOCOL:
-            event1115_names(system_prompt)
+        if prompt_snapshot is not None:
+            if protocol != EVENT1115_PROTOCOL:
+                raise ValueError("Agent timeline prompt requires direct-1115-v1")
+            if (
+                prompt_snapshot.binding.model_id != model_id
+                or prompt_snapshot.binding.model_version != model_version
+            ):
+                raise ValueError("Agent timeline prompt serving model mismatch")
+            from .event1115 import event1115_names_from_agent_snapshot
+            system_prompt = prompt_snapshot.system_prompt
+            agent_event_names = event1115_names_from_agent_snapshot(
+                system_prompt,
+                prompt_snapshot.event_registry_json,
+                prompt_snapshot.event_codebook_csv,
+            )
+        else:
+            system_prompt = _read_prompt(
+                "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", "system",
+                preserve_whitespace=native_video,
+            )
+            if protocol == EVENT1115_PROTOCOL:
+                local_event_names = event1115_names(system_prompt)
         user_prompt = "" if native_video else _read_prompt(
             "SGLANG_OMNI_TIMELINE_USER_PROMPT_PATH", "user"
         )
-        prompt_version = os.environ.get(
-            "SGLANG_OMNI_TIMELINE_PROMPT_VERSION", ""
-        ).strip()
+        prompt_version = (
+            prompt_snapshot.release_id
+            if prompt_snapshot is not None
+            else os.environ.get("SGLANG_OMNI_TIMELINE_PROMPT_VERSION", "").strip()
+        )
         if not prompt_version:
             raise ValueError("direct-e50 requires a timeline prompt version")
         return cls(
@@ -144,6 +175,13 @@ class DirectE50Profile:
             user_prompt=user_prompt,
             prompt_version=prompt_version,
             protocol=protocol,
+            event_ids=(
+                frozenset(agent_event_names)
+                if prompt_snapshot is not None
+                else frozenset(local_event_names)
+                if protocol == EVENT1115_PROTOCOL
+                else None
+            ),
             max_tokens=_positive_int("SGLANG_OMNI_TIMELINE_MAX_TOKENS", 128 if native_video else 8),
             video_max_pixels=137625 if native_video else 130000,
             cooldown_ms=_positive_int(

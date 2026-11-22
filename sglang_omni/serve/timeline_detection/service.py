@@ -183,6 +183,13 @@ def create_timeline_detection_app(
                     "next_sequence": start.next_sequence,
                     "contract_version": start.contract_version,
                     **({"result_mode": RAW_WINDOW_MODE} if start.result_mode == RAW_WINDOW_MODE else {}),
+                    **(
+                        {
+                            "prompt_release_id": start.prompt_snapshot.release_id,
+                            "prompt_bundle_sha256": start.prompt_snapshot.bundle_sha256,
+                        }
+                        if start.prompt_snapshot is not None else {}
+                    ),
                 }
             )
             while True:
@@ -281,17 +288,31 @@ def create_timeline_detection_app(
 def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
     if raw.get("type") != "session.start":
         raise ValueError("first message must be session.start")
+    from sglang_omni.serve.agent_prompt_snapshot import decode_timeline_prompt_snapshot
+    model_id = _string(raw, "model_id")
+    prompt_snapshot = (
+        decode_timeline_prompt_snapshot(raw["prompt_snapshot"], model_id=model_id)
+        if raw.get("prompt_snapshot") is not None else None
+    )
+    if prompt_snapshot is not None:
+        from .event1115 import event1115_names_from_agent_snapshot
+        event1115_names_from_agent_snapshot(
+            prompt_snapshot.system_prompt,
+            prompt_snapshot.event_registry_json,
+            prompt_snapshot.event_codebook_csv,
+        )
     return TimelineSessionStart(
         session_id=_string(raw, "session_id"),
         identity_epoch=_integer(raw, "identity_epoch"),
         stream_epoch=_integer(raw, "stream_epoch"),
         audio_format=_string(raw, "audio_format"),
         video_format=_string(raw, "video_format"),
-        model_id=_string(raw, "model_id"),
+        model_id=model_id,
         observer_epoch=_integer(raw, "observer_epoch"),
         next_sequence=_integer(raw, "next_sequence"),
         contract_version=_integer(raw, "contract_version"),
         result_mode=raw.get("result_mode", LEGACY_OBSERVATION_MODE),
+        prompt_snapshot=prompt_snapshot,
     )
 
 

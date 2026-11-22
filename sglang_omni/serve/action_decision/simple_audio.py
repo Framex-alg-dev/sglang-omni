@@ -35,9 +35,9 @@ from .requested_action import parse_requested_action
 
 
 _FIELDS = {"text", "audio", "audio_source", "channel", "character_prompt", "allowed_candidate_ids",
-           "context_audio", "user_context", "user_context_audio", "last_dispatched_action", "request_id", "requested_action"}
+           "context_audio", "user_context", "user_context_audio", "last_dispatched_action", "request_id", "requested_action", "prompt_snapshot"}
 MAX_RECALL_AUDIO_BYTES = 2 * 1024 * 1024
-_COMMON_FIELDS = {"channel", "character_prompt", "allowed_candidate_ids", "last_dispatched_action", "request_id", "requested_action"}
+_COMMON_FIELDS = {"channel", "character_prompt", "allowed_candidate_ids", "last_dispatched_action", "request_id", "requested_action", "prompt_snapshot"}
 _NAMED_FIELDS = {"mode", "user_input", "avatar_current", "avatar_history"}
 
 
@@ -172,6 +172,7 @@ def _clip(raw: Any, *, role: str, start: int) -> StreamedMedia:
 
 def parse_simple_audio_request(
     raw: Any, registry: ActionCatalogRegistry, *, media: tuple[StreamedMedia, ...] = (),
+    model_id: str | None = None, model_version: str | None = None,
 ) -> tuple[ActionDecisionRequest, str]:
     if not isinstance(raw, dict):
         raise ValueError("audio recall payload must be an object")
@@ -244,12 +245,22 @@ def parse_simple_audio_request(
         context.update(response_id=internal_id, output_epoch=0)
         if current_text is None:
             context["speech_window"] = {"window_id": "focus", "start_ms": focus.start_ms, "end_ms": focus.end_ms}
+    from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
+    if raw.get("prompt_snapshot") is not None and (not model_id or not model_version):
+        raise ValueError("action prompt_snapshot requires the serving model binding")
+    prompt_snapshot = (
+        decode_action_prompt_snapshot(
+            raw["prompt_snapshot"], model_id=model_id, model_version=model_version,
+        )
+        if raw.get("prompt_snapshot") is not None else None
+    )
     req = ActionDecisionRequest(
         request_id=internal_id, session_id=internal_id, turn_id=internal_id, decision_point_id=internal_id,
         channel=channel, text=user_text if text_request else user_context, character_prompt=persona,
         allowed_candidate_ids=tuple(ids), runtime_context=context, media=tuple(clips), simple_audio=True,
         avatar_current_text=current_text, avatar_history_text=history_text,
         requested_action=requested_action,
+        prompt_snapshot=prompt_snapshot,
     )
     if ids or previous is not None:
         # Preserve the deployed transport-code adapter; model identities remain

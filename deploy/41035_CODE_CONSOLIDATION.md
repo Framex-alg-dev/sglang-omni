@@ -31,6 +31,23 @@ their external interfaces.
 5. `framex_event_policy` 0.1.1 source extracted from the exact wheel consumed
    by the 41035 Agent. The wheel SHA-256 is
    `3e48594da60fe35b12fd8a99bf0cbd05d3e472f53c47315db0e207a9a03308d8`.
+6. Agent-owned prompt snapshot consumption for Action and Event. Action accepts
+   the immutable snapshot on both `/v1/action-decision` and
+   `/v1/action-recall`; Event accepts it in `session.start` and acknowledges
+   the exact release and bundle hash in `session.ready`. Both consumers reject
+   model/protocol binding or content-hash drift before inference.
+
+## Prompt ownership
+
+- Reply prompt assembly is already supplied by the Agent Reply snapshot path.
+- Action policy text is supplied by the Agent. sglang-omni only appends
+  request-scoped persona, channel and catalog data. Legacy callers without a
+  snapshot retain the captured local prompt fallback during migration.
+- Event system prompt, E0..E95 registry and CSV codebook are one Agent-owned
+  snapshot. The service validates all three together and uses that snapshot for
+  the session model profile; reconnects must carry the same snapshot.
+- sglang-omni no longer downloads the Action prompt release independently at
+  service startup. Release selection and pinning belong to the Agent process.
 
 ## Deliberately excluded
 

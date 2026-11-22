@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from framex_event_policy.windows import LEGACY_OBSERVATION_MODE, RAW_WINDOW_MODE
+from sglang_omni.serve.agent_prompt_snapshot import TimelinePromptSnapshot
 
 from .event1115 import EVENT1115_IDS
 from .prompt import EVENT_IDS
@@ -38,6 +39,7 @@ class TimelineSessionStart:
     next_sequence: int = 1
     contract_version: int = CONTRACT_VERSION
     result_mode: str = LEGACY_OBSERVATION_MODE
+    prompt_snapshot: TimelinePromptSnapshot | None = None
 
     def __post_init__(self) -> None:
         _required("session_id", self.session_id)

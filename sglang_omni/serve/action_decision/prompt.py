@@ -103,7 +103,7 @@ def _reference_system_prompt(profile: str) -> str:
 
 def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog, *, prompt_snapshot: dict[str, str] | None = None) -> str:
     prompt = _build_system_prompt(request, catalog, prompt_snapshot=prompt_snapshot)
-    if request.requested_action is not None:
+    if request.requested_action is not None and prompt_snapshot is None:
         from .requested_action import REQUESTED_ACTION_RULES
         from .speech_window import PERSONA_AUDIO_PROFILE
         if request.runtime_context.get("prompt_profile") != PERSONA_AUDIO_PROFILE:
@@ -145,6 +145,8 @@ def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalo
     ):
         raise ValueError("action decision text fields must not contain NUL")
     profile = reference_prompt_profile(request)
+    if prompt_snapshot is not None and set(prompt_snapshot) != {"system_prompt"}:
+        raise ValueError("invalid Agent action prompt snapshot")
     if profile is not None:
         if prompt_snapshot is not None:
             if profile != E67_REFERENCE_PROFILE or set(prompt_snapshot)!={"system_prompt"}:
@@ -164,7 +166,17 @@ def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalo
             context.extend(("[SESSION_POLICY]", request.session_prompt))
         return "\n\n".join(context)
     if request.runtime_context.get("prompt_profile") in PERSONA_PROFILES:
-        return build_persona_system_prompt(request, catalog)
+        return build_persona_system_prompt(
+            request,
+            catalog,
+            agent_system_prompt=(
+                prompt_snapshot["system_prompt"] if prompt_snapshot is not None else None
+            ),
+        )
+    if prompt_snapshot is not None:
+        return _build_agent_system_prompt(
+            request, catalog, prompt_snapshot["system_prompt"]
+        )
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [
@@ -197,6 +209,45 @@ def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalo
             f"{entry.code} | {entry.candidate_id} | {entry.label} | {entry.definition}"
         )
     lines.append(prompt_snapshot["final_constraints"] if prompt_snapshot is not None else E57_FINAL_TASK_CONSTRAINTS)
+    return "\n".join(lines)
+
+
+def _build_agent_system_prompt(
+    request: ActionDecisionRequest,
+    catalog: ResolvedCatalog,
+    system_prompt: str,
+) -> str:
+    """Combine Agent-owned policy with only request-scoped trusted data."""
+    target = "body" if request.channel is DecisionChannel.BODY else "expression"
+    marker = "[ACTION_CATALOG]" if request.channel is DecisionChannel.BODY else "[EXPRESSION_CATALOG]"
+    lines = [
+        system_prompt,
+        "[TRUSTED_RUNTIME_CONTEXT]",
+        json.dumps(
+            {
+                "active_channel": target,
+                "turn_origin": request.turn_origin,
+                "language": request.language,
+                "catalog_version": catalog.catalog_version,
+                "mapping_sha256": catalog.mapping_hash,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    ]
+    if request.character_prompt:
+        lines.extend(("[CHARACTER_PERSONA]", request.character_prompt))
+    if request.session_prompt:
+        lines.extend(("[SESSION_CONTEXT]", request.session_prompt))
+    lines.extend((
+        marker,
+        "格式：code | candidate_id | 名称 | 定义",
+    ))
+    lines.extend(
+        f"{entry.code} | {entry.candidate_id} | {entry.label} | {entry.definition}"
+        for entry in catalog.entries
+    )
     return "\n".join(lines)
 
 

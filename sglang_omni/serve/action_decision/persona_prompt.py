@@ -360,7 +360,12 @@ def _build_body_system_prompt(
     return _build_simple_body_system_prompt(request, catalog, usage)
 
 
-def build_persona_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
+def build_persona_system_prompt(
+    request: ActionDecisionRequest,
+    catalog: ResolvedCatalog,
+    *,
+    agent_system_prompt: str | None = None,
+) -> str:
     mode = catalog.runtime_context["decision_mode"]
     profile = catalog.runtime_context["prompt_profile"]
     audio_profile = profile == PERSONA_AUDIO_PROFILE
@@ -368,6 +373,10 @@ def build_persona_system_prompt(request: ActionDecisionRequest, catalog: Resolve
     real_body = audio_profile and body
     usage = load_body_usage_scenarios() if real_body else load_usage_scenarios()
     usage.validate_catalog(catalog)
+    if agent_system_prompt is not None:
+        return _build_agent_persona_system_prompt(
+            request, catalog, usage, agent_system_prompt
+        )
     if real_body:
         return _build_body_system_prompt(request, catalog, usage)
     if audio_profile and request.channel is DecisionChannel.EXPRESSION:
@@ -405,6 +414,51 @@ def build_persona_system_prompt(request: ActionDecisionRequest, catalog: Resolve
         "[FINAL_CHECK]",
         "只在内部确认：目标是否真实、候选是否匹配、状态是否允许、人设是否合适、是否重复；然后只输出一个合法两-token code。",
     ))
+    return "\n".join(lines)
+
+
+def _build_agent_persona_system_prompt(
+    request: ActionDecisionRequest,
+    catalog: ResolvedCatalog,
+    usage: UsageScenarioCatalog,
+    system_prompt: str,
+) -> str:
+    """Render changing persona/catalog facts under Agent-owned policy text."""
+    body = request.channel is DecisionChannel.BODY
+    lines = [
+        system_prompt,
+        "[TRUSTED_RUNTIME_CONTEXT]",
+        _json({
+            "active_channel": request.channel.value,
+            "decision_mode": catalog.runtime_context["decision_mode"],
+            "prompt_profile": catalog.runtime_context["prompt_profile"],
+            "turn_origin": request.turn_origin,
+            "language": request.language,
+            "catalog_version": catalog.catalog_version,
+            "mapping_sha256": catalog.mapping_hash,
+        }),
+        "[CHARACTER_PERSONA]",
+        quoted_text(_body_persona_description(request.character_prompt))
+        if body else quoted_text(request.character_prompt),
+    ]
+    if request.session_prompt:
+        lines.extend(("[SESSION_CONTEXT]", quoted_text(request.session_prompt)))
+    if body:
+        lines.extend((
+            "[ACTION_CATALOG]",
+            "格式：code | 动作名 | 动作定义 | 主动表达场景及排除条件 | 易混边界",
+        ))
+        lines.extend(_compact_catalog_row(entry, catalog, usage) for entry in catalog.entries)
+    else:
+        from .expression_prompt import _compact_expression_row
+        lines.extend((
+            "[EXPRESSION_CATALOG]",
+            "格式：code | 表情名 | 表情定义 | 主动表达场景及排除条件 | 易混边界",
+        ))
+        lines.extend(
+            _compact_expression_row(entry, catalog, usage)
+            for entry in catalog.entries
+        )
     return "\n".join(lines)
 
 
