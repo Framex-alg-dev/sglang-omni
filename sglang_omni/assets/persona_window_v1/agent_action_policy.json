@@ -1,0 +1,21 @@
+{
+  "schema_version": "action-agent-policy-v1",
+  "description": "Trusted orchestrator events that are allowed to extend the normal product action catalog.",
+  "bindings": {
+    "agent.search.started": {
+      "description": "Agent starts a search and the avatar opens the result panel/screen.",
+      "inject_candidate_ids": [
+        "481"
+      ],
+      "runtime_context": {
+        "agent_event": "agent.search.started",
+        "agent_task": "search",
+        "agent_phase": "started",
+        "tool_status": "running",
+        "display_state": "open_search_panel",
+        "required_action_candidate_id": "481",
+        "required_action_semantics": "拉开面板（产品语义：展开屏幕）"
+      }
+    }
+  }
+}

@@ -12,7 +12,6 @@ from sglang_omni.serve.action_decision.catalog import ActionCatalogRegistry
 from sglang_omni.serve.action_decision.contracts import (
     ActionDecision,
     ActionDecisionRequest,
-    ActionPrefixPrefillRequest,
     DecisionChannel,
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
@@ -108,6 +107,7 @@ def test_catalog_partitions_body_and_expression_and_controls() -> None:
     } == {"000", "IF0"}
 
 
+@pytest.mark.skip(reason="V10 runtime validates candidate subsets without legacy role_pool_v1")
 def test_role_pool_body_catalog_keeps_explicit_expression_actions() -> None:
     catalog = _registry().resolve(
         _request(
@@ -255,6 +255,7 @@ def test_e67_reference_profile_uses_frozen_v116_training_prompt() -> None:
     )
 
 
+@pytest.mark.skip(reason="V10 runtime validates candidate subsets without legacy role_pool_v1")
 def test_e67_role_pool_prompt_filters_catalog_without_appending_a_constraint() -> None:
     request = _request(
         DecisionChannel.BODY,
@@ -277,6 +278,7 @@ def test_e67_role_pool_prompt_filters_catalog_without_appending_a_constraint() -
     assert "本轮仅这些动作可用" not in prompt
 
 
+@pytest.mark.skip(reason="V10 action-recall no longer exposes legacy prefix-prefill")
 def test_role_pool_prefill_is_deduplicated_by_exact_prompt_and_catalog() -> None:
     async def run():
         client = _FakeClient()
@@ -510,6 +512,7 @@ def test_websocket_service_accepts_text_request() -> None:
     assert response["response"]["channel"] == "body"
 
 
+@pytest.mark.skip(reason="V10 action-recall no longer exposes legacy prefix-prefill")
 def test_websocket_service_accepts_role_pool_prefill() -> None:
     client = _FakeClient()
     app = create_action_decision_app(client, config=_config())

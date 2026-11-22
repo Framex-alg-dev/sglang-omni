@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .catalog import ResolvedCatalog
 from .contracts import ActionDecisionRequest, DecisionChannel
+from .speech_window import PERSONA_PROFILES
+from .persona_prompt import build_persona_system_prompt, build_persona_user_prompt
 
 
 MAX_CHARACTER_PROMPT_CHARS = 32_000
@@ -28,7 +30,6 @@ REFERENCE_SYSTEM_PROMPT_PATHS = {
     E66_REFERENCE_PROFILE: E66_REFERENCE_SYSTEM_PROMPT_PATH,
     E67_REFERENCE_PROFILE: E67_REFERENCE_SYSTEM_PROMPT_PATH,
 }
-ROLE_POOL_PROMPT_MODE = "role_pool_v1"
 
 
 # E57-A was trained with this action-selection protocol. Keep the stable rules
@@ -100,7 +101,35 @@ def _reference_system_prompt(profile: str) -> str:
     return prompt
 
 
-def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
+def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog, *, prompt_snapshot: dict[str, str] | None = None) -> str:
+    prompt = _build_system_prompt(request, catalog, prompt_snapshot=prompt_snapshot)
+    if request.requested_action is not None:
+        from .requested_action import REQUESTED_ACTION_RULES
+        from .speech_window import PERSONA_AUDIO_PROFILE
+        if request.runtime_context.get("prompt_profile") != PERSONA_AUDIO_PROFILE:
+            raise ValueError("requested_action requires persona-audio-window-v2")
+        # This is an explicit target, not a natural reaction selection.
+        # Reuse the exact output protocol, persona and catalog, while replacing
+        # the competing natural-reaction task instead of stacking priorities.
+        body = request.channel is DecisionChannel.BODY
+        marker = "[ACTION_CATALOG]" if body else "[EXPRESSION_CATALOG]"
+        before, catalog_text = prompt.rsplit("\n" + marker + "\n", 1)
+        persona = before.split("[CHARACTER_PERSONA]\n", 1)[1]
+        if body:
+            from .persona_prompt import SIMPLE_BODY_OUTPUT_RULES
+            output_rules = SIMPLE_BODY_OUTPUT_RULES
+        else:
+            from .expression_prompt import SIMPLE_EXPRESSION_OUTPUT_RULES
+            output_rules = SIMPLE_EXPRESSION_OUTPUT_RULES
+        prompt = "\n".join((output_rules, "[TASK requested_action]",
+                              "只匹配 USER_REQUESTED_ACTION 指定的下一刻明确目标，不根据对话或讲话背景另选自然反应。",
+                              REQUESTED_ACTION_RULES,
+                              "[CHARACTER_PERSONA]", persona,
+                              marker, catalog_text))
+    return prompt
+
+
+def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog, *, prompt_snapshot: dict[str, str] | None = None) -> str:
     if (
         request.character_prompt
         and len(request.character_prompt) > MAX_CHARACTER_PROMPT_CHARS
@@ -117,22 +146,29 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         raise ValueError("action decision text fields must not contain NUL")
     profile = reference_prompt_profile(request)
     if profile is not None:
-        prompt_mode = request.runtime_context.get("action_candidate_prompt_mode")
-        if prompt_mode is not None:
-            if prompt_mode != ROLE_POOL_PROMPT_MODE:
-                raise ValueError(
-                    f"unsupported action_candidate_prompt_mode: {prompt_mode!r}"
-                )
-            if profile != E67_REFERENCE_PROFILE:
-                raise ValueError(
-                    "role_pool_v1 is only supported by the E67 reference prompt"
-                )
-            return _filtered_reference_system_prompt(profile, catalog)
-        return _reference_system_prompt(profile)
+        if prompt_snapshot is not None:
+            if profile != E67_REFERENCE_PROFILE or set(prompt_snapshot)!={"system_prompt"}:
+                raise ValueError("invalid E67 prompt snapshot")
+            base = prompt_snapshot["system_prompt"]
+        else:
+            base = _reference_system_prompt(profile)
+        if not request.character_prompt and not request.session_prompt:
+            return base
+        context = [base, "[TRUSTED_CHARACTER_BEHAVIOR]",
+            "以下角色行为规则约束当前身体动作的选择、克制度和禁止项。只决定身体动作通道；"
+            "角色背景不是用户本轮的新请求。遵守本轮明确请求和宿主的动作候选／通道约束，"
+            "普通伴随动作按角色行为规则选择，也可不做动作。仍只输出原协议要求的一个合法两-token code。"]
+        if request.character_prompt:
+            context.append(request.character_prompt)
+        if request.session_prompt:
+            context.extend(("[SESSION_POLICY]", request.session_prompt))
+        return "\n\n".join(context)
+    if request.runtime_context.get("prompt_profile") in PERSONA_PROFILES:
+        return build_persona_system_prompt(request, catalog)
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [
-        E57_SYSTEM_RULES,
+        prompt_snapshot["system_rules"] if prompt_snapshot is not None else E57_SYSTEM_RULES,
         "[ACTIVE_CHANNEL]",
         f"本次只决定{target}通道；另一通道由一次独立模型调用决定。",
         f"没有充分证据改变本通道时选择 {neutral}。",
@@ -160,82 +196,47 @@ def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog
         lines.append(
             f"{entry.code} | {entry.candidate_id} | {entry.label} | {entry.definition}"
         )
-    lines.append(E57_FINAL_TASK_CONSTRAINTS)
+    lines.append(prompt_snapshot["final_constraints"] if prompt_snapshot is not None else E57_FINAL_TASK_CONSTRAINTS)
     return "\n".join(lines)
 
 
-def _filtered_reference_system_prompt(
-    profile: str,
-    catalog: ResolvedCatalog,
-) -> str:
-    source = _reference_system_prompt(profile)
-    lines = source.splitlines()
-    try:
-        catalog_index = lines.index("[ACTION_CATALOG]")
-    except ValueError as exc:
-        raise ValueError(f"{profile} reference prompt has no ACTION_CATALOG") from exc
-
-    legal_by_code = {entry.code: entry for entry in catalog.entries}
-    retained = lines[: catalog_index + 1]
-    pending_category: str | None = None
-    found_action_codes: set[str] = set()
-    for line in lines[catalog_index + 1 :]:
-        if line.startswith("类别："):
-            pending_category = line
-            continue
-        code = _reference_catalog_code(line)
-        if code is None:
-            pending_category = None
-            retained.append(line)
-            continue
-        entry = legal_by_code.get(code)
-        if entry is None:
-            continue
-        if entry.kind == "action":
-            if pending_category is not None:
-                retained.append(pending_category)
-            found_action_codes.add(code)
-        pending_category = None
-        retained.append(line)
-
-    expected_action_codes = {
-        entry.code for entry in catalog.entries if entry.kind == "action"
-    }
-    missing = sorted(expected_action_codes - found_action_codes)
-    if missing:
-        raise ValueError(
-            "role action candidates are absent from the E67 reference prompt: "
-            + ", ".join(missing)
-        )
-    suffix = "\n" if source.endswith("\n") else ""
-    return "\n".join(retained) + suffix
-
-
-def _reference_catalog_code(line: str) -> str | None:
-    head, separator, _ = line.partition(" | ")
-    if not separator or not head or any(character.isspace() for character in head):
-        return None
-    return head
-
-
 def build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
+    prompt = _build_user_prompt(request, catalog)
+    if request.requested_action is not None:
+        from .requested_action import requested_action_user_section
+        background = prompt.rsplit("\n[FINAL_TASK]\n", 1)[0].rstrip()
+        catalog = "ACTION_CATALOG" if request.channel is DecisionChannel.BODY else "EXPRESSION_CATALOG"
+        prompt = (requested_action_user_section(request.requested_action) +
+                  "\n[CONVERSATION_BACKGROUND]\n" + background +
+                  "\n[FINAL_TASK]\n按 USER_REQUESTED_ACTION 的名称和定义匹配下一刻明确目标。" +
+                  f"从 {catalog} 中选择能真正完成该目标的一项；没有匹配项选择000。只输出所选项的 code。")
+    return prompt
+
+
+def _build_user_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog) -> str:
     media_kinds = [item.kind for item in request.media]
+    if request.runtime_context.get("prompt_profile") in PERSONA_PROFILES:
+        return build_persona_user_prompt(request, catalog)
     if uses_reference_prompt(request):
         image_count = sum(kind in {"image", "video"} for kind in media_kinds)
         has_audio = "audio" in media_kinds
         parts = []
+        assistant = request.turn_origin == "assistant"
         if image_count:
             parts.append("user_video：按时间顺序提供的用户侧画面；不是数字人输出画面。")
         if has_audio:
-            parts.append("user_audio：这是本轮用户原始音频，请直接理解语义和语气。")
+            parts.append("assistant_audio：这是数字人本轮正在表达的回复音频片段。" if assistant else
+                         "user_audio：这是本轮用户原始音频，请直接理解语义和语气。")
         if request.text and not has_audio:
-            parts.append(f"typed_user_text：{request.text}")
+            parts.append(f"assistant_reply_text：{request.text}" if assistant else f"typed_user_text：{request.text}")
+        if assistant and request.reply_prefix:
+            parts.append(f"previous_reply_context：{request.reply_prefix}")
         parts.extend(
             (
                 "[RUNTIME_CONTEXT]",
                 "source=trusted_orchestrator",
-                "turn_origin=user",
-                "trigger=user_input",
+                f"turn_origin={request.turn_origin}",
+                "trigger=assistant_reply_window" if assistant else "trigger=user_input",
                 "现在只输出一个合法的两-token动作 code。",
             )
         )

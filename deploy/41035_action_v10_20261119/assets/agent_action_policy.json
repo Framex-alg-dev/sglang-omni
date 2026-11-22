@@ -1,0 +1,5 @@
+{
+  "schema_version": "action-agent-policy-v1",
+  "description": "No injected candidates in the isolated review registry.",
+  "bindings": {}
+}

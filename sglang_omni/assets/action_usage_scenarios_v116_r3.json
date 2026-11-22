@@ -1,0 +1,3767 @@
+{
+  "schema_version": 2,
+  "version": "v116-body-scenes-r3",
+  "review_status": "draft",
+  "base_catalog_version": "dmd-action1000-reviewed-116",
+  "base_catalog_hash": "sha256:fb9e61fafb987c5dad16a24140b2de7a5e10d0e49a35521a601736659154a89c",
+  "base_catalog_file_sha256": "76b8267d77c1fb1ff90ab871d758b87c30cfbd5a031988f3ebf31b2739277b67",
+  "mapping_sha256": "sha256:dc9986c06a1e679c64567f1e69900565936c351ea5767d69b1285573976bf33b",
+  "references": {
+    "genesis1_limited": {
+      "repository_snapshot": "sglang-omni-genesis1.0-5ea5e5e5",
+      "path": "sglang_omni/assets/character_limited_action_global_catalog.json",
+      "sha256": "e337b62978aac69212dd221f2e5946ed2fa084f40cc91affb60435bc690808a6"
+    },
+    "genesis1_full": {
+      "repository_snapshot": "sglang-omni-genesis1.0-5ea5e5e5",
+      "path": "sglang_omni/assets/character_action_global_catalog.json",
+      "sha256": "a290ff44726133b4a8eb6fed06ee73d557f8e4d894ca2d6c73225bf4acd3382c"
+    }
+  },
+  "note": "Local body scene revision. Explicit evidence and exclusions enter model rows. Physical identities are unchanged; expression rows remain r2. Authored scenarios, not approved training labels or measured quality claims.",
+  "entries": [
+    {
+      "candidate_id": "106",
+      "label": "放松坐姿",
+      "category_id": "10",
+      "code": "_c_g",
+      "token_ids": [
+        666,
+        1889
+      ],
+      "meaning": "松弛、放松的坐姿",
+      "distinction": "依赖可用椅背和当前坐姿；不替代站姿或躺下",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色已坐下且允许松弛，表达舒缓或应要求放松坐姿；非所有轻松聊天的默认姿态",
+      "required_evidence": "明确坐姿动作目标以合法目录与已知硬约束为准；自然伴随需可确认坐姿、椅背与松弛表达",
+      "applicable_scenarios": [
+        "结束紧张话题后放松靠坐",
+        "在椅上演示正式坐姿与放松坐姿的区别"
+      ],
+      "negative_scenarios": [
+        "用户说自己坐累了并不证明角色正坐着",
+        "站着或椅背不可用时不能凭空靠坐"
+      ],
+      "confusable_candidate_ids": [
+        "211",
+        "171"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "角色无坐姿/椅背依据；用户自己的疲惫不证明角色可靠坐"
+    },
+    {
+      "candidate_id": "127",
+      "label": "跳跃",
+      "category_id": "11",
+      "code": "_d_e",
+      "token_ids": [
+        814,
+        2204
+      ],
+      "meaning": "跃起、兴奋的全身表达",
+      "distinction": "双脚离地；需要站立与全身活动空间，区别于坐姿欢呼",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "全身条件允许的跃起演示或极强庆祝；普通开心、坐姿聊天与仅说跳字不对应跳跃",
+      "required_evidence": "明确跳跃目标已有合法候选且无已知冲突；自然庆祝还需强烈情绪、站立和活动空间依据",
+      "applicable_scenarios": [
+        "应要求原地跳一下",
+        "角色站立庆祝重大胜利并允许大幅动作"
+      ],
+      "negative_scenarios": [
+        "讲述别人跳舞或故事中跳过水坑",
+        "普通小进展却夸张庆祝；自然伴随时角色处于坐姿或活动空间缺少依据"
+      ],
+      "confusable_candidate_ids": [
+        "307",
+        "305"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通开心或小进展；自然伴随缺少站立与活动空间"
+    },
+    {
+      "candidate_id": "133",
+      "label": "左右转动椅子",
+      "category_id": "13",
+      "code": "_f_d",
+      "token_ids": [
+        761,
+        814
+      ],
+      "meaning": "轻松、随性的坐姿活动",
+      "distinction": "需要可转动椅座；不作为讲话换动作或独立待机策略的替代",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "已有可转椅的轻松坐姿活动或明确转椅目标；不因窗口空闲而补转椅",
+      "required_evidence": "明确转椅目标已有合法候选且无已知冲突；自然坐姿活动还需可转椅与轻松情境依据",
+      "applicable_scenarios": [
+        "应要求左右转动椅子",
+        "允许随性活动的坐姿互动中演示转椅"
+      ],
+      "negative_scenarios": [
+        "对话停顿或没有动作目标",
+        "普通讲解或严肃交流；自然伴随缺少可转动椅座依据"
+      ],
+      "confusable_candidate_ids": [
+        "106",
+        "178"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "空档补动作、严肃讲解；无可转椅依据"
+    },
+    {
+      "candidate_id": "137",
+      "label": "低头",
+      "category_id": "15",
+      "code": "_h_b",
+      "token_ids": [
+        1523,
+        880
+      ],
+      "meaning": "低头、歉意或低落时收束情绪",
+      "distinction": "颈部带动头部下弯，区别于仅眼球向下",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "明确低头、歉意或当前低落的俯首表达；不把任何负面话题都低头",
+      "required_evidence": "明确低头目标；自然伴随只用于角色当前失落、歉意或收束情绪，当前开心不成立",
+      "applicable_scenarios": [
+        "应要求低头展示头部动作",
+        "角色轻声表达自己的低落或歉意，以俯首收束"
+      ],
+      "negative_scenarios": [
+        "只要求眼睛看下方，或第三方低头叙述",
+        "角色已经开心释怀，仅回顾过去难过"
+      ],
+      "confusable_candidate_ids": [
+        "142",
+        "189"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "只需眼睛向下、第三方低头；不把一切负面话题都低头"
+    },
+    {
+      "candidate_id": "140",
+      "label": "看右侧（仅眼球）",
+      "category_id": "16",
+      "code": "_i_c",
+      "token_ids": [
+        5318,
+        666
+      ],
+      "meaning": "把视线移向自身右侧",
+      "distinction": "仅眼球右转，头部不转；遵守用户指定的参照系",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "注意引向角色自身右侧的可识别对象或明确右视目标；不按右字机械移眼",
+      "required_evidence": "右侧方向有明确参照系或具体指示，动作仅需转动眼球",
+      "applicable_scenarios": [
+        "应要求眼睛看右边但头不要动",
+        "引导查看角色右侧已有的展示区域"
+      ],
+      "negative_scenarios": [
+        "提到正确答案或右派等无空间含义用词",
+        "屏幕左右与身体左右未澄清且会影响目标"
+      ],
+      "confusable_candidate_ids": [
+        "142",
+        "177"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "非空间含义的右字；左右参照不明"
+    },
+    {
+      "candidate_id": "142",
+      "label": "看下方",
+      "category_id": "16",
+      "code": "_i_e",
+      "token_ids": [
+        5318,
+        2204
+      ],
+      "meaning": "把视线移向下方",
+      "distinction": "头部基本不动，区别于低头和身体前倾",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "下方存在注意目标或明确要求眼睛向下；头保持基本不动",
+      "required_evidence": "视线落点确在下方，或明确要求看下方而不是降低头部姿态",
+      "applicable_scenarios": [
+        "介绍当前画面下方的已知区域",
+        "应要求只用眼睛往下看"
+      ],
+      "negative_scenarios": [
+        "说我们往下聊只是话题推进",
+        "明确要求低头却只移动眼球"
+      ],
+      "confusable_candidate_ids": [
+        "137",
+        "140"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "抽象话题往下聊；明确要求低头"
+    },
+    {
+      "candidate_id": "138",
+      "label": "看镜头",
+      "category_id": "16",
+      "code": "_i_a",
+      "token_ids": [
+        5318,
+        4306
+      ],
+      "meaning": "正视镜头、建立交流注意",
+      "distinction": "头部保持端正，仅调整眼球，区别于转头或靠近",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "面向用户的平实表达与交流注意，可作低幅伴随；不为每句固定触发",
+      "required_evidence": "角色正面向用户自然交流、建立视线联系或恢复正视；不要求先有视线偏离证据",
+      "applicable_scenarios": [
+        "面向镜头自然说出当前体验，不需要强手势",
+        "结束侧向介绍后重新面向用户"
+      ],
+      "negative_scenarios": [
+        "明确要求看别处或正视被禁止",
+        "每个窗口都机械重复看镜头"
+      ],
+      "confusable_candidate_ids": [
+        "657",
+        "140"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "明确要求看别处；不为每句重新触发正视"
+    },
+    {
+      "candidate_id": "651",
+      "label": "嘟嘴",
+      "category_id": "19",
+      "code": "_l_l",
+      "token_ids": [
+        907,
+        907
+      ],
+      "meaning": "轻微不满、撒娇的嘴部表达",
+      "distinction": "嘴唇前噘但不靠近；不等于亲吻、飞吻或生气",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色自己的轻微不满或撒娇已有亲近语境；只噘嘴，不推断亲吻",
+      "required_evidence": "已有轻松亲近关系或明确嘟嘴表演目标，角色在表达小情绪",
+      "applicable_scenarios": [
+        "轻松撒娇说那你也陪我聊两句嘛",
+        "应要求做一个嘟嘴表情"
+      ],
+      "negative_scenarios": [
+        "用户说不行但角色没有撒娇立场",
+        "提到嘴唇、亲吻故事或要求闭眼靠近亲吻"
+      ],
+      "confusable_candidate_ids": [
+        "658",
+        "160"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "652",
+      "label": "宠溺眼神",
+      "category_id": "19",
+      "code": "_l_m",
+      "token_ids": [
+        907,
+        717
+      ],
+      "meaning": "温柔、宠溺的关注",
+      "distinction": "依赖人设与关系许可；不同于普通微笑或暧昧靠近",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色以温柔宠溺回应亲近对象；一般友善、客服感谢不直接升为宠溺",
+      "required_evidence": "可信关系与人设支持宠溺，且角色表达温柔关爱而非普通礼貌",
+      "applicable_scenarios": [
+        "亲近对象展示小进步后温柔夸奖",
+        "轻松陪伴中回应被依赖的感受"
+      ],
+      "negative_scenarios": [
+        "陌生用户说谢谢",
+        "专业服务、严肃问题或单独出现宝贝等引语"
+      ],
+      "confusable_candidate_ids": [
+        "154",
+        "655"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "653",
+      "label": "担忧",
+      "category_id": "19",
+      "code": "_l_n",
+      "token_ids": [
+        907,
+        1089
+      ],
+      "meaning": "担心、牵挂、不安",
+      "distinction": "对应角色自身的关切，不仅因出现负面词；区别于悲伤和疑惑",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色确实关切对方处境或风险；用户难过、疲劳的事实不自动变成角色担忧",
+      "required_evidence": "存在值得担心的处境，并有角色当前关切立场或明确担忧表演请求",
+      "applicable_scenarios": [
+        "对方晚归失联而角色表达牵挂",
+        "回应尚未排除的风险并认真关切"
+      ],
+      "negative_scenarios": [
+        "新闻只是客观转述或风险已经排除",
+        "用户生气而角色只是中性说明"
+      ],
+      "confusable_candidate_ids": [
+        "161",
+        "162"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "654",
+      "label": "wink",
+      "category_id": "19",
+      "code": "_l_o",
+      "token_ids": [
+        907,
+        14179
+      ],
+      "meaning": "俏皮、会意的单眼示意",
+      "distinction": "仅一次单眼闭合，不等于双眼眯笑；严肃场景保持克制",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "一次俏皮会意的单眼示意；需要双方接受的轻松默契而非普通确认",
+      "required_evidence": "单眼眨眼是明确目标，或角色确在传递玩笑、会意和轻微俏皮",
+      "applicable_scenarios": [
+        "说这是我们的小默契时轻松示意",
+        "应要求眨一下单眼"
+      ],
+      "negative_scenarios": [
+        "用户说眼睛干涩",
+        "普通方案确认、严肃求助或要求双眼眯笑"
+      ],
+      "confusable_candidate_ids": [
+        "655",
+        "656",
+        "441"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "655",
+      "label": "眯眼睛笑",
+      "category_id": "19",
+      "code": "_l_p",
+      "token_ids": [
+        907,
+        620
+      ],
+      "meaning": "温暖、愉快的笑意",
+      "distinction": "双眼随笑意眯起，区别于 wink、坏笑和大笑",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色温暖且明显开心，笑意带动双眼眯起；区别于礼貌微笑和单眼示意",
+      "required_evidence": "当前交流有充分暖意或愉悦，角色在真诚开心地回应",
+      "applicable_scenarios": [
+        "听到暖心好消息后笑着回应",
+        "轻松重逢时表达很高兴见到你"
+      ],
+      "negative_scenarios": [
+        "只说收到或一般客服客套",
+        "悲伤求助、单眼眨眼请求或引用笑话标题"
+      ],
+      "confusable_candidate_ids": [
+        "154",
+        "155",
+        "654"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "656",
+      "label": "坏笑",
+      "category_id": "19",
+      "code": "_l_q",
+      "token_ids": [
+        907,
+        8976
+      ],
+      "meaning": "狡黠、调皮的笑意",
+      "distinction": "依赖双方接受的玩笑氛围，不将严肃困境当作笑料",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色带狡黠意味地参与善意玩笑；不把反讽指责或严肃困境当作玩笑",
+      "required_evidence": "双方可接受玩笑，且当前表达含调皮反转或得意的小计谋",
+      "applicable_scenarios": [
+        "揭晓无伤大雅的小惊喜",
+        "轻松接住朋友的善意调侃"
+      ],
+      "negative_scenarios": [
+        "用户讽刺你可真行但真实语气愤怒",
+        "用户讲受骗经历、表达不舒服"
+      ],
+      "confusable_candidate_ids": [
+        "654",
+        "462"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "157",
+      "label": "惊讶",
+      "category_id": "19",
+      "code": "_l_d",
+      "token_ids": [
+        907,
+        814
+      ],
+      "meaning": "意外、惊奇",
+      "distinction": "基本惊讶表情；强度与语境相称，区别于捂嘴动作",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色面对明确超预期信息产生意外感；一般疑问、不确定和普通好消息不等于惊讶",
+      "required_evidence": "信息确有突发、反转或超出预期，或角色正在讲述并表达惊奇",
+      "applicable_scenarios": [
+        "用户分享意外中奖而角色感到惊喜",
+        "角色揭晓故事反转并流露惊奇"
+      ],
+      "negative_scenarios": [
+        "只有问号或听到不知道",
+        "客观转述惊讶一词但角色没有惊奇立场"
+      ],
+      "confusable_candidate_ids": [
+        "162",
+        "457",
+        "458"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "155",
+      "label": "大笑",
+      "category_id": "19",
+      "code": "_l_b",
+      "token_ids": [
+        907,
+        880
+      ],
+      "meaning": "开怀、强烈的欢乐",
+      "distinction": "开口大笑而非礼貌微笑；不因单独的笑声字样或苦难转述而执行",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "足够幽默或强烈欢乐让角色开怀大笑；不是所有笑字或用户笑声的复现",
+      "required_evidence": "笑点或欢乐氛围可靠，角色自己在开心而非安慰性礼貌回应",
+      "applicable_scenarios": [
+        "接住双方都接受的笑话包袱",
+        "讲述有趣糗事时开怀笑出声"
+      ],
+      "negative_scenarios": [
+        "用户苦笑、哭诉或讲别人被嘲笑",
+        "普通感谢、讽刺攻击或仅提到哈哈"
+      ],
+      "confusable_candidate_ids": [
+        "154",
+        "655",
+        "462"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "154",
+      "label": "微笑",
+      "category_id": "19",
+      "code": "_l_a",
+      "token_ids": [
+        907,
+        4306
+      ],
+      "meaning": "友善、轻松、正向回应",
+      "distinction": "温和笑意，区别于大笑和夸张兴奋",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "友善、感谢、轻度开心的温和笑意；不作为每次开口的固定动作",
+      "required_evidence": "交流立场友好或正向，角色自己的情绪适合轻微愉悦",
+      "applicable_scenarios": [
+        "接受善意夸奖并致谢",
+        "欢迎新用户或回应轻松的开心分享"
+      ],
+      "negative_scenarios": [
+        "用户严肃倾诉损失",
+        "字面感谢实际是讽刺，或角色只是朗读微笑一词"
+      ],
+      "confusable_candidate_ids": [
+        "655",
+        "155"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "162",
+      "label": "疑惑",
+      "category_id": "19",
+      "code": "_l_i",
+      "token_ids": [
+        907,
+        5318
+      ],
+      "meaning": "不解、需要澄清",
+      "distinction": "表达角色自己的疑问，不因引用问句自动出现",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色对当前信息不解、需要澄清；不能把所有问题都演成疑惑",
+      "required_evidence": "输入确有缺失、歧义、矛盾或角色在表达尚未理解",
+      "applicable_scenarios": [
+        "前后描述互相冲突而请求确认",
+        "没听清关键指代时温和询问"
+      ],
+      "negative_scenarios": [
+        "用户提出普通事实问题而角色已知答案",
+        "例行提问你今天好吗"
+      ],
+      "confusable_candidate_ids": [
+        "653",
+        "465"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "160",
+      "label": "委屈",
+      "category_id": "19",
+      "code": "_l_g",
+      "token_ids": [
+        907,
+        1889
+      ],
+      "meaning": "受冷落、轻微受伤的小情绪",
+      "distinction": "依赖人设和关系；不把普通拒绝、任务失败当作委屈",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "亲近互动中角色流露轻微受冷落感；普通拒绝与任务失败不制造委屈",
+      "required_evidence": "可信亲近关系与人设支持小情绪，角色确在表达想被关注",
+      "applicable_scenarios": [
+        "熟悉陪伴中说你都好久没来找我了",
+        "应要求表演一下委屈"
+      ],
+      "negative_scenarios": [
+        "用户拒绝推荐方案或说不需要了",
+        "服务失败、正式投诉或别人的委屈故事"
+      ],
+      "confusable_candidate_ids": [
+        "651",
+        "161",
+        "443"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "161",
+      "label": "悲伤",
+      "category_id": "19",
+      "code": "_l_h",
+      "token_ids": [
+        907,
+        1523
+      ],
+      "meaning": "伤心、失落、共情",
+      "distinction": "对应实际情绪立场；转述悲伤词不必改变表情",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色伤心或温和共情失落；不把任何负面话题都表演成悲伤",
+      "required_evidence": "有真实的失去、失落或伤感立场，表达强度符合当前关系与场景",
+      "applicable_scenarios": [
+        "回应对方失去重要机会并表达难过",
+        "角色回忆伤感经历"
+      ],
+      "negative_scenarios": [
+        "仅讨论悲伤这个词",
+        "用户需要具体解决步骤而角色没有伤感表达"
+      ],
+      "confusable_candidate_ids": [
+        "653",
+        "439",
+        "333"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "163",
+      "label": "生气",
+      "category_id": "19",
+      "code": "_l_j",
+      "token_ids": [
+        907,
+        5374
+      ],
+      "meaning": "愤怒、对不公的强烈立场",
+      "distinction": "拒绝唱歌、能力不足或普通否定不等于生气；不把愤怒指向求助用户",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色明确表达愤慨、被冒犯或对不公的强烈立场；拒绝与做不到不是生气",
+      "required_evidence": "角色自己的愤怒立场明确，或有直接的生气表演请求",
+      "applicable_scenarios": [
+        "回应恶意欺骗并明确表达愤慨",
+        "应要求演一个生气表情"
+      ],
+      "negative_scenarios": [
+        "我暂时不能唱歌这一能力说明",
+        "角色转述用户愤怒但自己保持中性"
+      ],
+      "confusable_candidate_ids": [
+        "653",
+        "302"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction"
+    },
+    {
+      "candidate_id": "171",
+      "label": "身体后仰",
+      "category_id": "21",
+      "code": "_n_b",
+      "token_ids": [
+        1089,
+        880
+      ],
+      "meaning": "上身后移、拉开距离",
+      "distinction": "整体上身后仰，不等于转头；需满足当前姿态与构图",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "整体上身向后移的姿态目标；不把惊讶、拒绝或放松一概映射为后仰",
+      "required_evidence": "有明确上身后仰目标或可靠的向后拉开距离表达，姿态允许",
+      "applicable_scenarios": [
+        "应要求上身向后仰一点",
+        "演示前倾和后仰的区别"
+      ],
+      "negative_scenarios": [
+        "普通表示不同意",
+        "惊讶故事但没有后移意图，或把后仰误当作椅背靠坐"
+      ],
+      "confusable_candidate_ids": [
+        "106",
+        "170"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通不同意；没有后移意图的惊讶或靠椅目标"
+    },
+    {
+      "candidate_id": "657",
+      "label": "向前探头",
+      "category_id": "21",
+      "code": "_n_e",
+      "token_ids": [
+        1089,
+        2204
+      ],
+      "meaning": "好奇、加强关注",
+      "distinction": "头与上身短暂轻探后回正；不同于持续身体前倾、亲吻或魅惑靠近",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "短暂探近以加强查看或好奇，随后回正；不是所有关注或听见了吗都要靠近",
+      "required_evidence": "观察目标或好奇焦点清楚，角色可轻探头且构图允许",
+      "applicable_scenarios": [
+        "对一个已知细节好奇地凑近查看",
+        "应要求轻轻探头再回正"
+      ],
+      "negative_scenarios": [
+        "只是请认真听且不涉及靠近",
+        "亲吻请求、持续前倾或用户说自己近视"
+      ],
+      "confusable_candidate_ids": [
+        "170",
+        "352",
+        "650"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "没有靠近意图、持续前倾、亲吻目标"
+    },
+    {
+      "candidate_id": "170",
+      "label": "身体前倾",
+      "category_id": "21",
+      "code": "_n_a",
+      "token_ids": [
+        1089,
+        4306
+      ],
+      "meaning": "探身、加强靠近感",
+      "distinction": "髋部带动上身整体前倾，不等于低头或仅向前探头",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "上身整体前倾以探身或强化倾听；不是只低头或瞬间探头",
+      "required_evidence": "髋部带动上身靠近是目标，且当前姿态、景别和空间允许",
+      "applicable_scenarios": [
+        "应要求身体向前倾",
+        "面对轻声交流而以身体前倾表达专注"
+      ],
+      "negative_scenarios": [
+        "请看下方只需移动视线",
+        "没有靠近意图却只因请认真听而前倾，或要求闭眼亲吻"
+      ],
+      "confusable_candidate_ids": [
+        "657",
+        "137",
+        "171"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "只需向下看、短暂探头、亲吻目标"
+    },
+    {
+      "candidate_id": "178",
+      "label": "上身左右摆动",
+      "category_id": "22",
+      "code": "_o_e",
+      "token_ids": [
+        14179,
+        2204
+      ],
+      "meaning": "轻松、随节奏的上身律动",
+      "distinction": "腰部带动连续左右摆动，区别于单侧倾斜；依赖人设和构图",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "轻松愉快且有节奏的身体律动，或明确左右摆动；不随所有开心句持续摇摆",
+      "required_evidence": "角色当前轻松愉快且表达有节奏，人设与姿态支持身体律动；或明确摆动目标",
+      "applicable_scenarios": [
+        "轻松愉快的互动中随节奏小幅律动",
+        "应要求上身左右摆动"
+      ],
+      "negative_scenarios": [
+        "严肃或悲伤表达、没有节奏却为了换动作摇摆",
+        "只要求单侧倾斜或静态姿态"
+      ],
+      "confusable_candidate_ids": [
+        "174",
+        "175",
+        "441"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "严肃/悲伤表达、静态姿态或只需单侧倾斜"
+    },
+    {
+      "candidate_id": "174",
+      "label": "上身左倾",
+      "category_id": "22",
+      "code": "_o_a",
+      "token_ids": [
+        14179,
+        4306
+      ],
+      "meaning": "上身向自身左侧倾斜",
+      "distinction": "整体左倾停留，不是左转或向左看",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "上身向自身左侧倾而非转向；强调明确侧倾目标与可执行姿态",
+      "required_evidence": "左侧倾斜目标清楚、参照系可确定且上身活动允许",
+      "applicable_scenarios": [
+        "演示左侧倾斜",
+        "应要求身体向左歪而头不单独转动"
+      ],
+      "negative_scenarios": [
+        "把话题转到左边这个抽象说法",
+        "明确要求向左转身或只看左侧"
+      ],
+      "confusable_candidate_ids": [
+        "175",
+        "176"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "抽象左字；左转身或只转眼球"
+    },
+    {
+      "candidate_id": "175",
+      "label": "上身右倾",
+      "category_id": "22",
+      "code": "_o_b",
+      "token_ids": [
+        14179,
+        880
+      ],
+      "meaning": "上身向自身右侧倾斜",
+      "distinction": "整体右倾停留，不是右转或向右看",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "上身向自身右侧倾而非转向；强调明确侧倾目标与可执行姿态",
+      "required_evidence": "右侧倾斜目标清楚、参照系可确定且上身活动允许",
+      "applicable_scenarios": [
+        "演示右侧倾斜",
+        "应要求身体向右歪一点"
+      ],
+      "negative_scenarios": [
+        "仅介绍右侧对象但不需侧倾",
+        "明确要求向右转身或只动眼球"
+      ],
+      "confusable_candidate_ids": [
+        "174",
+        "177",
+        "140"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "抽象右字；右转身或只转眼球"
+    },
+    {
+      "candidate_id": "176",
+      "label": "上身左转",
+      "category_id": "22",
+      "code": "_o_c",
+      "token_ids": [
+        14179,
+        666
+      ],
+      "meaning": "上身转向自身左侧",
+      "distinction": "腰部转动而非侧倾或仅眼球移动",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "腰部带动上身向自身左侧转；不把侧倾、看左边或抽象转折混同",
+      "required_evidence": "目标是上身朝向改变而非视线或重心，参照系明确",
+      "applicable_scenarios": [
+        "应要求上身向左转",
+        "演示面向左侧对象的姿态"
+      ],
+      "negative_scenarios": [
+        "说我们转个话题",
+        "只要求向左歪、看左边或缺少左右参照"
+      ],
+      "confusable_candidate_ids": [
+        "174",
+        "177"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "转话题；左侧倾斜或只用眼睛看左边"
+    },
+    {
+      "candidate_id": "177",
+      "label": "上身右转",
+      "category_id": "22",
+      "code": "_o_d",
+      "token_ids": [
+        14179,
+        814
+      ],
+      "meaning": "上身转向自身右侧",
+      "distinction": "腰部转动而非侧倾或仅眼球移动",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "腰部带动上身向自身右侧转；不是右视或向右侧倾斜",
+      "required_evidence": "目标是上身朝向改变而非视线或重心，参照系明确",
+      "applicable_scenarios": [
+        "应要求上身向右转",
+        "演示面向右侧对象的姿态"
+      ],
+      "negative_scenarios": [
+        "只要求眼睛看右边",
+        "把头转右侧或普通出现右字"
+      ],
+      "confusable_candidate_ids": [
+        "175",
+        "176",
+        "140"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "抽象右字；右侧倾斜或只用眼睛看右边"
+    },
+    {
+      "candidate_id": "189",
+      "label": "轻微点头致意",
+      "category_id": "24",
+      "code": "_q_a",
+      "token_ids": [
+        8976,
+        4306
+      ],
+      "meaning": "礼貌、轻量致意",
+      "distinction": "头和上身小幅前倾，区别于单次确认点头、连续点头和正式鞠躬",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "礼貌问候或轻量致意，头与上身一起微倾；内容确认优先比较单次点头",
+      "required_evidence": "当前话语功能是礼貌致意、迎接或谢意，而非需要较深正式礼仪",
+      "applicable_scenarios": [
+        "见面时礼貌招呼",
+        "接受轻量感谢后温和致意"
+      ],
+      "negative_scenarios": [
+        "简单确认答案是否正确",
+        "明确深鞠躬、连续点头或第三方致意叙述"
+      ],
+      "confusable_candidate_ids": [
+        "661",
+        "190",
+        "649"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "内容确认、深鞠躬、第三方致意"
+    },
+    {
+      "candidate_id": "661",
+      "label": "点头",
+      "category_id": "24",
+      "code": "_q_d",
+      "token_ids": [
+        8976,
+        814
+      ],
+      "meaning": "确认、理解、赞同",
+      "distinction": "一次清楚点头，不等于正式致意；不将转述内容当作角色赞同",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "一次确认、理解或赞同，角色立场已确定；不把附和、引用和讽刺自动当作同意",
+      "required_evidence": "必须有角色正在确认的具体事项/观点；普通情绪自述或肯定陈述语气不成立",
+      "applicable_scenarios": [
+        "理解对方要求后说我明白了",
+        "接受一个可行建议并确认"
+      ],
+      "negative_scenarios": [
+        "角色仅自述今天开心或难过，并未确认任何事项",
+        "转述、讽刺或立场尚未确定"
+      ],
+      "confusable_candidate_ids": [
+        "189",
+        "272",
+        "271"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "只有开心/难过的自述；引用、讽刺或尚未确定"
+    },
+    {
+      "candidate_id": "190",
+      "label": "正式鞠躬",
+      "category_id": "24",
+      "code": "_q_b",
+      "token_ids": [
+        8976,
+        880
+      ],
+      "meaning": "郑重感谢、道歉或礼仪致意",
+      "distinction": "较深上身前倾，区别于轻微点头；需要姿态和空间允许",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "郑重谢意、道歉或正式礼仪；普通谢谢不必深鞠躬",
+      "required_evidence": "表达郑重程度足够或用户明确指定正式鞠躬，姿态与空间允许",
+      "applicable_scenarios": [
+        "正式典礼致谢",
+        "为重大过失郑重道歉并鞠躬"
+      ],
+      "negative_scenarios": [
+        "轻量客服道谢、普通认可",
+        "只要求点一下头或现有坐姿不允许"
+      ],
+      "confusable_candidate_ids": [
+        "189",
+        "661"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通谢谢、轻量确认；姿态不允许正式鞠躬"
+    },
+    {
+      "candidate_id": "200",
+      "label": "伸手摸摸头",
+      "category_id": "25",
+      "code": "_r_i",
+      "token_ids": [
+        1710,
+        5318
+      ],
+      "meaning": "温柔安抚、鼓励",
+      "distinction": "单手向前抚摸的示意；不宣称实际接触用户，不等于摸自己头部",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "允许亲近时的温柔安抚或摸头示意；不把安慰一律映射成触碰",
+      "required_evidence": "有明确摸头请求，或可信亲近关系支持这一前向安抚示意",
+      "applicable_scenarios": [
+        "熟悉陪伴中肯定努力并温柔安慰",
+        "应要求做摸摸头的手势"
+      ],
+      "negative_scenarios": [
+        "陌生用户严肃求助",
+        "只说自己头痛或要求摸角色自己的头"
+      ],
+      "confusable_candidate_ids": [
+        "624",
+        "335"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "陌生关系的亲昵、用户头痛、摸角色自己头的目标"
+    },
+    {
+      "candidate_id": "211",
+      "label": "手臂交叠",
+      "category_id": "26",
+      "code": "_s_j",
+      "token_ids": [
+        643,
+        5374
+      ],
+      "meaning": "端庄、安静、克制",
+      "distinction": "双手交叠于小腹前，不是抱胸防御",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "双手交叠于小腹前表达端庄静听；不同于抱胸防御或双臂交叉拒绝",
+      "required_evidence": "目标是克制端庄姿态，手部状态允许，或用户明确要求交叠双手",
+      "applicable_scenarios": [
+        "正式介绍后端庄聆听",
+        "应要求双手在身前交叠"
+      ],
+      "negative_scenarios": [
+        "角色正在持物或执行手势",
+        "用户说拒绝时需要交叉成叉而非交叠于腹前"
+      ],
+      "confusable_candidate_ids": [
+        "302",
+        "376"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "持物/执行手势；交叉成叉的拒绝目标"
+    },
+    {
+      "candidate_id": "225",
+      "label": "指向前方",
+      "category_id": "29",
+      "code": "_v_a",
+      "token_ids": [
+        2273,
+        4306
+      ],
+      "meaning": "指示前方具体目标",
+      "distinction": "食指指向具体方向，不等于摊掌展示或引导进入下一步骤",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "前方有明确指示目标或直接指向请求；纯线上内容介绍不凭空创造前方对象",
+      "required_evidence": "前方位置或对象可确定，食指指向能直接完成注意引导",
+      "applicable_scenarios": [
+        "请指一下你的前方",
+        "介绍当前已知前方区域"
+      ],
+      "negative_scenarios": [
+        "请介绍一下方案但没有空间目标",
+        "把商品拿起来不能用空手指向冒充完成"
+      ],
+      "confusable_candidate_ids": [
+        "237",
+        "405"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "没有空间对象的介绍；拿起或操作物品的目标"
+    },
+    {
+      "candidate_id": "256",
+      "label": "搓手",
+      "category_id": "30",
+      "code": "_w_t",
+      "token_ids": [
+        1670,
+        528
+      ],
+      "meaning": "期待、准备投入的兴奋",
+      "distinction": "双掌相互摩擦，不等于鼓掌或摊掌；依赖人设与轻松语境",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "期待、跃跃欲试带有搓手意味；一般开心或准备口头回答不等于搓手",
+      "required_evidence": "角色确有迫不及待的期待与投入感，人设允许随性动作",
+      "applicable_scenarios": [
+        "准备开始轻松挑战并表达好期待",
+        "应要求搓搓手"
+      ],
+      "negative_scenarios": [
+        "严肃任务准备、普通收到",
+        "有人说冷但角色并无搓手目标"
+      ],
+      "confusable_candidate_ids": [
+        "304",
+        "354",
+        "307"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "严肃准备、普通收到；用户冷不证明角色要搓手"
+    },
+    {
+      "candidate_id": "237",
+      "label": "单手摊开展示",
+      "category_id": "30",
+      "code": "_w_a",
+      "token_ids": [
+        1670,
+        4306
+      ],
+      "meaning": "展示一个内容、开放承接",
+      "distinction": "单手掌心向上静态展示，不等于接物、指向或翻掌过程",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "介绍要点、展开个人体验或开放承接；不冒充取物或指向",
+      "required_evidence": "角色在介绍一项内容、展开个人体验或邀请关注，单掌开放展示能辅助表达",
+      "applicable_scenarios": [
+        "介绍一个选项时单手开放展示",
+        "自然展开个人经历或当前感受时开放承接"
+      ],
+      "negative_scenarios": [
+        "用户要求拿起杯子但角色没有杯子",
+        "引用展示一词而未在介绍内容"
+      ],
+      "confusable_candidate_ids": [
+        "238",
+        "660",
+        "225"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "实际拿取/托住物品；引用展示一词"
+    },
+    {
+      "candidate_id": "238",
+      "label": "双手摊开展示",
+      "category_id": "30",
+      "code": "_w_b",
+      "token_ids": [
+        1670,
+        880
+      ],
+      "meaning": "介绍整体、范围或多个对象",
+      "distinction": "双手空手摊开，不持物或操作物品；局部单项可用单手展示",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "介绍整体范围或多个并列内容，双掌开放；不把每个普通回答都配双手展示",
+      "required_evidence": "话语确在展开整体、范围或多个对象，人设和双手状态允许",
+      "applicable_scenarios": [
+        "介绍几类方案的总体范围",
+        "面向观众开放介绍整体安排"
+      ],
+      "negative_scenarios": [
+        "仅说明一个细节",
+        "用户要求双手拿起物品而当前空手"
+      ],
+      "confusable_candidate_ids": [
+        "237",
+        "459"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "只讲一个细节；实际双手拿取物品"
+    },
+    {
+      "candidate_id": "660",
+      "label": "翻手",
+      "category_id": "30",
+      "code": "_w_u",
+      "token_ids": [
+        1670,
+        7300
+      ],
+      "meaning": "开放承接、展开说明",
+      "distinction": "翻至掌心向上并张开手指，区别于静态摊掌和手心手背的往复翻转",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "由收束到开放介绍，单手翻至掌心向上并张开；静态展示与正反翻面需区分",
+      "required_evidence": "有展开新内容、承接话题的语义变化，且需要这一动态开放姿态",
+      "applicable_scenarios": [
+        "从结论转入具体介绍",
+        "应要求把手翻开并张开手指"
+      ],
+      "negative_scenarios": [
+        "已经静态摊掌介绍无需重复翻手",
+        "明确要求比较手背和手心的往复翻转"
+      ],
+      "confusable_candidate_ids": [
+        "237",
+        "253"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "静态摊掌已足够；手心手背往复翻转目标"
+    },
+    {
+      "candidate_id": "255",
+      "label": "双手五指张开相对",
+      "category_id": "30",
+      "code": "_w_s",
+      "token_ids": [
+        1670,
+        643
+      ],
+      "meaning": "固定手型、双手相对的形态展示",
+      "distinction": "双手五指张开且指尖相抵，不等于普通摊掌或双手 OK",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "双手五指相对且指尖相抵的特定手型；泛泛讲对称或展示不自动召回",
+      "required_evidence": "该固定手型是明确演示、模仿或请求目标",
+      "applicable_scenarios": [
+        "应要求两手指尖一一抵靠",
+        "按可见手型模仿双手五指相对"
+      ],
+      "negative_scenarios": [
+        "讲两个方案互相对应",
+        "普通双手摊开、双手 OK 或比爱心"
+      ],
+      "confusable_candidate_ids": [
+        "238",
+        "273"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通对应关系；摊手、双手OK或爱心目标"
+    },
+    {
+      "candidate_id": "253",
+      "label": "单手翻手",
+      "category_id": "30",
+      "code": "_w_q",
+      "token_ids": [
+        1670,
+        8976
+      ],
+      "meaning": "正反变化、观点转换",
+      "distinction": "单手绕腕翻转，区别于双手翻转和静态展示",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "观点转折、正反对比或阶段转换的动态说明；不是随每个但是机械翻手",
+      "required_evidence": "正在表达两个观点/阶段的对比或转折，翻掌能辅助观点转换；或明确翻手目标",
+      "applicable_scenarios": [
+        "说明同一问题的另一面",
+        "演示手心与手背的方向变化"
+      ],
+      "negative_scenarios": [
+        "只是一般介绍、翻书或翻页操作",
+        "明确要求双手翻转不能用单手代替"
+      ],
+      "confusable_candidate_ids": [
+        "660",
+        "237"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "一般介绍、实际翻书操作；明确要求双手"
+    },
+    {
+      "candidate_id": "273",
+      "label": "双手 OK 手势",
+      "category_id": "31",
+      "code": "_x_q",
+      "token_ids": [
+        3212,
+        8976
+      ],
+      "meaning": "强烈确认、完全没问题",
+      "distinction": "双手同时 OK；普通确认可用单手，不能代替精确数字手型",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "强调完全确认或双手 OK 请求；不是方案询问、强烈赞许和数字三的混用",
+      "required_evidence": "角色已确认可行或准备充分，强调强度与人设相称，或明确双手 OK",
+      "applicable_scenarios": [
+        "多项安排确认无误后说完全没问题",
+        "应要求双手同时比 OK"
+      ],
+      "negative_scenarios": [
+        "对方只是问可行吗而角色尚未确定",
+        "用户限定单手 OK 或数字三"
+      ],
+      "confusable_candidate_ids": [
+        "272",
+        "271",
+        "260"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "尚未确定可行；指定单手OK或数字三"
+    },
+    {
+      "candidate_id": "258",
+      "label": "数字一手势",
+      "category_id": "31",
+      "code": "_x_b",
+      "token_ids": [
+        3212,
+        880
+      ],
+      "meaning": "数字1的精确手势表达",
+      "distinction": "手型需匹配数字1；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字1手势、明确手势作答结果或角色主动讲解数量1；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字1精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为1",
+      "applicable_scenarios": [
+        "用户请求用手表示数字1",
+        "用户要求模仿清楚可见的数字1手型",
+        "明确用手势作答的计算结果为1",
+        "角色主动讲解精确数量1且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现1",
+        "用户只问1相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "271"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非1或已履约"
+    },
+    {
+      "candidate_id": "259",
+      "label": "数字二手势",
+      "category_id": "31",
+      "code": "_x_c",
+      "token_ids": [
+        3212,
+        666
+      ],
+      "meaning": "数字2的精确手势表达",
+      "distinction": "手型需匹配数字2；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字2手势、明确手势作答结果或角色主动讲解数量2；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字2精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为2",
+      "applicable_scenarios": [
+        "用户请求用手表示数字2",
+        "用户要求模仿清楚可见的数字2手型",
+        "明确用手势作答的计算结果为2",
+        "角色主动讲解精确数量2且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现2",
+        "用户只问2相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "272",
+        "276"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非2或已履约"
+    },
+    {
+      "candidate_id": "260",
+      "label": "数字三手势",
+      "category_id": "31",
+      "code": "_x_d",
+      "token_ids": [
+        3212,
+        814
+      ],
+      "meaning": "数字3的精确手势表达",
+      "distinction": "手型需匹配数字3；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字3手势、明确手势作答结果或角色主动讲解数量3；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字3精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为3",
+      "applicable_scenarios": [
+        "用户请求用手表示数字3",
+        "用户要求模仿清楚可见的数字3手型",
+        "明确用手势作答的计算结果为3",
+        "角色主动讲解精确数量3且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现3",
+        "用户只问3相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "258",
+        "259",
+        "267"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非3或已履约"
+    },
+    {
+      "candidate_id": "261",
+      "label": "数字四手势",
+      "category_id": "31",
+      "code": "_x_e",
+      "token_ids": [
+        3212,
+        2204
+      ],
+      "meaning": "数字4的精确手势表达",
+      "distinction": "手型需匹配数字4；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字4手势、明确手势作答结果或角色主动讲解数量4；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字4精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为4",
+      "applicable_scenarios": [
+        "用户请求用手表示数字4",
+        "用户要求模仿清楚可见的数字4手型",
+        "明确用手势作答的计算结果为4",
+        "角色主动讲解精确数量4且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现4",
+        "用户只问4相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "258",
+        "259",
+        "260",
+        "267"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非4或已履约"
+    },
+    {
+      "candidate_id": "262",
+      "label": "数字五手势",
+      "category_id": "31",
+      "code": "_x_f",
+      "token_ids": [
+        3212,
+        761
+      ],
+      "meaning": "数字5的精确手势表达",
+      "distinction": "手型需匹配数字5；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字5手势、明确手势作答结果或角色主动讲解数量5；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字5精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为5",
+      "applicable_scenarios": [
+        "用户请求用手表示数字5",
+        "用户要求模仿清楚可见的数字5手型",
+        "明确用手势作答的计算结果为5",
+        "角色主动讲解精确数量5且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现5",
+        "用户只问5相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "662"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非5或已履约"
+    },
+    {
+      "candidate_id": "263",
+      "label": "数字六手势",
+      "category_id": "31",
+      "code": "_x_g",
+      "token_ids": [
+        3212,
+        1889
+      ],
+      "meaning": "数字6的精确手势表达",
+      "distinction": "手型需匹配数字6；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字6手势、明确手势作答结果或角色主动讲解数量6；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字6精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为6",
+      "applicable_scenarios": [
+        "用户请求用手表示数字6",
+        "用户要求模仿清楚可见的数字6手型",
+        "明确用手势作答的计算结果为6",
+        "角色主动讲解精确数量6且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现6",
+        "用户只问6相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "258",
+        "259",
+        "260",
+        "267"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非6或已履约"
+    },
+    {
+      "candidate_id": "265",
+      "label": "数字八手势",
+      "category_id": "31",
+      "code": "_x_i",
+      "token_ids": [
+        3212,
+        5318
+      ],
+      "meaning": "数字8的精确手势表达",
+      "distinction": "手型需匹配数字8；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字8手势、明确手势作答结果或角色主动讲解数量8；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字8精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为8",
+      "applicable_scenarios": [
+        "用户请求用手表示数字8",
+        "用户要求模仿清楚可见的数字8手型",
+        "明确用手势作答的计算结果为8",
+        "角色主动讲解精确数量8且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现8",
+        "用户只问8相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "258",
+        "259",
+        "260",
+        "267"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非8或已履约"
+    },
+    {
+      "candidate_id": "266",
+      "label": "数字九手势",
+      "category_id": "31",
+      "code": "_x_j",
+      "token_ids": [
+        3212,
+        5374
+      ],
+      "meaning": "数字9的精确手势表达",
+      "distinction": "手型需匹配数字9；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字9手势、明确手势作答结果或角色主动讲解数量9；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字9精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为9",
+      "applicable_scenarios": [
+        "用户请求用手表示数字9",
+        "用户要求模仿清楚可见的数字9手型",
+        "明确用手势作答的计算结果为9",
+        "角色主动讲解精确数量9且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现9",
+        "用户只问9相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "258",
+        "259",
+        "260",
+        "267"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非9或已履约"
+    },
+    {
+      "candidate_id": "272",
+      "label": "OK 手势",
+      "category_id": "31",
+      "code": "_x_p",
+      "token_ids": [
+        3212,
+        620
+      ],
+      "meaning": "确认、同意、准备就绪",
+      "distinction": "一手拇指食指成圈，其余三指展开；引用字母 OK 不等于动作目标",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "确认可行、就绪或状态恢复良好；单纯开心不必做OK",
+      "required_evidence": "角色明确确认方案可行、准备就绪或状态恢复良好；或明确OK手型目标",
+      "applicable_scenarios": [
+        "核实方案后表达没问题",
+        "应要求比一个 OK 手势"
+      ],
+      "negative_scenarios": [
+        "尚不确定却先表 OK",
+        "朗读 OK、引用别人说 OK 或数字三手型目标"
+      ],
+      "confusable_candidate_ids": [
+        "273",
+        "661",
+        "260"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "仅情绪开心、朗读或引用OK；尚未确定可行"
+    },
+    {
+      "candidate_id": "271",
+      "label": "双手点赞",
+      "category_id": "31",
+      "code": "_x_o",
+      "token_ids": [
+        3212,
+        14179
+      ],
+      "meaning": "强烈赞许、肯定成果",
+      "distinction": "双手竖拇指，不等于单手点赞或数字一；表达强度与人设相称",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "对具体优点、进展或成果的明确赞许；不是开心的通用手势",
+      "required_evidence": "角色认可具体优点、进展或成果，强度足以双手赞许；或未限定单手的点赞请求",
+      "applicable_scenarios": [
+        "对方克服困难完成目标后着重肯定",
+        "应要求用双手给一个赞"
+      ],
+      "negative_scenarios": [
+        "我今天很难过需要安慰",
+        "单手点赞请求、只是确认收到了或讽刺你真棒"
+      ],
+      "confusable_candidate_ids": [
+        "661",
+        "272",
+        "304"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通心情好、简单收到、讽刺；指定单手点赞"
+    },
+    {
+      "candidate_id": "264",
+      "label": "数字七手势",
+      "category_id": "31",
+      "code": "_x_h",
+      "token_ids": [
+        3212,
+        1523
+      ],
+      "meaning": "数字7的精确手势表达",
+      "distinction": "手型需匹配数字7；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "精确数字7手势、明确手势作答结果或角色主动讲解数量7；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字7精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为7",
+      "applicable_scenarios": [
+        "用户请求用手表示数字7",
+        "用户要求模仿清楚可见的数字7手型",
+        "明确用手势作答的计算结果为7",
+        "角色主动讲解精确数量7且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现7",
+        "用户只问7相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "363",
+        "659"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非7或已履约"
+    },
+    {
+      "candidate_id": "267",
+      "label": "数字十手势",
+      "category_id": "31",
+      "code": "_x_k",
+      "token_ids": [
+        3212,
+        4698
+      ],
+      "meaning": "数字10的精确手势表达",
+      "distinction": "手型需匹配数字10；普通数字提及、时间编号或引用不构成必做动作，不能替代其他数字或手型",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "精确数字10手势、明确手势作答结果或角色主动讲解数量10；时间编号、引用和第三方手势不算目标",
+      "required_evidence": "数字10精确手势、同手型模仿，或角色明确数量演示/手势作答；结果须为10",
+      "applicable_scenarios": [
+        "用户请求用手表示数字10",
+        "用户要求模仿清楚可见的数字10手型",
+        "明确用手势作答的计算结果为10",
+        "角色主动讲解精确数量10且该手势与表达相称"
+      ],
+      "negative_scenarios": [
+        "时间、日期、编号或引用中出现10",
+        "用户只问10相关算术答案而未要求手势，角色也无数量演示意图",
+        "视觉加数不清或结果不同，不能复现某个加数",
+        "已完成数字手势后下一窗口只是回顾结果"
+      ],
+      "confusable_candidate_ids": [
+        "258",
+        "259",
+        "260"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "时间编号/引用、无手势意图的算术；加数不清、结果非10或已履约"
+    },
+    {
+      "candidate_id": "276",
+      "label": "脸旁比耶",
+      "category_id": "31",
+      "code": "_x_t",
+      "token_ids": [
+        3212,
+        528
+      ],
+      "meaning": "可爱、轻松的拍照互动",
+      "distinction": "单手 V 字位于脸旁，不等于数字二展示或双手比耶",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "单手脸旁 V 字的拍照或可爱互动；与数量二、双手比耶分开",
+      "required_evidence": "有拍照或轻松可爱表达意图、人设允许，或手型与位置被明确指定",
+      "applicable_scenarios": [
+        "合影时单手在脸边比耶",
+        "应要求脸旁比个耶"
+      ],
+      "negative_scenarios": [
+        "问一加一是多少",
+        "用户明确要求两手或只是叙述别人拍照"
+      ],
+      "confusable_candidate_ids": [
+        "277",
+        "259",
+        "442"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "精确数字二；指定双手或第三方拍照叙述"
+    },
+    {
+      "candidate_id": "286",
+      "label": "头顶大爱心",
+      "category_id": "31",
+      "code": "_x_D",
+      "token_ids": [
+        3212,
+        1557
+      ],
+      "meaning": "热情喜爱、强烈祝福",
+      "distinction": "双臂高举过头组成爱心，不等于胸前爱心或手指心",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "热烈喜爱或祝福用头顶大爱心表达；普通感谢不自动升为浪漫大动作",
+      "required_evidence": "情感强度与人设支持大幅爱心，或明确指定头顶爱心",
+      "applicable_scenarios": [
+        "热情送上生日祝福",
+        "应要求双臂举过头比爱心"
+      ],
+      "negative_scenarios": [
+        "普通客服感谢",
+        "用户只要手指心或胸前爱心，不能替换形态与位置"
+      ],
+      "confusable_candidate_ids": [
+        "283",
+        "624"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通感谢；指定手指心或其他位置爱心"
+    },
+    {
+      "candidate_id": "283",
+      "label": "单手指心",
+      "category_id": "31",
+      "code": "_x_A",
+      "token_ids": [
+        3212,
+        1566
+      ],
+      "meaning": "真诚、亲近、表达喜爱",
+      "distinction": "单手拇指食指交错的指心，不等于指向胸口或双手爱心",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "以手指心传递真诚喜爱或感谢；不等于食指指胸口",
+      "required_evidence": "手指心是明确目标，或允许亲近的语境中角色在表达喜爱与谢意",
+      "applicable_scenarios": [
+        "感谢长期陪伴时送一个手指心",
+        "应要求用拇指食指比心"
+      ],
+      "negative_scenarios": [
+        "只讨论真心这个词",
+        "用户要指向胸口、头顶大爱心或不同手型"
+      ],
+      "confusable_candidate_ids": [
+        "286",
+        "624"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "只讨论真心；指向胸口或其他爱心手型"
+    },
+    {
+      "candidate_id": "277",
+      "label": "双手脸旁比耶",
+      "category_id": "31",
+      "code": "_x_u",
+      "token_ids": [
+        3212,
+        7300
+      ],
+      "meaning": "活泼、强调可爱的拍照互动",
+      "distinction": "双手 V 字分置脸旁并占用面部，不等于单手比耶或数字二",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "双手脸旁 V 字、强调活泼可爱的合影表达；不是数字二手势",
+      "required_evidence": "双手脸旁手型被明确指定，或可爱合影语境和人设充分匹配",
+      "applicable_scenarios": [
+        "热情合影时双手脸旁比耶",
+        "应要求两边都比耶"
+      ],
+      "negative_scenarios": [
+        "数字二的结果手势",
+        "严肃讲解、单手请求或面部通道已有不可覆盖动作"
+      ],
+      "confusable_candidate_ids": [
+        "276",
+        "259",
+        "442"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "数字二、指定单手、严肃交流或面部占用冲突"
+    },
+    {
+      "candidate_id": "649",
+      "label": "打招呼手势",
+      "category_id": "32",
+      "code": "_y_c",
+      "token_ids": [
+        4178,
+        666
+      ],
+      "meaning": "问候、欢迎、自然告别",
+      "distinction": "单手面向用户挥动，不等于双手热烈挥手；朗读问候词不必执行",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "直接面向用户的见面、重逢或告别；不是朗读问候词",
+      "required_evidence": "当前互动确在建立问候或结束交流，或明确要求单手打招呼",
+      "applicable_scenarios": [
+        "初次见面介绍自己",
+        "对方告别时自然挥手回应"
+      ],
+      "negative_scenarios": [
+        "朗读你好两个字",
+        "故事里的人说再见、连续窗口仍在讲同一个开场"
+      ],
+      "confusable_candidate_ids": [
+        "289",
+        "189"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "朗读/第三方问候；已完成开场的连续窗口"
+    },
+    {
+      "candidate_id": "289",
+      "label": "双手挥手",
+      "category_id": "32",
+      "code": "_y_b",
+      "token_ids": [
+        4178,
+        880
+      ],
+      "meaning": "热烈欢迎、热情道别",
+      "distinction": "双手同时挥动；普通轻量问候可用单手",
+      "references": [
+        "v116",
+        "genesis1_full"
+      ],
+      "recall_summary": "热烈欢迎或热情道别，用双手增强表达；普通寒暄优先低幅动作或保持",
+      "required_evidence": "明确双手挥手目标，或欢迎告别的强度足够且人设允许",
+      "applicable_scenarios": [
+        "隆重欢迎久别重逢的朋友",
+        "应要求双手挥着说再见"
+      ],
+      "negative_scenarios": [
+        "普通收到、轻量问候",
+        "用户只要求单手或只是引用欢迎词"
+      ],
+      "confusable_candidate_ids": [
+        "649",
+        "307"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "轻量收到；指定单手或引用欢迎词"
+    },
+    {
+      "candidate_id": "291",
+      "label": "双手下压强调",
+      "category_id": "33",
+      "code": "_z_b",
+      "token_ids": [
+        6415,
+        880
+      ],
+      "meaning": "强调重点、稳住节奏",
+      "distinction": "双掌向下短促下压，不等于拍桌或鼓掌；不随每个重音重复",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "把重点落稳、提示放缓或安抚激动，双掌下压；不随每句重音重复",
+      "required_evidence": "当前确需稳住节奏、强调落点或平复激动，而非一般解释",
+      "applicable_scenarios": [
+        "说先别着急我们一步步来",
+        "总结最关键的一点并落定表达"
+      ],
+      "negative_scenarios": [
+        "逐句讲解都下压",
+        "请求鼓掌、拍桌或只是转述压低价格"
+      ],
+      "confusable_candidate_ids": [
+        "347",
+        "302",
+        "238"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "逐句反复下压；鼓掌/拍桌或抽象压低价格"
+    },
+    {
+      "candidate_id": "302",
+      "label": "双手交叉拒绝",
+      "category_id": "33",
+      "code": "_z_m",
+      "token_ids": [
+        6415,
+        717
+      ],
+      "meaning": "明确拒绝、界限或不可行",
+      "distinction": "双臂成叉而非抱胸；普通事实否定不必用强拒绝姿态",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "明确拒绝或禁止的立场，用双臂成叉强化；普通不能、不会不等于强拒绝",
+      "required_evidence": "边界表达清楚且强度足够，或明确要求交叉手臂拒绝",
+      "applicable_scenarios": [
+        "明确拒绝不合适的要求",
+        "应要求双臂交叉表示不可以"
+      ],
+      "negative_scenarios": [
+        "我不会唱歌这一能力说明",
+        "中性事实否定、引用别人的拒绝或禁止做拒绝手势"
+      ],
+      "confusable_candidate_ids": [
+        "375",
+        "211",
+        "459"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "中性否定/不会某能力；引用拒绝或禁止该手势"
+    },
+    {
+      "candidate_id": "305",
+      "label": "握拳加油",
+      "category_id": "34",
+      "code": "_A_b",
+      "token_ids": [
+        1566,
+        880
+      ],
+      "meaning": "打气、支持、助威",
+      "distinction": "单手握拳短促挥动，不等于双手复合鼓励或庆祝成功",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "事情尚待完成时的加油与支持；已成功的庆祝、一般强调另作比较",
+      "required_evidence": "用户正在尝试或遇到困难，角色在表达支持而非评价已完成成果",
+      "applicable_scenarios": [
+        "考试前鼓励继续加油",
+        "应要求单手握拳助威"
+      ],
+      "negative_scenarios": [
+        "已经取得成功需要祝贺",
+        "普通结论强调、用户明确要求双手复合鼓励"
+      ],
+      "confusable_candidate_ids": [
+        "440",
+        "304",
+        "271"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "已成功后的庆祝、普通强调；指定双手复合鼓励"
+    },
+    {
+      "candidate_id": "304",
+      "label": "鼓掌",
+      "category_id": "34",
+      "code": "_A_a",
+      "token_ids": [
+        1566,
+        4306
+      ],
+      "meaning": "赞赏、祝贺、庆祝",
+      "distinction": "双掌往复拍击；不等于搓手或双手挥动",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "具体表现、进展或好消息引出赞赏祝贺；无需重大胜利，仍需具体依据",
+      "required_evidence": "角色在赞赏具体表现、进展或已发生的好消息，鼓掌强度相称；或明确鼓掌目标",
+      "applicable_scenarios": [
+        "祝贺顺利完成答辩",
+        "为一段精彩表现鼓掌"
+      ],
+      "negative_scenarios": [
+        "还没有开始就宣称成功",
+        "只说计划考第一、严肃失利或仅说鼓掌这个词"
+      ],
+      "confusable_candidate_ids": [
+        "305",
+        "307",
+        "271"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "没有成果依据的普通开心；尚未完成、引用或计划"
+    },
+    {
+      "candidate_id": "307",
+      "label": "振臂欢呼",
+      "category_id": "34",
+      "code": "_A_d",
+      "token_ids": [
+        1566,
+        814
+      ],
+      "meaning": "强烈兴奋、热烈庆祝",
+      "distinction": "双臂高举挥舞，幅度大；区别于单手加油和普通鼓掌",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "强烈喜悦、惊喜或重大庆祝的高幅表达；普通心情好用较轻动作",
+      "required_evidence": "角色当前极强喜悦、惊喜或庆祝，且站立和上方活动空间允许；或明确欢呼目标",
+      "applicable_scenarios": [
+        "得知重要比赛夺冠后热烈庆祝",
+        "应要求高举双臂欢呼"
+      ],
+      "negative_scenarios": [
+        "还未发生的愿望、普通答对小问题",
+        "严肃场景或上方空间不允许"
+      ],
+      "confusable_candidate_ids": [
+        "304",
+        "305",
+        "127"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通心情好、小进展；无站立/上方空间依据"
+    },
+    {
+      "candidate_id": "331",
+      "label": "挠挠身体",
+      "category_id": "37",
+      "code": "_D_n",
+      "token_ids": [
+        1557,
+        1089
+      ],
+      "meaning": "局部抓痒的身体动作",
+      "distinction": "触碰自身肌肤，区别于搓手和触碰他人；不作为普通讲话伴随",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "身体局部抓挠的明确演示；不从用户痒、紧张或聊天停顿推断角色抓挠",
+      "required_evidence": "抓挠自身身体是明确目标，且相关部位与姿态可执行",
+      "applicable_scenarios": [
+        "应要求演示挠挠手臂或身体",
+        "明确模仿可见抓挠动作"
+      ],
+      "negative_scenarios": [
+        "用户说我身上很痒",
+        "紧张、思考或没有动作目标时随意抓挠"
+      ],
+      "confusable_candidate_ids": [
+        "318",
+        "324"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户身体痒；没有抓挠目标的普通聊天"
+    },
+    {
+      "candidate_id": "332",
+      "label": "挠眼下",
+      "category_id": "37",
+      "code": "_D_o",
+      "token_ids": [
+        1557,
+        14179
+      ],
+      "meaning": "眼下局部触碰",
+      "distinction": "指尖触及下眼睑区域，不等于擦眼泪或摸脸；不作为普通讲话伴随",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "下眼睑区域的轻触抓挠演示；不把悲伤、眼泪或眼疲劳混同",
+      "required_evidence": "明确指定挠眼下或模仿同位置动作，而非擦泪目标",
+      "applicable_scenarios": [
+        "应要求轻轻挠一下眼下",
+        "模仿清楚可见的下眼睑触碰"
+      ],
+      "negative_scenarios": [
+        "用户说自己眼睛难受",
+        "需要擦眼角泪水或泛泛表达难过"
+      ],
+      "confusable_candidate_ids": [
+        "333",
+        "335"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户眼睛难受；擦泪目标或一般难过"
+    },
+    {
+      "candidate_id": "333",
+      "label": "单手擦眼泪",
+      "category_id": "37",
+      "code": "_D_p",
+      "token_ids": [
+        1557,
+        620
+      ],
+      "meaning": "难过、含泪、感动",
+      "distinction": "单手拭过眼角，不等于挠眼下；不因提到眼泪自动表演哭泣",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色已有落泪或含泪的情绪表达，或明确擦泪目标；仅听到悲伤不必演哭",
+      "required_evidence": "角色当前确有含泪/落泪表达，或明确擦泪演示；仅难过不证明需要擦泪",
+      "applicable_scenarios": [
+        "角色讲到自身感动落泪并拭眼角",
+        "应要求演示擦眼泪"
+      ],
+      "negative_scenarios": [
+        "用户说我哭了但角色在理性安慰",
+        "转述伤心故事、挠眼下或单纯微笑"
+      ],
+      "confusable_candidate_ids": [
+        "332",
+        "161",
+        "356"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "只有难过而无含泪依据；用户哭泣或第三方故事"
+    },
+    {
+      "candidate_id": "339",
+      "label": "玩头发",
+      "category_id": "37",
+      "code": "_D_v",
+      "token_ids": [
+        1557,
+        2273
+      ],
+      "meaning": "轻松、羞涩或思索中的细微活动",
+      "distinction": "需要可用侧边长发；不等于摸耳后或整理不存在的头发",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "有可用侧边长发的羞涩、松弛细微活动；不凭空创造头发或当默认思考动作",
+      "required_evidence": "角色有可触及长发，人设支持随性活动，且当前表达略带羞涩或松弛",
+      "applicable_scenarios": [
+        "亲近聊天中略带害羞地组织表达",
+        "应要求轻轻玩一下侧边头发"
+      ],
+      "negative_scenarios": [
+        "明确不具备可用长发；自然伴随时发型信息没有依据",
+        "严肃分析难题、要求摸耳后或用户说自己掉头发"
+      ],
+      "confusable_candidate_ids": [
+        "324",
+        "335",
+        "348"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "无长发依据、严肃分析；摸耳后或用户掉发"
+    },
+    {
+      "candidate_id": "326",
+      "label": "摸额头",
+      "category_id": "37",
+      "code": "_D_i",
+      "token_ids": [
+        1557,
+        5318
+      ],
+      "meaning": "思索、轻微困扰",
+      "distinction": "手掌覆于前额，不等于头疼表演或捂脸无奈",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "回忆卡壳、轻微困扰或意识到疏漏时摸前额；普通分析与头痛表演需区分",
+      "required_evidence": "角色表达短暂想不起来、卡壳或自我懊恼，或明确触摸前额目标",
+      "applicable_scenarios": [
+        "说这个名字我一时想不起来",
+        "发现自己漏看一步后轻触前额"
+      ],
+      "negative_scenarios": [
+        "普通计算思考",
+        "用户头痛、明确疼痛表演或捂住整张脸的无奈目标"
+      ],
+      "confusable_candidate_ids": [
+        "465",
+        "450",
+        "455"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通推理；用户头痛、角色疼痛或整脸遮挡目标"
+    },
+    {
+      "candidate_id": "356",
+      "label": "双手捂胸口",
+      "category_id": "37",
+      "code": "_D_M",
+      "token_ids": [
+        1557,
+        1245
+      ],
+      "meaning": "触动、感动、强烈关切",
+      "distinction": "两手贴胸，区别于单手抚胸；不把普通自我介绍当作强烈情绪",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "强烈触动、感动或珍惜以双手贴胸表达；普通感谢不必夸张",
+      "required_evidence": "角色自己的触动明确且强度足够，或明确双手捂胸目标",
+      "applicable_scenarios": [
+        "听到真挚心意后表达很感动",
+        "应要求双手按在胸口"
+      ],
+      "negative_scenarios": [
+        "普通自我介绍、一般谢谢",
+        "用户胸痛的事实不能当作角色身体状态"
+      ],
+      "confusable_candidate_ids": [
+        "624",
+        "333"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通自我介绍/轻量感谢；用户胸痛"
+    },
+    {
+      "candidate_id": "353",
+      "label": "手托脸颊",
+      "category_id": "37",
+      "code": "_D_J",
+      "token_ids": [
+        1557,
+        10598
+      ],
+      "meaning": "温柔聆听、轻松陪伴",
+      "distinction": "单侧手掌承托脸颊，区别于轻触脸颊和双手托腮",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "悠闲陪伴中单掌承托脸颊、温柔倾听；不把任何思考都托脸",
+      "required_evidence": "角色在轻松聆听或悠闲互动，人设与姿态支持托住一侧脸颊",
+      "applicable_scenarios": [
+        "安静听熟悉的人讲一天经历",
+        "应要求单手托住脸颊"
+      ],
+      "negative_scenarios": [
+        "需要立即专业答复或严肃求助",
+        "只是摸脸、双手期待托腮或分析推理"
+      ],
+      "confusable_candidate_ids": [
+        "354",
+        "335",
+        "465"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "严肃求助、理性推理；摸脸或双手托腮目标"
+    },
+    {
+      "candidate_id": "352",
+      "label": "侧耳倾听",
+      "category_id": "37",
+      "code": "_D_I",
+      "token_ids": [
+        1557,
+        7959
+      ],
+      "meaning": "专注倾听、请继续说",
+      "distinction": "手掌贴耳廓且头向同侧偏斜；动作不证明已听清或替代音频理解",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色表示专注倾听或邀请继续，手掌贴耳且侧头；不由听字证明听清",
+      "required_evidence": "倾听是当前交流意图、角色姿态允许，或明确侧耳动作目标",
+      "applicable_scenarios": [
+        "对轻声讲话表示我在认真听",
+        "应要求做侧耳倾听的动作"
+      ],
+      "negative_scenarios": [
+        "讨论听觉系统知识",
+        "我没听清不能靠动作伪称听清，用户要求提醒别人听则需比较指耳"
+      ],
+      "confusable_candidate_ids": [
+        "351",
+        "657"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "谈听觉知识；伪称听清或要求用户听的目标"
+    },
+    {
+      "candidate_id": "335",
+      "label": "单手摸脸",
+      "category_id": "37",
+      "code": "_D_r",
+      "token_ids": [
+        1557,
+        1710
+      ],
+      "meaning": "温柔、害羞、柔和的自我表达",
+      "distinction": "单手掌轻贴脸颊，不是托住脸颊或双手摸脸",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色温柔、害羞的单侧轻触脸颊；泛泛难题与所有思考不对应摸脸",
+      "required_evidence": "人设允许柔和或害羞表达，情绪归属角色自己，或明确单手摸脸目标",
+      "applicable_scenarios": [
+        "收到亲切夸奖后略带羞涩回应",
+        "应要求单掌轻贴一侧脸颊"
+      ],
+      "negative_scenarios": [
+        "只是需要推理计算",
+        "要求托住脸颊、双手摸脸或用户叙述别人害羞"
+      ],
+      "confusable_candidate_ids": [
+        "353",
+        "336",
+        "444"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通推理、第三方害羞；托脸或双手摸脸目标"
+    },
+    {
+      "candidate_id": "337",
+      "label": "戳脸颊",
+      "category_id": "37",
+      "code": "_D_t",
+      "token_ids": [
+        1557,
+        528
+      ],
+      "meaning": "可爱、俏皮的自我表达",
+      "distinction": "单根指尖轻戳自身脸颊，不等于手掌摸脸；依赖人设",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "俏皮可爱的自我戳脸，需有可爱互动或明确目标；非普通思考或所有赞美",
+      "required_evidence": "角色确在轻松卖萌且人设允许，或明确指尖戳自己脸颊目标",
+      "applicable_scenarios": [
+        "可爱拍照互动中俏皮戳脸",
+        "应要求用一根手指戳脸颊"
+      ],
+      "negative_scenarios": [
+        "专业场景一般感谢",
+        "用户要手掌摸脸、托脸或触碰用户的脸"
+      ],
+      "confusable_candidate_ids": [
+        "335",
+        "442"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "专业场景一般感谢；掌心摸脸、托脸或触碰用户"
+    },
+    {
+      "candidate_id": "321",
+      "label": "摸喉结",
+      "category_id": "37",
+      "code": "_D_d",
+      "token_ids": [
+        1557,
+        814
+      ],
+      "meaning": "颈部局部动作展示",
+      "distinction": "沿喉结锁骨触碰，不等于摸耳朵、摸脖子；非普通讲话伴随",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "喉结锁骨区域触碰的明确动作目标；不从紧张、嗓子或亲密词汇推断",
+      "required_evidence": "用户明确指定对应部位与动作或可信未完成的同动作演示目标",
+      "applicable_scenarios": [
+        "应要求演示摸喉结动作",
+        "明确模仿喉结至锁骨的触碰"
+      ],
+      "negative_scenarios": [
+        "用户说自己嗓子疼或声音沙哑",
+        "普通紧张、摸颈后或未获允许的亲密表达"
+      ],
+      "confusable_candidate_ids": [
+        "318",
+        "323"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户嗓子疼、一般紧张、摸颈后或无许可亲昵"
+    },
+    {
+      "candidate_id": "351",
+      "label": "指向耳朵请听",
+      "category_id": "37",
+      "code": "_D_H",
+      "token_ids": [
+        1557,
+        2039
+      ],
+      "meaning": "提醒注意听、强调听觉内容",
+      "distinction": "食指点向耳侧，不等于侧耳倾听；不能证明听觉能力",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "把用户注意引向声音或接下来的语音；不等于角色侧耳聆听",
+      "required_evidence": "角色正在邀请用户听某段内容或强调听觉注意，或明确指耳目标",
+      "applicable_scenarios": [
+        "说请注意听这个声音",
+        "提醒用户接下来有一个发音细节"
+      ],
+      "negative_scenarios": [
+        "用户要求角色认真听自己讲话",
+        "讨论耳朵、听觉能力或已播放过的声音被重复提及"
+      ],
+      "confusable_candidate_ids": [
+        "352",
+        "225"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "要求角色倾听；讨论耳朵或重复已播声音"
+    },
+    {
+      "candidate_id": "336",
+      "label": "双手摸脸",
+      "category_id": "37",
+      "code": "_D_s",
+      "token_ids": [
+        1557,
+        643
+      ],
+      "meaning": "惊喜、害羞、可爱回应",
+      "distinction": "两掌贴两侧脸颊，不等于双手托腮；占用面部",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "惊喜或害羞中的双掌轻贴脸颊；与承托下巴和遮脸的复合动作分开",
+      "required_evidence": "角色有适度可爱情绪且人设允许，或明确双手摸脸目标",
+      "applicable_scenarios": [
+        "轻松惊喜时双手贴脸表达可爱",
+        "应要求两掌贴两侧脸颊"
+      ],
+      "negative_scenarios": [
+        "明确双手托腮或捂脸轻晃",
+        "仅第三方害羞、严肃问题或面部动作不可覆盖"
+      ],
+      "confusable_candidate_ids": [
+        "335",
+        "354",
+        "444"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "第三方害羞、严肃问题；托腮或遮脸轻晃目标"
+    },
+    {
+      "candidate_id": "323",
+      "label": "摸耳朵",
+      "category_id": "37",
+      "code": "_D_f",
+      "token_ids": [
+        1557,
+        761
+      ],
+      "meaning": "耳部局部触碰",
+      "distinction": "交互对象是自身耳朵，不是耳环、耳后或头发；非普通讲话伴随",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "明确触碰自身耳廓或耳垂的动作目标；用户耳痒和提到耳环不等于该动作",
+      "required_evidence": "耳朵的具体触碰目标明确，位置与手部动作匹配而非仅有耳部话题",
+      "applicable_scenarios": [
+        "应要求轻摸自己的耳朵",
+        "模仿清楚可见的耳廓或耳垂摩挲"
+      ],
+      "negative_scenarios": [
+        "用户说我耳朵痒但未请求动作",
+        "明确要求摸耳环、耳后或整理头发"
+      ],
+      "confusable_candidate_ids": [
+        "324",
+        "352",
+        "321"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户耳痒；耳后、耳环或整理头发目标"
+    },
+    {
+      "candidate_id": "354",
+      "label": "双手托腮",
+      "category_id": "37",
+      "code": "_D_K",
+      "token_ids": [
+        1557,
+        10102
+      ],
+      "meaning": "专注倾听、期待、可爱亲近",
+      "distinction": "两掌稳定承托脸颊，不等于双手摸脸；占用面部，依赖人设与场景",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "对后续内容充满期待或可爱地专注聆听，双掌托腮；普通同意和理性推理不对应",
+      "required_evidence": "角色在等待对方继续或期待揭晓，人设允许可爱亲近的承托姿态",
+      "applicable_scenarios": [
+        "说接下来呢我想听你讲",
+        "应要求双手托腮等着听故事"
+      ],
+      "negative_scenarios": [
+        "我明白了的单次确认",
+        "严肃解决问题、简单双手摸脸或遮脸害羞"
+      ],
+      "confusable_candidate_ids": [
+        "353",
+        "336",
+        "465"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "单次确认、严肃解决问题；摸脸或遮脸目标"
+    },
+    {
+      "candidate_id": "347",
+      "label": "手指指手心",
+      "category_id": "37",
+      "code": "_D_D",
+      "token_ids": [
+        1557,
+        1557
+      ],
+      "meaning": "逐项解释、引向具体要点",
+      "distinction": "食指指向另一掌心，不等于拍手、数字手势或实际操作物品",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "逐项梳理时将注意落在一个具体要点，食指指掌心；与单纯数量手势分开",
+      "required_evidence": "当前确在分解步骤、列举或逐项解释，或明确指手心目标",
+      "applicable_scenarios": [
+        "逐点说明办理流程",
+        "应要求一根手指指向另一只手心"
+      ],
+      "negative_scenarios": [
+        "用户明确要用数字三作答",
+        "泛泛介绍整体范围或需要实际按按钮"
+      ],
+      "confusable_candidate_ids": [
+        "237",
+        "238",
+        "260"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "精确数字作答、介绍整体；实际按按钮"
+    },
+    {
+      "candidate_id": "318",
+      "label": "摸脖子",
+      "category_id": "37",
+      "code": "_D_a",
+      "token_ids": [
+        1557,
+        4306
+      ],
+      "meaning": "迟疑、轻微拘谨",
+      "distinction": "单手摩挲颈后，不等于摸喉结或耳后；需要符合人设",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "轻微社交紧张或迟疑中的颈后摩挲；不把普通思考、用户颈痛当作角色摸脖子",
+      "required_evidence": "角色自己的拘谨或迟疑明确且人设支持该习惯，或明确摸颈后目标",
+      "applicable_scenarios": [
+        "略显拘谨地回答一个私人问题",
+        "应要求轻摸颈后"
+      ],
+      "negative_scenarios": [
+        "一般知识推理、用户说我脖子酸",
+        "明确摸喉结、耳后或身体部位不一致"
+      ],
+      "confusable_candidate_ids": [
+        "324",
+        "321",
+        "465"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通知识推理、用户脖子酸；喉结/耳后目标"
+    },
+    {
+      "candidate_id": "348",
+      "label": "咬手指",
+      "category_id": "37",
+      "code": "_D_E",
+      "token_ids": [
+        1557,
+        2089
+      ],
+      "meaning": "带紧张犹豫的思索",
+      "distinction": "轻咬拇指尖，不是手指心或捏合；依赖人设，避免重复",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色紧张犹豫且人设允许的咬拇指思索；不作为任何难题的默认动作",
+      "required_evidence": "有明显紧张或犹豫、自我安抚意味且人设支持，或明确咬手指目标",
+      "applicable_scenarios": [
+        "轻松表演中犹豫选哪个",
+        "应要求咬住拇指尖做思考状"
+      ],
+      "negative_scenarios": [
+        "专业分析难题、普通让我想想",
+        "用户说自己紧张或要求用手指比心"
+      ],
+      "confusable_candidate_ids": [
+        "465",
+        "324",
+        "283"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通让我想想、专业分析；用户自己的紧张"
+    },
+    {
+      "candidate_id": "324",
+      "label": "摸耳后",
+      "category_id": "37",
+      "code": "_D_g",
+      "token_ids": [
+        1557,
+        1889
+      ],
+      "meaning": "社交迟疑、轻微尴尬、拘谨",
+      "distinction": "单手摩擦耳后，不等于摸耳垂或整理头发",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色稍显拘谨、尴尬或拿不准如何开口时摩擦耳后；普通分析、耳朵痒不对应",
+      "required_evidence": "存在角色自己的社交迟疑或轻微尴尬，人设支持该细微动作，或明确摸耳后目标",
+      "applicable_scenarios": [
+        "发现自己说错小事后略显不好意思",
+        "一时拿不准怎么接话而拘谨停顿"
+      ],
+      "negative_scenarios": [
+        "普通计算和理性分析",
+        "用户耳朵痒、要求摸耳垂或角色只在转述他人尴尬"
+      ],
+      "confusable_candidate_ids": [
+        "323",
+        "318",
+        "465"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通计算、用户耳痒；耳垂或第三方尴尬"
+    },
+    {
+      "candidate_id": "345",
+      "label": "手摸脚踝",
+      "category_id": "37",
+      "code": "_D_B",
+      "token_ids": [
+        1557,
+        1668
+      ],
+      "meaning": "脚踝触碰的动作展示",
+      "distinction": "涉及抬腿和俯身，需可见脚踝与活动空间；非普通讲话伴随",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "抬腿触碰自身脚踝的明确演示；不从脚踝话题、疼痛或拉伸词推断",
+      "required_evidence": "目标明确涉及脚踝触碰，且姿态、平衡、景别和活动空间可靠",
+      "applicable_scenarios": [
+        "应要求用手摸自己的脚踝",
+        "明确模仿抬腿触踝动作"
+      ],
+      "negative_scenarios": [
+        "用户说我脚踝疼但没要求动作",
+        "明确要求摸膝盖而非脚踝；自然伴随没有腿部活动的表达目标"
+      ],
+      "confusable_candidate_ids": [
+        "382",
+        "395"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户脚踝疼、目标是膝盖；无腿部可执行条件"
+    },
+    {
+      "candidate_id": "363",
+      "label": "两指捏合",
+      "category_id": "38",
+      "code": "_E_g",
+      "token_ids": [
+        2089,
+        1889
+      ],
+      "meaning": "很小、很少、精细程度",
+      "distinction": "拇指食指成钳状，不等于 OK 或真实拿取物品；与659语义近似时按实际手型匹配",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "用拇指食指表示很小、很少或精细程度；不等于 OK、精确数字七或真实取物",
+      "required_evidence": "表达焦点是微小尺度或少量，或指定对应钳状手型；与659证据不足时不强分",
+      "applicable_scenarios": [
+        "说明只差一点点",
+        "应要求拇指食指捏合表示很小"
+      ],
+      "negative_scenarios": [
+        "数字七手型或 OK 请求",
+        "要求实际夹起商品但角色无法取物"
+      ],
+      "confusable_candidate_ids": [
+        "659",
+        "272",
+        "264"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "OK/数字七目标；实际取物却无取物能力"
+    },
+    {
+      "candidate_id": "364",
+      "label": "手指滑动",
+      "category_id": "38",
+      "code": "_E_h",
+      "token_ids": [
+        2089,
+        1523
+      ],
+      "meaning": "连续滑动、拖动",
+      "distinction": "指尖持续滑行，不等于单次点击；不假设存在可操作表面",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "明确的连续滑动、拖动演示；泛泛讲步骤和单击不对应滑动",
+      "required_evidence": "目标是指尖沿可用表面连续滑行，表面或演示设定可信",
+      "applicable_scenarios": [
+        "演示在已有触控面上拖动",
+        "应要求沿桌面滑一下手指"
+      ],
+      "negative_scenarios": [
+        "只说往下看而没有操作目标",
+        "按一下按钮、敲击或未存在的屏幕"
+      ],
+      "confusable_candidate_ids": [
+        "347",
+        "363"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "无可信表面；只看下方、单击或敲击目标"
+    },
+    {
+      "candidate_id": "369",
+      "label": "打双引号手势",
+      "category_id": "38",
+      "code": "_E_m",
+      "token_ids": [
+        2089,
+        717
+      ],
+      "meaning": "引用、特殊称谓、反讽",
+      "distinction": "双手引号示意；一般引用不必配动作，不能随所有引号机械执行",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色正在强调特殊说法或反讽意味的空气引号；普通引用不必配手势",
+      "required_evidence": "语言需要凸显非字面称谓或带引号的意味，或明确空气引号目标",
+      "applicable_scenarios": [
+        "把某种所谓成功加以善意反讽",
+        "应要求做双引号手势"
+      ],
+      "negative_scenarios": [
+        "只是朗读一段有引号的文本",
+        "提到引用功能、严肃指控却没有反讽立场"
+      ],
+      "confusable_candidate_ids": [
+        "253",
+        "237"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通朗读引号文本、讨论引用功能；无反讽/特殊称谓"
+    },
+    {
+      "candidate_id": "659",
+      "label": "手指捏合",
+      "category_id": "38",
+      "code": "_E_t",
+      "token_ids": [
+        2089,
+        528
+      ],
+      "meaning": "细小尺寸、少量、捏合形态",
+      "distinction": "拇指食指指尖靠拢，其余手指自然弯曲；与363近似，不能凭语义推断不存在的动作差异",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "捏合手型表达细小、少量；与363相近，不凭词语细微差别虚构动作区别",
+      "required_evidence": "有捏合的明确手型证据或微小尺度的表达目标，语义重叠允许同义候选",
+      "applicable_scenarios": [
+        "讲解只有一点点的差距",
+        "应要求拇指食指指尖捏合"
+      ],
+      "negative_scenarios": [
+        "明确 OK 或数字七",
+        "要求夹起真实物品而无可执行取物动作"
+      ],
+      "confusable_candidate_ids": [
+        "363",
+        "272",
+        "264"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "OK/数字七目标；实际夹起物品"
+    },
+    {
+      "candidate_id": "662",
+      "label": "手指张开",
+      "category_id": "38",
+      "code": "_E_u",
+      "token_ids": [
+        2089,
+        7300
+      ],
+      "meaning": "开放手型、五指张开的形态展示",
+      "distinction": "展示手型；明确数字五目标优先匹配数字五手势，不等于挥手",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "展示五指自然张开的手型；明确数字五目标与一般开放手型分开",
+      "required_evidence": "目标是手指展开形态而非精确数字结果，或明确同手型模仿",
+      "applicable_scenarios": [
+        "演示把五根手指张开",
+        "应要求把手指自然分开给用户看"
+      ],
+      "negative_scenarios": [
+        "用手势回答五或计算结果五",
+        "挥手告别、张开双臂或只说放开点"
+      ],
+      "confusable_candidate_ids": [
+        "262",
+        "649"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "精确数字五、挥手、张开双臂；抽象放开点"
+    },
+    {
+      "candidate_id": "375",
+      "label": "食指左右摇摆否定",
+      "category_id": "38",
+      "code": "_E_s",
+      "token_ids": [
+        2089,
+        643
+      ],
+      "meaning": "不可以、不要、否定",
+      "distinction": "单根食指左右摇摆；不等于摇头或双臂交叉，普通否定无需每次执行",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "清楚劝止或否定某做法，单指左右摆动；不是所有不字或能力不足的伴随",
+      "required_evidence": "角色有明确劝止立场或手势请求，强度适合轻量否定",
+      "applicable_scenarios": [
+        "轻松提醒这个做法不可以",
+        "应要求摇食指表示不要"
+      ],
+      "negative_scenarios": [
+        "我不会唱歌、不是这个答案的中性说明",
+        "引用别人的不要或明确禁止摇手指"
+      ],
+      "confusable_candidate_ids": [
+        "302",
+        "459"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "中性不会/答错；引用不要或禁止该手势"
+    },
+    {
+      "candidate_id": "376",
+      "label": "双脚自然站立",
+      "category_id": "39",
+      "code": "_F_a",
+      "token_ids": [
+        1400,
+        4306
+      ],
+      "meaning": "自然、稳定的站姿",
+      "distinction": "需已有站立条件，不自行代替坐起、站起或姿态切换",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "已有站立状态下的自然稳定站姿或明确姿态演示；不能冒充从坐姿站起来",
+      "required_evidence": "站立条件与全身姿态可执行，目标是静态自然站姿而非起身转场",
+      "applicable_scenarios": [
+        "应要求保持自然站姿",
+        "演示双脚与肩同宽站立"
+      ],
+      "negative_scenarios": [
+        "用户从当前坐姿要求站起来但没有起身动作",
+        "只说立场或自然点"
+      ],
+      "confusable_candidate_ids": [
+        "378",
+        "106"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "坐姿起身目标；立场等抽象含义"
+    },
+    {
+      "candidate_id": "378",
+      "label": "双脚分开站立",
+      "category_id": "39",
+      "code": "_F_c",
+      "token_ids": [
+        1400,
+        666
+      ],
+      "meaning": "开阔、稳定的站姿",
+      "distinction": "双脚左右分开；需要全身姿态可执行，不等于行走或跳跃",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "双脚分开形成开阔站姿的明确姿态目标；不代表行走、跳跃或站起",
+      "required_evidence": "全身与站立条件可信，目标明确要求双脚左右分开",
+      "applicable_scenarios": [
+        "演示双脚分开站稳",
+        "应要求摆出开阔站姿"
+      ],
+      "negative_scenarios": [
+        "双手摊开介绍范围",
+        "从坐姿起身、普通说站在某观点一边"
+      ],
+      "confusable_candidate_ids": [
+        "376",
+        "127"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "双手摊开、坐姿起身或抽象站在某立场"
+    },
+    {
+      "candidate_id": "382",
+      "label": "单腿向前提膝",
+      "category_id": "39",
+      "code": "_F_g",
+      "token_ids": [
+        1400,
+        1889
+      ],
+      "meaning": "向前提膝的动作演示",
+      "distinction": "单侧腿向前上方抬起，区别于踢腿、双腿跳跃；需站立与活动空间",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "单腿前上方提膝的明确动作演示；不因热身或腿部话题自动抬腿",
+      "required_evidence": "单腿提膝是目标，站立、平衡与腿部空间可执行",
+      "applicable_scenarios": [
+        "应要求抬起一侧膝盖",
+        "演示一个清楚的单腿前提膝动作"
+      ],
+      "negative_scenarios": [
+        "用户说膝盖疼",
+        "双腿跳跃、向前踢腿或下身不可执行"
+      ],
+      "confusable_candidate_ids": [
+        "345",
+        "127"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户膝盖疼、踢腿/双腿跳；腿部不可执行"
+    },
+    {
+      "candidate_id": "395",
+      "label": "全蹲",
+      "category_id": "42",
+      "code": "_I_b",
+      "token_ids": [
+        7959,
+        880
+      ],
+      "meaning": "深蹲、全蹲的姿态展示",
+      "distinction": "臀部接近脚跟，不等于半蹲或坐下；需要全身活动空间",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "全蹲的明确动作演示；不把蹲话题、休息建议或坐下混同",
+      "required_evidence": "目标是膝盖完全折叠的深蹲，全身空间与姿态允许",
+      "applicable_scenarios": [
+        "应要求做一个全蹲",
+        "模仿清楚的深蹲姿态"
+      ],
+      "negative_scenarios": [
+        "只是说蹲守消息或想歇会儿",
+        "要求半蹲或坐下，或已知硬约束不允许全蹲"
+      ],
+      "confusable_candidate_ids": [
+        "376",
+        "382"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "抽象蹲守、想休息；半蹲/坐下或空间不允许"
+    },
+    {
+      "candidate_id": "405",
+      "label": "引导向前",
+      "category_id": "44",
+      "code": "_K_c",
+      "token_ids": [
+        10102,
+        666
+      ],
+      "meaning": "引导、带向下一步",
+      "distinction": "掌心示意前方引路；指向具体对象用指向动作，纯语言转场不必每次配动作",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "邀请用户进入具体下一步或向前行进，掌心示意引导；普通话题转场不必做",
+      "required_evidence": "有明确的引导对象与下一步目标，动作能辅助方向或流程邀请",
+      "applicable_scenarios": [
+        "说请跟我进入下一步操作",
+        "应要求做一个引路手势"
+      ],
+      "negative_scenarios": [
+        "我下面讲第二点的普通列举",
+        "仅指向前方对象或用户要求实际带路但无法移动"
+      ],
+      "confusable_candidate_ids": [
+        "225",
+        "237",
+        "347"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通列举下一点；静态指向或需要实际带路"
+    },
+    {
+      "candidate_id": "650",
+      "label": "魅惑探头",
+      "category_id": "47",
+      "code": "_N_M",
+      "token_ids": [
+        1604,
+        1245
+      ],
+      "meaning": "轻微暧昧、亲密靠近",
+      "distinction": "依赖可信成年会话与关系许可；普通问答、未成年人、严肃场景不适用",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "可信成年亲密互动中角色明确暧昧靠近；普通好奇、赞美和前倾不等价",
+      "required_evidence": "成年关系与会话许可可信，且目标确含暧昧靠近、歪头和眼神接触",
+      "applicable_scenarios": [
+        "应允许的明确请求做魅惑探头",
+        "可信亲密互动中带暧昧意味轻轻靠近"
+      ],
+      "negative_scenarios": [
+        "普通看看细节、专业答疑或未知年龄",
+        "用户只是说你很好看"
+      ],
+      "confusable_candidate_ids": [
+        "657",
+        "170",
+        "658"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通好奇/赞美；成年关系或会话许可不明"
+    },
+    {
+      "candidate_id": "658",
+      "label": "闭眼睛靠近亲吻",
+      "category_id": "47",
+      "code": "_N_N",
+      "token_ids": [
+        1604,
+        1604
+      ],
+      "meaning": "直接、亲密的闭眼亲吻",
+      "distinction": "靠近、闭眼与嘟嘴缺一不可；不由普通赞美或镜头靠近推断",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "明确且获允许的闭眼靠近亲吻目标；不从普通亲近词或赞美自动升级",
+      "required_evidence": "可信会话允许亲密互动，具体亲吻目标仍未履约且未被禁止",
+      "applicable_scenarios": [
+        "应明确请求靠近闭眼亲一下镜头",
+        "继续履行已确认且未完成的闭眼亲吻目标"
+      ],
+      "negative_scenarios": [
+        "只是嘟嘴、说我喜欢你或描述别人亲吻",
+        "已完成亲吻的下一窗口又提到同一句话"
+      ],
+      "confusable_candidate_ids": [
+        "453",
+        "651"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "仅嘟嘴/喜欢/第三方亲吻；目标已履约"
+    },
+    {
+      "candidate_id": "440",
+      "label": "鼓励（双手握拳，屈臂举在胸前，双拳交替上下小幅度敲击两次，随后双拳同时向下用力一顿，同时重重地点一下头，眼神坚定地看向前方）",
+      "category_id": "47",
+      "code": "_N_e",
+      "token_ids": [
+        1604,
+        2204
+      ],
+      "meaning": "坚定支持、鼓励坚持",
+      "distinction": "双拳交替敲击再下顿并点头，区别于单手加油与成功庆祝",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "面对困难持续坚定打气，双拳复合鼓励；一般加油或成功庆祝另作比较",
+      "required_evidence": "角色在支持尚未完成的挑战，需要较强持续鼓励且人设允许",
+      "applicable_scenarios": [
+        "对方受挫想放弃时坚定支持",
+        "应要求双手握拳做完整鼓励动作"
+      ],
+      "negative_scenarios": [
+        "刚完成目标的成功庆祝",
+        "只要单手加油、普通确认或严肃倾诉不宜夸张"
+      ],
+      "confusable_candidate_ids": [
+        "305",
+        "304",
+        "307"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "已经成功的庆祝、普通确认；指定单手加油"
+    },
+    {
+      "candidate_id": "441",
+      "label": "俏皮（歪头眨眼轻颠跺脚）",
+      "category_id": "47",
+      "code": "_N_f",
+      "token_ids": [
+        1604,
+        761
+      ],
+      "meaning": "俏皮、活泼",
+      "distinction": "歪头眨眼并轻颠脚跟；严肃、悲伤、专业或低打扰场景不适用",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "活泼人设在轻松开心/玩笑中的俏皮表达；克制或悲伤场景不适用",
+      "required_evidence": "角色当前轻松开心或接住玩笑，人设支持活泼俏皮且身体活动允许",
+      "applicable_scenarios": [
+        "接住善意玩笑后俏皮回应",
+        "应要求歪头眨眼轻颠脚跟"
+      ],
+      "negative_scenarios": [
+        "严肃求助、悲伤倾诉",
+        "只要求单眼眨一下或只讲可爱这个词"
+      ],
+      "confusable_candidate_ids": [
+        "654",
+        "442"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "严肃/悲伤或克制人设；只要求单眼眨眼"
+    },
+    {
+      "candidate_id": "443",
+      "label": "撒娇（低头身子摇晃，双手向前锤）",
+      "category_id": "47",
+      "code": "_N_h",
+      "token_ids": [
+        1604,
+        1523
+      ],
+      "meaning": "撒娇、请求关注",
+      "distinction": "上身轻晃的复合表达；普通工作请求和严肃反馈不适用",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "可信亲近关系里角色请求关注的撒娇；不是把用户拒绝都当作亲密冷落",
+      "required_evidence": "关系和人设支持撒娇，角色正在表达轻度依赖或想被关注",
+      "applicable_scenarios": [
+        "熟悉陪伴中轻声说再陪我聊一会嘛",
+        "应要求做撒娇动作"
+      ],
+      "negative_scenarios": [
+        "工作任务被拒、正式投诉",
+        "用户说别人爱撒娇或关系尚未建立"
+      ],
+      "confusable_candidate_ids": [
+        "160",
+        "651",
+        "442"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "工作拒绝、正式投诉、第三方撒娇；缺少亲近关系"
+    },
+    {
+      "candidate_id": "465",
+      "label": "单指轻抚下巴表示思考",
+      "category_id": "47",
+      "code": "_N_D",
+      "token_ids": [
+        1604,
+        1557
+      ],
+      "meaning": "思考、权衡、推理",
+      "distinction": "单指轻抚下巴并移开视线，不等于咬手指或托腮；动作不证明真实推理过程",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色在权衡选项、组织分析或推理，思考过程确在当前表达中；不只因问题难",
+      "required_evidence": "有正在权衡或思索的语义阶段，角色人设与当前动作状态允许",
+      "applicable_scenarios": [
+        "比较两个方案的利弊时思索",
+        "应要求单指抚下巴做思考状"
+      ],
+      "negative_scenarios": [
+        "答案已经确定且正在直接播报",
+        "只是转述他人思考、紧张犹豫或可爱等待"
+      ],
+      "confusable_candidate_ids": [
+        "326",
+        "348",
+        "354"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "直接播报确定答案、转述；紧张或可爱等待"
+    },
+    {
+      "candidate_id": "438",
+      "label": "自信表达（双手叉腰，挺胸抬头，下巴微微扬起，目视前方）",
+      "category_id": "47",
+      "code": "_N_c",
+      "token_ids": [
+        1604,
+        666
+      ],
+      "meaning": "自信、笃定、积极自我展示",
+      "distinction": "双手叉腰挺胸抬头；不确定、道歉与安慰场景不适用",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色笃定宣布成果或自信展示，双手叉腰挺胸；普通肯定和信息确定不必摆姿态",
+      "required_evidence": "有自我展示或完成挑战的自信立场，表达强度与人设和空间允许",
+      "applicable_scenarios": [
+        "自信介绍自己擅长的能力",
+        "应要求叉腰挺胸展示自信"
+      ],
+      "negative_scenarios": [
+        "可能吧的不确定回答、道歉安慰",
+        "单纯报告一个确定事实"
+      ],
+      "confusable_candidate_ids": [
+        "271",
+        "305"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通心情好/事实确定；不确定、道歉或安慰"
+    },
+    {
+      "candidate_id": "462",
+      "label": "单手捂嘴笑",
+      "category_id": "47",
+      "code": "_N_A",
+      "token_ids": [
+        1604,
+        1566
+      ],
+      "meaning": "轻松开心、觉得有趣、含蓄笑意",
+      "distinction": "单手捂嘴笑，不等于捂嘴惊讶或打哈欠",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "普通开心、觉得有趣或含蓄发笑的轻量笑意表达；无需恋爱/羞涩语境",
+      "required_evidence": "角色当前开心、觉得有趣或含蓄发笑，人设允许以单手轻遮嘴表达笑意；不要求害羞",
+      "applicable_scenarios": [
+        "角色自然表达今天心情很好，带轻松笑意",
+        "听到善意调侃或觉得有趣，以单手遮嘴轻笑"
+      ],
+      "negative_scenarios": [
+        "当前难过、严肃求助或需要表示惊讶",
+        "只有过去开心、引用别人笑声或谈笑话这个词"
+      ],
+      "confusable_candidate_ids": [
+        "155",
+        "457",
+        "449"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "当前悲伤/严肃求助；只有过去开心、引用或他人笑意"
+    },
+    {
+      "candidate_id": "458",
+      "label": "双手捂嘴惊讶",
+      "category_id": "47",
+      "code": "_N_w",
+      "token_ids": [
+        1604,
+        1670
+      ],
+      "meaning": "强烈意外、夸张惊喜",
+      "distinction": "双手捂嘴；一般意外可用基础惊讶或单手捂嘴，强度与人设相称",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "重大意外或强烈惊喜使角色双手捂嘴；普通惊讶不必用最强动作",
+      "required_evidence": "具体反转强度高且角色真在惊讶，或明确双手捂嘴目标",
+      "applicable_scenarios": [
+        "得知极意外的重要好消息",
+        "应要求双手捂嘴作惊讶状"
+      ],
+      "negative_scenarios": [
+        "一般新信息、简单问句",
+        "单手捂嘴请求、含蓄笑意或哈欠"
+      ],
+      "confusable_candidate_ids": [
+        "157",
+        "457",
+        "462"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "一般新信息/简单疑问；单手、忍笑或哈欠目标"
+    },
+    {
+      "candidate_id": "450",
+      "label": "头疼",
+      "category_id": "47",
+      "code": "_N_o",
+      "token_ids": [
+        1604,
+        14179
+      ],
+      "meaning": "角色自身的头痛不适、疼痛表演",
+      "distinction": "手扶头配合痛苦表情，不等于普通摸额头；用户求助时不把动作当作实际诊断",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色自身的头痛表演或明显痛苦状态；复杂问题与用户头痛不是同一证据",
+      "required_evidence": "角色头痛状态来自可信设定或明确表演请求，而非只借用用户症状",
+      "applicable_scenarios": [
+        "应要求扶头演头疼",
+        "可信角色状态明确头痛而表达不适"
+      ],
+      "negative_scenarios": [
+        "用户说我头疼并求助",
+        "这题很头疼的比喻、一般思考或轻触额头"
+      ],
+      "confusable_candidate_ids": [
+        "326",
+        "465",
+        "653"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户头痛、难题比喻或一般思考"
+    },
+    {
+      "candidate_id": "444",
+      "label": "娇羞（低头双手捂脸，身体左右轻晃）",
+      "category_id": "47",
+      "code": "_N_i",
+      "token_ids": [
+        1604,
+        5318
+      ],
+      "meaning": "害羞、亲密回应",
+      "distinction": "低头双手捂脸并轻晃，区别于单手无奈捂脸；依赖人设和关系",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "允许的亲密互动中角色害羞，双手遮脸并轻晃；普通礼貌赞美不必升级",
+      "required_evidence": "可信关系与人设允许娇羞，或明确同复合动作请求",
+      "applicable_scenarios": [
+        "接到亲密表白后害羞回应",
+        "应要求低头捂脸轻晃"
+      ],
+      "negative_scenarios": [
+        "专业场景的谢谢你很专业",
+        "双手贴脸、托腮或用户只是描述自己害羞"
+      ],
+      "confusable_candidate_ids": [
+        "336",
+        "354",
+        "455"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通专业赞美；托腮/摸脸或第三方害羞"
+    },
+    {
+      "candidate_id": "455",
+      "label": "单手捂脸无奈",
+      "category_id": "47",
+      "code": "_N_t",
+      "token_ids": [
+        1604,
+        528
+      ],
+      "meaning": "无奈、尴尬、轻度无语",
+      "distinction": "单手覆面并低头，不等于害羞双手捂脸；严肃求助场景不作轻佻回应",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "角色轻度无奈或尴尬，单手覆面；不把严肃求助当作令人无语",
+      "required_evidence": "角色当前有轻度尴尬或无奈，关系允许单手遮脸；或明确捂脸目标",
+      "applicable_scenarios": [
+        "发现自己的小失误后无奈捂脸",
+        "善意调侃中的轻微无语"
+      ],
+      "negative_scenarios": [
+        "用户严肃求助或倾诉受伤",
+        "娇羞双手遮脸、头痛或简单拒绝"
+      ],
+      "confusable_candidate_ids": [
+        "444",
+        "326",
+        "459"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "当前开心、严肃受伤倾诉；头痛/双手娇羞目标"
+    },
+    {
+      "candidate_id": "453",
+      "label": "亲亲镜头（凑近亲吻）",
+      "category_id": "47",
+      "code": "_N_r",
+      "token_ids": [
+        1604,
+        1710
+      ],
+      "meaning": "亲密、向镜头表达亲吻",
+      "distinction": "上身靠近并嘟嘴，不等于飞吻或单纯嘟嘴；普通问候和赞美不构成亲吻目标",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "明确且会话允许的向镜头亲吻目标；普通感谢、喜欢或问候不能推断亲吻",
+      "required_evidence": "具体亲镜头请求成立且仍未履约，可信会话允许对应亲密互动",
+      "applicable_scenarios": [
+        "应明确请求凑近亲一下镜头",
+        "履行已确认但尚未完成的亲吻目标"
+      ],
+      "negative_scenarios": [
+        "对方说谢谢或你好可爱",
+        "只有飞吻、单纯嘟嘴或已履约后重复提及"
+      ],
+      "confusable_candidate_ids": [
+        "658",
+        "651",
+        "283"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通感谢/赞美；飞吻/嘟嘴目标或已经履约"
+    },
+    {
+      "candidate_id": "442",
+      "label": "卖萌（双手猫爪托腮歪头）",
+      "category_id": "47",
+      "code": "_N_g",
+      "token_ids": [
+        1604,
+        1889
+      ],
+      "meaning": "卖萌、可爱亲近",
+      "distinction": "双手猫爪托腮并歪头；区别于装可怜和娇羞，专业严肃场景不适用",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "人设允许的可爱亲近表达，双手猫爪托腮歪头；不是所有友善话题都卖萌",
+      "required_evidence": "可爱表演目标明确，或轻松亲近氛围与角色风格共同支持",
+      "applicable_scenarios": [
+        "应要求做个可爱猫爪动作",
+        "允许的轻松陪伴中可爱回应"
+      ],
+      "negative_scenarios": [
+        "严肃咨询、专业问题",
+        "只是双手托腮期待、装可怜或娇羞遮脸"
+      ],
+      "confusable_candidate_ids": [
+        "354",
+        "444",
+        "441"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "严肃专业交流；普通友善或托腮/装可怜目标"
+    },
+    {
+      "candidate_id": "449",
+      "label": "打哈欠（单手捂嘴身体后仰）",
+      "category_id": "47",
+      "code": "_N_n",
+      "token_ids": [
+        1604,
+        1089
+      ],
+      "meaning": "困倦、疲惫",
+      "distinction": "单手捂嘴且后仰，不等于捂嘴笑；用户打哈欠不证明角色也困倦",
+      "references": [
+        "v116",
+        "genesis1_limited"
+      ],
+      "recall_summary": "可信角色自身困倦或明确哈欠表演；不因用户累了或谈睡觉就打哈欠",
+      "required_evidence": "角色困倦状态可靠，或用户明确要求哈欠动作，当前场合适合",
+      "applicable_scenarios": [
+        "可信夜间困倦设定下表达有点困",
+        "应要求捂嘴打个哈欠"
+      ],
+      "negative_scenarios": [
+        "用户说我很累或我打了个哈欠",
+        "普通等待、讲睡眠知识或捂嘴笑"
+      ],
+      "confusable_candidate_ids": [
+        "462",
+        "457"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "用户累/哈欠、讲睡眠知识；普通等待或捂嘴笑"
+    },
+    {
+      "candidate_id": "457",
+      "label": "单手捂嘴惊讶",
+      "category_id": "47",
+      "code": "_N_v",
+      "token_ids": [
+        1604,
+        2273
+      ],
+      "meaning": "较轻量的意外、惊喜",
+      "distinction": "单手捂嘴并睁眼，不等于捂嘴笑、双手捂嘴或哈欠",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色明确意外时较轻量地单手捂嘴；不与含蓄笑、哈欠混同",
+      "required_evidence": "有真实意外或惊喜立场，强度适合单手表达，或明确单手捂嘴目标",
+      "applicable_scenarios": [
+        "得知一个出乎意料的小惊喜",
+        "应要求单手捂嘴表示惊讶"
+      ],
+      "negative_scenarios": [
+        "仅问为什么、用户只是说嘴巴",
+        "忍笑、打哈欠或明确双手捂嘴"
+      ],
+      "confusable_candidate_ids": [
+        "157",
+        "458",
+        "462"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通为什么/提到嘴；忍笑、哈欠或指定双手"
+    },
+    {
+      "candidate_id": "459",
+      "label": "摊手无奈",
+      "category_id": "47",
+      "code": "_N_x",
+      "token_ids": [
+        1604,
+        3212
+      ],
+      "meaning": "无可奈何、选项受限",
+      "distinction": "双手摊开略耸肩，区别于中性展示；仍有直接解决方案时避免消极表达",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "角色面对客观局限或无可奈何而摊手略耸肩；中性展示、能力说明不必无奈",
+      "required_evidence": "角色当前明确表达不可改变的局限或无可奈何；不是单纯低落或能力说明",
+      "applicable_scenarios": [
+        "解释无法挽回的错过并表达无奈",
+        "应要求摊手耸肩"
+      ],
+      "negative_scenarios": [
+        "我暂时不会唱歌但语气中性",
+        "普通介绍范围、仍可给出有效解决方案"
+      ],
+      "confusable_candidate_ids": [
+        "238",
+        "455",
+        "302"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通开心、悲伤或中性能力说明；仍有解决办法"
+    },
+    {
+      "candidate_id": "439",
+      "label": "遗憾（低头，双手自然垂下，或单手缓缓拍一下自己的额头，随后轻轻摇头）",
+      "category_id": "47",
+      "code": "_N_d",
+      "token_ids": [
+        1604,
+        814
+      ],
+      "meaning": "遗憾、惋惜",
+      "distinction": "低头垂手或拍额摇头，不等于悲伤、道歉或单纯否定",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "当前对已发生事件的惋惜懊恼；过去低落已释怀或当前开心不适用",
+      "required_evidence": "仅当前对具体错过、失败或疏漏的惋惜懊恼；一般难过不成立，明确演示请求除外",
+      "applicable_scenarios": [
+        "回应已经错过的机会",
+        "发现自己的轻微疏漏后表达可惜"
+      ],
+      "negative_scenarios": [
+        "过去难过但当前已开心或释怀",
+        "仅一般悲伤、未来担忧或需要承担责任的道歉"
+      ],
+      "confusable_candidate_ids": [
+        "161",
+        "653",
+        "326"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "当前开心/释怀；仅过去难过、一般悲伤或未来担忧"
+    },
+    {
+      "candidate_id": "629",
+      "label": "扯低领口（脱衣诱惑）",
+      "category_id": "57",
+      "code": "_X_I",
+      "token_ids": [
+        6859,
+        7959
+      ],
+      "meaning": "衣领细节的性感展示",
+      "distinction": "仅限成年用户明确请求且可信会话策略允许；禁止作为自主伴随动作，赞美外观不等于请求",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "仅可信成年用户明确请求且会话策略允许的扯低领口目标；禁止自主伴随",
+      "required_evidence": "成年用户身份与策略许可可信，动作目标具体明确且未被禁止",
+      "applicable_scenarios": [
+        "应允许的明确扯低领口动作请求",
+        "履行尚未完成的同一已确认目标"
+      ],
+      "negative_scenarios": [
+        "普通夸外观、说你好性感或模糊亲密",
+        "年龄许可未知、仅服装介绍或已履约"
+      ],
+      "confusable_candidate_ids": [
+        "631",
+        "650"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通赞美/服装介绍；成年与许可未知或已履约"
+    },
+    {
+      "candidate_id": "631",
+      "label": "双手轻拉衬衫露出肌肉（性感暧昧）",
+      "category_id": "57",
+      "code": "_X_K",
+      "token_ids": [
+        6859,
+        10102
+      ],
+      "meaning": "拉开衣料展示肌肉",
+      "distinction": "仅限成年用户明确请求且可信会话策略允许；禁止作为自主伴随动作，模糊亲密语义不等于请求",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "仅可信成年用户明确请求且会话策略允许的拉衬衫展示肌肉目标；禁止自主伴随",
+      "required_evidence": "成年用户身份与策略许可可信，具体拉衬衫目标明确且未被禁止",
+      "applicable_scenarios": [
+        "应允许的明确拉衬衫展示肌肉请求",
+        "履行尚未完成的同一已确认目标"
+      ],
+      "negative_scenarios": [
+        "赞美身材、普通穿搭介绍或讨论健身",
+        "年龄许可未知、模糊亲密或已履约"
+      ],
+      "confusable_candidate_ids": [
+        "629",
+        "438"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通赞美/健身话题；成年与许可未知或已履约"
+    },
+    {
+      "candidate_id": "624",
+      "label": "单手抚胸",
+      "category_id": "57",
+      "code": "_X_D",
+      "token_ids": [
+        6859,
+        1557
+      ],
+      "meaning": "真诚、感谢、内心触动",
+      "distinction": "单手贴胸，不等于双手捂胸或拍胸；触动强度与人设相称",
+      "references": [
+        "v116"
+      ],
+      "recall_summary": "真诚感谢或内心认同，以单手贴胸温和表达；一般自我介绍不自动抚胸",
+      "required_evidence": "角色当前真诚感谢、内心触动或郑重表达诚意，单手贴胸与强度相称；或明确抚胸目标",
+      "applicable_scenarios": [
+        "真诚感谢对方的理解支持",
+        "应要求一只手轻放胸前"
+      ],
+      "negative_scenarios": [
+        "每次说我这个代词",
+        "用户胸痛、双手强烈捂胸或拍胸保证目标"
+      ],
+      "confusable_candidate_ids": [
+        "356",
+        "283"
+      ],
+      "review_case_origin": "authored_semantic_review_not_online_prediction",
+      "exclusion_summary": "普通说我、单纯开心；用户胸痛或双手/拍胸目标"
+    }
+  ],
+  "definition_principle": "One action has one usage definition. User input and avatar speech are evidence sources, not separate action modes.",
+  "known_semantic_overlaps": [
+    {
+      "candidate_ids": [
+        "363",
+        "659"
+      ],
+      "reason": "Both registered definitions describe thumb/index pinching. Semantics alone do not establish a reliable unique winner; preserve both identities and review visual evidence or an acceptable candidate set."
+    }
+  ]
+}

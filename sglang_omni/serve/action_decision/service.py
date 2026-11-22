@@ -19,20 +19,23 @@ from starlette.websockets import WebSocketDisconnect
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.serve.streaming_request import (
     StreamedMedia,
+    StreamedRequest,
     media_data_uri,
     receive_streamed_request,
     run_until_websocket_disconnect,
+    serve_streamed_requests,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log
 
 from .catalog import ActionCatalogRegistry, ActionEntry, ResolvedCatalog
 from .contracts import ActionDecision, ActionDecisionRequest, DecisionChannel
-from .contracts import ActionPrefixPrefillRequest, ActionPrefixPrefillResult
-from .prompt import (
-    build_system_prompt,
-    build_user_prompt,
-    uses_reference_prompt,
-)
+from .prompt import build_system_prompt
+from .speech_window import PERSONA_PROFILES
+from .speech_audio import ACTION_AUDIO_ROLES, AVATAR_FOCUS_ROLE, is_exact_silence
+from .model_input import user_message_content
+from .requested_action import parse_requested_action
+from .recall_audit import input_snapshot, recall_variant
+from .simple_audio import MAX_RECALL_AUDIO_BYTES, parse_simple_audio_request
 
 
 class CompletionClient(Protocol):
@@ -45,13 +48,6 @@ class CompletionClient(Protocol):
     ) -> Any: ...
 
     async def abort(self, request_id: str) -> Any: ...
-
-    async def prefill_completion_prefix(
-        self,
-        request: GenerateRequest,
-        *,
-        request_id: str,
-    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -82,13 +78,6 @@ class ActionDecisionConfig:
             raise ValueError("action-decision limits must be positive")
 
 
-@dataclass(frozen=True)
-class _PrefillArtifact:
-    prompt_hash: str
-    cache_key: str
-    candidate_count: int
-
-
 class ActionDecisionEngine:
     def __init__(
         self,
@@ -96,7 +85,10 @@ class ActionDecisionEngine:
         *,
         config: ActionDecisionConfig,
         registry: ActionCatalogRegistry | None = None,
+        prompt_snapshot: dict[str, str] | None = None,
     ) -> None:
+        self._prompt_snapshot = dict(prompt_snapshot) if prompt_snapshot is not None else None
+        self._runtime_prompt_bundles = {}
         self._client = client
         self.config = config
         self.registry = registry or ActionCatalogRegistry(
@@ -108,13 +100,24 @@ class ActionDecisionEngine:
         self._lock = asyncio.Lock()
         self._completed: OrderedDict[str, tuple[str, ActionDecision]] = OrderedDict()
         self._inflight: dict[str, tuple[str, asyncio.Task[ActionDecision]]] = {}
-        self._prefill_lock = asyncio.Lock()
-        self._prefilled: OrderedDict[str, _PrefillArtifact] = OrderedDict()
-        self._prefill_inflight: dict[str, asyncio.Task[_PrefillArtifact]] = {}
+        self._cancelled: OrderedDict[str, None] = OrderedDict()
+
+    def _effective_prompt_snapshot(self, request):
+        if self._prompt_snapshot is not None:
+            return self._prompt_snapshot
+        from .prompt import reference_prompt_profile, E67_REFERENCE_PROFILE
+        reference = reference_prompt_profile(request)
+        if reference is not None and reference != E67_REFERENCE_PROFILE:
+            return None  # Preserve explicitly requested legacy reference profiles.
+        profile = 'e67' if reference == E67_REFERENCE_PROFILE else 'generic'
+        bundle = self._runtime_prompt_bundles.get(profile)
+        return bundle.rules if bundle is not None else None
 
     async def decide(self, request: ActionDecisionRequest) -> ActionDecision:
         digest = _request_digest(request)
         async with self._lock:
+            if request.request_id in self._cancelled:
+                raise asyncio.CancelledError("logical_body_request_cancelled")
             completed = self._completed.get(request.request_id)
             if completed is not None:
                 if completed[0] != digest:
@@ -180,6 +183,26 @@ class ActionDecisionEngine:
         await self._settle(request, digest, task)
         return decision
 
+    async def cancel(self, request_id: str) -> None:
+        """Remove API waiters as well as requests already in model scheduling."""
+        async with self._lock:
+            self._cancelled[request_id] = None
+            self._cancelled.move_to_end(request_id)
+            while len(self._cancelled) > self.config.idempotency_cache_size:
+                self._cancelled.popitem(last=False)
+            entry = self._inflight.get(request_id)
+            task = entry[1] if entry is not None else None
+            if task is not None:
+                task.cancel("logical_body_request_cancelled")
+        try:
+            await self._client.abort(request_id)
+        finally:
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+        emit_structured_log("action", "action_decision_cancel_terminal",
+                            component="action_decision", request_id=request_id,
+                            api_waiter_removed=True, model_abort_requested=True)
+
     async def _settle(
         self,
         request: ActionDecisionRequest,
@@ -197,139 +220,17 @@ class ActionDecisionEngine:
             while len(self._completed) > self.config.idempotency_cache_size:
                 self._completed.popitem(last=False)
 
-    async def prefill(
-        self,
-        request: ActionPrefixPrefillRequest,
-    ) -> ActionPrefixPrefillResult:
-        decision_request = request.as_decision_request()
-        catalog = self.registry.resolve(decision_request)
-        system_prompt = build_system_prompt(decision_request, catalog)
-        prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
-        cache_payload = json.dumps(
-            {
-                "model_id": self.config.model_id,
-                "model_version": self.config.model_version,
-                "channel": request.channel.value,
-                "prompt_hash": prompt_hash,
-                "catalog_version": catalog.catalog_version,
-                "mapping_hash": catalog.mapping_hash,
-                "candidate_ids": [
-                    entry.candidate_id for entry in catalog.entries
-                ],
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
-
-        async with self._prefill_lock:
-            completed = self._prefilled.get(cache_key)
-            if completed is not None:
-                self._prefilled.move_to_end(cache_key)
-                return self._prefill_result(request, completed, cached=True)
-            task = self._prefill_inflight.get(cache_key)
-            joined = task is not None
-            if task is None:
-                task = asyncio.create_task(
-                    self._prefill_once(
-                        decision_request,
-                        catalog,
-                        prompt_hash=prompt_hash,
-                        cache_key=cache_key,
-                    ),
-                    name=f"action-prefix-prefill:{request.channel.value}:{cache_key[:12]}",
-                )
-                self._prefill_inflight[cache_key] = task
-        try:
-            artifact = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            emit_structured_log(
-                "action",
-                "action_prefix_prefill_waiter_cancelled",
-                component="action_decision",
-                request_id=request.request_id,
-                session_id=request.session_id,
-                channel=request.channel.value,
-                cache_key=cache_key,
-            )
-            raise
-        return self._prefill_result(request, artifact, cached=joined)
-
-    async def _prefill_once(
-        self,
-        request: ActionDecisionRequest,
-        catalog: ResolvedCatalog,
-        *,
-        prompt_hash: str,
-        cache_key: str,
-    ) -> _PrefillArtifact:
-        started = time.perf_counter()
-        try:
-            prefill = getattr(self._client, "prefill_completion_prefix", None)
-            if not callable(prefill):
-                raise RuntimeError(
-                    "action completion client does not support prefix prefill"
-                )
-            ready = bool(
-                await prefill(
-                    self._generate_request(request, catalog),
-                    request_id=request.request_id,
-                )
-            )
-            if not ready:
-                raise RuntimeError("action prefix prefill was not accepted")
-            artifact = _PrefillArtifact(
-                prompt_hash=prompt_hash,
-                cache_key=cache_key,
-                candidate_count=len(catalog.entries),
-            )
-            async with self._prefill_lock:
-                self._prefilled[cache_key] = artifact
-                self._prefilled.move_to_end(cache_key)
-                while len(self._prefilled) > self.config.idempotency_cache_size:
-                    self._prefilled.popitem(last=False)
-            emit_structured_log(
-                "action",
-                "action_prefix_prefill_completed",
-                component="action_decision",
-                request_id=request.request_id,
-                session_id=request.session_id,
-                channel=request.channel.value,
-                prompt_hash=prompt_hash,
-                cache_key=cache_key,
-                candidate_count=len(catalog.entries),
-                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
-            )
-            return artifact
-        finally:
-            async with self._prefill_lock:
-                current = self._prefill_inflight.get(cache_key)
-                if current is asyncio.current_task():
-                    self._prefill_inflight.pop(cache_key, None)
-
-    def _prefill_result(
-        self,
-        request: ActionPrefixPrefillRequest,
-        artifact: _PrefillArtifact,
-        *,
-        cached: bool,
-    ) -> ActionPrefixPrefillResult:
-        return ActionPrefixPrefillResult(
-            contract_version=1,
-            request_id=request.request_id,
-            session_id=request.session_id,
-            channel=request.channel,
-            prompt_hash=artifact.prompt_hash,
-            cache_key=artifact.cache_key,
-            candidate_count=artifact.candidate_count,
-            cached=cached,
-            model_id=self.config.model_id,
-            model_version=self.config.model_version,
-        )
-
     async def _decide_once(self, request: ActionDecisionRequest) -> ActionDecision:
         started = time.perf_counter()
+        expected_version = request.runtime_context.get("expected_model_version")
+        if expected_version and expected_version != self.config.model_version:
+            raise ValueError("Body frozen model release does not match the running model")
+        expected_prompt = request.runtime_context.get("expected_prompt_sha256")
+        if expected_prompt:
+            from .prompt import _reference_system_prompt, reference_prompt_profile
+            profile = reference_prompt_profile(request)
+            if profile is None or hashlib.sha256(_reference_system_prompt(profile).encode()).hexdigest() != expected_prompt:
+                raise ValueError("Body frozen prompt digest does not match the running prompt")
         catalog = self.registry.resolve(request)
         emit_structured_log(
             "action",
@@ -341,6 +242,8 @@ class ActionDecisionEngine:
             decision_point_id=request.decision_point_id,
             channel=request.channel.value,
             candidate_count=len(catalog.entries),
+            recall_variant=recall_variant(request),
+            requested_action=request.requested_action,
             media_count=len(request.media),
             model_id=self.config.model_id,
             model_version=self.config.model_version,
@@ -353,7 +256,8 @@ class ActionDecisionEngine:
             return self._decision(
                 request, catalog, entry, started, deterministic=True, reason_code=reason
             )
-        if catalog.hard_bound is not None:
+        persona_window = request.runtime_context.get("prompt_profile") in PERSONA_PROFILES
+        if catalog.hard_bound is not None and not persona_window:
             return self._decision(
                 request,
                 catalog,
@@ -363,44 +267,43 @@ class ActionDecisionEngine:
                 reason_code="required_action_binding",
             )
 
-        result = await self._client.completion(
-            self._generate_request(request, catalog),
-            request_id=request.request_id,
+        # A service health check may send an exactly-zero avatar reply clip.
+        # It contains no semantic evidence for model selection.  Some
+        # constrained backends stop after the shared first token of a legal
+        # action code on this degenerate input (for example ``_g``), which is
+        # only a prefix and must never escape as a model_error.  Use the
+        # catalog's neutral gaze action for the body channel.  Low-volume or
+        # near-silent speech still follows normal model inference.
+        focus = next(
+            (item for item in request.media if item.evidence_role == AVATAR_FOCUS_ROLE),
+            None,
         )
-        code = str(result.text)
-        # Constrained backends normally return the assigned two-token code, but
-        # some deployments decode control tokens to their canonical candidate
-        # ID (for example ``IB0``). Both identify the same catalog entry.
-        entry = catalog.by_code.get(code) or catalog.by_candidate_id.get(code)
-        if entry is None:
-            raise RuntimeError(f"action model returned code outside constrained catalog: {code!r}")
-        usage = result.usage.to_dict() if result.usage is not None else None
-        return self._decision(
-            request,
-            catalog,
-            entry,
-            started,
-            deterministic=False,
-            reason_code="model_selected",
-            weight_version=result.weight_version,
-            usage=usage,
-        )
+        neutral_gaze = catalog.by_candidate_id.get("138")
+        if (
+            request.channel is DecisionChannel.BODY
+            and request.runtime_context.get("decision_mode") == "speech_window"
+            and request.requested_action is None
+            and focus is not None
+            and is_exact_silence(focus)
+            and neutral_gaze is not None
+        ):
+            return self._decision(
+                request,
+                catalog,
+                neutral_gaze,
+                started,
+                deterministic=True,
+                reason_code="silent_avatar_audio_safe_body",
+            )
 
-    def _generate_request(
-        self,
-        request: ActionDecisionRequest,
-        catalog: ResolvedCatalog,
-    ) -> GenerateRequest:
-        user_prompt = {"type": "text", "text": build_user_prompt(request, catalog)}
-        media_content = [
-            {"type": "audio" if item.kind == "audio" else "image"}
-            for item in request.media
-        ]
-        content: list[dict[str, str]] = (
-            [*media_content, user_prompt]
-            if uses_reference_prompt(request)
-            else [user_prompt, *media_content]
-        )
+        content = user_message_content(request, catalog)
+        system_prompt = build_system_prompt(request, catalog, prompt_snapshot=self._effective_prompt_snapshot(request))
+        snapshot = await asyncio.to_thread(input_snapshot, request, catalog, system_prompt, content)
+        emit_structured_log("action", "action_recall_model_input", component="action_decision",
+                            request_id=request.request_id, session_id=request.session_id,
+                            turn_id=request.turn_id, channel=request.channel.value,
+                            model_id=self.config.model_id, model_version=self.config.model_version,
+                            **snapshot)
         metadata: dict[str, Any] = {
             "task": "action_direct",
             "task_role": request.channel.value,
@@ -412,6 +315,14 @@ class ActionDecisionEngine:
             "channel": request.channel.value,
             "output_modalities": ["text"],
         }
+        from sglang_omni.utils.turn_media_scope import turn_media_scope
+        media_owner = turn_media_scope(
+            request.session_id, request.turn_id,
+            request.runtime_context.get("identity_epoch"),
+            request.runtime_context.get("input_revision"),
+        )
+        if media_owner is not None:
+            metadata["media_cache_owner"] = media_owner
         audios = [media_data_uri(item) for item in request.media if item.kind == "audio"]
         images = [
             media_data_uri(item)
@@ -427,27 +338,75 @@ class ActionDecisionEngine:
                 for item in request.media
                 if item.kind in {"image", "video"}
             ]
-        legal_codes = tuple(entry.code for entry in catalog.entries)
+        legal_codes = (catalog.hard_bound.code,) if catalog.hard_bound is not None else tuple(entry.code for entry in catalog.entries)
         grammar = "(?:" + "|".join(re.escape(code) for code in legal_codes) + ")"
-        return GenerateRequest(
-            model=self.config.model_id,
-            messages=[
-                Message(role="system", content=build_system_prompt(request, catalog)),
-                Message(role="user", content=content),
-            ],
-            sampling=SamplingParams(
-                temperature=0.0,
-                top_p=1.0,
-                seed=0,
-                max_new_tokens=2,
-                min_new_tokens=2,
-                ignore_eos=True,
-                regex=grammar,
+        result = await self._client.completion(
+            GenerateRequest(
+                model=self.config.model_id,
+                messages=[
+                    Message(role="system", content=system_prompt),
+                    Message(role="user", content=content),
+                ],
+                sampling=SamplingParams(
+                    temperature=0.0,
+                    top_p=1.0,
+                    seed=0,
+                    max_new_tokens=2,
+                    min_new_tokens=2,
+                    ignore_eos=True,
+                    regex=grammar,
+                ),
+                stream=False,
+                max_tokens=2,
+                output_modalities=["text"],
+                metadata=metadata,
             ),
-            stream=False,
-            max_tokens=2,
-            output_modalities=["text"],
-            metadata=metadata,
+            request_id=request.request_id,
+        )
+        code = str(result.text)
+        # Constrained backends normally return the assigned two-token code, but
+        # some deployments decode control tokens to their canonical candidate
+        # ID (for example ``IB0``). Both identify the same catalog entry.
+        entry = catalog.by_code.get(code) or catalog.by_candidate_id.get(code)
+        reason_code = "model_selected"
+        if entry is None and re.fullmatch(r"_[A-Za-z]", code):
+            # Affected SGLang constrained decoders can occasionally return the
+            # first token of a legal two-token code even with min_new_tokens=2
+            # and ignore_eos=True.  Preserve that model-selected action family
+            # and complete it with the first registered real action in the
+            # resolved catalog.  Catalog order is frozen with the release, so
+            # this fallback is deterministic and never expands the candidates.
+            prefix_entries = [
+                candidate
+                for candidate in catalog.entries
+                if candidate.code.startswith(code) and candidate.kind == "action"
+            ]
+            if prefix_entries:
+                entry = prefix_entries[0]
+                reason_code = "model_prefix_completed"
+                emit_structured_log(
+                    "action",
+                    "action_model_prefix_completed",
+                    component="action_decision",
+                    request_id=request.request_id,
+                    channel=request.channel.value,
+                    returned_prefix=code,
+                    completed_code=entry.code,
+                    candidate_id=entry.candidate_id,
+                    matching_candidate_count=len(prefix_entries),
+                )
+        if entry is None or entry.code not in legal_codes:
+            raise RuntimeError(f"action model returned code outside constrained catalog: {code!r}")
+        usage = result.usage.to_dict() if result.usage is not None else None
+        return self._decision(
+            request,
+            catalog,
+            entry,
+            started,
+            deterministic=False,
+            reason_code=reason_code,
+            weight_version=result.weight_version,
+            usage=usage,
         )
 
     def _decision(
@@ -496,6 +455,7 @@ class ActionDecisionEngine:
             "action",
             "action_decision_completed",
             component="action_decision",
+            recall_variant=recall_variant(request),
             **decision.to_dict(),
         )
         return decision
@@ -508,8 +468,15 @@ def create_action_decision_app(
     performance_token: str | None = None,
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
-    app = FastAPI(title="sglang-omni-action-decision", version="1")
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def lifespan(app):
+        from sglang_omni.serve.prompt_runtime import install_action_runtime
+        await install_action_runtime(app, engine, include_performance=performance_token is not None)
+        yield
+    app = FastAPI(title="sglang-omni-action-decision", version="1", lifespan=lifespan)
     app.state.action_decision_engine = engine
+
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
@@ -517,9 +484,20 @@ def create_action_decision_app(
         ):
             raise HTTPException(status_code=404, detail="not found")
 
+    from sglang_omni.serve.prompt_debug import install_action_debug
+    install_action_debug(app, engine=engine, authenticate=authenticate, parser=_parse_request,
+                         factory=lambda capture, snapshot: ActionDecisionEngine(capture, config=config, registry=engine.registry, prompt_snapshot=snapshot))
+
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
         authenticate(request)
+        runtime: dict[str, Any] = {}
+        admission_load = getattr(client, "action_scoring_load", None)
+        if callable(admission_load):
+            runtime["workload_admission"] = admission_load()
+        pipeline_health = getattr(client, "health", None)
+        if callable(pipeline_health):
+            runtime["pipeline"] = pipeline_health()
         return JSONResponse(
             {
                 "ok": True,
@@ -529,7 +507,7 @@ def create_action_decision_app(
                 "model_version": config.model_version,
                 "catalog_version": engine.registry.catalog_version,
                 "mapping_version": engine.registry.mapping_version,
-                "capabilities": ["prefix_prefill_v1"],
+                "runtime": runtime,
             }
         )
 
@@ -541,18 +519,11 @@ def create_action_decision_app(
             raise HTTPException(status_code=413, detail="request body too large")
         try:
             raw = json.loads(body)
-            if not isinstance(raw, dict):
-                raise ValueError("action decision payload must be an object")
-            operation = raw.get("operation", "decide")
-            if operation == "prefill":
-                result = await engine.prefill(_parse_prefill_request(raw))
-            elif operation == "decide":
-                result = await engine.decide(_parse_request(raw, media=()))
-            else:
-                raise ValueError(f"unsupported action operation: {operation!r}")
+            decision_request = _parse_request(raw, media=())
+            decision = await engine.decide(decision_request)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse(result.to_dict())
+        return JSONResponse(decision.to_dict())
 
     @app.websocket("/v1/action-decision/realtime")
     async def decide_realtime(websocket: WebSocket) -> None:
@@ -562,34 +533,24 @@ def create_action_decision_app(
                 websocket,
                 expected_authorization=f"Bearer {config.token}",
                 max_total_bytes=config.max_body_bytes,
+                allowed_audio_roles=ACTION_AUDIO_ROLES | {"assistant_spoken"},
             )
             if streamed is None:
                 return
             request_id = streamed.request_id
             payload = dict(streamed.payload)
             payload.setdefault("request_id", request_id)
-            operation = payload.get("operation", "decide")
-            if operation == "prefill":
-                if streamed.media:
-                    raise ValueError("action prefix prefill does not accept media")
-                operation_result = await run_until_websocket_disconnect(
-                    websocket,
-                    engine.prefill(_parse_prefill_request(payload)),
-                    abort=lambda: client.abort(request_id),
-                )
-            elif operation == "decide":
-                operation_result = await run_until_websocket_disconnect(
-                    websocket,
-                    engine.decide(_parse_request(payload, media=streamed.media)),
-                    abort=lambda: client.abort(request_id),
-                )
-            else:
-                raise ValueError(f"unsupported action operation: {operation!r}")
+            decision_request = _parse_request(payload, media=streamed.media)
+            decision = await run_until_websocket_disconnect(
+                websocket,
+                engine.decide(decision_request),
+                abort=lambda: engine.cancel(request_id),
+            )
             await websocket.send_json(
                 {
                     "type": "response.completed",
                     "request_id": request_id,
-                    "response": operation_result.to_dict(),
+                    "response": decision.to_dict(),
                 }
             )
         except WebSocketDisconnect:
@@ -613,11 +574,59 @@ def create_action_decision_app(
             )
             await websocket.close(code=1011)
 
+    @app.post("/v1/action-recall")
+    async def recall_audio(request: Request) -> JSONResponse:
+        authenticate(request)
+        body = await request.body()
+        if len(body) > config.max_body_bytes:
+            raise HTTPException(status_code=413, detail="request body too large")
+        try:
+            decision_request, public_id = parse_recall(json.loads(body))
+            decision = await engine.decide(decision_request)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse(_recall_response(public_id, decision))
+
+    def parse_recall(payload: Any, media: tuple[StreamedMedia, ...] = ()):
+        decision_request, public_id = parse_simple_audio_request(
+            payload, engine.registry, media=media,
+        )
+        mode = payload.get("mode")
+        emit_structured_log(
+            "action", "action_recall_received", component="action_decision",
+            request_id=decision_request.request_id, public_request_id=public_id,
+            recall_variant=recall_variant(decision_request), input_mode=mode,
+            target_text=payload["user_input"]["text"] if mode == "action_request" else None,
+        )
+        return decision_request, public_id
+
+    @app.websocket("/v1/action-recall")
+    async def recall_audio_realtime(websocket: WebSocket) -> None:
+        async def recall(streamed: StreamedRequest) -> dict[str, Any]:
+            payload = dict(streamed.payload)
+            if payload.setdefault("request_id", streamed.request_id) != streamed.request_id:
+                raise ValueError("recall payload request_id must match request.start")
+            decision_request, public_id = parse_recall(payload, streamed.media)
+            try:
+                decision = await engine.decide(decision_request)
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    await engine.cancel(decision_request.request_id)
+                    raise
+                raise ValueError("recall request was cancelled") from None
+            return _recall_response(public_id, decision)
+
+        await serve_streamed_requests(
+            websocket, recall, expected_authorization=f"Bearer {config.token}",
+            max_requests=4, max_media_items=3, max_item_bytes=MAX_RECALL_AUDIO_BYTES,
+            max_total_bytes=config.max_body_bytes, allowed_audio_roles=ACTION_AUDIO_ROLES,
+        )
+
     if performance_token is not None:
         normalized_performance_token = performance_token.strip()
         if not normalized_performance_token:
             raise ValueError("performance control token must not be empty")
-        from sglang_omni.serve.realtime.performance.service import (
+        from sglang_omni.serve.performance_control.service import (
             register_performance_control,
         )
 
@@ -625,6 +634,18 @@ def create_action_decision_app(
         register_performance_control(app, token=normalized_performance_token)
 
     return app
+
+
+def _recall_response(request_id: str, decision: ActionDecision) -> dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "channel": decision.channel.value,
+        "candidate_id": decision.candidate_id,
+        "code": decision.code,
+        "label": decision.label,
+        "outcome": decision.outcome,
+        "occupies_channels": list(decision.occupies_channels),
+    }
 
 
 def _parse_request(
@@ -636,6 +657,11 @@ def _parse_request(
         raise ValueError("action decision payload must be an object")
     channel = DecisionChannel(_required_string(raw, "channel"))
     request_id = _required_string(raw, "request_id")
+    if any(item.evidence_role == "assistant_spoken" for item in media) and not (
+        channel is DecisionChannel.BODY and raw.get("turn_origin") == "assistant"
+    ):
+        raise ValueError("assistant audio requires an assistant body-action request")
+    runtime_context = _object_field(raw, "runtime_context")
     return ActionDecisionRequest(
         request_id=request_id,
         session_id=_required_string(raw, "session_id"),
@@ -647,35 +673,20 @@ def _parse_request(
         character_prompt=_optional_string(raw, "character_prompt"),
         session_prompt=_optional_string(raw, "session_prompt"),
         reply_prefix=_optional_string(raw, "reply_prefix"),
-        runtime_context=_object_field(raw, "runtime_context"),
+        runtime_context=runtime_context,
         allowed_candidate_ids=_string_array(raw, "allowed_candidate_ids"),
         excluded_candidate_ids=_string_array(raw, "excluded_candidate_ids"),
         channel_enabled=_boolean(raw, "channel_enabled", True),
         prohibited=_boolean(raw, "prohibited", False),
         turn_origin=_optional_string(raw, "turn_origin") or "user",
         media=media,
+        requested_action=parse_requested_action(raw.get("requested_action")),
+        # User-reaction media has no executor timeline. Match the frozen r1
+        # text/audio/image renderer without exposing transport frame ordinals
+        # as meaningful millisecond evidence. Speech windows retain timing.
+        simple_audio=(runtime_context.get("prompt_profile") == "persona-audio-window-v2"
+                      and runtime_context.get("decision_mode") == "user_request"),
     )
-
-
-def _parse_prefill_request(raw: Any) -> ActionPrefixPrefillRequest:
-    if not isinstance(raw, dict):
-        raise ValueError("action prefix prefill payload must be an object")
-    request = ActionPrefixPrefillRequest(
-        request_id=_required_string(raw, "request_id"),
-        session_id=_required_string(raw, "session_id"),
-        channel=DecisionChannel(_required_string(raw, "channel")),
-        language=_optional_string(raw, "language") or "zh-CN",
-        character_prompt=_optional_string(raw, "character_prompt"),
-        session_prompt=_optional_string(raw, "session_prompt"),
-        runtime_context=_object_field(raw, "runtime_context"),
-        allowed_candidate_ids=_string_array(raw, "allowed_candidate_ids"),
-        excluded_candidate_ids=_string_array(raw, "excluded_candidate_ids"),
-    )
-    if request.runtime_context.get("action_candidate_prompt_mode") != "role_pool_v1":
-        raise ValueError(
-            "action prefix prefill requires action_candidate_prompt_mode=role_pool_v1"
-        )
-    return request
 
 
 def _required_string(raw: dict[str, Any], key: str) -> str:
