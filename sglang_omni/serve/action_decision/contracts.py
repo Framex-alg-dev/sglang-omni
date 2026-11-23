@@ -44,6 +44,11 @@ class ActionDecisionRequest:
     requested_action: dict[str, str] | None = None
     # Agent-owned immutable rules. The service only renders request/catalog data.
     prompt_snapshot: ActionPromptSnapshot | None = None
+    # The existing request_id remains the inference operation/cancellation key.
+    # These fields are logging-only and therefore excluded from idempotency.
+    trace_request_id: str | None = None
+    root_session_id: str | None = None
+    agent_session_id: str | None = None
 
 
 @dataclass(frozen=True)

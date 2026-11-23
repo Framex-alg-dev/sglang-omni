@@ -37,6 +37,19 @@ Use `run_service.sh` after providing a Python environment, model directory, GPU
 selection, and token. The defaults retain the active model identity and port;
 deployment-specific paths can be supplied through environment variables.
 
+The v1.0 service log is written to
+`/var/log/framex/omni-action-worker/app.log`. Provision its fixed directory once
+for the runtime account before starting this shell-managed service:
+
+```bash
+sudo install -d -o "$(id -un)" -g "$(id -gn)" \
+  /var/log/framex/omni-action-worker
+```
+
+The launch script fails before model allocation when this directory is absent
+or not writable. systemd-managed Reply and Event units provision their own
+service-specific directories through `LogsDirectory=`.
+
 For Agent-managed deployments, every recall payload includes a validated
 `prompt_snapshot`. Its policy text is authoritative; this service renders only
 the current channel, persona and allowed catalog beneath it. The bundled prompt

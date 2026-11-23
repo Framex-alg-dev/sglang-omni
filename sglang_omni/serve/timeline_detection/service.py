@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +26,10 @@ from .contracts import (
 )
 from .session import TimelineDetectionModel, TimelineDetectionSession
 from .diagnostics import TimelineIngressDiagnostics
+from sglang_omni.utils.framex_service_logs import (
+    correlation_id_or_digest,
+    emit_service_event,
+)
 
 
 TimelineModelFactory = Callable[[TimelineSessionStart], TimelineDetectionModel]
@@ -76,6 +82,7 @@ def create_timeline_detection_app(
         observation_worker: asyncio.Task[None] | None = None
         diagnostic_worker: asyncio.Task[None] | None = None
         diagnostics: TimelineIngressDiagnostics | None = None
+        close_reason = "closed"
         work_queue: asyncio.Queue[_Work] = asyncio.Queue(max_pending_chunks)
         send_lock = asyncio.Lock()
         pending_bytes = 0
@@ -143,12 +150,49 @@ def create_timeline_detection_app(
             assert session is not None
             try:
                 while True:
+                    started = time.perf_counter()
                     events = await session.next_observations()
                     if isinstance(events, DetectionWindow):
                         await send_json(events.to_wire())
+                        emit_service_event(
+                            "omni-event-worker",
+                            "inference.completed",
+                            logger_name=__name__,
+                            root_session_id=(
+                                start.root_session_id or start.session_id
+                            ),
+                            operation="timeline_window",
+                            status=200,
+                            duration_ms=round(
+                                (time.perf_counter() - started) * 1000, 3
+                            ),
+                            event_count=len(events.events),
+                            model_id=start.model_id,
+                            agent_session_id=(
+                                start.agent_session_id or start.session_id
+                            ),
+                        )
                     else:
                         for event in events:
                             await send_json(_event_to_json(event))
+                        emit_service_event(
+                            "omni-event-worker",
+                            "inference.completed",
+                            logger_name=__name__,
+                            root_session_id=(
+                                start.root_session_id or start.session_id
+                            ),
+                            operation="timeline_observation",
+                            status=200,
+                            duration_ms=round(
+                                (time.perf_counter() - started) * 1000, 3
+                            ),
+                            event_count=len(events),
+                            model_id=start.model_id,
+                            agent_session_id=(
+                                start.agent_session_id or start.session_id
+                            ),
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -158,6 +202,14 @@ def create_timeline_detection_app(
         try:
             first = await websocket.receive_json()
             start = _start_from_json(_object(first, "session.start"))
+            emit_service_event(
+                "omni-event-worker",
+                "ws.connected",
+                logger_name=__name__,
+                root_session_id=start.root_session_id or start.session_id,
+                agent_session_id=start.agent_session_id or start.session_id,
+                connection_type="timeline",
+            )
             session = TimelineDetectionSession(start, model_factory(start))
             await session.start()
             diagnostics = TimelineIngressDiagnostics(start)
@@ -182,6 +234,8 @@ def create_timeline_detection_app(
                     "stream_epoch": start.stream_epoch,
                     "next_sequence": start.next_sequence,
                     "contract_version": start.contract_version,
+                    "root_session_id": start.root_session_id or start.session_id,
+                    "agent_session_id": start.agent_session_id or start.session_id,
                     **({"result_mode": RAW_WINDOW_MODE} if start.result_mode == RAW_WINDOW_MODE else {}),
                     **(
                         {
@@ -248,10 +302,25 @@ def create_timeline_detection_app(
                 else:
                     raise ValueError(f"unsupported timeline message type: {message_type!r}")
         except WebSocketDisconnect:
+            close_reason = "peer_disconnected"
             return
         except asyncio.CancelledError:
+            close_reason = "server_cancelled"
             raise
         except ValueError as exc:
+            close_reason = "invalid_request"
+            emit_service_event(
+                "omni-event-worker",
+                "ws.request.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                root_session_id=(
+                    start.root_session_id or start.session_id
+                    if session is not None
+                    else None
+                ),
+                error_type=type(exc).__name__,
+            )
             try:
                 await send_json(
                     {"type": "error", "code": "invalid_request", "detail": str(exc)}
@@ -259,7 +328,20 @@ def create_timeline_detection_app(
                 await websocket.close(code=4400)
             except (RuntimeError, WebSocketDisconnect):
                 pass
-        except Exception:
+        except Exception as exc:
+            close_reason = "internal_error"
+            emit_service_event(
+                "omni-event-worker",
+                "ws.request.failed",
+                level=logging.ERROR,
+                logger_name=__name__,
+                root_session_id=(
+                    start.root_session_id or start.session_id
+                    if session is not None
+                    else None
+                ),
+                error_type=type(exc).__name__,
+            )
             try:
                 await websocket.close(code=1011)
             except (RuntimeError, WebSocketDisconnect):
@@ -281,6 +363,17 @@ def create_timeline_detection_app(
                 await asyncio.gather(worker, return_exceptions=True)
             if session is not None:
                 await session.close()
+            if session is not None:
+                emit_service_event(
+                    "omni-event-worker",
+                    "ws.closed",
+                    logger_name=__name__,
+                    root_session_id=start.root_session_id or start.session_id,
+                    reason=close_reason,
+                    agent_session_id=(
+                        start.agent_session_id or start.session_id
+                    ),
+                )
 
     return app
 
@@ -290,6 +383,9 @@ def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
         raise ValueError("first message must be session.start")
     from sglang_omni.serve.agent_prompt_snapshot import decode_timeline_prompt_snapshot
     model_id = _string(raw, "model_id")
+    session_id = _string(raw, "session_id")
+    root_session_id = _optional_string(raw, "root_session_id")
+    agent_session_id = _optional_string(raw, "agent_session_id")
     prompt_snapshot = (
         decode_timeline_prompt_snapshot(raw["prompt_snapshot"], model_id=model_id)
         if raw.get("prompt_snapshot") is not None else None
@@ -302,7 +398,7 @@ def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
             prompt_snapshot.event_codebook_csv,
         )
     return TimelineSessionStart(
-        session_id=_string(raw, "session_id"),
+        session_id=session_id,
         identity_epoch=_integer(raw, "identity_epoch"),
         stream_epoch=_integer(raw, "stream_epoch"),
         audio_format=_string(raw, "audio_format"),
@@ -313,6 +409,12 @@ def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
         contract_version=_integer(raw, "contract_version"),
         result_mode=raw.get("result_mode", LEGACY_OBSERVATION_MODE),
         prompt_snapshot=prompt_snapshot,
+        root_session_id=root_session_id or correlation_id_or_digest(
+            session_id, prefix="legacy_root"
+        ),
+        agent_session_id=agent_session_id or correlation_id_or_digest(
+            session_id, prefix="legacy_agent"
+        ),
     )
 
 
@@ -366,6 +468,13 @@ def _object(raw: Any, name: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"{name} must be an object")
     return raw
+
+
+def _optional_string(raw: dict[str, Any], key: str) -> str | None:
+    value = raw.get(key)
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ValueError(f"{key} must be a non-empty string or null")
+    return value
 
 
 def _string(raw: dict[str, Any], key: str) -> str:

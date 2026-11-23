@@ -56,6 +56,7 @@
 | `user` | `string` | 否 | - | 调用方用户标识 |
 | `runtime_prompt_profile` | `"reply"` | 否 | - | 设置后 Worker 会再注入本地回复提示词 |
 | `runtime_prompt_language` | `zh|en|zh-CN|en-US` | 否 | `zh-CN` | 本地提示词语言 |
+| `log_context` | `object` | 否 | - | 仅实时 WebSocket 用于日志关联；HTTP 使用下述 Header |
 
 `Message` 字段：
 
@@ -68,6 +69,9 @@
 | `tool_call_id` | `string` | 否 | 工具结果对应的调用 ID |
 
 Agent 已经提供完整 system message 时，不传 `runtime_prompt_profile`。
+
+HTTP 调用可用 `X-Request-ID`、`X-Root-Session-ID`、`X-Turn-ID`
+传递日志关联 ID；响应回传最终采用的 `X-Request-ID`。
 
 ### 2.3 WebSocket 返回字段
 
@@ -96,6 +100,7 @@ Agent 已经提供完整 system message 时，不传 `runtime_prompt_profile`。
 | `avatar_current` | `Input` | `avatar_speech` 必填 | 数字人当前要说的内容 |
 | `last_dispatched_action` | `object` | 否 | 兼容字段；V10 当前不用于推理 |
 | `prompt_snapshot` | `object` | 否 | 试验字段，当前生产接入不要发送 |
+| `log_context` | `object` | 否 | 仅用于日志关联；字段见第 8 节 |
 
 `Input` 必须且只能包含 `text` 或 `audio`：
 
@@ -175,6 +180,7 @@ Recall 不接收图片和视频。视觉手势使用第 4 节 Action Decision。
 | `turn_origin` | `string` | 否 | `user`；数字人说话动作可用 `assistant` |
 | `requested_action` | `object|null` | 否 | 明确目标动作 |
 | `prompt_snapshot` | `object` | 否 | 试验字段，当前生产接入不要发送 |
+| `log_context` | `object` | 否 | 仅用于日志关联；字段见第 8 节 |
 
 ### 4.2 媒体字段
 
@@ -244,6 +250,8 @@ Recall 不接收图片和视频。视觉手势使用第 4 节 Action Decision。
 | `model_id` | `string` | 是 | 当前 `event-1115-v1-fp8` |
 | `result_mode` | `string` | 否 | 推荐 `raw_windows.v1`；兼容值 `observations` |
 | `prompt_snapshot` | `object` | 否 | 试验字段，当前生产接入不要发送 |
+| `root_session_id` | `string` | 否 | 全链路实时会话 ID；省略时兼容使用 `session_id` |
+| `agent_session_id` | `string` | 否 | Agent 内部会话 ID；省略时兼容使用 `session_id` |
 
 ### 5.2 `media` 字段
 
@@ -320,6 +328,8 @@ Recall 不接收图片和视频。视觉手势使用第 4 节 Action Decision。
 | `type` | `string` | 是 | 固定 `session.open` |
 | `contract_version` | `integer` | 是 | 固定 `4` |
 | `session_id` | `string` | 是 | 会话 ID |
+| `root_session_id` | `string` | 否 | 全链路实时会话 ID；省略时兼容使用 `session_id` |
+| `agent_session_id` | `string` | 否 | Agent 内部会话 ID；省略时兼容使用 `session_id` |
 
 返回 `session.ready`：
 
@@ -345,6 +355,9 @@ Recall 不接收图片和视频。视觉手势使用第 4 节 Action Decision。
 | `payload` | `object` | 是 | 对应上游业务 payload |
 | `media_refs` | `string[]` | 否 | 已通过 `media.put` 注册的媒体 ID |
 
+`payload.log_context.request_id` 可传本次全链路日志 ID；它不替代外层
+`request_id`，也不参与 stage 取消和去重。
+
 返回事件：
 
 | `type` | 关键字段 |
@@ -368,3 +381,30 @@ Recall 不接收图片和视频。视觉手势使用第 4 节 Action Decision。
 | `retryable` | `boolean` | Gateway stage 错误是否建议重试 |
 
 Action/Event WebSocket 鉴权失败关闭码为 `4404`；协议字段错误通常为 `4400`；内部模型错误通常为 `1011`。
+
+## 8. 链路日志字段
+
+关联 ID 均满足 `[A-Za-z0-9_.:-]{1,128}`。
+
+| 字段 | 位置 | 说明 |
+| --- | --- | --- |
+| `request_id` | `log_context` | 一次全链路操作的日志 ID；不作为鉴权、计费、幂等或取消键 |
+| `root_session_id` | `log_context` 或 `session.start/session.open` | 一次实时会话的全链路 ID |
+| `turn_id` | `log_context`；Action 使用原 `turn_id` | 一轮用户/数字人交互 ID |
+| `agent_session_id` | `log_context` 或 `session.start/session.open` | Agent 自身的会话 ID |
+
+Action 的业务 `request_id` 仍是推理、取消和幂等键；日志 ID 放在
+`log_context.request_id`，两者不会互相覆盖。旧 `session_id` 继续保留在接口中，
+但日志内不写含义不明确的 `session_id` 字段。
+
+Worker 日志分别写到：
+
+| 服务 | 文件 |
+| --- | --- |
+| Reply | `/var/log/framex/omni-reply-worker/app.log` |
+| Event | `/var/log/framex/omni-event-worker/app.log` |
+| Action | `/var/log/framex/omni-action-worker/app.log` |
+
+每条日志为单行 JSON，固定包含 `timestamp`、`level`、`service`、`env`、
+`version`、`host`、`logger`、`event`。CLS 日志不记录用户原文、模型输出、
+提示词、音视频内容、鉴权信息；Action 完整回放数据仅在显式配置独立回放目录时写入。

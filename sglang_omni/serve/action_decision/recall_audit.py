@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -43,7 +44,7 @@ def input_snapshot(request, catalog, system_prompt, user_content) -> dict:
             except OSError as exc:
                 item["save_error"] = str(exc)
         media.append(item)
-    return dict(
+    full_snapshot = dict(
         recall_variant=recall_variant(request),
         requested_action=request.requested_action,
         decision_mode=request.runtime_context.get("decision_mode"),
@@ -57,4 +58,63 @@ def input_snapshot(request, catalog, system_prompt, user_content) -> dict:
         system_prompt=system_prompt, user_content=user_content,
         system_sha256=hashlib.sha256(system_prompt.encode()).hexdigest(),
         media=media, media_replay_complete=all("path" in m for m in media),
+    )
+    replay_path = None
+    replay_save_error = None
+    if root:
+        try:
+            encoded = json.dumps(
+                full_snapshot, ensure_ascii=False, sort_keys=True, default=str
+            ).encode("utf-8")
+            digest = hashlib.sha256(encoded).hexdigest()
+            records = Path(root) / "records" / digest[:2]
+            records.mkdir(parents=True, exist_ok=True)
+            destination = records / f"{digest}.json"
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    dir=records, mode="wb", delete=False
+                ) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(encoded)
+                try:
+                    os.link(temporary, destination)
+                except FileExistsError:
+                    pass
+                replay_path = str(destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        except OSError as exc:
+            replay_save_error = type(exc).__name__
+
+    # Only this bounded metadata is allowed into ordinary service diagnostics.
+    # Raw text, prompts, catalog definitions and media stay in the explicitly
+    # configured replay store above, which is not a CLS collection path.
+    return dict(
+        recall_variant=recall_variant(request),
+        requested_action_present=request.requested_action is not None,
+        decision_mode=request.runtime_context.get("decision_mode"),
+        runtime_context_keys=sorted(request.runtime_context),
+        catalog_version=catalog.catalog_version,
+        mapping_hash=catalog.mapping_hash,
+        system_sha256=full_snapshot["system_sha256"],
+        media=[
+            {
+                key: item[key]
+                for key in (
+                    "kind",
+                    "evidence_role",
+                    "encoding",
+                    "start_ms",
+                    "end_ms",
+                    "sha256",
+                    "bytes",
+                )
+            }
+            for item in media
+        ],
+        media_replay_complete=full_snapshot["media_replay_complete"],
+        replay_path=replay_path,
+        replay_save_error=replay_save_error,
     )

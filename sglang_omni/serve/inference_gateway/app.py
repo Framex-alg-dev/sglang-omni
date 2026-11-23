@@ -9,6 +9,7 @@ import hmac
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,13 @@ from sglang_omni.serve.realtime.embedded_tts import (
     EmbeddedTTSConfig,
     EmbeddedTTSConnection,
     EmbeddedTTSError,
+)
+from sglang_omni.utils.framex_service_logs import (
+    adopt_request_id,
+    bind_service_log_context,
+    correlation_id_or_digest,
+    emit_service_event,
+    valid_correlation_id,
 )
 
 
@@ -150,6 +158,8 @@ class _Session:
         self.websocket = websocket
         self.config = config
         self.session_id = ""
+        self.root_session_id = ""
+        self.agent_session_id = ""
         self.media: dict[str, _Media] = {}
         self.media_refcounts: dict[str, int] = {}
         self.media_bytes = 0
@@ -173,6 +183,20 @@ class _Session:
         if first.get("type") != "session.open" or contract_version != 4:
             raise ValueError("first gateway message must be session.open v4")
         self.session_id = _string(first, "session_id")
+        self.agent_session_id = _optional_correlation_string(
+            first, "agent_session_id"
+        ) or correlation_id_or_digest(self.session_id, prefix="legacy_agent")
+        self.root_session_id = _optional_correlation_string(
+            first, "root_session_id"
+        ) or correlation_id_or_digest(self.session_id, prefix="legacy_root")
+        emit_service_event(
+            "omni-reply-worker",
+            "ws.connected",
+            logger_name=__name__,
+            root_session_id=self.root_session_id,
+            agent_session_id=self.agent_session_id,
+            connection_type="inference_gateway",
+        )
         if self.config.reply_speech is not None:
             self.reply_speech = GatewaySpeechSynthesizer(
                 self.config.reply_speech,
@@ -186,6 +210,8 @@ class _Session:
             "type": "session.ready",
             "contract_version": contract_version,
             "session_id": self.session_id,
+            "root_session_id": self.root_session_id,
+            "agent_session_id": self.agent_session_id,
         }
         ready.update(
             availability_epoch=self.availability_epoch,
@@ -236,6 +262,15 @@ class _Session:
         if probes:
             await asyncio.gather(*probes, return_exceptions=True)
         self.availability_probes.clear()
+        if self.root_session_id:
+            emit_service_event(
+                "omni-reply-worker",
+                "ws.closed",
+                logger_name=__name__,
+                root_session_id=self.root_session_id,
+                reason="closed",
+                agent_session_id=self.agent_session_id,
+            )
         self.speech_speculations.clear()
         self.reserved_request_ids.clear()
         self.media.clear()
@@ -1148,6 +1183,38 @@ class _Session:
         media_refs: tuple[str, ...],
         speech_speculation: tuple[str, str, str, str, int, str] | None,
     ) -> None:
+        trace_request_id = _stage_trace_request_id(payload, request_id)
+        raw_turn_id = _optional_nonempty_string(payload, "turn_id")
+        turn_id = (
+            correlation_id_or_digest(raw_turn_id, prefix="legacy_turn")
+            if raw_turn_id is not None
+            else None
+        )
+        with bind_service_log_context(
+            request_id=trace_request_id,
+            root_session_id=self.root_session_id,
+            turn_id=turn_id,
+        ):
+            await self._run_stage_with_context(
+                request_id,
+                stage,
+                payload,
+                media_refs,
+                speech_speculation,
+            )
+
+    async def _run_stage_with_context(
+        self,
+        request_id: str,
+        stage: str,
+        payload: dict[str, Any],
+        media_refs: tuple[str, ...],
+        speech_speculation: tuple[str, str, str, str, int, str] | None,
+    ) -> None:
+        started = time.perf_counter()
+        logged_operation_id = correlation_id_or_digest(
+            request_id, prefix="legacy_operation"
+        )
         try:
             await asyncio.wait_for(
                 self._forward_stage(
@@ -1160,10 +1227,48 @@ class _Session:
                 timeout=self.config.request_timeout_seconds,
             )
             await self._set_stage_availability(stage, True, "request_succeeded")
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                logger_name=__name__,
+                peer=_stage_peer(stage),
+                operation=stage,
+                status=200,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                operation_id=logged_operation_id,
+                agent_session_id=self.agent_session_id,
+            )
         except asyncio.CancelledError:
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.WARNING,
+                logger_name=__name__,
+                peer=_stage_peer(stage),
+                operation=stage,
+                status=499,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                operation_id=logged_operation_id,
+                agent_session_id=self.agent_session_id,
+                error_type="CancelledError",
+            )
             await self.send({"type": "stage.cancelled", "request_id": request_id})
             raise
         except asyncio.TimeoutError:
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.ERROR,
+                logger_name=__name__,
+                peer=_stage_peer(stage),
+                operation=stage,
+                status=504,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                operation_id=logged_operation_id,
+                agent_session_id=self.agent_session_id,
+                error_type="TimeoutError",
+                error_message="model stage exceeded its deadline",
+            )
             await self.send(
                 {
                     "type": "stage.error",
@@ -1178,6 +1283,19 @@ class _Session:
             code, retryable = _classify_stage_failure(exc)
             if code == "provider_unavailable":
                 await self._set_stage_availability(stage, False, type(exc).__name__)
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.ERROR,
+                logger_name=__name__,
+                peer=_stage_peer(stage),
+                operation=stage,
+                status=502,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                operation_id=logged_operation_id,
+                agent_session_id=self.agent_session_id,
+                error_type=type(exc).__name__,
+            )
             await self.send(
                 {
                     "type": "stage.error",
@@ -1606,6 +1724,38 @@ def _classify_stage_failure(exc: Exception) -> tuple[str, bool]:
     if isinstance(exc, (ValueError, json.JSONDecodeError)):
         return "upstream_protocol_error", False
     return "stage_execution_failed", False
+
+
+def _optional_nonempty_string(raw: dict[str, Any], key: str) -> str | None:
+    value = raw.get(key)
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ValueError(f"{key} must be a non-empty string or null")
+    return value
+
+
+def _optional_correlation_string(
+    raw: dict[str, Any], key: str
+) -> str | None:
+    value = _optional_nonempty_string(raw, key)
+    if value is not None and not valid_correlation_id(value):
+        raise ValueError(f"{key} is not a valid correlation ID")
+    return value
+
+
+def _stage_trace_request_id(payload: dict[str, Any], operation_id: str) -> str:
+    raw = payload.get("log_context")
+    if raw is None:
+        return operation_id
+    if not isinstance(raw, dict):
+        raise ValueError("log_context must be an object")
+    explicit = _optional_correlation_string(raw, "request_id")
+    return explicit or adopt_request_id(operation_id)[0]
+
+
+def _stage_peer(stage: str) -> str:
+    if stage in {"body", "expression", "performance"}:
+        return "omni_action_worker"
+    return "omni_reply_worker"
 
 
 async def _close_with_error(

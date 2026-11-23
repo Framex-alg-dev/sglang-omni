@@ -56,12 +56,44 @@ from sglang_omni.utils.gpu_memory import (
     get_gpu_device_info,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log
+from sglang_omni.utils.framex_service_logs import (
+    LOG_SPEC_VERSION,
+    configure_service_logging,
+    emit_service_event,
+    shutdown_service_logging,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_ACTION_WARMUP_AUDIO_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "audio_encoder_warmup.wav"
 )
+
+
+def _register_framex_logging_lifecycle(
+    app: Any, *, service: str, role: str
+) -> None:
+    async def start_service_log() -> None:
+        configure_service_logging(service)
+        emit_service_event(
+            service,
+            "service.started",
+            logger_name=__name__,
+            role=role,
+            log_spec_version=LOG_SPEC_VERSION,
+        )
+
+    async def stop_service_log() -> None:
+        emit_service_event(
+            service,
+            "service.stopped",
+            logger_name=__name__,
+            role=role,
+        )
+        shutdown_service_logging(service)
+
+    app.add_event_handler("startup", start_service_log)
+    app.add_event_handler("shutdown", stop_service_log)
 
 
 def _load_production_action_catalog_support():
@@ -460,6 +492,11 @@ async def _run_server(
             release.manifest_version,
             release.artifact_count,
         )
+    framex_service = {
+        "openai": "omni-reply-worker",
+        "timeline-detection": "omni-event-worker",
+        "action-decision": "omni-action-worker",
+    }.get(service_role)
     # Validate the server-authoritative catalog before allocating model/GPU
     # resources. The import and load stay out of the development-only path.
     if service_role == "openai":
@@ -827,6 +864,10 @@ async def _run_server(
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
         profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)
         _mount_profiler_routes(app, profiler_ctl, profiler_dir)
+        if framex_service is not None:
+            _register_framex_logging_lifecycle(
+                app, service=framex_service, role=service_role
+            )
 
         config = uvicorn.Config(
             app,

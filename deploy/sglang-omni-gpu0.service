@@ -6,6 +6,7 @@ After=network-online.target
 Type=simple
 User=user
 Group=user
+LogsDirectory=framex/omni-reply-worker
 WorkingDirectory=/data/fanshide/sglang-omni
 Environment=HOME=/data/fanshide/.runtime-home
 Environment=XDG_CACHE_HOME=/data/fanshide/.cache

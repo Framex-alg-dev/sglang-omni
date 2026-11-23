@@ -159,6 +159,13 @@ from sglang_omni.utils.structured_logs import (
     emit_structured_log,
     get_structured_log_writer,
 )
+from sglang_omni.utils.framex_service_logs import (
+    adopt_request_id,
+    bind_service_log_context,
+    correlation_id_or_digest,
+    emit_service_event,
+    valid_correlation_id,
+)
 from sglang_omni.serve.internal_realtime_model_api import (
     register_internal_realtime_model_api,
 )
@@ -181,6 +188,14 @@ _BAD_REQUEST_MARKERS = (
     "sequence exceeds max_length",
     "multimodal_train_inputs",
 )
+
+
+def _optional_log_header(value: str | None) -> tuple[str | None, bool]:
+    if value is None:
+        return None, False
+    if valid_correlation_id(value):
+        return value, False
+    return None, True
 
 
 def _is_bad_request_error(exc: Exception) -> bool:
@@ -313,6 +328,68 @@ def create_app(
         VoiceUploadBodyLimitMiddleware,
         max_bytes=MAX_VOICE_UPLOAD_BODY_BYTES,
     )
+
+    @app.middleware("http")
+    async def framex_http_request_log(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        request_id, rejected_request_id = adopt_request_id(
+            request.headers.get("x-request-id")
+        )
+        root_session_id, rejected_root_session_id = _optional_log_header(
+            request.headers.get("x-root-session-id")
+        )
+        turn_id, rejected_turn_id = _optional_log_header(
+            request.headers.get("x-turn-id")
+        )
+        started = time.perf_counter()
+        with bind_service_log_context(
+            request_id=request_id,
+            root_session_id=root_session_id,
+            turn_id=turn_id,
+        ):
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                emit_service_event(
+                    "omni-reply-worker",
+                    "http.request.completed",
+                    level=logging.ERROR,
+                    logger_name=__name__,
+                    method=request.method,
+                    path=request.url.path,
+                    status=500,
+                    duration_ms=round(
+                        (time.perf_counter() - started) * 1000, 3
+                    ),
+                    inbound_request_id_rejected=rejected_request_id,
+                    inbound_root_session_id_rejected=(
+                        rejected_root_session_id
+                    ),
+                    inbound_turn_id_rejected=rejected_turn_id,
+                    error_type=type(exc).__name__,
+                )
+                raise
+            emit_service_event(
+                "omni-reply-worker",
+                "http.request.completed",
+                level=(
+                    logging.INFO
+                    if response.status_code < 500
+                    else logging.ERROR
+                ),
+                logger_name=__name__,
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                inbound_request_id_rejected=rejected_request_id,
+                inbound_root_session_id_rejected=rejected_root_session_id,
+                inbound_turn_id_rejected=rejected_turn_id,
+            )
+            response.headers["X-Request-ID"] = request_id
+            return response
 
     # Store references in app state for access from route handlers
     app.state.client = client
@@ -887,10 +964,41 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
 
     @app.websocket("/v1/chat/completions/realtime")
     async def chat_completions_realtime(websocket: WebSocket) -> None:
+        started = time.perf_counter()
+        trace_request_id: str | None = None
+        root_session_id: str | None = None
+        turn_id: str | None = None
+        agent_session_id: str | None = None
+        outer_request_id: str | None = None
+        logged_operation_id: str | None = None
+        connected = False
+        close_reason = "completed"
         try:
             streamed = await receive_streamed_request(websocket)
             if streamed is None:
                 return
+            outer_request_id = streamed.request_id
+            logged_operation_id = correlation_id_or_digest(
+                outer_request_id, prefix="legacy_operation"
+            )
+            (
+                trace_request_id,
+                root_session_id,
+                turn_id,
+                agent_session_id,
+            ) = _reply_log_context(streamed.payload, streamed.request_id)
+            emit_service_event(
+                "omni-reply-worker",
+                "ws.connected",
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+                connection_type="chat_completions_realtime",
+                operation_id=logged_operation_id,
+                agent_session_id=agent_session_id,
+            )
+            connected = True
             payload = inject_openai_media(streamed.payload, streamed.media)
             req = ChatCompletionRequest.model_validate(payload)
             client: Client = app.state.client
@@ -932,9 +1040,40 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 ),
                 abort=lambda: client.abort(request_id),
             )
+            emit_service_event(
+                "omni-reply-worker",
+                "inference.completed",
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+                operation="chat_completion_realtime",
+                operation_id=logged_operation_id,
+                agent_session_id=agent_session_id,
+                status=200,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                model_id=model,
+            )
         except WebSocketDisconnect:
+            close_reason = "peer_disconnected"
             return
         except HTTPException as exc:
+            close_reason = "invalid_request"
+            emit_service_event(
+                "omni-reply-worker",
+                "inference.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+                operation="chat_completion_realtime",
+                operation_id=logged_operation_id,
+                agent_session_id=agent_session_id,
+                status=400,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                error_type=type(exc).__name__,
+            )
             await websocket.send_json(
                 {
                     "type": "error",
@@ -944,6 +1083,22 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             )
             await websocket.close(code=4400)
         except ValueError as exc:
+            close_reason = "invalid_request"
+            emit_service_event(
+                "omni-reply-worker",
+                "inference.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+                operation="chat_completion_realtime",
+                operation_id=logged_operation_id,
+                agent_session_id=agent_session_id,
+                status=400,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                error_type=type(exc).__name__,
+            )
             await websocket.send_json(
                 {
                     "type": "error",
@@ -952,12 +1107,70 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 }
             )
             await websocket.close(code=4400)
-        except Exception:
+        except Exception as exc:
+            close_reason = "internal_error"
+            emit_service_event(
+                "omni-reply-worker",
+                "inference.failed",
+                level=logging.ERROR,
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+                operation="chat_completion_realtime",
+                operation_id=logged_operation_id,
+                agent_session_id=agent_session_id,
+                status=500,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                error_type=type(exc).__name__,
+            )
             logger.exception("streamed chat completion failed")
             try:
                 await websocket.close(code=1011)
             except RuntimeError:
                 pass
+        finally:
+            if connected:
+                emit_service_event(
+                    "omni-reply-worker",
+                    "ws.closed",
+                    logger_name=__name__,
+                    request_id=trace_request_id,
+                    root_session_id=root_session_id,
+                    turn_id=turn_id,
+                    connection_type="chat_completions_realtime",
+                    operation_id=logged_operation_id,
+                    agent_session_id=agent_session_id,
+                    reason=close_reason,
+                )
+
+
+def _reply_log_context(
+    payload: dict[str, Any], operation_id: str
+) -> tuple[str, str | None, str | None, str | None]:
+    raw = payload.get("log_context")
+    if raw is None:
+        return adopt_request_id(operation_id)[0], None, None, None
+    if not isinstance(raw, dict):
+        raise ValueError("log_context must be an object")
+
+    values: dict[str, str | None] = {}
+    for name in (
+        "request_id",
+        "root_session_id",
+        "turn_id",
+        "agent_session_id",
+    ):
+        value = raw.get(name)
+        if value is not None and not valid_correlation_id(value):
+            raise ValueError(f"log_context.{name} is not a valid correlation ID")
+        values[name] = value
+    return (
+        values["request_id"] or adopt_request_id(operation_id)[0],
+        values["root_session_id"],
+        values["turn_id"],
+        values["agent_session_id"],
+    )
 
 
 async def _send_chat_websocket_response(

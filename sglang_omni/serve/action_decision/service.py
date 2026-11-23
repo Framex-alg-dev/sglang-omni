@@ -6,10 +6,11 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
@@ -26,6 +27,13 @@ from sglang_omni.serve.streaming_request import (
     serve_streamed_requests,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log
+from sglang_omni.utils.framex_service_logs import (
+    adopt_request_id,
+    bind_service_log_context,
+    correlation_id_or_digest,
+    emit_service_event,
+    valid_correlation_id,
+)
 
 from .catalog import ActionCatalogRegistry, ActionEntry, ResolvedCatalog
 from .contracts import ActionDecision, ActionDecisionRequest, DecisionChannel
@@ -48,6 +56,86 @@ class CompletionClient(Protocol):
     ) -> Any: ...
 
     async def abort(self, request_id: str) -> Any: ...
+
+
+async def _decide_with_service_log(
+    engine: "ActionDecisionEngine",
+    request: ActionDecisionRequest,
+    *,
+    operation: str,
+) -> ActionDecision:
+    trace_request_id = request.trace_request_id or adopt_request_id(
+        request.request_id
+    )[0]
+    root_session_id = request.root_session_id or correlation_id_or_digest(
+        request.session_id, prefix="legacy_root"
+    )
+    agent_session_id = request.agent_session_id or correlation_id_or_digest(
+        request.session_id, prefix="legacy_agent"
+    )
+    turn_id = correlation_id_or_digest(request.turn_id, prefix="legacy_turn")
+    operation_id = correlation_id_or_digest(
+        request.request_id, prefix="legacy_operation"
+    )
+    decision_point_id = correlation_id_or_digest(
+        request.decision_point_id, prefix="legacy_decision"
+    )
+    started = time.perf_counter()
+    with bind_service_log_context(
+        request_id=trace_request_id,
+        root_session_id=root_session_id,
+        turn_id=turn_id,
+    ):
+        try:
+            decision = await engine.decide(request)
+        except asyncio.CancelledError:
+            emit_service_event(
+                "omni-action-worker",
+                "inference.cancelled",
+                level=logging.WARNING,
+                logger_name=__name__,
+                operation=operation,
+                status=499,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                operation_id=operation_id,
+                decision_point_id=decision_point_id,
+                channel=request.channel.value,
+                agent_session_id=agent_session_id,
+            )
+            raise
+        except Exception as exc:
+            emit_service_event(
+                "omni-action-worker",
+                "inference.failed",
+                level=logging.ERROR,
+                logger_name=__name__,
+                operation=operation,
+                status=500,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                operation_id=operation_id,
+                decision_point_id=decision_point_id,
+                channel=request.channel.value,
+                agent_session_id=agent_session_id,
+                error_type=type(exc).__name__,
+            )
+            raise
+        emit_service_event(
+            "omni-action-worker",
+            "inference.completed",
+            logger_name=__name__,
+            operation=operation,
+            status=200,
+            duration_ms=decision.elapsed_ms,
+            operation_id=operation_id,
+            decision_point_id=decision_point_id,
+            channel=request.channel.value,
+            outcome=decision.outcome,
+            candidate_id=decision.candidate_id,
+            model_id=decision.model_id,
+            model_version=decision.model_version,
+            agent_session_id=agent_session_id,
+        )
+        return decision
 
 
 @dataclass(frozen=True)
@@ -517,7 +605,9 @@ def create_action_decision_app(
         try:
             raw = json.loads(body)
             decision_request = _parse_request(raw, media=(), config=config)
-            decision = await engine.decide(decision_request)
+            decision = await _decide_with_service_log(
+                engine, decision_request, operation="action_decision"
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return JSONResponse(_with_prompt_receipt(decision.to_dict(), decision_request))
@@ -536,11 +626,16 @@ def create_action_decision_app(
                 return
             request_id = streamed.request_id
             payload = dict(streamed.payload)
-            payload.setdefault("request_id", request_id)
+            if payload.setdefault("request_id", request_id) != request_id:
+                raise ValueError(
+                    "action payload request_id must match request.start"
+                )
             decision_request = _parse_request(payload, media=streamed.media, config=config)
             decision = await run_until_websocket_disconnect(
                 websocket,
-                engine.decide(decision_request),
+                _decide_with_service_log(
+                    engine, decision_request, operation="action_decision"
+                ),
                 abort=lambda: engine.cancel(request_id),
             )
             await websocket.send_json(
@@ -581,7 +676,9 @@ def create_action_decision_app(
             raise HTTPException(status_code=413, detail="request body too large")
         try:
             decision_request, public_id = parse_recall(json.loads(body))
-            decision = await engine.decide(decision_request)
+            decision = await _decide_with_service_log(
+                engine, decision_request, operation="action_recall"
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return JSONResponse(_recall_response(public_id, decision, decision_request))
@@ -591,12 +688,30 @@ def create_action_decision_app(
             payload, engine.registry, media=media,
             model_id=config.model_id, model_version=config.model_version,
         )
+        if not isinstance(payload, dict):
+            raise ValueError("action recall payload must be an object")
+        trace_request_id, root_session_id, agent_session_id = _parse_log_context(
+            payload, default_session_id=decision_request.session_id
+        )
+        decision_request = replace(
+            decision_request,
+            trace_request_id=trace_request_id,
+            root_session_id=root_session_id,
+            agent_session_id=agent_session_id,
+        )
         mode = payload.get("mode")
+        target_text = (
+            payload.get("user_input", {}).get("text")
+            if mode == "action_request"
+            and isinstance(payload.get("user_input"), dict)
+            else None
+        )
         emit_structured_log(
             "action", "action_recall_received", component="action_decision",
             request_id=decision_request.request_id, public_request_id=public_id,
             recall_variant=recall_variant(decision_request), input_mode=mode,
-            target_text=payload["user_input"]["text"] if mode == "action_request" else None,
+            target_text_present=bool(target_text),
+            target_text_chars=len(target_text) if isinstance(target_text, str) else 0,
         )
         return decision_request, public_id
 
@@ -608,7 +723,9 @@ def create_action_decision_app(
                 raise ValueError("recall payload request_id must match request.start")
             decision_request, public_id = parse_recall(payload, streamed.media)
             try:
-                decision = await engine.decide(decision_request)
+                decision = await _decide_with_service_log(
+                    engine, decision_request, operation="action_recall"
+                )
             except asyncio.CancelledError:
                 if asyncio.current_task().cancelling():
                     await engine.cancel(decision_request.request_id)
@@ -680,6 +797,9 @@ def _parse_request(
     ):
         raise ValueError("assistant audio requires an assistant body-action request")
     runtime_context = _object_field(raw, "runtime_context")
+    trace_request_id, root_session_id, agent_session_id = _parse_log_context(
+        raw, default_session_id=_required_string(raw, "session_id")
+    )
     from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
     prompt_snapshot = (
         decode_action_prompt_snapshot(
@@ -714,7 +834,39 @@ def _parse_request(
         # as meaningful millisecond evidence. Speech windows retain timing.
         simple_audio=(runtime_context.get("prompt_profile") == "persona-audio-window-v2"
                       and runtime_context.get("decision_mode") == "user_request"),
+        trace_request_id=trace_request_id,
+        root_session_id=root_session_id,
+        agent_session_id=agent_session_id,
     )
+
+
+def _parse_log_context(
+    raw: dict[str, Any], *, default_session_id: str
+) -> tuple[str | None, str, str]:
+    context = raw.get("log_context", {})
+    if not isinstance(context, dict):
+        raise ValueError("log_context must be an object")
+    trace_request_id = _optional_string(context, "request_id")
+    root_session_id = _optional_string(
+        context, "root_session_id"
+    ) or _optional_string(raw, "root_session_id")
+    agent_session_id = _optional_string(
+        context, "agent_session_id"
+    ) or _optional_string(raw, "agent_session_id")
+    for name, value in (
+        ("request_id", trace_request_id),
+        ("root_session_id", root_session_id),
+        ("agent_session_id", agent_session_id),
+    ):
+        if value is not None and not valid_correlation_id(value):
+            raise ValueError(f"log_context.{name} is not a valid correlation ID")
+    root_session_id = root_session_id or correlation_id_or_digest(
+        default_session_id, prefix="legacy_root"
+    )
+    agent_session_id = agent_session_id or correlation_id_or_digest(
+        default_session_id, prefix="legacy_agent"
+    )
+    return trace_request_id, root_session_id, agent_session_id
 
 
 def _required_string(raw: dict[str, Any], key: str) -> str:
@@ -773,7 +925,12 @@ def _request_digest(request: ActionDecisionRequest) -> str:
                 else item
             )
             for key, item in request.__dict__.items()
-            if key != "media"
+            if key not in {
+                "media",
+                "trace_request_id",
+                "root_session_id",
+                "agent_session_id",
+            }
         },
         "media": [
             {

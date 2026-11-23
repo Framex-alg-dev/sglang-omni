@@ -7,6 +7,7 @@ from enum import Enum
 
 from framex_event_policy.windows import LEGACY_OBSERVATION_MODE, RAW_WINDOW_MODE
 from sglang_omni.serve.agent_prompt_snapshot import TimelinePromptSnapshot
+from sglang_omni.utils.framex_service_logs import valid_correlation_id
 
 from .event1115 import EVENT1115_IDS
 from .prompt import EVENT_IDS
@@ -40,12 +41,24 @@ class TimelineSessionStart:
     contract_version: int = CONTRACT_VERSION
     result_mode: str = LEGACY_OBSERVATION_MODE
     prompt_snapshot: TimelinePromptSnapshot | None = None
+    # Log-correlation fields. ``session_id`` remains the v2 wire identity for
+    # compatibility; new callers should send the explicit IDs below.
+    root_session_id: str | None = None
+    agent_session_id: str | None = None
 
     def __post_init__(self) -> None:
         _required("session_id", self.session_id)
         _required("audio_format", self.audio_format)
         _required("video_format", self.video_format)
         _required("model_id", self.model_id)
+        if self.root_session_id is not None:
+            _required("root_session_id", self.root_session_id)
+            if not valid_correlation_id(self.root_session_id):
+                raise ValueError("root_session_id is not a valid correlation ID")
+        if self.agent_session_id is not None:
+            _required("agent_session_id", self.agent_session_id)
+            if not valid_correlation_id(self.agent_session_id):
+                raise ValueError("agent_session_id is not a valid correlation ID")
         if min(self.identity_epoch, self.observer_epoch, self.stream_epoch) < 0:
             raise ValueError("timeline epochs must be non-negative")
         if self.next_sequence <= 0:

@@ -17,6 +17,13 @@ export SGLANG_OMNI_SCOPED_RADIX_CACHE=1
 export SGLANG_OMNI_STRICT_PORT=1
 export SGLANG_OMNI_SERVICE_INSTANCE_ID="${SGLANG_OMNI_SERVICE_INSTANCE_ID:-41035-action-v10}"
 
+FRAME_LOG_DIR=/var/log/framex/omni-action-worker
+if [[ ! -d "$FRAME_LOG_DIR" || ! -w "$FRAME_LOG_DIR" ]]; then
+  echo "FrameX log directory is missing or not writable: $FRAME_LOG_DIR" >&2
+  echo "Provision it before launch: sudo install -d -o $(id -un) -g $(id -gn) $FRAME_LOG_DIR" >&2
+  exit 1
+fi
+
 exec "$PYTHON_BIN" -m sglang_omni.cli serve \
   --config "$DEPLOY_DIR/config.yaml" \
   --host "${ACTION_V10_HOST:-0.0.0.0}" \
