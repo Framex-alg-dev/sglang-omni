@@ -166,6 +166,7 @@ from sglang_omni.utils.framex_service_logs import (
     emit_service_event,
     valid_correlation_id,
 )
+from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
 from sglang_omni.serve.internal_realtime_model_api import (
     register_internal_realtime_model_api,
 )
@@ -188,14 +189,6 @@ _BAD_REQUEST_MARKERS = (
     "sequence exceeds max_length",
     "multimodal_train_inputs",
 )
-
-
-def _optional_log_header(value: str | None) -> tuple[str | None, bool]:
-    if value is None:
-        return None, False
-    if valid_correlation_id(value):
-        return value, False
-    return None, True
 
 
 def _is_bad_request_error(exc: Exception) -> bool:
@@ -328,68 +321,7 @@ def create_app(
         VoiceUploadBodyLimitMiddleware,
         max_bytes=MAX_VOICE_UPLOAD_BODY_BYTES,
     )
-
-    @app.middleware("http")
-    async def framex_http_request_log(
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
-        request_id, rejected_request_id = adopt_request_id(
-            request.headers.get("x-request-id")
-        )
-        root_session_id, rejected_root_session_id = _optional_log_header(
-            request.headers.get("x-root-session-id")
-        )
-        turn_id, rejected_turn_id = _optional_log_header(
-            request.headers.get("x-turn-id")
-        )
-        started = time.perf_counter()
-        with bind_service_log_context(
-            request_id=request_id,
-            root_session_id=root_session_id,
-            turn_id=turn_id,
-        ):
-            try:
-                response = await call_next(request)
-            except Exception as exc:
-                emit_service_event(
-                    "omni-reply-worker",
-                    "http.request.completed",
-                    level=logging.ERROR,
-                    logger_name=__name__,
-                    method=request.method,
-                    path=request.url.path,
-                    status=500,
-                    duration_ms=round(
-                        (time.perf_counter() - started) * 1000, 3
-                    ),
-                    inbound_request_id_rejected=rejected_request_id,
-                    inbound_root_session_id_rejected=(
-                        rejected_root_session_id
-                    ),
-                    inbound_turn_id_rejected=rejected_turn_id,
-                    error_type=type(exc).__name__,
-                )
-                raise
-            emit_service_event(
-                "omni-reply-worker",
-                "http.request.completed",
-                level=(
-                    logging.INFO
-                    if response.status_code < 500
-                    else logging.ERROR
-                ),
-                logger_name=__name__,
-                method=request.method,
-                path=request.url.path,
-                status=response.status_code,
-                duration_ms=round((time.perf_counter() - started) * 1000, 3),
-                inbound_request_id_rejected=rejected_request_id,
-                inbound_root_session_id_rejected=rejected_root_session_id,
-                inbound_turn_id_rejected=rejected_turn_id,
-            )
-            response.headers["X-Request-ID"] = request_id
-            return response
+    app.add_middleware(FramexHTTPRequestLogMiddleware)
 
     # Store references in app state for access from route handlers
     app.state.client = client

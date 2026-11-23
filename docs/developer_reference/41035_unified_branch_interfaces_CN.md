@@ -408,3 +408,7 @@ Worker 日志分别写到：
 每条日志为单行 JSON，固定包含 `timestamp`、`level`、`service`、`env`、
 `version`、`host`、`logger`、`event`。CLS 日志不记录用户原文、模型输出、
 提示词、音视频内容、鉴权信息；Action 完整回放数据仅在显式配置独立回放目录时写入。
+
+Reply HTTP 的 `http.request.completed` 在响应最后一个 body 成功发送后记录；
+`outcome` 为 `completed/failed/cancelled`。流式响应中途断开或发送失败记为
+`cancelled`，并且每个请求只记录一次终态。WebSocket 不经过该 HTTP middleware。
