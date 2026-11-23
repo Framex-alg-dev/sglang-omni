@@ -269,7 +269,6 @@ class _Session:
                 logger_name=__name__,
                 root_session_id=self.root_session_id,
                 reason="closed",
-                agent_session_id=self.agent_session_id,
             )
         self.speech_speculations.clear()
         self.reserved_request_ids.clear()
@@ -1236,7 +1235,6 @@ class _Session:
                 status=200,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=logged_operation_id,
-                agent_session_id=self.agent_session_id,
             )
         except asyncio.CancelledError:
             emit_service_event(
@@ -1249,7 +1247,6 @@ class _Session:
                 status=499,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=logged_operation_id,
-                agent_session_id=self.agent_session_id,
                 error_type="CancelledError",
             )
             await self.send({"type": "stage.cancelled", "request_id": request_id})
@@ -1265,7 +1262,6 @@ class _Session:
                 status=504,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=logged_operation_id,
-                agent_session_id=self.agent_session_id,
                 error_type="TimeoutError",
                 error_message="model stage exceeded its deadline",
             )
@@ -1293,7 +1289,6 @@ class _Session:
                 status=502,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=logged_operation_id,
-                agent_session_id=self.agent_session_id,
                 error_type=type(exc).__name__,
             )
             await self.send(

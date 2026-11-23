@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
+from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
 from .contracts import (
     CONTRACT_VERSION,
     MediaKind,
@@ -62,6 +63,10 @@ def create_timeline_detection_app(
     if min(max_chunk_bytes, max_pending_chunks, max_pending_bytes) <= 0:
         raise ValueError("timeline service queue limits must be positive")
     app = FastAPI(title="sglang-omni-timeline-detection", version="1")
+    app.add_middleware(
+        FramexHTTPRequestLogMiddleware,
+        service="omni-event-worker",
+    )
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
@@ -168,9 +173,6 @@ def create_timeline_detection_app(
                             ),
                             event_count=len(events.events),
                             model_id=start.model_id,
-                            agent_session_id=(
-                                start.agent_session_id or start.session_id
-                            ),
                         )
                     else:
                         for event in events:
@@ -189,9 +191,6 @@ def create_timeline_detection_app(
                             ),
                             event_count=len(events),
                             model_id=start.model_id,
-                            agent_session_id=(
-                                start.agent_session_id or start.session_id
-                            ),
                         )
             except asyncio.CancelledError:
                 raise
@@ -370,9 +369,6 @@ def create_timeline_detection_app(
                     logger_name=__name__,
                     root_session_id=start.root_session_id or start.session_id,
                     reason=close_reason,
-                    agent_session_id=(
-                        start.agent_session_id or start.session_id
-                    ),
                 )
 
     return app

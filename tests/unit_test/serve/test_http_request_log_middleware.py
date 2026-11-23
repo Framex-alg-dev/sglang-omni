@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from sglang_omni.serve import http_request_logs
 from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
-from sglang_omni.utils.framex_service_logs import current_service_log_context
+from sglang_omni.serve.speech_errors import openai_error_payload
+from sglang_omni.utils.framex_service_logs import (
+    bind_service_log_context,
+    current_service_log_context,
+)
 
 
 def _http_scope(*, headers: list[tuple[bytes, bytes]] | None = None) -> dict[str, Any]:
@@ -20,6 +25,7 @@ def _http_scope(*, headers: list[tuple[bytes, bytes]] | None = None) -> dict[str
         "method": "POST",
         "scheme": "http",
         "path": "/v1/chat/completions",
+        "route": SimpleNamespace(path="/v1/chat/completions"),
         "raw_path": b"/v1/chat/completions",
         "query_string": b"ignored=secret",
         "headers": headers or [],
@@ -46,6 +52,11 @@ def test_http_log_waits_for_final_stream_body_and_preserves_context(
         async def app(scope, receive, send) -> None:
             assert current_service_log_context().root_session_id == "root-1"
             assert current_service_log_context().turn_id == "turn-1"
+            assert scope["state"] == {
+                "framex_request_id": "client-request-1",
+                "framex_root_session_id": "root-1",
+                "framex_turn_id": "turn-1",
+            }
             await send(
                 {
                     "type": "http.response.start",
@@ -112,6 +123,10 @@ def test_http_log_waits_for_final_stream_body_and_preserves_context(
         assert events[0][1]["outcome"] == "completed"
         assert events[0][1]["status"] == 200
         assert events[0][1]["response_started"] is True
+        assert events[0][1]["route"] == "/v1/chat/completions"
+        assert "path" not in events[0][1]
+        assert events[0][1]["inbound_request_id_invalid"] is False
+        assert "inbound_request_id_rejected" not in events[0][1]
         assert current_service_log_context().request_id is None
 
     asyncio.run(run())
@@ -287,3 +302,14 @@ def test_http_log_does_not_intercept_websocket_scope(
         assert events == []
 
     asyncio.run(run())
+
+
+def test_openai_error_payload_returns_bound_request_id() -> None:
+    with bind_service_log_context(request_id="req_0123456789abcdfg"):
+        payload = openai_error_payload(
+            "invalid request",
+            error_type="BadRequestError",
+            code=400,
+        )
+
+    assert payload["error"]["request_id"] == "req_0123456789abcdfg"

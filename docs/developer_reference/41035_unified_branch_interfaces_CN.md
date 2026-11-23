@@ -397,6 +397,10 @@ Action 的业务 `request_id` 仍是推理、取消和幂等键；日志 ID 放�
 `log_context.request_id`，两者不会互相覆盖。旧 `session_id` 继续保留在接口中，
 但日志内不写含义不明确的 `session_id` 字段。
 
+Action WebSocket 的外层 `request.start.request_id` 按日志规范作为本次操作的
+全链路日志 ID，并在响应帧中原样回传；payload 内的 `request_id` 仍是模型推理、
+幂等和取消键，允许不同。旧客户端省略 payload `request_id` 时，兼容使用外层值。
+
 Worker 日志分别写到：
 
 | 服务 | 文件 |
@@ -408,6 +412,14 @@ Worker 日志分别写到：
 每条日志为单行 JSON，固定包含 `timestamp`、`level`、`service`、`env`、
 `version`、`host`、`logger`、`event`。CLS 日志不记录用户原文、模型输出、
 提示词、音视频内容、鉴权信息；Action 完整回放数据仅在显式配置独立回放目录时写入。
+
+自动注入的主关联字段只有 `request_id`、`root_session_id`、`turn_id`；
+`trace_id/span_id` 仅在接入 OpenTelemetry 时可选，不作为主查询键。HTTP 日志使用
+`route` 路由模板，不记录带具体对象 ID 的原始 path；非法入站请求 ID 记录
+`inbound_request_id_invalid=true`。Reply HTTP 响应回传并通过 CORS 暴露
+`X-Request-ID`；OpenAI 风格错误体的 `error.request_id` 与该响应头一致。
+`agent_session_id` 等本地会话 ID 只出现在会话建立或首次绑定的关联行，不自动复制到
+每条推理日志。
 
 Reply HTTP 的 `http.request.completed` 在响应最后一个 body 成功发送后记录；
 `outcome` 为 `completed/failed/cancelled`。流式响应中途断开或发送失败记为

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from sglang_omni.serve.action_decision.recall_audit import input_snapshot
 from sglang_omni.serve.action_decision.service import (
+    _adopt_stream_log_request_id,
     _parse_request,
     _request_digest,
 )
@@ -41,6 +42,18 @@ def test_action_log_context_is_separate_from_operation_idempotency() -> None:
         agent_session_id="agent-session-2",
     )
     assert _request_digest(retried) == _request_digest(request)
+
+
+def test_action_websocket_request_id_is_log_only() -> None:
+    payload = _wire_request()
+    _adopt_stream_log_request_id(payload, "req_z123456789abcdfg")
+
+    assert payload["request_id"] == "operation-1"
+    assert payload["log_context"] == {
+        "request_id": "req_z123456789abcdfg",
+        "root_session_id": "ses_0123456789abcdfg",
+        "agent_session_id": "agent-session-1",
+    }
 
 
 def test_action_input_snapshot_excludes_user_content_and_prompts(monkeypatch) -> None:

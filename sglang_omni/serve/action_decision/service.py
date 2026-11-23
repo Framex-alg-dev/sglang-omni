@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
+from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
 from sglang_omni.serve.streaming_request import (
     StreamedMedia,
     StreamedRequest,
@@ -86,6 +87,16 @@ async def _decide_with_service_log(
         root_session_id=root_session_id,
         turn_id=turn_id,
     ):
+        emit_service_event(
+            "omni-action-worker",
+            "inference.started",
+            logger_name=__name__,
+            operation=operation,
+            operation_id=operation_id,
+            decision_point_id=decision_point_id,
+            channel=request.channel.value,
+            agent_session_id=agent_session_id,
+        )
         try:
             decision = await engine.decide(request)
         except asyncio.CancelledError:
@@ -100,7 +111,6 @@ async def _decide_with_service_log(
                 operation_id=operation_id,
                 decision_point_id=decision_point_id,
                 channel=request.channel.value,
-                agent_session_id=agent_session_id,
             )
             raise
         except Exception as exc:
@@ -115,7 +125,6 @@ async def _decide_with_service_log(
                 operation_id=operation_id,
                 decision_point_id=decision_point_id,
                 channel=request.channel.value,
-                agent_session_id=agent_session_id,
                 error_type=type(exc).__name__,
             )
             raise
@@ -133,7 +142,6 @@ async def _decide_with_service_log(
             candidate_id=decision.candidate_id,
             model_id=decision.model_id,
             model_version=decision.model_version,
-            agent_session_id=agent_session_id,
         )
         return decision
 
@@ -559,6 +567,10 @@ def create_action_decision_app(
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
     app = FastAPI(title="sglang-omni-action-decision", version="1")
+    app.add_middleware(
+        FramexHTTPRequestLogMiddleware,
+        service="omni-action-worker",
+    )
     app.state.action_decision_engine = engine
 
 
@@ -604,6 +616,12 @@ def create_action_decision_app(
             raise HTTPException(status_code=413, detail="request body too large")
         try:
             raw = json.loads(body)
+            if isinstance(raw, dict):
+                _adopt_stream_log_request_id(
+                    raw,
+                    request.state.framex_request_id,
+                    root_session_id=request.state.framex_root_session_id,
+                )
             decision_request = _parse_request(raw, media=(), config=config)
             decision = await _decide_with_service_log(
                 engine, decision_request, operation="action_decision"
@@ -626,17 +644,17 @@ def create_action_decision_app(
                 return
             request_id = streamed.request_id
             payload = dict(streamed.payload)
-            if payload.setdefault("request_id", request_id) != request_id:
-                raise ValueError(
-                    "action payload request_id must match request.start"
-                )
+            # The outer ID is the end-to-end log correlation ID. The payload
+            # ID remains the inference/idempotency key and may differ.
+            payload.setdefault("request_id", request_id)
+            _adopt_stream_log_request_id(payload, request_id)
             decision_request = _parse_request(payload, media=streamed.media, config=config)
             decision = await run_until_websocket_disconnect(
                 websocket,
                 _decide_with_service_log(
                     engine, decision_request, operation="action_decision"
                 ),
-                abort=lambda: engine.cancel(request_id),
+                abort=lambda: engine.cancel(decision_request.request_id),
             )
             await websocket.send_json(
                 {
@@ -651,7 +669,12 @@ def create_action_decision_app(
             return
         except (TypeError, ValueError) as exc:
             await websocket.send_json(
-                {"type": "error", "code": "invalid_request", "detail": str(exc)}
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "code": "invalid_request",
+                    "detail": str(exc),
+                }
             )
             await websocket.close(code=4400)
         except Exception as exc:
@@ -664,7 +687,12 @@ def create_action_decision_app(
                 detail=str(exc),
             )
             await websocket.send_json(
-                {"type": "error", "code": "model_error", "detail": str(exc)}
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "code": "model_error",
+                    "detail": str(exc),
+                }
             )
             await websocket.close(code=1011)
 
@@ -675,7 +703,14 @@ def create_action_decision_app(
         if len(body) > config.max_body_bytes:
             raise HTTPException(status_code=413, detail="request body too large")
         try:
-            decision_request, public_id = parse_recall(json.loads(body))
+            raw = json.loads(body)
+            if isinstance(raw, dict):
+                _adopt_stream_log_request_id(
+                    raw,
+                    request.state.framex_request_id,
+                    root_session_id=request.state.framex_root_session_id,
+                )
+            decision_request, public_id = parse_recall(raw)
             decision = await _decide_with_service_log(
                 engine, decision_request, operation="action_recall"
             )
@@ -719,8 +754,8 @@ def create_action_decision_app(
     async def recall_audio_realtime(websocket: WebSocket) -> None:
         async def recall(streamed: StreamedRequest) -> dict[str, Any]:
             payload = dict(streamed.payload)
-            if payload.setdefault("request_id", streamed.request_id) != streamed.request_id:
-                raise ValueError("recall payload request_id must match request.start")
+            payload.setdefault("request_id", streamed.request_id)
+            _adopt_stream_log_request_id(payload, streamed.request_id)
             decision_request, public_id = parse_recall(payload, streamed.media)
             try:
                 decision = await _decide_with_service_log(
@@ -867,6 +902,23 @@ def _parse_log_context(
         default_session_id, prefix="legacy_agent"
     )
     return trace_request_id, root_session_id, agent_session_id
+
+
+def _adopt_stream_log_request_id(
+    payload: dict[str, Any],
+    request_id: str,
+    *,
+    root_session_id: str | None = None,
+) -> None:
+    context = payload.get("log_context")
+    if context is None:
+        context = {}
+    if not isinstance(context, dict):
+        raise ValueError("log_context must be an object")
+    context = {**context, "request_id": request_id}
+    if root_session_id is not None:
+        context.setdefault("root_session_id", root_session_id)
+    payload["log_context"] = context
 
 
 def _required_string(raw: dict[str, Any], key: str) -> str:

@@ -592,6 +592,7 @@ def test_speech_endpoint_rejects_invalid_request_with_openai_error() -> None:
             "type": "BadRequestError",
             "param": "response_format",
             "code": 400,
+            "request_id": response.headers["x-request-id"],
         }
     }
 

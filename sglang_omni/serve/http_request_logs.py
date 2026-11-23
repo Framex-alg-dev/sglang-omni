@@ -12,6 +12,7 @@ from typing import Any
 from starlette.types import Receive, Scope, Send
 
 from sglang_omni.utils.framex_service_logs import (
+    SERVICES,
     adopt_request_id,
     bind_service_log_context,
     emit_service_event,
@@ -24,8 +25,16 @@ logger = logging.getLogger(__name__)
 class FramexHTTPRequestLogMiddleware:
     """Log the complete ASGI HTTP response lifecycle without buffering it."""
 
-    def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        app: Callable[..., Awaitable[None]],
+        *,
+        service: str = "omni-reply-worker",
+    ) -> None:
+        if service not in SERVICES:
+            raise ValueError(f"unsupported FrameX service: {service!r}")
         self.app = app
+        self.service = service
 
     async def __call__(
         self,
@@ -46,8 +55,12 @@ class FramexHTTPRequestLogMiddleware:
         turn_id, rejected_turn_id = _optional_log_header(
             _asgi_header(scope, b"x-turn-id")
         )
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["framex_request_id"] = request_id
+            state["framex_root_session_id"] = root_session_id
+            state["framex_turn_id"] = turn_id
         method = str(scope.get("method", ""))
-        path = str(scope.get("path", ""))
         started = time.perf_counter()
         response_status: int | None = None
         response_started = False
@@ -68,21 +81,21 @@ class FramexHTTPRequestLogMiddleware:
             finalized = True
             try:
                 emit_service_event(
-                    "omni-reply-worker",
+                    self.service,
                     "http.request.completed",
                     level=level,
                     logger_name=__name__,
                     method=method,
-                    path=path,
+                    route=_route_template(scope),
                     status=status,
                     outcome=outcome,
                     response_started=response_started,
                     duration_ms=round(
                         (time.perf_counter() - started) * 1000, 3
                     ),
-                    inbound_request_id_rejected=rejected_request_id,
-                    inbound_root_session_id_rejected=rejected_root_session_id,
-                    inbound_turn_id_rejected=rejected_turn_id,
+                    inbound_request_id_invalid=rejected_request_id,
+                    inbound_root_session_id_invalid=rejected_root_session_id,
+                    inbound_turn_id_invalid=rejected_turn_id,
                     error_type=error_type,
                 )
             except Exception:
@@ -182,6 +195,16 @@ def _asgi_header(scope: Scope, name: bytes) -> str | None:
         if header_name.lower() == name:
             return value.decode("latin-1")
     return None
+
+
+def _route_template(scope: Scope) -> str:
+    route = scope.get("route")
+    for attribute in ("path_format", "path"):
+        value = getattr(route, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    # Do not put an unmatched raw path into CLS: it can contain IDs or content.
+    return "<unmatched>"
 
 
 def _with_asgi_response_header(

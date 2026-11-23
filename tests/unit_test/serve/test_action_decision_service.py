@@ -494,9 +494,9 @@ def test_websocket_service_accepts_text_request() -> None:
             {
                 "type": "request.start",
                 "contract_version": 2,
-                "request_id": "r1",
+                "request_id": "req_0123456789abcdfg",
                 "payload": {
-                    "request_id": "r1",
+                    "request_id": "business-r1",
                     "session_id": "s1",
                     "turn_id": "t1",
                     "decision_point_id": "dp1",
@@ -506,10 +506,17 @@ def test_websocket_service_accepts_text_request() -> None:
             }
         )
         assert socket.receive_json()["type"] == "request.ready"
-        socket.send_json({"type": "request.commit", "request_id": "r1"})
+        socket.send_json(
+            {
+                "type": "request.commit",
+                "request_id": "req_0123456789abcdfg",
+            }
+        )
         response = socket.receive_json()
     assert response["type"] == "response.completed"
+    assert response["request_id"] == "req_0123456789abcdfg"
     assert response["response"]["channel"] == "body"
+    assert client.requests[0][0] == "business-r1"
 
 
 @pytest.mark.skip(reason="V10 action-recall no longer exposes legacy prefix-prefill")

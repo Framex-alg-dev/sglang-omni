@@ -316,6 +316,7 @@ def create_app(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID"],
     )
     app.add_middleware(
         VoiceUploadBodyLimitMiddleware,
@@ -981,7 +982,6 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 turn_id=turn_id,
                 operation="chat_completion_realtime",
                 operation_id=logged_operation_id,
-                agent_session_id=agent_session_id,
                 status=200,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 model_id=model,
@@ -1001,7 +1001,6 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 turn_id=turn_id,
                 operation="chat_completion_realtime",
                 operation_id=logged_operation_id,
-                agent_session_id=agent_session_id,
                 status=400,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 error_type=type(exc).__name__,
@@ -1009,6 +1008,7 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             await websocket.send_json(
                 {
                     "type": "error",
+                    "request_id": outer_request_id,
                     "code": "invalid_request",
                     "detail": str(exc.detail),
                 }
@@ -1026,7 +1026,6 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 turn_id=turn_id,
                 operation="chat_completion_realtime",
                 operation_id=logged_operation_id,
-                agent_session_id=agent_session_id,
                 status=400,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 error_type=type(exc).__name__,
@@ -1034,6 +1033,7 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             await websocket.send_json(
                 {
                     "type": "error",
+                    "request_id": outer_request_id,
                     "code": "invalid_request",
                     "detail": str(exc),
                 }
@@ -1051,7 +1051,6 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 turn_id=turn_id,
                 operation="chat_completion_realtime",
                 operation_id=logged_operation_id,
-                agent_session_id=agent_session_id,
                 status=500,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 error_type=type(exc).__name__,
@@ -1072,7 +1071,6 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                     turn_id=turn_id,
                     connection_type="chat_completions_realtime",
                     operation_id=logged_operation_id,
-                    agent_session_id=agent_session_id,
                     reason=close_reason,
                 )
 
