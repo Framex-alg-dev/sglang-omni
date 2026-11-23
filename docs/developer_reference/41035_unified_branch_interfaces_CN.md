@@ -1,373 +1,130 @@
-# 41035 sglang-omni 统一分支接口说明
+# 41035 sglang-omni 接口字段说明｜2026-11-23
 
-> 文档状态：按 `codex/41035-omni-integration-20261121` 分支、提交
-> `6b43da4c` 整理，日期为 2026-11-23。
->
-> 本文描述当前代码已经实现的接口，不代表下一阶段的统一接口方案。
+适用分支：`codex/41035-omni-integration-20261121`。
 
-快速导航：
+## 1. 接口地址
 
-- 第 1～3 节：架构、端点和两种 WebSocket 外层协议
-- 第 4 节：Agent 会话级 Inference Gateway
-- 第 5～7 节：Reply、Action、Event 业务接口
-- 第 8 节：尚未稳定的 Prompt Snapshot 扩展
-- 第 9～10 节：错误语义和 Agent 接入检查清单
+| 能力 | 接口 | 鉴权 |
+| --- | --- | --- |
+| Gateway | `WS /v1/inference-session`，默认端口 `18003` | 无，仅限可信内网 |
+| Reply | `WS /v1/chat/completions/realtime`，通常端口 `18005` | 无，仅限可信内网 |
+| Reply | `POST /v1/chat/completions` | 无，仅限可信内网 |
+| Action Recall | `WS/POST /v1/action-recall`，当前 `10.199.0.7:18049` | `Authorization: Bearer <token>` |
+| Action Decision | `WS /v1/action-decision/realtime`，当前端口 `18049` | `Authorization: Bearer <token>` |
+| Event | `WS /v1/timeline`，当前 `10.199.0.15:18118` | `Authorization: Bearer <token>` |
 
-## 1. 先说结论
+## 2. Reply
 
-当前完成的是**代码分支统一**，不是把 Reply、Action、Event 合并成一个模型、
-一个进程或一套 wire protocol。
-
-三个模型仍然独立部署：
-
-| 能力 | 模型服务 | 主要 Agent 接口 | 当前模型身份 |
-| --- | --- | --- | --- |
-| Reply | OpenAI Reply Worker | Gateway `stage=reply`，或直连 `/v1/chat/completions/realtime` | 由 Reply 部署配置决定 |
-| Action | Action V10 | `/v1/action-recall`；完整多模态场景也可经 Gateway 的 `body` / `expression` stage | `v10-boundary-ep1-final-fp8` |
-| Event | Event 1115 Timeline | `/v1/timeline` | ID `event-1115-v1-fp8`；version `1115_v1-checkpoint-6138-fp8` |
-
-当前建议的连接关系是：
-
-```text
-                         +--> Reply Worker /v1/chat/completions/realtime
-Agent --> Inference GW --+--> Action Worker /v1/action-decision/realtime
-  |                      +--> 其他 classifier / brain / performance stage
-  |
-  +--------------------------> Action Worker /v1/action-recall
-  |
-  +--------------------------> Event Worker /v1/timeline
-```
-
-Inference Gateway 用于会话内媒体复用和多 stage 编排；Action Recall 与 Timeline
-仍是独立接口。不要把 Gateway v4、模型请求 v2、Timeline v2、Action Decision v1
-理解成同一个 `contract_version`。
-
-## 2. 服务和端点总览
-
-| 服务 | 默认/当前端口 | 端点 | 鉴权 |
-| --- | ---: | --- | --- |
-| Inference Gateway | `18003` | `WS /v1/inference-session` | 当前代码未校验客户端 token，只应暴露在可信内网 |
-| Inference Gateway | `18003` | `GET /live`、`/ready`、`/health` | 无 |
-| Reply Worker | 通常 `18005` | `WS /v1/chat/completions/realtime` | 当前路由未校验 Bearer；通常只允许 Gateway 内部访问 |
-| Reply Worker | 通常 `18005` | `POST /v1/chat/completions` | 当前路由未校验 Bearer |
-| Reply Worker | 通常 `18005` | `GET /health`、`/v1/models` | 无 |
-| Action V10 | 当前 `18049` | `WS/POST /v1/action-recall` | `Authorization: Bearer <token>` |
-| Action V10 | 当前 `18049` | `WS /v1/action-decision/realtime` | `Authorization: Bearer <token>` |
-| Action V10 | 当前 `18049` | `POST /v1/action-decision` | `Authorization: Bearer <token>` |
-| Action V10 | 当前 `18049` | `GET /health` | `Authorization: Bearer <token>` |
-| Event 1115 | 当前 `18118` | `WS /v1/timeline` | `Authorization: Bearer <token>` |
-| Event 1115 | 当前 `18118` | `GET /health` | `Authorization: Bearer <token>` |
-
-代码快照记录的 41035 地址为：
-
-- Action：`ws://10.199.0.7:18049/v1/action-recall`
-- Event：`ws://10.199.0.15:18118/v1/timeline`
-
-地址属于部署配置，不属于协议。接入代码不应写死 IP。
-
-## 3. 两种 WebSocket 外层协议
-
-### 3.1 Gateway 会话协议：`inference-session-v4`
-
-Gateway 连接是长会话连接。一份媒体先注册一次，之后多个 stage 用 `media_refs`
-引用。
-
-打开会话：
-
-```json
-{
-  "type": "session.open",
-  "contract_version": 4,
-  "session_id": "sess_example"
-}
-```
-
-成功响应：
-
-```json
-{
-  "type": "session.ready",
-  "contract_version": 4,
-  "session_id": "sess_example",
-  "availability_epoch": 0,
-  "stages": {
-    "body": true,
-    "brain": true,
-    "classifier": true,
-    "expression": true,
-    "performance": true,
-    "reply": true
-  }
-}
-```
-
-Gateway 当前支持六个 stage：`classifier`、`brain`、`reply`、`body`、
-`expression`、`performance`。
-
-### 3.2 模型单请求协议：`request.start v2`
-
-Reply Worker、Action Decision 以及 Action Recall 的 WebSocket 都使用相同的传输
-外壳，但 `payload` 业务结构不同。
-
-```text
-client                         server
-  | request.start v2             |
-  |----------------------------->|
-  | request.ready v2             |
-  |<-----------------------------|
-  | input.media JSON（可重复）    |
-  | binary payload               |
-  |----------------------------->|
-  | input.media.ack              |
-  |<-----------------------------|
-  | request.commit               |
-  |----------------------------->|
-  | response.delta（Reply 可选）  |
-  | response.completed / error   |
-  |<-----------------------------|
-```
-
-首帧：
+### 2.1 WebSocket 首帧
 
 ```json
 {
   "type": "request.start",
   "contract_version": 2,
-  "request_id": "req-1",
-  "payload": {}
-}
-```
-
-媒体头之后必须紧跟一个 binary WebSocket frame：
-
-```json
-{
-  "type": "input.media",
-  "request_id": "req-1",
-  "media_id": "frame-1",
-  "kind": "image",
-  "start_ms": 0,
-  "end_ms": 100,
-  "encoding": "image/jpeg",
-  "checksum": "sha256:<64位小写十六进制>",
-  "payload_bytes": 12345,
-  "evidence_role": "user_camera"
-}
-```
-
-通用媒体约束：
-
-| `kind` | 可用 `evidence_role` | 常用编码 |
-| --- | --- | --- |
-| `audio` | 接口允许的音频角色；Reply 常用 `user_audio` | `pcm_s16le`、`wav` |
-| `image` | `user_camera`、`avatar_state` | `image/jpeg`、`image/png` |
-| `video` | `user_camera` | 当前模型路径通常仍传采样后的图片帧 |
-
-`avatar_state` 必须是 JPEG。服务会校验字节数和 SHA-256。
-
-## 4. Inference Gateway 接口
-
-### 4.1 注册媒体
-
-Gateway 使用 `media.put`，而不是 `input.media`：
-
-```json
-{
-  "type": "media.put",
-  "media_id": "turn-7-frame-1",
-  "kind": "image",
-  "start_ms": 1200,
-  "end_ms": 1300,
-  "encoding": "image/jpeg",
-  "checksum": "sha256:<digest>",
-  "payload_bytes": 12345,
-  "evidence_role": "user_camera"
-}
-```
-
-发送 JSON 后紧跟 binary frame。成功返回：
-
-```json
-{
-  "type": "media.ack",
-  "media_id": "turn-7-frame-1",
-  "kind": "image",
-  "start_ms": 1200,
-  "end_ms": 1300,
-  "encoding": "image/jpeg",
-  "checksum": "sha256:<digest>",
-  "payload_bytes": 12345,
-  "evidence_role": "user_camera",
-  "duplicate": false
-}
-```
-
-同一个 `media_id` 可以用完全相同的头和字节重复注册，响应中
-`duplicate=true`；同 ID 不同内容会关闭会话。媒体可能因容量限制收到
-`media.evicted`，之后不能再被新 stage 引用。
-
-默认限制：单媒体 32 MiB、会话媒体总量 128 MiB、最多 64 项。
-
-### 4.2 发起 stage
-
-```json
-{
-  "type": "stage.request",
   "request_id": "reply-turn-7",
-  "stage": "reply",
   "payload": {
-    "model": "qwen3-omni-reply-gpu",
     "messages": [
-      {"role": "system", "content": "应用侧完整回复规则"},
+      {"role": "system", "content": "Agent 管理的回复提示词"},
       {"role": "user", "content": "你好"}
     ],
     "stream": true,
     "modalities": ["text"]
-  },
-  "media_refs": ["turn-7-frame-1"]
-}
-```
-
-立即接收：
-
-```json
-{
-  "type": "stage.accepted",
-  "request_id": "reply-turn-7",
-  "stage": "reply"
-}
-```
-
-后续可能收到：
-
-| 事件 | 含义 |
-| --- | --- |
-| `stage.model_input` | 仅开启模型输入诊断时出现；不包含原始二进制 |
-| `stage.delta` | 流式 Reply 增量，`response` 是 OpenAI chunk |
-| `stage.completed` | stage 成功终态，`response` 为上游最终响应 |
-| `stage.error` | stage 失败；包含 `code`、`detail`、`retryable` |
-| `stage.cancelled` | 已运行请求被取消 |
-| `stage.availability` | 上游可用性变化及 `availability_epoch` |
-
-取消请求：
-
-```json
-{"type":"stage.cancel","request_id":"reply-turn-7"}
-```
-
-关闭会话：
-
-```json
-{"type":"session.close"}
-```
-
-Gateway 当前没有单独的成功关闭回执；发送后客户端应正常关闭 socket。
-
-### 4.3 Gateway 的 Action stage
-
-`stage=body` 或 `stage=expression` 时，Gateway 会强制把相同名称写入
-`payload.channel`，然后转发到 Action Decision Worker。两通道仍然是两次独立
-请求；Gateway 不替 Agent 做最终融合。
-
-## 5. Reply 接口
-
-### 5.1 推荐路径
-
-Agent 优先通过 Gateway `stage=reply` 调用。直连 Worker 时使用：
-
-```text
-WS /v1/chat/completions/realtime
-```
-
-外层采用第 3.2 节的 `request.start v2`。最小 payload：
-
-```json
-{
-  "model": "qwen3-omni-reply-gpu",
-  "messages": [
-    {"role": "system", "content": "完整的应用回复规则"},
-    {"role": "user", "content": "用户输入"}
-  ],
-  "stream": true,
-  "modalities": ["text"],
-  "temperature": 0.6,
-  "top_p": 0.95,
-  "top_k": 20,
-  "max_tokens": 512
-}
-```
-
-主要字段：
-
-| 字段 | 必需 | 说明 |
-| --- | --- | --- |
-| `messages` | 是 | OpenAI 风格消息；应用提示词也放在这里 |
-| `model` | 否 | 省略时使用 Worker 默认模型 |
-| `stream` | 否 | `true` 时返回 `response.delta` |
-| `modalities` | 否 | 默认 `text`；可请求 `text`、`audio` |
-| `temperature/top_p/top_k/min_p` | 否 | 采样参数 |
-| `max_tokens` / `max_completion_tokens` | 否 | 后者优先 |
-| `response_format` | 否 | 支持 JSON schema 约束 |
-| `runtime_prompt_profile` | 否 | 内部扩展；见下面的提示词说明 |
-| `runtime_prompt_language` | 否 | `zh-CN` / `en-US` 等 |
-
-流式事件示例：
-
-```json
-{
-  "type": "response.delta",
-  "request_id": "reply-1",
-  "response": {
-    "id": "chatcmpl-reply-1",
-    "choices": [{"index":0,"delta":{"content":"你好"},"finish_reason":null}]
   }
 }
 ```
 
-流式完成时：
+### 2.2 `payload` 字段
 
-```json
-{"type":"response.completed","request_id":"reply-1","response":{}}
-```
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `messages` | `array<Message>` | 是 | - | OpenAI 格式消息列表 |
+| `model` | `string` | 否 | Worker 默认模型 | 模型名 |
+| `stream` | `boolean` | 否 | `false` | 是否返回增量 |
+| `modalities` | `string[]` | 否 | `text` | 可选 `text`、`audio` |
+| `temperature` | `number` | 否 | 模型默认 | 采样温度 |
+| `top_p` | `number` | 否 | 模型默认 | nucleus sampling |
+| `top_k` | `integer` | 否 | 模型默认 | top-k sampling |
+| `min_p` | `number` | 否 | 模型默认 | min-p sampling |
+| `repetition_penalty` | `number` | 否 | 模型默认 | 重复惩罚 |
+| `max_tokens` | `integer` | 否 | 模型默认 | 最大输出 token |
+| `max_completion_tokens` | `integer` | 否 | - | 设置时优先于 `max_tokens` |
+| `stop` | `string|string[]` | 否 | - | 停止词 |
+| `seed` | `integer` | 否 | - | 随机种子 |
+| `response_format` | `object` | 否 | - | JSON/JSON Schema 输出约束 |
+| `audio` | `object` | 否 | - | 音频输出配置，如 `voice`、`format` |
+| `request_id` | `string` | 否 | 外层 ID | OpenAI 请求内 ID |
+| `user` | `string` | 否 | - | 调用方用户标识 |
+| `runtime_prompt_profile` | `"reply"` | 否 | - | 设置后 Worker 会再注入本地回复提示词 |
+| `runtime_prompt_language` | `zh|en|zh-CN|en-US` | 否 | `zh-CN` | 本地提示词语言 |
 
-非流式完成时，`response` 是完整 OpenAI Chat Completion 对象。
+`Message` 字段：
 
-### 5.2 Reply 提示词边界
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `role` | `string` | 是 | `system`、`user`、`assistant`、`tool` 等 |
+| `content` | `any` | 否 | 文本或多模态内容 |
+| `name` | `string` | 否 | 消息名称 |
+| `tool_calls` | `array<object>` | 否 | 工具调用 |
+| `tool_call_id` | `string` | 否 | 工具结果对应的调用 ID |
 
-- `runtime_prompt_profile` 省略：Worker 原样使用调用方提供的 `messages`。
-- `runtime_prompt_profile="reply"`：Worker 会在最前面额外插入一条本地
-  `reply_rules` system message。
-- 如果提示词由 Agent 完整管理，Agent 应直接构造 `messages`，并避免同时设置
-  `runtime_prompt_profile="reply"`，否则会出现两份 system policy。
-- 当前 Reply 接口没有 Action/Event 所使用的 `prompt_snapshot` 字段，也没有
-  prompt release 回执。
+Agent 已经提供完整 system message 时，不传 `runtime_prompt_profile`。
 
-## 6. Action 接口
+### 2.3 WebSocket 返回字段
 
-Action 有两层业务接口。二者使用同一个 V10 模型和目录，但请求结构不同。
+| `type` | 字段 | 说明 |
+| --- | --- | --- |
+| `request.ready` | `request_id`、`contract_version=2` | 请求已建立 |
+| `response.delta` | `request_id`、`response` | OpenAI 流式 chunk |
+| `response.completed` | `request_id`、`response` | 成功；流式模式下 `response={}` |
+| `error` | `request_id`、`code`、`detail` | 失败 |
 
-### 6.1 `/v1/action-recall`：简化召回接口
+## 3. Action Recall
 
-这是当前 41035 动作/表情召回的主要接口，支持 HTTP 和可复用 WebSocket。
-WebSocket 可在一条连接上并发最多 4 个 request。
+接口：`WS/POST /v1/action-recall`。
 
-每个决策点分别请求：
+### 3.1 请求字段
 
-```json
-{"channel":"body"}
-```
+| 字段 | 类型 | 必填 | 约束/说明 |
+| --- | --- | --- | --- |
+| `request_id` | `string` | 否 | 1～128 字符；`[A-Za-z0-9._:-]`；省略时服务生成 |
+| `mode` | `string` | 是 | `user_reaction`、`avatar_speech`、`action_request` |
+| `channel` | `string` | 是 | `body` 或 `expression`；两通道分别调用 |
+| `character_prompt` | `string` | 是 | 非空，最多 32,000 字符 |
+| `allowed_candidate_ids` | `string[]` | 否 | 最多 512 个；非空、唯一、已注册；省略表示通道全目录 |
+| `user_input` | `Input` | 见模式 | 用户输入/用户上下文/明确动作要求 |
+| `avatar_history` | `Input` | 否 | 仅 `avatar_speech` 可用 |
+| `avatar_current` | `Input` | `avatar_speech` 必填 | 数字人当前要说的内容 |
+| `last_dispatched_action` | `object` | 否 | 兼容字段；V10 当前不用于推理 |
+| `prompt_snapshot` | `object` | 否 | 试验字段，当前生产接入不要发送 |
 
-和：
+`Input` 必须且只能包含 `text` 或 `audio`：
 
-```json
-{"channel":"expression"}
-```
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `text` | `string` | 非空，最多 4,000 字符 |
+| `audio.data` | `string` | Base64 音频；解码后最大 2 MiB |
+| `audio.format` | `string` | `wav` 或 `pcm_s16le`，默认 `wav`；16 kHz、单声道、PCM16 |
 
-服务不会一次同时返回 body 与 expression。
+模式要求：
 
-#### user_reaction
+| `mode` | `user_input` | `avatar_history` | `avatar_current` |
+| --- | --- | --- | --- |
+| `user_reaction` | 必填，用户文本或音频 | 不允许 | 不允许 |
+| `avatar_speech` | 可选，用户上一轮上下文 | 可选，数字人已说内容 | 必填，数字人当前内容 |
+| `action_request` | 必填文本，格式 `名称: 定义` | 不允许 | 不允许 |
 
-文本示例：
+音频时长：
+
+| 输入 | 最大时长 | WebSocket `evidence_role` |
+| --- | ---: | --- |
+| `user_reaction.user_input` | 60 秒 | `user_audio` |
+| `avatar_speech.user_input` | 60 秒 | `user_context_audio` |
+| `avatar_speech.avatar_history` | 4 秒 | `avatar_speech_context` |
+| `avatar_speech.avatar_current` | 4 秒 | `avatar_speech_audio` |
+
+Recall 不接收图片和视频。视觉手势使用第 4 节 Action Decision。
+
+### 3.2 请求示例
 
 ```json
 {
@@ -380,430 +137,234 @@ WebSocket 可在一条连接上并发最多 4 个 request。
 }
 ```
 
-音频可以内联：
+### 3.3 返回字段
 
-```json
-{
-  "user_input": {
-    "audio": {"data":"<base64 wav>","format":"wav"}
-  }
-}
-```
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `request_id` | `string` | 原请求 ID |
+| `channel` | `string` | `body` 或 `expression` |
+| `candidate_id` | `string` | 召回候选 ID |
+| `code` | `string` | 两 token 动作码 |
+| `label` | `string` | 候选名称 |
+| `outcome` | `string` | body：`execute/no_action/unsupported`；expression：`apply/keep/unsupported` |
+| `occupies_channels` | `string[]` | 候选占用通道 |
 
-也可以通过 `input.media` binary frame 上传，角色必须是 `user_audio`。
+## 4. Action Decision（视觉/完整多模态）
 
-#### avatar_speech
+接口：`WS /v1/action-decision/realtime`。
 
-用于数字人正在讲话时选择伴随动作或表情：
+### 4.1 `payload` 字段
 
-```json
-{
-  "request_id": "reply-9-expression",
-  "mode": "avatar_speech",
-  "channel": "expression",
-  "character_prompt": "角色动作与表达风格",
-  "allowed_candidate_ids": ["IF0", "655"],
-  "user_input": {"text": "用户上一轮说的话"},
-  "avatar_history": {"text": "数字人此前已说内容"},
-  "avatar_current": {"text": "数字人当前要说内容"}
-}
-```
-
-三类音频角色分别为：
-
-| 字段 | binary `evidence_role` | 最大时长 |
-| --- | --- | ---: |
-| `user_input` | `user_context_audio` | 60 秒 |
-| `avatar_history` | `avatar_speech_context` | 4 秒 |
-| `avatar_current` | `avatar_speech_audio` | 4 秒 |
-
-音频必须是 16 kHz、单声道、PCM16 WAV 或 `pcm_s16le`。文本与对应音频
-互斥。三段音频合计最大 68 秒。
-
-#### action_request
-
-用于宿主明确指定下一刻目标动作/表情：
-
-```json
-{
-  "request_id": "explicit-1",
-  "mode": "action_request",
-  "channel": "body",
-  "character_prompt": "角色动作与表达风格",
-  "allowed_candidate_ids": ["288", "000"],
-  "user_input": {"text": "挥手：抬起右手左右摆动"}
-}
-```
-
-`user_input.text` 必须是 `名称: 定义` 或 `名称：定义`。该模式不接受
-`avatar_current`、`avatar_history`。
-
-#### Recall 限制
-
-- `request_id` 最长 128 字符，只允许字母、数字及 `._:-`。
-- `character_prompt` 必需，最大 32,000 字符。
-- `allowed_candidate_ids` 若传入，必须是非空、唯一、已注册候选，最多 512 个。
-- 每个字段的文本最大 4,000 字符。
-- WebSocket binary 模式最多 3 个媒体项，每项最大 2 MiB。
-- 当前 Recall adapter 只接收文本和音频，不接收图片/视频。视觉手势等任务应走
-  `/v1/action-decision/realtime` 的完整多模态接口。
-- 同一 `request_id` 同一输入可复用结果；同 ID 不同输入会被拒绝。
-
-#### Recall 响应
-
-```json
-{
-  "request_id": "turn-7-body",
-  "channel": "body",
-  "candidate_id": "189",
-  "code": "_x_y",
-  "label": "动作名称",
-  "outcome": "execute",
-  "occupies_channels": ["body"]
-}
-```
-
-`outcome`：
-
-| channel | 普通候选 | 保持/不动作 | 不支持 |
+| 字段 | 类型 | 必填 | 默认值/说明 |
 | --- | --- | --- | --- |
-| `body` | `execute` | `no_action`（`IB0`） | `unsupported`（`000`） |
-| `expression` | `apply` | `keep`（`IF0`） | `unsupported`（`000`） |
+| `request_id` | `string` | 是 | 本次模型请求 ID |
+| `session_id` | `string` | 是 | 会话 ID |
+| `turn_id` | `string` | 是 | 用户/数字人回合 ID |
+| `decision_point_id` | `string` | 是 | 决策点 ID；可包含输入 revision |
+| `channel` | `body|expression` | 是 | 两通道分别调用 |
+| `text` | `string|null` | 否 | 当前文字证据 |
+| `language` | `string` | 否 | `zh-CN` |
+| `character_prompt` | `string|null` | 否 | 角色动作/表情风格 |
+| `session_prompt` | `string|null` | 否 | 会话场景 |
+| `reply_prefix` | `string|null` | 否 | 已生成回复前缀 |
+| `runtime_context` | `object` | 否 | `{}`；运行时上下文 |
+| `allowed_candidate_ids` | `string[]` | 否 | 允许候选 |
+| `excluded_candidate_ids` | `string[]` | 否 | 排除候选 |
+| `channel_enabled` | `boolean` | 否 | `true`；`false` 时不调用模型 |
+| `prohibited` | `boolean` | 否 | `false`；`true` 时不调用模型 |
+| `turn_origin` | `string` | 否 | `user`；数字人说话动作可用 `assistant` |
+| `requested_action` | `object|null` | 否 | 明确目标动作 |
+| `prompt_snapshot` | `object` | 否 | 试验字段，当前生产接入不要发送 |
 
-### 6.2 `/v1/action-decision/realtime`：完整决策接口
+### 4.2 媒体字段
 
-该接口适合带用户画面、原始音频、明确 session/turn fence 的请求。外层仍是
-`request.start v2`。
+`request.start` 后发送一组 `input.media` JSON，每条 JSON 后紧跟 binary frame：
 
-```json
-{
-  "request_id": "body-turn-7-r3",
-  "session_id": "sess-1",
-  "turn_id": "turn-7",
-  "decision_point_id": "turn-7:revision-3",
-  "channel": "body",
-  "text": "模仿我刚才的手势",
-  "language": "zh-CN",
-  "character_prompt": "角色动作与表达风格",
-  "session_prompt": "当前会话场景",
-  "runtime_context": {
-    "turn_origin": "user",
-    "identity_epoch": 1,
-    "input_revision": 3,
-    "prompt_profile": "e67_v116_step695_fp8"
-  },
-  "allowed_candidate_ids": ["gesture-1", "gesture-2", "000"],
-  "excluded_candidate_ids": [],
-  "channel_enabled": true,
-  "prohibited": false,
-  "turn_origin": "user"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `string` | 是 | 固定 `input.media` |
+| `request_id` | `string` | 是 | 必须等于外层请求 ID |
+| `media_id` | `string` | 是 | 本请求内唯一 |
+| `kind` | `audio|image|video` | 是 | 媒体类型 |
+| `start_ms` | `integer` | 是 | 大于等于 0 |
+| `end_ms` | `integer` | 是 | 大于 `start_ms` |
+| `encoding` | `string` | 是 | 如 `image/jpeg`、`pcm_s16le` |
+| `checksum` | `string` | 是 | `sha256:<64位小写hex>` |
+| `payload_bytes` | `integer` | 是 | 后续 binary 字节数 |
+| `evidence_role` | `string` | 是 | 视觉用 `user_camera`；音频按服务允许角色 |
 
-图片使用 `input.media`，`kind=image`、`evidence_role=user_camera`。完整响应
-包含 `contract_version=1`、session/turn/decision fence、候选、code、token IDs、
-model/catalog/mapping version、耗时以及是否真正调用模型。
+视觉手势使用：`kind=image`、`encoding=image/jpeg`、`evidence_role=user_camera`。
 
-`channel_enabled=false` 或 `prohibited=true` 时服务确定性返回控制项，不调用模型。
-
-### 6.3 Action 健康检查
-
-```http
-GET /health
-Authorization: Bearer <token>
-```
-
-关键返回：
+媒体发送完成后：
 
 ```json
-{
-  "ok": true,
-  "contract": "action-decision.v1",
-  "channels": ["body", "expression"],
-  "model_id": "v10-boundary-ep1-final-fp8",
-  "model_version": "v10-boundary-ep1-final-fp8",
-  "catalog_version": "taxonomy4-global210-review-v1",
-  "mapping_version": "taxonomy4-global210-review-v1",
-  "runtime": {}
-}
+{"type":"request.commit","request_id":"body-turn-7-r3"}
 ```
 
-## 7. Event Timeline 接口
+### 4.3 返回字段
 
-### 7.1 建立连接
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `contract_version` | `integer` | 当前为 `1` |
+| `request_id/session_id/turn_id/decision_point_id` | `string` | 请求 fence |
+| `channel` | `string` | `body` 或 `expression` |
+| `outcome` | `string` | 执行、保持或不支持 |
+| `candidate_id` | `string` | 候选 ID |
+| `action_id` | `string|null` | 执行动作 ID |
+| `code` | `string` | 两 token 动作码 |
+| `token_ids` | `[integer,integer]` | 模型 token ID |
+| `label` | `string` | 候选名称 |
+| `occupies_channels` | `string[]` | 占用通道 |
+| `deterministic` | `boolean` | 是否确定性返回 |
+| `model_invoked` | `boolean` | 是否实际调用模型 |
+| `reason_code` | `string` | 决策原因码 |
+| `model_id/model_version` | `string` | 模型身份 |
+| `catalog_version/mapping_version` | `string` | 目录与映射版本 |
+| `candidate_count` | `integer` | 实际候选数 |
+| `elapsed_ms` | `number` | 服务耗时 |
+| `usage` | `object|null` | token 使用量 |
 
-```text
-WS /v1/timeline
-Authorization: Bearer <token>
-```
+## 5. Event Timeline
 
-第一条消息必须是：
+接口：`WS /v1/timeline`。
 
-```json
-{
-  "type": "session.start",
-  "contract_version": 2,
-  "session_id": "sess-1",
-  "identity_epoch": 1,
-  "observer_epoch": 0,
-  "stream_epoch": 0,
-  "next_sequence": 1,
-  "audio_format": "pcm_s16le/16000/1",
-  "video_format": "image/jpeg",
-  "model_id": "event-1115-v1-fp8",
-  "result_mode": "raw_windows.v1"
-}
-```
+### 5.1 `session.start` 字段
 
-成功响应会原样回显 session fence：
+| 字段 | 类型 | 必填 | 默认值/说明 |
+| --- | --- | --- | --- |
+| `type` | `string` | 是 | 固定 `session.start` |
+| `contract_version` | `integer` | 是 | 固定 `2` |
+| `session_id` | `string` | 是 | 会话 ID |
+| `identity_epoch` | `integer` | 是 | 身份代次，大于等于 0 |
+| `observer_epoch` | `integer` | 否 | `0`；观察器代次 |
+| `stream_epoch` | `integer` | 是 | 媒体连续流代次，大于等于 0 |
+| `next_sequence` | `integer` | 否 | `1`；下一条媒体序号 |
+| `audio_format` | `string` | 是 | 如 `pcm_s16le/16000/1` |
+| `video_format` | `string` | 是 | 当前使用 `image/jpeg` |
+| `model_id` | `string` | 是 | 当前 `event-1115-v1-fp8` |
+| `result_mode` | `string` | 否 | 推荐 `raw_windows.v1`；兼容值 `observations` |
+| `prompt_snapshot` | `object` | 否 | 试验字段，当前生产接入不要发送 |
 
-```json
-{
-  "type": "session.ready",
-  "contract_version": 2,
-  "session_id": "sess-1",
-  "identity_epoch": 1,
-  "observer_epoch": 0,
-  "stream_epoch": 0,
-  "next_sequence": 1,
-  "result_mode": "raw_windows.v1"
-}
-```
+### 5.2 `media` 字段
 
-`result_mode` 有两种：
+每条媒体先发 JSON，再发 binary frame。
 
-| 值 | 返回 |
-| --- | --- |
-| `raw_windows.v1` | 每个模型窗口返回一次 `window.result`，可以是空事件数组 |
-| `observations` | 只返回策略处理后的单条 `observation`；省略字段时的兼容默认值 |
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `string` | 是 | 固定 `media` |
+| `session_id` | `string` | 是 | 必须匹配当前 session |
+| `identity_epoch` | `integer` | 是 | 必须匹配当前 session |
+| `observer_epoch` | `integer` | 否 | 默认 `0` |
+| `stream_epoch` | `integer` | 是 | 必须匹配当前流 |
+| `sequence` | `integer` | 是 | 音频和视频共用一条连续序列 |
+| `kind` | `audio|video` | 是 | 媒体类型 |
+| `start_ms` | `integer` | 是 | 大于等于 0 |
+| `end_ms` | `integer` | 是 | 大于 `start_ms` |
+| `encoding` | `string` | 是 | 视频 `image/jpeg`；音频 `pcm_s16le` |
+| `payload_bytes` | `integer` | 是 | 最大 8 MiB；等于 binary 长度 |
 
-Event 1115 当前建议使用 `raw_windows.v1`，由 Agent 统一做事件策略、去重和回复触发。
-
-### 7.2 发送媒体
-
-Timeline 的媒体头类型是 `media`，发送 JSON 后紧跟 binary frame：
-
-```json
-{
-  "type": "media",
-  "session_id": "sess-1",
-  "identity_epoch": 1,
-  "observer_epoch": 0,
-  "stream_epoch": 0,
-  "sequence": 1,
-  "kind": "video",
-  "start_ms": 0,
-  "end_ms": 500,
-  "encoding": "image/jpeg",
-  "payload_bytes": 48213
-}
-```
-
-音频示例：
-
-```json
-{
-  "type": "media",
-  "session_id": "sess-1",
-  "identity_epoch": 1,
-  "observer_epoch": 0,
-  "stream_epoch": 0,
-  "sequence": 2,
-  "kind": "audio",
-  "start_ms": 0,
-  "end_ms": 500,
-  "encoding": "pcm_s16le",
-  "payload_bytes": 16000
-}
-```
-
-服务返回：
+接管回执：
 
 ```json
 {"type":"media.ack","observer_epoch":0,"sequence":2}
 ```
 
-注意：
+`media.ack` 仅表示服务接管了字节，不表示模型完成推理。
 
-- `sequence` 是音频和视频共享的一条全局连续序列，不能分别编号。
-- `media.ack` 只表示服务已接管字节，不表示模型已经完成该窗口。
-- 默认单 chunk 最大 8 MiB，等待队列最多 64 个 chunk、128 MiB。
-- 视频 chunk 必须是 JPEG 帧；音频支持 PCM16 / `pcm_s16le` / `audio/l16`。
-- 结果引用的 `evidence_end_ms` 不会超过服务已经接收的媒体时间。
+### 5.3 `window.result` 字段
 
-### 7.3 原始窗口结果
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | `string` | 固定 `window.result` |
+| `contract_version` | `integer` | `2` |
+| `status` | `string` | 当前为 `complete` |
+| `session_id` | `string` | 会话 ID |
+| `identity_epoch/observer_epoch/stream_epoch` | `integer` | 结果 fence |
+| `window_sequence` | `integer` | 模型窗口序号 |
+| `evidence_start_ms/evidence_end_ms` | `integer` | 窗口证据范围 |
+| `model_id` | `string` | `event-1115-v1-fp8` |
+| `model_version` | `string` | `1115_v1-checkpoint-6138-fp8` |
+| `evidence_mode` | `string` | `audio_video` 或 `video_only` |
+| `audio_status` | `string` | `complete/missing/gapped/behind` |
+| `events` | `array<Event>` | 可以为空数组 |
 
-```json
-{
-  "type": "window.result",
-  "contract_version": 2,
-  "status": "complete",
-  "session_id": "sess-1",
-  "identity_epoch": 1,
-  "observer_epoch": 0,
-  "stream_epoch": 0,
-  "window_sequence": 12,
-  "evidence_start_ms": 1000,
-  "evidence_end_ms": 11000,
-  "model_id": "event-1115-v1-fp8",
-  "model_version": "1115_v1-checkpoint-6138-fp8",
-  "evidence_mode": "audio_video",
-  "audio_status": "complete",
-  "events": [
-    {"event_type":"E50","summary":"检测到对应事件"}
-  ]
-}
-```
+`Event` 字段：
 
-空窗口是正常结果：
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `event_type` | `string` | 事件编码，如 `E50` |
+| `summary` | `string` | 模型事件摘要 |
 
-```json
-{"type":"window.result","status":"complete","events":[]}
-```
+### 5.4 流中断字段
 
-`evidence_mode` / `audio_status` 合法组合：
-
-- `audio_video` + `complete`
-- `video_only` + `missing|gapped|behind`
-
-### 7.4 流中断
-
-RTC 重连、媒体时钟重置或丢失连续性时，不应继续沿用旧 `stream_epoch`：
-
-```json
-{
-  "type": "discontinuity",
-  "session_id": "sess-1",
-  "identity_epoch": 1,
-  "observer_epoch": 0,
-  "old_stream_epoch": 0,
-  "new_stream_epoch": 1,
-  "reason": "rtc_reconnect"
-}
-```
-
-服务处理完成后返回：
-
-```json
-{"type":"discontinuity.ack","observer_epoch":0,"stream_epoch":1}
-```
-
-新 epoch 的下一条媒体从 `sequence=1` 开始。
-
-### 7.5 正常关闭
-
-```json
-{"type":"session.close"}
-```
-
-服务会先处理所有已经 ACK 的媒体，再返回：
-
-```json
-{"type":"session.closed","observer_epoch":0}
-```
-
-## 8. Prompt Snapshot 扩展：当前实现状态
-
-当前分支实现了可选 `prompt_snapshot`，但它仍处于接口试验阶段。根据本分支
-review，现有 Action 多 profile 和现网 Event 1115 资产还不能无损迁移，因此生产
-接入暂时不应发送该字段。
-
-### 8.1 Action Snapshot
-
-Action payload 可选字段：
-
-```json
-{
-  "prompt_snapshot": {
-    "consumer": "d_video_call.action.decision",
-    "release_id": "不可变release ID，不能是active",
-    "bundle_sha256": "<sha256>",
-    "binding": {
-      "assembly_contract": "d-action-decision-v1",
-      "output_protocol": "d-action-decision-response-v1",
-      "model_id": "v10-boundary-ep1-final-fp8",
-      "model_version": "v10-boundary-ep1-final-fp8"
-    },
-    "system_prompt": "...",
-    "system_prompt_sha256": "<sha256>"
-  }
-}
-```
-
-服务使用 snapshot 时，响应额外包含：
-
-```json
-{
-  "prompt_release_id": "...",
-  "prompt_bundle_sha256": "..."
-}
-```
-
-### 8.2 Timeline Snapshot
-
-`session.start` 可选字段：
-
-```json
-{
-  "prompt_snapshot": {
-    "consumer": "d_video_call.timeline.detection",
-    "release_id": "不可变release ID",
-    "bundle_sha256": "<sha256>",
-    "binding": {
-      "assembly_contract": "d-timeline-detection-v1",
-      "output_protocol": "d-timeline-observation-v2",
-      "model_id": "event-1115-v1-fp8",
-      "model_version": "1115_v1-checkpoint-6138-fp8"
-    },
-    "system_prompt": "...",
-    "event_registry_json": "...",
-    "event_codebook_csv": "...",
-    "item_sha256": {
-      "system_prompt": "<sha256>",
-      "event_registry_json": "<sha256>",
-      "event_codebook_csv": "<sha256>"
-    }
-  }
-}
-```
-
-服务使用 snapshot 时，`session.ready` 额外包含相同的
-`prompt_release_id`、`prompt_bundle_sha256`。
-
-下一阶段设计 Agent 接入时，需要先修订 snapshot 的模型绑定来源、Action 多
-profile 表达方式和 Event 原始资产格式，再把这一节标记为稳定协议。
-
-## 9. 错误与关闭语义
-
-| 接口 | 非法鉴权 | 非法请求 | 模型/内部错误 |
+| 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| Gateway | 当前无鉴权 | `error` 后 WS 4400，或单 stage `stage.error` | `stage.error`；会话级错误 1011 |
-| Reply WS | 当前无鉴权 | `error code=invalid_request`，WS 4400 | WS 1011 |
-| Action Decision WS | WS 4404 | `error code=invalid_request`，WS 4400 | `error code=model_error`，WS 1011 |
-| Action Recall WS | WS 4404 | 单 request `error code=invalid_request`，连接可继续 | 单 request `error code=model_error` |
-| Timeline WS | WS 4404 | `error code=invalid_request`，WS 4400 | `error code=model_failure`，WS 1011 |
+| `type` | `string` | 是 | 固定 `discontinuity` |
+| `session_id` | `string` | 是 | 会话 ID |
+| `identity_epoch` | `integer` | 是 | 身份代次 |
+| `observer_epoch` | `integer` | 否 | 默认 `0` |
+| `old_stream_epoch` | `integer` | 是 | 旧流代次 |
+| `new_stream_epoch` | `integer` | 是 | 必须大于旧值 |
+| `reason` | `string` | 是 | 如 `rtc_reconnect` |
 
-HTTP Action 鉴权失败刻意返回 404，避免暴露服务；非法 JSON/字段返回 422，过大
-请求返回 413。
+收到 `discontinuity.ack` 后，新流从 `sequence=1` 开始。
 
-## 10. Agent 接入前需要确认的清单
+关闭：发送 `{"type":"session.close"}`，服务处理完已 ACK 媒体后返回 `session.closed`。
 
-1. Reply 走 Gateway 还是直连 Worker；同一部署只能明确选择一种主路径。
-2. Reply 提示词由 Agent messages 完整提供时，不设置 `runtime_prompt_profile=reply`。
-3. Action 的用户完成态 body、expression 是否都调用；两者不能互相取消。
-4. 视觉手势走完整 Action Decision，不走只支持文本/音频的 Recall adapter。
-5. Event 1115 使用 `raw_windows.v1`，事件策略由 Agent 处理。
-6. Agent 严格维护 Timeline 的 identity/observer/stream epoch 和全局 sequence。
-7. Prompt Snapshot 在完成兼容性修订前保持关闭。
-8. Gateway 与 Reply Worker 当前没有 Agent-facing 鉴权，部署时必须有内网边界或补充鉴权。
+## 6. Inference Gateway
 
-## 11. 代码依据
+### 6.1 建立会话
 
-- Gateway：`sglang_omni/serve/inference_gateway/app.py`
-- 通用模型 WS 传输：`sglang_omni/serve/streaming_request.py`
-- Reply：`sglang_omni/serve/openai_api.py`、`sglang_omni/serve/protocol.py`
-- Action：`sglang_omni/serve/action_decision/`
-- Timeline：`sglang_omni/serve/timeline_detection/`
-- Raw window：`framex_event_policy/windows.py`
-- Prompt Snapshot：`sglang_omni/serve/agent_prompt_snapshot.py`
-- 当前部署代码来源：`deploy/41035_CODE_CONSOLIDATION.md`
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `string` | 是 | 固定 `session.open` |
+| `contract_version` | `integer` | 是 | 固定 `4` |
+| `session_id` | `string` | 是 | 会话 ID |
+
+返回 `session.ready`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `session_id` | `string` | 会话 ID |
+| `contract_version` | `integer` | `4` |
+| `availability_epoch` | `integer` | 上游可用性版本 |
+| `stages` | `object<string,boolean>` | `classifier/brain/reply/body/expression/performance` 可用性 |
+
+### 6.2 `media.put`
+
+字段与第 4.2 节媒体字段相同，区别是 `type=media.put`，不带 `request_id`。
+服务返回 `media.ack`，额外字段 `duplicate` 表示是否为完全相同的重复注册。
+
+### 6.3 `stage.request`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `string` | 是 | 固定 `stage.request` |
+| `request_id` | `string` | 是 | 会话内正在运行的请求不可重复 |
+| `stage` | `string` | 是 | `classifier/brain/reply/body/expression/performance` |
+| `payload` | `object` | 是 | 对应上游业务 payload |
+| `media_refs` | `string[]` | 否 | 已通过 `media.put` 注册的媒体 ID |
+
+返回事件：
+
+| `type` | 关键字段 |
+| --- | --- |
+| `stage.accepted` | `request_id`、`stage` |
+| `stage.delta` | `request_id`、`stage`、`response` |
+| `stage.completed` | `request_id`、`stage`、`response` |
+| `stage.error` | `request_id`、`code`、`detail`、`retryable` |
+| `stage.cancelled` | `request_id` |
+
+取消：`{"type":"stage.cancel","request_id":"..."}`。
+
+## 7. 通用错误字段
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | `string` | 固定 `error`，或 Gateway 的 `stage.error` |
+| `request_id` | `string` | 有请求级 ID 时返回 |
+| `code` | `string` | 如 `invalid_request`、`model_error`、`model_failure` |
+| `detail` | `string` | 错误详情 |
+| `retryable` | `boolean` | Gateway stage 错误是否建议重试 |
+
+Action/Event WebSocket 鉴权失败关闭码为 `4404`；协议字段错误通常为 `4400`；内部模型错误通常为 `1011`。
