@@ -3,6 +3,10 @@
 This branch captures the code paths used by the 41035 Agent without changing
 their external interfaces.
 
+The Agent-facing Reply, Action, Event, Gateway, media, error, and optional
+prompt-snapshot wire contracts are documented in
+`docs/developer_reference/41035_unified_branch_interfaces_CN.md`.
+
 ## Current baseline
 
 - sglang-omni base: `bebe4bc22e02461027a145b9ac9da0959161e427`.
