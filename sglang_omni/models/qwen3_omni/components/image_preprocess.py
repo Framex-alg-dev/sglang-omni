@@ -5,6 +5,7 @@ import os
 import types
 
 import torch
+from PIL import Image
 from torchvision.transforms.v2 import functional as tvf
 from transformers.models.qwen2_vl import image_processing_qwen2_vl as hf
 
@@ -33,6 +34,29 @@ def _rescale_and_normalize(
     # uint8 -> float32 always allocates private storage. The same torchvision
     # subtract/divide operations may safely reuse it without mutating the input.
     return tvf.normalize(images.to(dtype=torch.float32), mean, std, inplace=True)
+
+
+def _resize_image(self, batch, height, width, resample):
+    # The CPU uint8 bicubic implementation is substantially faster with
+    # interleaved RGB storage on the validated AVX512 backend. Preserve the
+    # original interpolation/antialiasing call and fall back on other paths.
+    if (
+        os.environ.get("SGLANG_OMNI_CHANNELS_LAST_RESIZE", "1") != "0"
+        and batch.device.type == "cpu"
+        and batch.dtype == torch.uint8
+        and batch.ndim == 4
+        and batch.shape[1] == 3
+        and batch.numel() >= 1024 * 1024
+        and (height, width) != tuple(batch.shape[-2:])
+        and resample == Image.Resampling.BICUBIC
+        and torch.backends.cpu.get_cpu_capability() == "AVX512"
+    ):
+        batch = batch.contiguous(memory_format=torch.channels_last)
+    return self.resize(
+        image=batch,
+        size=hf.SizeDict(height=height, width=width),
+        resample=resample,
+    )
 
 
 def _preprocess(
@@ -94,11 +118,7 @@ def _preprocess(
                 min_pixels=size.shortest_edge,
                 max_pixels=size.longest_edge,
             )
-            batch = self.resize(
-                image=batch,
-                size=hf.SizeDict(height=height, width=width),
-                resample=resample,
-            )
+            batch = _resize_image(self, batch, height, width, resample)
         resized[shape] = batch
     images = hf.reorder_images(resized, indices)
     grouped, indices = hf.group_images_by_shape(
@@ -107,8 +127,23 @@ def _preprocess(
     processed, grids = {}, {}
     for shape, batch in grouped.items():
         height, width = batch.shape[-2:]
-        patches = _rescale_and_normalize(
-            self, batch, do_rescale, rescale_factor, do_normalize, image_mean, image_std
+        # Pack the uint8 samples before allocating FP32 output: reordering and
+        # temporal duplication then move one byte per element instead of four.
+        # Normalization is elementwise per channel, so this preserves its order
+        # and arithmetic while keeping resize entirely unchanged.
+        pack_uint8 = batch.numel() >= 1024 * 1024
+        patches = (
+            batch
+            if pack_uint8
+            else _rescale_and_normalize(
+                self,
+                batch,
+                do_rescale,
+                rescale_factor,
+                do_normalize,
+                image_mean,
+                image_std,
+            )
         )
         batch_size, channels = patches.shape[:2]
         grid_h, grid_w = height // patch_size, width // patch_size
@@ -122,7 +157,7 @@ def _preprocess(
             merge_size,
             patch_size,
         ).permute(0, 2, 5, 3, 6, 1, 4, 7)
-        processed[shape] = (
+        packed = (
             patches.unsqueeze(6)
             .expand(-1, -1, -1, -1, -1, -1, temporal_patch_size, -1, -1)
             .reshape(
@@ -131,6 +166,30 @@ def _preprocess(
                 channels * temporal_patch_size * patch_size * patch_size,
             )
         )
+        if pack_uint8:
+            normalized = _rescale_and_normalize(
+                self,
+                packed.reshape(
+                    batch_size * grid_h * grid_w,
+                    channels,
+                    temporal_patch_size * patch_size,
+                    patch_size,
+                ),
+                do_rescale,
+                rescale_factor,
+                do_normalize,
+                image_mean,
+                image_std,
+            )
+            processed[shape] = normalized.reshape(
+                batch_size,
+                grid_h * grid_w,
+                channels * temporal_patch_size * patch_size * patch_size,
+            )
+        else:
+            # Tiny inputs are dominated by dispatch, not copy bandwidth. Keep
+            # the previous normalize-then-pack path for these images.
+            processed[shape] = packed
         grids[shape] = [[1, grid_h, grid_w]] * batch_size
     outputs = hf.reorder_images(processed, indices)
     # The normalized/packed tensor already owns private storage. torch.cat on

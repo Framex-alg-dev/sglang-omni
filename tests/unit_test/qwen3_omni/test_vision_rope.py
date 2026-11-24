@@ -9,6 +9,12 @@ from transformers.models.qwen3_omni_moe import modeling_qwen3_omni_moe as hf
 from sglang_omni.models.qwen3_omni.components import vision_compat
 
 
+@pytest.fixture(autouse=True)
+def use_sdpa_reference(monkeypatch):
+    # These regression tests check the lossless RoPE path, not FA4 numerics.
+    monkeypatch.setenv("SGLANG_OMNI_VISION_ATTENTION_BACKEND", "sdpa")
+
+
 def config():
     return hf.Qwen3OmniMoeVisionEncoderConfig(
         depth=2,
@@ -81,7 +87,8 @@ def test_fused_rope_bit_exact_strided_qkv(length, position_dtype):
 
 
 @cuda
-def test_attention_bit_exact_and_compiler_fallback():
+@pytest.mark.parametrize("boundaries", [[0, 64], [0, 16, 64]])
+def test_attention_bit_exact_and_compiler_fallback(boundaries):
     from sglang_omni.models.qwen3_omni.components import vision_rope
 
     encoder = (
@@ -90,7 +97,7 @@ def test_attention_bit_exact_and_compiler_fallback():
     attn = encoder.blocks[0].attn
     x = torch.randn(64, 1152, device="cuda", dtype=torch.bfloat16)
     pos = torch.randn(64, 72, device="cuda")
-    lengths = torch.tensor([0, 16, 64], dtype=torch.int32)
+    lengths = torch.tensor(boundaries, dtype=torch.int32)
     with torch.inference_mode():
         expected = hf.Qwen3OmniMoeVisionAttention.forward(
             attn, x, lengths, (pos.cos(), pos.sin())

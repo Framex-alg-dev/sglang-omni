@@ -37,6 +37,25 @@ def _non_empty(value: Any) -> bool:
     return False
 
 
+def _host_visual_grid(encoded: Any, preprocessed: Any) -> Any:
+    """Reuse unchanged CPU grid metadata instead of synchronizing the encoder.
+
+    The image encoder preserves grid values and row order, including when
+    splitting a batch. M-RoPE consumes these integer dimensions on CPU; visual
+    features remain on their original device. Keep the encoder fallback for
+    payloads without the original CPU metadata.
+    """
+    if (
+        isinstance(encoded, torch.Tensor)
+        and encoded.device.type == "cuda"
+        and isinstance(preprocessed, torch.Tensor)
+        and preprocessed.device.type == "cpu"
+        and preprocessed.shape == encoded.shape
+    ):
+        return preprocessed
+    return encoded if encoded is not None else preprocessed
+
+
 def merge_for_thinker(payloads: dict[str, StagePayload]) -> StagePayload:
     """Aggregate preprocessing + encoder outputs into thinker inputs."""
     started = time.perf_counter()
@@ -92,18 +111,14 @@ def build_thinker_inputs(
     video_embeds = video_out.get("video_embeds")
 
     image_grid_thw = _cast_tensor(
-        (
-            image_out.get("image_grid_thw")
-            if image_out.get("image_grid_thw") is not None
-            else mm_image.get("image_grid_thw")
+        _host_visual_grid(
+            image_out.get("image_grid_thw"), mm_image.get("image_grid_thw")
         ),
         dtype=torch.long,
     )
     video_grid_thw = _cast_tensor(
-        (
-            video_out.get("video_grid_thw")
-            if video_out.get("video_grid_thw") is not None
-            else mm_video.get("video_grid_thw")
+        _host_visual_grid(
+            video_out.get("video_grid_thw"), mm_video.get("video_grid_thw")
         ),
         dtype=torch.long,
     )

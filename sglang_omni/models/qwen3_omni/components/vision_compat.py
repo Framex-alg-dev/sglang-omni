@@ -24,8 +24,7 @@ def _vision_attention_forward(
     # Retain upstream behavior for training, CPU, other precisions/backends and
     # deprecated call signatures. No HF module globals or checkpoint keys change.
     if (
-        not self._omni_rope_state["enabled"]
-        or self.training
+        self.training
         or torch.is_grad_enabled()
         or not hidden_states.is_cuda
         or hidden_states.dtype != torch.bfloat16
@@ -60,21 +59,6 @@ def _vision_attention_forward(
             position_embeddings=position_embeddings,
             **kwargs,
         )
-    try:
-        from triton.compiler.errors import CompilationError
-
-        from .vision_rope import fused_vision_rope
-    except ImportError:
-        self._omni_rope_state["enabled"] = False
-        logger.warning("Triton unavailable; falling back to HF vision RoPE")
-        return hf_modeling.Qwen3OmniMoeVisionAttention.forward(
-            self,
-            hidden_states,
-            cu_seqlens,
-            position_embeddings=position_embeddings,
-            **kwargs,
-        )
-
     seq_length = hidden_states.shape[0]
     q, k, v = (
         self.qkv(hidden_states)
@@ -82,20 +66,34 @@ def _vision_attention_forward(
         .permute(1, 0, 2, 3)
         .unbind(0)
     )
-    try:
-        q, k = fused_vision_rope(q, k, cos, sin)
-    except (CompilationError, subprocess.CalledProcessError) as exc:
-        # Disable for this encoder after a compiler failure. Do not swallow GPU
-        # execution errors, OOMs, or unexpected programming errors.
-        self._omni_rope_state["enabled"] = False
-        logger.warning("Vision RoPE compilation failed; using HF fallback: %s", exc)
+    if self._omni_rope_state["enabled"]:
+        try:
+            from triton.compiler.errors import CompilationError
+
+            from .vision_rope import fused_vision_rope
+        except ImportError:
+            self._omni_rope_state["enabled"] = False
+            logger.warning("Triton unavailable; falling back to HF vision RoPE")
+        else:
+            try:
+                q, k = fused_vision_rope(q, k, cos, sin)
+            except (CompilationError, subprocess.CalledProcessError) as exc:
+                self._omni_rope_state["enabled"] = False
+                logger.warning(
+                    "Vision RoPE compilation failed; using HF fallback: %s", exc
+                )
+    if not self._omni_rope_state["enabled"]:
         q, k = hf_modeling.apply_rotary_pos_emb_vision(q, k, cos, sin)
     q, k, v = (t.transpose(0, 1).unsqueeze(0) for t in (q, k, v))
     attention = hf_modeling.ALL_ATTENTION_FUNCTIONS.get_interface(
         self.config._attn_implementation, hf_modeling.eager_attention_forward
     )
+    from .vision_attention import select_vision_attention
+
+    attention = select_vision_attention(self._omni_rope_state, attention)
     lengths = cu_seqlens[1:] - cu_seqlens[:-1]
-    splits = [torch.split(t, lengths.tolist(), dim=2) for t in (q, k, v)]
+    split_sizes = lengths.tolist()
+    splits = [torch.split(t, split_sizes, dim=2) for t in (q, k, v)]
     chunks = [
         attention(
             self,
@@ -110,7 +108,10 @@ def _vision_attention_forward(
         )[0]
         for qi, ki, vi in zip(*splits)
     ]
-    output = torch.cat(chunks, dim=1).reshape(seq_length, -1).contiguous()
+    # A single attention segment needs no concatenation. Retain the final
+    # contiguous layout for both backends and concatenate multiple segments.
+    output = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=1)
+    output = output.reshape(seq_length, -1).contiguous()
     return self.proj(output)
 
 
@@ -118,9 +119,14 @@ class Qwen3OmniMoeVisionEncoderCompat(hf_modeling.Qwen3OmniMoeVisionEncoder):
     """HF vision encoder with the Transformers 5.6 interpolation arithmetic."""
 
     def __init__(self, config, *args, **kwargs):
+        backend = os.environ.get(
+            "SGLANG_OMNI_VISION_ATTENTION_BACKEND", "fa4"
+        ).strip().lower()
+        if backend not in ("fa4", "sdpa"):
+            raise ValueError("SGLANG_OMNI_VISION_ATTENTION_BACKEND must be fa4 or sdpa")
         super().__init__(config, *args, **kwargs)
         enabled = os.environ.get("SGLANG_OMNI_FUSED_VISION_ROPE", "1") != "0"
-        state = {"enabled": enabled}
+        state = {"enabled": enabled, "backend": backend}
         for block in self.blocks:
             block.attn._omni_rope_state = state
             block.attn.forward = types.MethodType(_vision_attention_forward, block.attn)

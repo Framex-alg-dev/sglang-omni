@@ -95,3 +95,34 @@ def test_config_and_opt_out(monkeypatch):
     assert Qwen2VLImageProcessor.from_dict(p.to_dict()).to_dict() == config
     assert "_preprocess" not in p.to_json_string()
     assert not optimize_image_processor(None)
+
+
+@pytest.mark.parametrize("temporal_patch_size", [1, 2])
+@pytest.mark.parametrize("grouping", [False, True])
+def test_large_uint8_pack_preserves_channels_and_rounding(
+    temporal_patch_size, grouping
+):
+    kwargs = {
+        "patch_size": 16,
+        "temporal_patch_size": temporal_patch_size,
+        "merge_size": 2,
+        "min_pixels": 1024,
+        "max_pixels": 1024 * 1024,
+    }
+    base, fast = Qwen2VLImageProcessor(**kwargs), Qwen2VLImageProcessor(**kwargs)
+    assert optimize_image_processor(fast)
+    # Above the large-image threshold; distinct channel patterns catch accidental
+    # normalization across patch/temporal dimensions instead of color channels.
+    values = torch.arange(3 * 384 * 1024).reshape(3, 384, 1024).to(torch.uint8)
+    options = {
+        "return_tensors": "pt",
+        "disable_grouping": grouping,
+        "image_mean": [0.17, 0.29, 0.43],
+        "image_std": [0.13, 0.37, 0.71],
+        "rescale_factor": 0.00392156862745098,
+    }
+    original = values.clone()
+    expected, actual = base(images=values, **options), fast(images=values, **options)
+    for key in expected:
+        assert torch.equal(actual[key], expected[key])
+    assert torch.equal(values, original)
