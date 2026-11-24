@@ -14,3 +14,8 @@ production Docker image. It is idempotent, skips other GPU models, and logs
 when files are installed. Retune these files after material SGLang, Triton,
 CUDA, model-shape, or GPU changes instead of assuming the old result remains
 optimal.
+
+The N=768 FP8 MoE asset additionally tunes 4096–8192-token Prefill on TP=1.
+Adjacent boundary keys preserve the previous configuration outside that
+interval because SGLang uses nearest-key selection. See
+[measurements and numerical checks](../../../docs/performance/qwen3-moe-prefill.md).

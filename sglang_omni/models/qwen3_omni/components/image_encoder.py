@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import types
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from sglang_omni.models.qwen3_omni.components.common import load_thinker_config
 from sglang_omni.models.qwen3_omni.components.vision_compat import (
@@ -20,6 +21,26 @@ logger = logging.getLogger(__name__)
 
 VISUAL_PREFIX = ("thinker.visual.", "visual.")
 VISUAL_CLASS = Qwen3OmniMoeVisionEncoderCompat
+
+
+def _prepare_visual_pixels(pixels, device, dtype):
+    """Transfer pageable FP32 inputs before BF16 conversion on the CUDA stream.
+
+    PyTorch's blocking mixed-device/dtype copy converts on CPU. The nonblocking
+    path stages pageable input, transfers FP32 and converts on GPU. Consumers on
+    the same stream automatically wait; no request concurrency is introduced.
+    Keep pinned buffers on the original path to preserve their reuse semantics.
+    """
+    device = torch.device(device)
+    non_blocking = (
+        os.environ.get("SGLANG_OMNI_ASYNC_VISION_H2D", "1") != "0"
+        and pixels.device.type == "cpu"
+        and device.type == "cuda"
+        and pixels.dtype == torch.float32
+        and dtype == torch.bfloat16
+        and not pixels.is_pinned()
+    )
+    return pixels.to(device=device, dtype=dtype, non_blocking=non_blocking)
 
 
 def _patch_embed_forward(self: nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -165,7 +186,9 @@ class Qwen3OmniImageEncoder(nn.Module):
             image_grid_thw, torch.Tensor
         ):
             image_grid_thw = image_grid_thw.to(self._device, dtype=torch.long)
-            pixel_values = pixel_values.to(device=self._device, dtype=self.visual.dtype)
+            pixel_values = _prepare_visual_pixels(
+                pixel_values, self._device, self.visual.dtype
+            )
             image_embeds, image_embeds_multiscale = _unpack_visual_output(
                 self.visual(pixel_values, grid_thw=image_grid_thw)
             )
@@ -183,8 +206,8 @@ class Qwen3OmniImageEncoder(nn.Module):
             video_grid_thw, torch.Tensor
         ):
             video_grid_thw = video_grid_thw.to(self._device, dtype=torch.long)
-            pixel_values_videos = pixel_values_videos.to(
-                device=self._device, dtype=self.visual.dtype
+            pixel_values_videos = _prepare_visual_pixels(
+                pixel_values_videos, self._device, self.visual.dtype
             )
             video_embeds, video_embeds_multiscale = _unpack_visual_output(
                 self.visual(pixel_values_videos, grid_thw=video_grid_thw)

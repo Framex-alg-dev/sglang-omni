@@ -1,5 +1,7 @@
 # Qwen3-Omni fused vision RoPE
 
+> Since the FA4 backend switch, set `SGLANG_OMNI_VISION_ATTENTION_BACKEND=sdpa` to reproduce the lossless SDPA comparisons below. Default FA4 has measured numerical differences; see [FA4 backend](qwen3-vision-fa4.md).
+
 The vision compatibility encoder uses a fused Triton RoPE kernel on NVIDIA SM120,
 with BF16 hidden states, head dimension 72, SDPA attention, evaluation mode and
 no autograd. Other devices, precisions, head dimensions, attention backends and

@@ -15,6 +15,21 @@ from PIL import Image, UnidentifiedImageError
 from .base import MediaIO, _is_url
 from .cache_key import compute_media_cache_key
 
+try:
+    from pybase64 import b64decode as _fast_b64decode
+except ImportError:
+    _fast_b64decode = None
+
+
+def _decode_image_base64(data: str) -> bytes:
+    """Use optional SIMD decoding; preserve stdlib error handling on failure."""
+    if _fast_b64decode is not None:
+        try:
+            return _fast_b64decode(data, validate=True)
+        except (ValueError, TypeError):
+            pass
+    return base64.b64decode(data)
+
 
 PREPARED_IMAGE_WIRE_TYPE = "sglang_omni.prepared_image.rgb.v1"
 
@@ -51,7 +66,7 @@ class ImageMediaIO(MediaIO[Image.Image]):
         data: str,
     ) -> Image.Image:
         """Load image from base64-encoded data."""
-        return self.load_bytes(base64.b64decode(data))
+        return self.load_bytes(_decode_image_base64(data))
 
     def load_file(self, filepath: Path) -> Image.Image:
         """Load image from a local file path."""

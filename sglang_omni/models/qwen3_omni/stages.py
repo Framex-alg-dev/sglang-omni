@@ -985,8 +985,16 @@ def create_image_encoder_executor(
     device: str = "cuda",
     dtype: str | None = None,
     max_batch_wait_ms: int = 50,
+    max_batch_size: int = 32,
 ):
     from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
+
+    if (
+        isinstance(max_batch_size, bool)
+        or not isinstance(max_batch_size, int)
+        or max_batch_size < 1
+    ):
+        raise ValueError("image encoder max_batch_size must be a positive integer")
 
     model = Qwen3OmniImageEncoder(model_path=model_path, device=device, dtype=dtype)
     cache = StageOutputCache(
@@ -1065,7 +1073,7 @@ def create_image_encoder_executor(
         _encode,
         batch_compute_fn=_encode_batch,
         release_session_callback=cache.release_owner,
-        max_batch_size=32,
+        max_batch_size=max_batch_size,
         max_batch_wait_ms=max_batch_wait_ms,
         request_cost_fn=_create_image_encoder_request_cost_fn(model),
         max_batch_cost=QWEN3_IMAGE_ENCODER_BATCH_BUDGET_BYTES,
@@ -1159,8 +1167,23 @@ def create_audio_encoder_executor(
     )
 
 
-def create_decode_executor(model_path: str):
-    return create_streaming_detokenize_scheduler(model_path)
+def create_decode_executor(model_path: str, cpu_num_threads: int | None = None):
+    # In colocated pipelines this stage is created after Thinker, whose model
+    # runner resets the process-wide intra-op pool. Apply an explicit override
+    # here, matching the validated deployment hook; preserve defaults otherwise.
+    if cpu_num_threads is not None and (
+        isinstance(cpu_num_threads, bool)
+        or not isinstance(cpu_num_threads, int)
+        or cpu_num_threads < 1
+    ):
+        raise ValueError("cpu_num_threads must be a positive integer")
+    scheduler = create_streaming_detokenize_scheduler(model_path)
+    if cpu_num_threads is not None:
+        previous = torch.get_num_threads()
+        torch.set_num_threads(cpu_num_threads)
+        logger.info("CPU intra-op threads after decoder initialization: %s -> %s",
+                    previous, torch.get_num_threads())
+    return scheduler
 
 
 # ---------------------------------------------------------------------------
