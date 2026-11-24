@@ -401,7 +401,8 @@ Action WebSocket 的外层 `request.start.request_id` 按日志规范作为本�
 全链路日志 ID，并在响应帧中原样回传；payload 内的 `request_id` 仍是模型推理、
 幂等和取消键，允许不同。旧客户端省略 payload `request_id` 时，兼容使用外层值。
 
-Worker 日志分别写到：
+Omni 服务日志分别写到以下目录。目录中的 `service` 名称沿用全链路日志规范的
+固定枚举，并不表示 Omni 在 Agent 架构中是 Worker：
 
 | 服务 | 文件 |
 | --- | --- |
@@ -417,10 +418,19 @@ Worker 日志分别写到：
 `trace_id/span_id` 仅在接入 OpenTelemetry 时可选，不作为主查询键。HTTP 日志使用
 `route` 路由模板，不记录带具体对象 ID 的原始 path；非法入站请求 ID 记录
 `inbound_request_id_invalid=true`。Reply HTTP 响应回传并通过 CORS 暴露
-`X-Request-ID`；OpenAI 风格错误体的 `error.request_id` 与该响应头一致。
+`X-Request-ID`；所有 HTTP 错误体均增加 `error.request_id`，且与该响应头一致，
+同时保留原有 `detail` 字段。
 `agent_session_id` 等本地会话 ID 只出现在会话建立或首次绑定的关联行，不自动复制到
 每条推理日志。
 
 Reply HTTP 的 `http.request.completed` 在响应最后一个 body 成功发送后记录；
 `outcome` 为 `completed/failed/cancelled`。流式响应中途断开或发送失败记为
 `cancelled`，并且每个请求只记录一次终态。WebSocket 不经过该 HTTP middleware。
+
+Inference Gateway 的 classifier、brain、reply、body、expression、performance
+请求会把 `payload.log_context` 原样透传给对应模型服务。各服务接受该字段并记录
+`inference.started` 与唯一终态 `inference.completed`、`inference.failed` 或
+`inference.cancelled`；单请求 WebSocket 同时记录 `ws.connected/ws.closed`。
+Event 连续流的每个模型检测窗口单独生成 `request_id`，通过同一
+`root_session_id` 归入会话。Gateway 调用 TTS 时向下游透传
+`X-Request-ID`、`X-Root-Session-ID`，并记录成功和失败的 `dependency.call`。

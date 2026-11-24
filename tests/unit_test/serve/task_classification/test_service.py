@@ -149,6 +149,12 @@ def test_websocket_streams_binary_media_before_classification() -> None:
     start_payload = msgpack.unpackb(_body("book a ticket"), raw=False)
     start_payload["text"] = None
     start_payload.pop("media")
+    start_payload["log_context"] = {
+        "request_id": "trace-request-1",
+        "root_session_id": "root-1",
+        "turn_id": "turn-1",
+        "agent_session_id": "agent-1",
+    }
     with TestClient(app) as client:
         with client.websocket_connect(
             "/v1/task-classification/realtime",

@@ -22,6 +22,7 @@ from sglang_omni.serve.inference_gateway.speech_synthesis import (
     GatewaySpeechError,
     GatewaySpeechSynthesizer,
 )
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from sglang_omni.serve.realtime.embedded_tts import (
     EmbeddedTTSConfig,
     EmbeddedTTSConnection,
@@ -32,6 +33,7 @@ from sglang_omni.utils.framex_service_logs import (
     bind_service_log_context,
     correlation_id_or_digest,
     emit_service_event,
+    new_request_id,
     valid_correlation_id,
 )
 
@@ -158,6 +160,7 @@ class _Session:
         self.websocket = websocket
         self.config = config
         self.session_id = ""
+        self.connection_request_id = new_request_id()
         self.root_session_id = ""
         self.agent_session_id = ""
         self.media: dict[str, _Media] = {}
@@ -193,6 +196,7 @@ class _Session:
             "omni-reply-worker",
             "ws.connected",
             logger_name=__name__,
+            request_id=self.connection_request_id,
             root_session_id=self.root_session_id,
             agent_session_id=self.agent_session_id,
             connection_type="inference_gateway",
@@ -267,6 +271,7 @@ class _Session:
                 "omni-reply-worker",
                 "ws.closed",
                 logger_name=__name__,
+                request_id=self.connection_request_id,
                 root_session_id=self.root_session_id,
                 reason="closed",
             )
@@ -371,7 +376,7 @@ class _Session:
                 raise ValueError("action stage and payload channel do not match")
             payload["channel"] = stage
         elif stage == "reply":
-            # The OpenAI-compatible reply worker uses this stable, gateway-owned
+            # The OpenAI-compatible reply service uses this stable, gateway-owned
             # namespace for its private radix cache.  Always overwrite a caller
             # value so two browser sessions cannot opt into the same cache owner.
             payload["session_instance_id"] = self.session_id
@@ -549,6 +554,19 @@ class _Session:
         if len(instruction) > 1_000:
             raise ValueError("speech instruction exceeds its size limit")
         if self.reply_speech is None:
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.ERROR,
+                logger_name=__name__,
+                request_id=adopt_request_id(request_id)[0],
+                root_session_id=self.root_session_id or None,
+                peer="tts_worker",
+                operation="speech_synthesis",
+                status=503,
+                duration_ms=0.0,
+                error_type="TTSUnavailable",
+            )
             await self.send(
                 {
                     "type": "speech.error",
@@ -575,6 +593,8 @@ class _Session:
         instruction: str,
     ) -> None:
         assert self.reply_speech is not None
+        started = time.perf_counter()
+        trace_request_id = adopt_request_id(request_id)[0]
         next_seq = 0
         sent_bytes = 0
 
@@ -604,6 +624,8 @@ class _Session:
                 voice=voice,
                 instruction=instruction,
                 audio_sink=audio_sink,
+                request_id=trace_request_id,
+                root_session_id=self.root_session_id or None,
             )
             await self.send(
                 {
@@ -620,10 +642,48 @@ class _Session:
                     },
                 }
             )
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=self.root_session_id or None,
+                peer="tts_worker",
+                operation="speech_synthesis",
+                status=200,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                provider_request_id=result.provider_response_id,
+            )
         except asyncio.CancelledError:
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=self.root_session_id or None,
+                peer="tts_worker",
+                operation="speech_synthesis",
+                status=499,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                error_type="CancelledError",
+            )
             await self.send({"type": "speech.cancelled", "request_id": request_id})
             raise
         except GatewaySpeechError as exc:
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.ERROR,
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=self.root_session_id or None,
+                peer="tts_worker",
+                operation="speech_synthesis",
+                status=504 if exc.phase == "timeout" else 502,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                error_type=type(exc).__name__,
+            )
             await self.send(
                 {
                     "type": "speech.error",
@@ -637,6 +697,19 @@ class _Session:
                 }
             )
         except Exception:
+            emit_service_event(
+                "omni-reply-worker",
+                "dependency.call",
+                level=logging.ERROR,
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=self.root_session_id or None,
+                peer="tts_worker",
+                operation="speech_synthesis",
+                status=502,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                error_type="ProviderCallbackError",
+            )
             logger.exception("inference gateway speech rendering failed")
             await self.send(
                 {
@@ -748,6 +821,8 @@ class _Session:
                 voice=state.voice,
                 instruction=state.instruction,
                 audio_sink=audio_sink,
+                request_id=adopt_request_id(state.request_id)[0],
+                root_session_id=self.root_session_id or None,
             )
             await asyncio.wait_for(
                 state.commit_event.wait(),
@@ -963,6 +1038,8 @@ class _Session:
                     voice=state.voice,
                     instruction=state.instruction,
                     audio_sink=audio_sink,
+                    request_id=adopt_request_id(state.request_id)[0],
+                    root_session_id=self.root_session_id or None,
                 )
                 audio_bytes += result.audio_bytes
                 chunk_count += result.chunk_count
@@ -1663,6 +1740,7 @@ class _Session:
 
 def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
     app = FastAPI(title="sglang-omni-inference-gateway", version="4")
+    install_framex_http_logging(app, service="omni-reply-worker")
 
     @app.get("/live")
     async def live() -> dict[str, object]:

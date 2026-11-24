@@ -7,9 +7,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from sglang_omni.serve import http_request_logs
-from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
+from sglang_omni.serve.http_request_logs import (
+    FramexHTTPRequestLogMiddleware,
+    install_framex_http_logging,
+)
 from sglang_omni.serve.speech_errors import openai_error_payload
 from sglang_omni.utils.framex_service_logs import (
     bind_service_log_context,
@@ -313,3 +318,41 @@ def test_openai_error_payload_returns_bound_request_id() -> None:
         )
 
     assert payload["error"]["request_id"] == "req_0123456789abcdfg"
+
+
+def test_unhandled_http_error_returns_the_logged_request_id() -> None:
+    app = FastAPI()
+    install_framex_http_logging(app)
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("not exposed")
+
+    response = TestClient(app, raise_server_exceptions=False).get(
+        "/boom",
+        headers={"X-Request-ID": "request-500"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["X-Request-ID"] == "request-500"
+    assert response.json() == {
+        "detail": "Internal Server Error",
+        "error": {"request_id": "request-500"},
+    }
+
+
+def test_http_error_preserves_detail_and_adds_request_id() -> None:
+    app = FastAPI()
+    install_framex_http_logging(app)
+
+    response = TestClient(app).get(
+        "/missing",
+        headers={"X-Request-ID": "request-404"},
+    )
+
+    assert response.status_code == 404
+    assert response.headers["X-Request-ID"] == "request-404"
+    assert response.json() == {
+        "detail": "Not Found",
+        "error": {"request_id": "request-404"},
+    }

@@ -30,7 +30,7 @@ import logging
 import os
 import socket
 import time
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +73,10 @@ _DEFAULT_ACTION_WARMUP_AUDIO_PATH = (
 def _register_framex_logging_lifecycle(
     app: Any, *, service: str, role: str
 ) -> None:
-    async def start_service_log() -> None:
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def framex_lifespan(lifespan_app: Any):
         configure_service_logging(service)
         emit_service_event(
             service,
@@ -82,18 +85,19 @@ def _register_framex_logging_lifecycle(
             role=role,
             log_spec_version=LOG_SPEC_VERSION,
         )
+        try:
+            async with original_lifespan(lifespan_app):
+                yield
+        finally:
+            emit_service_event(
+                service,
+                "service.stopped",
+                logger_name=__name__,
+                role=role,
+            )
+            shutdown_service_logging(service)
 
-    async def stop_service_log() -> None:
-        emit_service_event(
-            service,
-            "service.stopped",
-            logger_name=__name__,
-            role=role,
-        )
-        shutdown_service_logging(service)
-
-    app.add_event_handler("startup", start_service_log)
-    app.add_event_handler("shutdown", stop_service_log)
+    app.router.lifespan_context = framex_lifespan
 
 
 def _load_production_action_catalog_support():
@@ -494,6 +498,8 @@ async def _run_server(
         )
     framex_service = {
         "openai": "omni-reply-worker",
+        "task-classification": "omni-reply-worker",
+        "decision-services": "omni-reply-worker",
         "timeline-detection": "omni-event-worker",
         "action-decision": "omni-action-worker",
     }.get(service_role)

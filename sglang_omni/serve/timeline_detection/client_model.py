@@ -17,6 +17,14 @@ from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE, Window
 from PIL import Image, ImageOps
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
+from sglang_omni.serve.request_log_context import (
+    RequestLogContext,
+    model_request_log,
+)
+from sglang_omni.utils.framex_service_logs import (
+    correlation_id_or_digest,
+    new_request_id,
+)
 
 from .artifacts import TimelineArtifactRecorder, observation_records
 from .diagnostics import log_diagnostic
@@ -599,10 +607,29 @@ class SglangClientTimelineDetectionModel:
                 video_mp4=video_mp4, image_jpegs=image_jpegs,
             )
             try:
-                result = await self._client.completion(
-                    request,
-                    request_id=f"{logical_request_id}:{attempt + 1}",
+                model_operation_id = f"{logical_request_id}:{attempt + 1}"
+                context = RequestLogContext(
+                    request_id=new_request_id(),
+                    root_session_id=correlation_id_or_digest(
+                        self._start.root_session_id or self._start.session_id,
+                        prefix="legacy_root",
+                    ),
+                    agent_session_id=correlation_id_or_digest(
+                        self._start.agent_session_id or self._start.session_id,
+                        prefix="legacy_agent",
+                    ),
                 )
+                async with model_request_log(
+                    "omni-event-worker",
+                    "timeline_model_call",
+                    context,
+                    operation_id=model_operation_id,
+                    logger_name=__name__,
+                ):
+                    result = await self._client.completion(
+                        request,
+                        request_id=model_operation_id,
+                    )
             except (Exception, asyncio.CancelledError) as exc:
                 self._artifacts.record_attempt_result(
                     stream_epoch=work.stream_epoch, window=work.window,

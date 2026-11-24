@@ -20,6 +20,16 @@ from sglang_omni.serve.streaming_request import (
     receive_streamed_request,
     run_until_websocket_disconnect,
 )
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
+from sglang_omni.serve.request_log_context import (
+    model_request_log,
+    payload_request_log_context,
+    websocket_request_log,
+)
+from sglang_omni.utils.framex_service_logs import (
+    emit_service_event,
+    new_request_id,
+)
 
 from .contracts import (
     CONTRACT_VERSION,
@@ -60,6 +70,7 @@ def create_task_classification_app(
         version="6",
         lifespan=lifespan,
     )
+    install_framex_http_logging(app, service="omni-reply-worker")
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
@@ -105,6 +116,7 @@ def create_task_classification_app(
 
     @app.websocket("/v1/task-classification/realtime")
     async def classify_realtime(websocket: WebSocket) -> None:
+        request_id = new_request_id()
         try:
             streamed = await receive_streamed_request(
                 websocket,
@@ -114,6 +126,7 @@ def create_task_classification_app(
             )
             if streamed is None:
                 return
+            request_id = streamed.request_id
             body = dict(streamed.payload)
             body["media"] = [
                 {
@@ -128,23 +141,59 @@ def create_task_classification_app(
                 }
                 for item in streamed.media
             ]
-            result = await run_until_websocket_disconnect(
-                websocket,
-                _classify_payload(pipeline, body, transport="websocket"),
+            context = payload_request_log_context(
+                body,
+                fallback_request_id=request_id,
+                fallback_root_session_id=(
+                    body.get("session_id")
+                    if isinstance(body.get("session_id"), str)
+                    else None
+                ),
+                fallback_turn_id=(
+                    body.get("turn_id")
+                    if isinstance(body.get("turn_id"), str)
+                    else None
+                ),
             )
-            await websocket.send_json(
-                {
-                    "type": "response.completed",
-                    "request_id": streamed.request_id,
-                    "response": result,
-                }
-            )
-            _emit_response_sent(result, "websocket")
+            async with websocket_request_log(
+                "omni-reply-worker",
+                "task_classification_realtime",
+                context,
+                operation_id=request_id,
+                logger_name=__name__,
+            ):
+                result = await run_until_websocket_disconnect(
+                    websocket,
+                    _classify_payload(pipeline, body, transport="websocket"),
+                )
+                await websocket.send_json(
+                    {
+                        "type": "response.completed",
+                        "request_id": streamed.request_id,
+                        "response": result,
+                    }
+                )
+                _emit_response_sent(result, "websocket")
         except WebSocketDisconnect:
             return
         except (InvalidRouteOutput, ValueError) as exc:
+            emit_service_event(
+                "omni-reply-worker",
+                "ws.request.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=request_id,
+                operation="task_classification",
+                status=400,
+                error_type=type(exc).__name__,
+            )
             await websocket.send_json(
-                {"type": "error", "code": "invalid_request", "detail": str(exc)}
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "code": "invalid_request",
+                    "detail": str(exc),
+                }
             )
             await websocket.close(code=4400)
 
@@ -156,6 +205,42 @@ async def _classify_payload(
     body: dict[str, Any],
     *,
     transport: str = "internal",
+) -> dict[str, Any]:
+    fallback_request_id = body.get("request_id")
+    if not isinstance(fallback_request_id, str):
+        fallback_request_id = ""
+    fallback_session_id = body.get("session_id")
+    if not isinstance(fallback_session_id, str):
+        fallback_session_id = None
+    fallback_turn_id = body.get("turn_id")
+    if not isinstance(fallback_turn_id, str):
+        fallback_turn_id = None
+    context = payload_request_log_context(
+        body,
+        fallback_request_id=fallback_request_id,
+        fallback_root_session_id=fallback_session_id,
+        fallback_turn_id=fallback_turn_id,
+        fallback_agent_session_id=fallback_session_id,
+    )
+    async with model_request_log(
+        "omni-reply-worker",
+        "task_classification",
+        context,
+        operation_id=fallback_request_id,
+        logger_name=__name__,
+    ):
+        return await _classify_payload_with_context(
+            pipeline,
+            body,
+            transport=transport,
+        )
+
+
+async def _classify_payload_with_context(
+    pipeline: TaskClassificationPipeline,
+    body: dict[str, Any],
+    *,
+    transport: str,
 ) -> dict[str, Any]:
     classification_request = _request_from_json(body)
     metadata = _timing_metadata(classification_request)
@@ -314,6 +399,7 @@ def create_decision_services_app(
         version="1",
         lifespan=lifespan,
     )
+    install_framex_http_logging(app, service="omni-reply-worker")
     app.mount("/classifier", classifier_app)
     app.mount("/brain", brain_app)
     return app
@@ -362,6 +448,10 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         "router_profile",
         "active_task_goal",
         "active_task_status",
+        "active_task_family",
+        "active_task_phase",
+        "active_task_awaiting_input",
+        "log_context",
     }
     if not required_fields.issubset(raw) or not set(raw).issubset(
         required_fields | optional_fields
@@ -391,6 +481,11 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         follow_up_required=_boolean(raw, "follow_up_required"),
         active_task_goal=_optional_string(raw, "active_task_goal"),
         active_task_status=_optional_string(raw, "active_task_status"),
+        active_task_family=_optional_string(raw, "active_task_family"),
+        active_task_phase=_optional_string(raw, "active_task_phase"),
+        active_task_awaiting_input=_optional_string(
+            raw, "active_task_awaiting_input"
+        ),
         router_profile=(
             _string(raw, "router_profile")
             if "router_profile" in raw

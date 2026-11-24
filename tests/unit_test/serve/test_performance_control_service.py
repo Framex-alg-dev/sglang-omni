@@ -60,6 +60,12 @@ def _payload() -> dict[str, object]:
             "persona": {},
             "visual_behavior_preferences": "自然克制",
         },
+        "log_context": {
+            "request_id": "trace-performance-1",
+            "root_session_id": "root-1",
+            "turn_id": "turn-1",
+            "agent_session_id": "agent-1",
+        },
     }
 
 

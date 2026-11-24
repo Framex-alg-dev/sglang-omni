@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
-from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from .contracts import (
     CONTRACT_VERSION,
     MediaKind,
@@ -30,6 +30,7 @@ from .diagnostics import TimelineIngressDiagnostics
 from sglang_omni.utils.framex_service_logs import (
     correlation_id_or_digest,
     emit_service_event,
+    new_request_id,
 )
 
 
@@ -63,10 +64,7 @@ def create_timeline_detection_app(
     if min(max_chunk_bytes, max_pending_chunks, max_pending_bytes) <= 0:
         raise ValueError("timeline service queue limits must be positive")
     app = FastAPI(title="sglang-omni-timeline-detection", version="1")
-    app.add_middleware(
-        FramexHTTPRequestLogMiddleware,
-        service="omni-event-worker",
-    )
+    install_framex_http_logging(app, service="omni-event-worker")
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
@@ -82,6 +80,7 @@ def create_timeline_detection_app(
             await websocket.close(code=4404)
             return
         await websocket.accept()
+        connection_request_id = new_request_id()
         session: TimelineDetectionSession | None = None
         worker: asyncio.Task[None] | None = None
         observation_worker: asyncio.Task[None] | None = None
@@ -205,6 +204,7 @@ def create_timeline_detection_app(
                 "omni-event-worker",
                 "ws.connected",
                 logger_name=__name__,
+                request_id=connection_request_id,
                 root_session_id=start.root_session_id or start.session_id,
                 agent_session_id=start.agent_session_id or start.session_id,
                 connection_type="timeline",
@@ -313,6 +313,7 @@ def create_timeline_detection_app(
                 "ws.request.failed",
                 level=logging.WARNING,
                 logger_name=__name__,
+                request_id=connection_request_id,
                 root_session_id=(
                     start.root_session_id or start.session_id
                     if session is not None
@@ -334,6 +335,7 @@ def create_timeline_detection_app(
                 "ws.request.failed",
                 level=logging.ERROR,
                 logger_name=__name__,
+                request_id=connection_request_id,
                 root_session_id=(
                     start.root_session_id or start.session_id
                     if session is not None
@@ -367,6 +369,7 @@ def create_timeline_detection_app(
                     "omni-event-worker",
                     "ws.closed",
                     logger_name=__name__,
+                    request_id=connection_request_id,
                     root_session_id=start.root_session_id or start.session_id,
                     reason=close_reason,
                 )

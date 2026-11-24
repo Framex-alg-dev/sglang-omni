@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
-from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from sglang_omni.serve.streaming_request import (
     StreamedMedia,
     StreamedRequest,
@@ -33,6 +33,7 @@ from sglang_omni.utils.framex_service_logs import (
     bind_service_log_context,
     correlation_id_or_digest,
     emit_service_event,
+    new_request_id,
     valid_correlation_id,
 )
 
@@ -567,10 +568,7 @@ def create_action_decision_app(
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
     app = FastAPI(title="sglang-omni-action-decision", version="1")
-    app.add_middleware(
-        FramexHTTPRequestLogMiddleware,
-        service="omni-action-worker",
-    )
+    install_framex_http_logging(app, service="omni-action-worker")
     app.state.action_decision_engine = engine
 
 
@@ -632,7 +630,13 @@ def create_action_decision_app(
 
     @app.websocket("/v1/action-decision/realtime")
     async def decide_realtime(websocket: WebSocket) -> None:
-        request_id = ""
+        request_id = new_request_id()
+        trace_request_id = request_id
+        root_session_id: str | None = None
+        turn_id: str | None = None
+        operation_id: str | None = None
+        connected = False
+        close_reason = "completed"
         try:
             streamed = await receive_streamed_request(
                 websocket,
@@ -649,6 +653,28 @@ def create_action_decision_app(
             payload.setdefault("request_id", request_id)
             _adopt_stream_log_request_id(payload, request_id)
             decision_request = _parse_request(payload, media=streamed.media, config=config)
+            trace_request_id = decision_request.trace_request_id or request_id
+            root_session_id = decision_request.root_session_id or correlation_id_or_digest(
+                decision_request.session_id, prefix="legacy_root"
+            )
+            turn_id = correlation_id_or_digest(
+                decision_request.turn_id, prefix="legacy_turn"
+            )
+            operation_id = correlation_id_or_digest(
+                decision_request.request_id, prefix="legacy_operation"
+            )
+            emit_service_event(
+                "omni-action-worker",
+                "ws.connected",
+                logger_name=__name__,
+                request_id=trace_request_id,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+                connection_type="action_decision_realtime",
+                operation_id=operation_id,
+                agent_session_id=decision_request.agent_session_id,
+            )
+            connected = True
             decision = await run_until_websocket_disconnect(
                 websocket,
                 _decide_with_service_log(
@@ -666,8 +692,20 @@ def create_action_decision_app(
                 }
             )
         except WebSocketDisconnect:
+            close_reason = "peer_disconnected"
             return
         except (TypeError, ValueError) as exc:
+            close_reason = "invalid_request"
+            emit_service_event(
+                "omni-action-worker",
+                "ws.request.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=request_id,
+                operation="action_decision",
+                status=400,
+                error_type=type(exc).__name__,
+            )
             await websocket.send_json(
                 {
                     "type": "error",
@@ -678,6 +716,17 @@ def create_action_decision_app(
             )
             await websocket.close(code=4400)
         except Exception as exc:
+            close_reason = "internal_error"
+            emit_service_event(
+                "omni-action-worker",
+                "ws.request.failed",
+                level=logging.ERROR,
+                logger_name=__name__,
+                request_id=request_id,
+                operation="action_decision",
+                status=500,
+                error_type=type(exc).__name__,
+            )
             emit_structured_log(
                 "error",
                 "action_decision_failed",
@@ -695,6 +744,19 @@ def create_action_decision_app(
                 }
             )
             await websocket.close(code=1011)
+        finally:
+            if connected:
+                emit_service_event(
+                    "omni-action-worker",
+                    "ws.closed",
+                    logger_name=__name__,
+                    request_id=trace_request_id,
+                    root_session_id=root_session_id,
+                    turn_id=turn_id,
+                    connection_type="action_decision_realtime",
+                    operation_id=operation_id,
+                    reason=close_reason,
+                )
 
     @app.post("/v1/action-recall")
     async def recall_audio(request: Request) -> JSONResponse:
@@ -783,7 +845,11 @@ def create_action_decision_app(
         )
 
         app.state.client = client
-        register_performance_control(app, token=normalized_performance_token)
+        register_performance_control(
+            app,
+            token=normalized_performance_token,
+            service="omni-action-worker",
+        )
 
     return app
 

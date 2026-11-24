@@ -331,12 +331,18 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
             "duplicate": False,
         }
         for request_id, stage in (("r1", "classifier"), ("r2", "brain")):
+            log_context = {
+                "request_id": f"trace-{request_id}",
+                "root_session_id": "root-1",
+                "turn_id": "turn-1",
+                "agent_session_id": "agent-1",
+            }
             socket.send_json(
                 {
                     "type": "stage.request",
                     "request_id": request_id,
                     "stage": stage,
-                    "payload": {},
+                    "payload": {"log_context": log_context},
                     "media_refs": ["frame-1"],
                 }
             )
@@ -355,6 +361,12 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
             if isinstance(item, str) and json.loads(item)["type"] == "input.media"
         )
         assert request_start["contract_version"] == 2
+        assert request_start["payload"]["log_context"] == {
+            "request_id": f"trace-{request_start['request_id']}",
+            "root_session_id": "root-1",
+            "turn_id": "turn-1",
+            "agent_session_id": "agent-1",
+        }
         assert media_header["evidence_role"] == "user_camera"
 
 
@@ -595,7 +607,7 @@ def test_speech_request_uses_one_whole_text_synthesis(monkeypatch) -> None:
             instances.append(self)
 
         async def synthesize(
-            self, *, text, voice, instruction, audio_sink
+            self, *, text, voice, instruction, audio_sink, **_log_context
         ):
             self.calls.append((text, voice, instruction))
             await audio_sink(b"\x01\x00" * 2)
@@ -674,7 +686,9 @@ def test_reply_speculation_buffers_until_matching_commit(monkeypatch) -> None:
         def __init__(self, _config):
             pass
 
-        async def synthesize(self, *, text, voice, instruction, audio_sink):
+        async def synthesize(
+            self, *, text, voice, instruction, audio_sink, **_log_context
+        ):
             assert (text, voice, instruction) == ("你好", "voice-1", "自然地说")
             await audio_sink(b"\x01\x00")
             await audio_sink(b"\x02\x00")
@@ -760,7 +774,9 @@ def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
         def __init__(self, _config):
             pass
 
-        async def synthesize(self, *, text, voice, instruction, audio_sink):
+        async def synthesize(
+            self, *, text, voice, instruction, audio_sink, **_log_context
+        ):
             speech_calls.append((text, voice, instruction))
             await audio_sink(b"\x01\x00")
             return SimpleNamespace(

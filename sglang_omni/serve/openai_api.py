@@ -164,9 +164,10 @@ from sglang_omni.utils.framex_service_logs import (
     bind_service_log_context,
     correlation_id_or_digest,
     emit_service_event,
+    new_request_id,
     valid_correlation_id,
 )
-from sglang_omni.serve.http_request_logs import FramexHTTPRequestLogMiddleware
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from sglang_omni.serve.internal_realtime_model_api import (
     register_internal_realtime_model_api,
 )
@@ -322,7 +323,7 @@ def create_app(
         VoiceUploadBodyLimitMiddleware,
         max_bytes=MAX_VOICE_UPLOAD_BODY_BYTES,
     )
-    app.add_middleware(FramexHTTPRequestLogMiddleware)
+    install_framex_http_logging(app)
 
     # Store references in app state for access from route handlers
     app.state.client = client
@@ -898,12 +899,14 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
     @app.websocket("/v1/chat/completions/realtime")
     async def chat_completions_realtime(websocket: WebSocket) -> None:
         started = time.perf_counter()
-        trace_request_id: str | None = None
+        trace_request_id: str | None = new_request_id()
         root_session_id: str | None = None
         turn_id: str | None = None
         agent_session_id: str | None = None
-        outer_request_id: str | None = None
-        logged_operation_id: str | None = None
+        outer_request_id: str | None = trace_request_id
+        logged_operation_id: str | None = correlation_id_or_digest(
+            trace_request_id, prefix="legacy_operation"
+        )
         connected = False
         close_reason = "completed"
         try:

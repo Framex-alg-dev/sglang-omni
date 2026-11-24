@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""FrameX v1.0 service logs for CLS collection.
+"""FrameX v1.0 Omni service logs for CLS collection.
 
 This module is deliberately separate from ``structured_logs``.  The latter is
 an internal diagnostic/replay stream and may contain model-specific details;
@@ -301,7 +301,7 @@ class _DrainingQueueListener(logging.handlers.QueueListener):
 
 
 class _LockedRotatingFileHandler(logging.handlers.RotatingFileHandler):
-    """Serialize append and rollover across co-located Worker processes."""
+    """Serialize append and rollover across co-located service processes."""
 
     def __init__(self, filename: Path, **kwargs: Any) -> None:
         super().__init__(filename, **kwargs)
@@ -363,7 +363,7 @@ def configure_service_logging(
     include_stdout: bool = True,
     queue_size: int = 8192,
 ) -> logging.Logger:
-    """Configure one non-blocking JSON logger for a Worker service."""
+    """Configure one non-blocking JSON logger for an Omni service role."""
 
     if service not in SERVICES:
         raise ValueError(f"unsupported FrameX service: {service!r}")
