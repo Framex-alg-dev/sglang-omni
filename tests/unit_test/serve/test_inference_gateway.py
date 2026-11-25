@@ -1151,3 +1151,31 @@ def test_streaming_speculation_session_budget_fails_closed(monkeypatch) -> None:
     assert error["type"] == "speech.error"
     assert error["code"] == "tts_failed"
     assert error["retryable"] is True
+
+
+def test_upstream_errors_are_failed_dependencies_without_success(monkeypatch):
+    class ErrorUpstream(_Upstream):
+        async def send(self, value):
+            if isinstance(value, str) and json.loads(value)["type"] == "request.commit":
+                await self.events.put(json.dumps({"type": "error", "code": failure_code,
+                    "detail": "controlled rejection"}))
+                return
+            await super().send(value)
+    for failure_code, expected_status in (("invalid_request", 422), ("overloaded", 429), ("timeout", 504)):
+        emitted = []
+        monkeypatch.setattr(gateway_module.websockets, "connect", lambda *a, **kw: ErrorUpstream())
+        monkeypatch.setattr(gateway_module, "emit_service_event", lambda *a, **kw: emitted.append((a, kw)))
+        with TestClient(create_inference_gateway_app(_config())).websocket_connect("/v1/inference-session") as socket:
+            socket.send_json({"type": "session.open", "contract_version": 4, "session_id": "error-test"})
+            assert socket.receive_json()["type"] == "session.ready"
+            socket.send_json({"type": "stage.request", "request_id": "rejected", "stage": "brain",
+                "payload": {}, "media_refs": [], "log_context": {"request_id": "trace-error"}})
+            assert socket.receive_json()["type"] == "stage.accepted"
+            terminal = socket.receive_json()
+            assert terminal["type"] == "stage.error"
+            assert terminal["code"] == failure_code
+            assert terminal["retryable"] == (failure_code != "invalid_request")
+        calls = [kw for args, kw in emitted if len(args) > 1 and args[1] == "dependency.call"]
+        assert len(calls) == 1
+        assert calls[0]["status"] == expected_status
+        assert calls[0]["peer"] == "omni_task_brain"

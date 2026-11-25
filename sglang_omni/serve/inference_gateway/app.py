@@ -45,6 +45,15 @@ _STAGES = frozenset(
 _EVIDENCE_ROLES = frozenset({"user_audio", "user_camera", "avatar_state"})
 
 
+class UpstreamStageError(RuntimeError):
+    """An upstream protocol error is a failed operation, not a completed socket."""
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+        self.retryable = code in {"overloaded", "timeout"}
+        self.status = {"invalid_request": 422, "overloaded": 429, "timeout": 504}.get(code, 502)
+
+
 @dataclass(frozen=True)
 class UpstreamStage:
     url: str
@@ -1363,7 +1372,7 @@ class _Session:
                 logger_name=__name__,
                 peer=_stage_peer(stage),
                 operation=stage,
-                status=502,
+                status=exc.status if isinstance(exc, UpstreamStageError) else 502,
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=logged_operation_id,
                 error_type=type(exc).__name__,
@@ -1729,16 +1738,9 @@ class _Session:
                     )
                     return
                 if event_type == "error":
-                    await self.send(
-                        {
-                            "type": "stage.error",
-                            "request_id": request_id,
-                            "code": event.get("code", "upstream_error"),
-                            "detail": event.get("detail", "model stage failed"),
-                            "retryable": event.get("code") in {"overloaded", "timeout"},
-                        }
-                    )
-                    return
+                    raise UpstreamStageError(
+                        event.get("code", "upstream_error"),
+                        event.get("detail", "model stage failed"))
                 raise RuntimeError("model stage returned an unsupported event")
 
 
@@ -1788,6 +1790,8 @@ def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
 
 
 def _classify_stage_failure(exc: Exception) -> tuple[str, bool]:
+    if isinstance(exc, UpstreamStageError):
+        return exc.code, exc.retryable
     if isinstance(
         exc,
         (
@@ -1830,6 +1834,8 @@ def _stage_trace_request_id(payload: dict[str, Any], operation_id: str) -> str:
 
 
 def _stage_peer(stage: str) -> str:
+    if stage == "brain":
+        return "omni_task_brain"
     if stage in {"body", "expression", "performance"}:
         return "omni_action_worker"
     return "omni_reply_worker"
