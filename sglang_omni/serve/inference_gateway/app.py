@@ -1497,7 +1497,11 @@ class _Session:
                         "type": "request.start",
                         "contract_version": 2,
                         "request_id": request_id,
-                        "payload": payload,
+                        # Temporary legacy Brain compatibility: keep lineage
+                        # bound in Gateway; omit it only from the upstream wire.
+                        "payload": ({key: value for key, value in payload.items()
+                                     if key != "log_context"}
+                                    if stage == "brain" else payload),
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),

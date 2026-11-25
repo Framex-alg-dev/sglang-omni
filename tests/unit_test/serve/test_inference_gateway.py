@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from sglang_omni.utils.framex_service_logs import current_service_log_context
 
 from sglang_omni.serve.inference_gateway import app as gateway_module
 from sglang_omni.serve.inference_gateway import __main__ as gateway_main
@@ -48,6 +49,7 @@ class _Upstream:
             return
         message = json.loads(value)
         if message["type"] == "request.start":
+            self.trace_context = current_service_log_context()
             self.request_payload = message.get("payload")
             self.request_id = message["request_id"]
             await self.events.put(
@@ -361,12 +363,14 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
             if isinstance(item, str) and json.loads(item)["type"] == "input.media"
         )
         assert request_start["contract_version"] == 2
-        assert request_start["payload"]["log_context"] == {
-            "request_id": f"trace-{request_start['request_id']}",
-            "root_session_id": "root-1",
-            "turn_id": "turn-1",
-            "agent_session_id": "agent-1",
-        }
+        assert upstream.trace_context.request_id == f"trace-{request_start['request_id']}"
+        if request_start["request_id"] == "r2":
+            assert "log_context" not in request_start["payload"]
+        else:
+            assert request_start["payload"]["log_context"] == {
+                "request_id": "trace-r1", "root_session_id": "root-1",
+                "turn_id": "turn-1", "agent_session_id": "agent-1",
+            }
         assert media_header["evidence_role"] == "user_camera"
 
 
