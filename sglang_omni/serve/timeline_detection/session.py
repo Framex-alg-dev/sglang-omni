@@ -6,6 +6,8 @@ from typing import Protocol
 
 from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE
 
+from sglang_omni.serve.request_log_context import RequestLogContext
+
 from .contracts import (
     ObservationEvent,
     TimelineDiscontinuity,
@@ -74,6 +76,11 @@ class TimelineDetectionSession:
                 accepted_media_end_ms=self._max_media_end_ms,
             )
         return observations
+
+    @property
+    def output_log_context(self) -> RequestLogContext | None:
+        """Only the output consumer advances this identity, alongside dequeue."""
+        return getattr(self._model, "output_log_context", None)
 
     async def discontinuity(self, event: TimelineDiscontinuity) -> None:
         await self.start()

@@ -93,6 +93,7 @@ class _WindowWork:
     stream_epoch: int
     window: EventDetectionWindow
     enqueued_at: float = field(default_factory=time.perf_counter)
+    request_id: str = field(default_factory=new_request_id)
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ _ModelOutput = _DetectionResult | _ModelFailure
 class _QueuedOutput:
     generation: int
     output: _ModelOutput
+    log_context: RequestLogContext | None = None
 
 
 class _EventEdgeLatch:
@@ -324,6 +326,7 @@ class SglangClientTimelineDetectionModel:
         self._decoded_video_frames: OrderedDict[tuple[int, int], Image.Image] = OrderedDict()
         self._windows: asyncio.Queue[_WindowWork] = asyncio.Queue(maxsize=1)
         self._outputs: asyncio.Queue[_QueuedOutput] = asyncio.Queue(maxsize=1)
+        self.output_log_context: RequestLogContext | None = None
         self._worker: asyncio.Task[None] | None = None
         self._generation = 0
         self._started = False
@@ -405,6 +408,7 @@ class SglangClientTimelineDetectionModel:
             self._outputs.task_done()
             if queued.generation == self._generation:
                 break
+        self.output_log_context = queued.log_context
         output = queued.output
         if isinstance(output, _ModelFailure):
             raise RuntimeError("timeline event inference failed") from output.error
@@ -488,7 +492,7 @@ class SglangClientTimelineDetectionModel:
                 try:
                     observations = await self._detect(work)
                     if work.generation == self._generation:
-                        await self._publish_output(work.generation, observations)
+                        await self._publish_output(work.generation, observations, self._window_log_context(work))
                     else:
                         self._log_work(
                             "inference_result_discarded", work,
@@ -502,14 +506,15 @@ class SglangClientTimelineDetectionModel:
                         "inference_failed", work, error_type=type(exc).__name__,
                     )
                     if work.generation == self._generation:
-                        await self._publish_output(work.generation, _ModelFailure(exc))
+                        await self._publish_output(work.generation, _ModelFailure(exc), self._window_log_context(work))
                 finally:
                     self._windows.task_done()
         except asyncio.CancelledError:
             raise
 
-    async def _publish_output(self, generation: int, result: _ModelOutput) -> None:
-        output = _QueuedOutput(generation, result)
+    async def _publish_output(self, generation: int, result: _ModelOutput,
+                              context: RequestLogContext | None = None) -> None:
+        output = _QueuedOutput(generation, result, context)
         if self._raw_windows:
             await self._outputs.put(output)
         else:
@@ -534,6 +539,19 @@ class SglangClientTimelineDetectionModel:
                 f"{work.stream_epoch}:{work.window.end_ms}"
             ),
             **fields,
+        )
+
+    def _window_log_context(self, work: _WindowWork) -> RequestLogContext:
+        """A frozen window operation survives retries and the output queue."""
+        window_id = (f"timeline:{self._start.session_id}:{self._start.observer_epoch}:"
+                     f"{work.stream_epoch}:{work.window.end_ms}")
+        return RequestLogContext(
+            request_id=work.request_id,
+            root_session_id=correlation_id_or_digest(
+                self._start.root_session_id or self._start.session_id, prefix="legacy_root"),
+            turn_id=correlation_id_or_digest(window_id, prefix="window"),
+            agent_session_id=correlation_id_or_digest(
+                self._start.agent_session_id or self._start.session_id, prefix="legacy_agent"),
         )
 
     async def _detect(self, work: _WindowWork) -> _DetectionResult:
@@ -608,17 +626,7 @@ class SglangClientTimelineDetectionModel:
             )
             try:
                 model_operation_id = f"{logical_request_id}:{attempt + 1}"
-                context = RequestLogContext(
-                    request_id=new_request_id(),
-                    root_session_id=correlation_id_or_digest(
-                        self._start.root_session_id or self._start.session_id,
-                        prefix="legacy_root",
-                    ),
-                    agent_session_id=correlation_id_or_digest(
-                        self._start.agent_session_id or self._start.session_id,
-                        prefix="legacy_agent",
-                    ),
-                )
+                context = self._window_log_context(work)
                 async with model_request_log(
                     "omni-event-worker",
                     "timeline_model_call",

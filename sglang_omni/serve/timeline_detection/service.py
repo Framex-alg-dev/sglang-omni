@@ -29,6 +29,8 @@ from .session import TimelineDetectionModel, TimelineDetectionSession
 from .diagnostics import TimelineIngressDiagnostics
 from sglang_omni.utils.framex_service_logs import (
     correlation_id_or_digest,
+    adopt_request_id,
+    bind_service_log_context,
     emit_service_event,
     new_request_id,
 )
@@ -156,41 +158,57 @@ def create_timeline_detection_app(
                 while True:
                     started = time.perf_counter()
                     events = await session.next_observations()
-                    if isinstance(events, DetectionWindow):
-                        await send_json(events.to_wire())
-                        emit_service_event(
-                            "omni-event-worker",
-                            "inference.completed",
-                            logger_name=__name__,
-                            root_session_id=(
-                                start.root_session_id or start.session_id
-                            ),
-                            operation="timeline_window",
-                            status=200,
-                            duration_ms=round(
-                                (time.perf_counter() - started) * 1000, 3
-                            ),
-                            event_count=len(events.events),
-                            model_id=start.model_id,
-                        )
-                    else:
-                        for event in events:
-                            await send_json(_event_to_json(event))
-                        emit_service_event(
-                            "omni-event-worker",
-                            "inference.completed",
-                            logger_name=__name__,
-                            root_session_id=(
-                                start.root_session_id or start.session_id
-                            ),
-                            operation="timeline_observation",
-                            status=200,
-                            duration_ms=round(
-                                (time.perf_counter() - started) * 1000, 3
-                            ),
-                            event_count=len(events),
-                            model_id=start.model_id,
-                        )
+                    context = session.output_log_context
+                    with bind_service_log_context(
+                        request_id=context.request_id if context else connection_request_id,
+                        root_session_id=start.root_session_id or start.session_id,
+                        turn_id=context.turn_id if context else None,
+                    ):
+                        if isinstance(events, DetectionWindow):
+                            payload = events.to_wire()
+                            if context is not None:
+                                payload["log_context"] = {
+                                    "request_id": context.request_id,
+                                    "root_session_id": context.root_session_id,
+                                    "turn_id": context.turn_id,
+                                }
+                            await send_json(payload)
+                            emit_service_event(
+                                "omni-event-worker",
+                                "inference.completed",
+                                logger_name=__name__,
+                                root_session_id=(
+                                    start.root_session_id or start.session_id
+                                ),
+                                operation="timeline_window",
+                                operation_id=context.turn_id if context else None,
+                                window_id=events.evidence_end_ms,
+                                status=200,
+                                duration_ms=round(
+                                    (time.perf_counter() - started) * 1000, 3
+                                ),
+                                event_count=len(events.events),
+                                model_id=start.model_id,
+                            )
+                        else:
+                            for event in events:
+                                await send_json(_event_to_json(event))
+                            emit_service_event(
+                                "omni-event-worker",
+                                "inference.completed",
+                                logger_name=__name__,
+                                root_session_id=(
+                                    start.root_session_id or start.session_id
+                                ),
+                                operation="timeline_observation",
+                                operation_id=context.turn_id if context else None,
+                                status=200,
+                                duration_ms=round(
+                                    (time.perf_counter() - started) * 1000, 3
+                                ),
+                                event_count=len(events),
+                                model_id=start.model_id,
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -200,6 +218,7 @@ def create_timeline_detection_app(
         try:
             first = await websocket.receive_json()
             start = _start_from_json(_object(first, "session.start"))
+            connection_request_id = adopt_request_id(first.get("request_id"))[0]
             emit_service_event(
                 "omni-event-worker",
                 "ws.connected",
