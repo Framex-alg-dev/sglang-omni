@@ -7,10 +7,6 @@ import json
 
 import pytest
 
-from sglang_omni.serve.agent_prompt_snapshot import (
-    decode_action_prompt_snapshot,
-    decode_timeline_prompt_snapshot,
-)
 from sglang_omni.serve.action_decision.catalog import ActionEntry, ResolvedCatalog
 from sglang_omni.serve.action_decision.contracts import (
     ActionDecisionRequest,
@@ -18,11 +14,16 @@ from sglang_omni.serve.action_decision.contracts import (
 )
 from sglang_omni.serve.action_decision.prompt import build_system_prompt
 from sglang_omni.serve.action_decision.service import _with_prompt_receipt
+from sglang_omni.serve.agent_prompt_snapshot import (
+    decode_action_prompt_snapshot,
+    decode_router_prompt_snapshot,
+    decode_timeline_prompt_snapshot,
+)
+from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
 from sglang_omni.serve.timeline_detection.event1115 import (
     event1115_names_from_agent_snapshot,
     parse_event1115_output,
 )
-from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
 from sglang_omni.serve.timeline_detection.parser import ModelOutputError
 from sglang_omni.serve.timeline_detection.service import _start_from_json
 
@@ -48,10 +49,7 @@ def _action_snapshot(prompt: str = "AGENT OWNED ACTION POLICY") -> dict:
 
 
 def _timeline_documents() -> tuple[str, str, str]:
-    events = [
-        {"code": f"E{index}", "name": f"event-{index}"}
-        for index in range(96)
-    ]
+    events = [{"code": f"E{index}", "name": f"event-{index}"} for index in range(96)]
     registry = json.dumps({"events": events}, ensure_ascii=False, separators=(",", ":"))
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=("code", "name"), lineterminator="\n")
@@ -81,6 +79,40 @@ def _timeline_snapshot() -> dict:
         **texts,
         "item_sha256": {key: _sha(value) for key, value in texts.items()},
     }
+
+
+def _router_snapshot() -> dict:
+    texts = {
+        "system_prompt": "AGENT ROUTER POLICY",
+        "mcp_scope": "MCP scope",
+        "multimodal_scope": "Multimodal scope",
+    }
+    return {
+        "consumer": "sglang_omni.router.v1_0",
+        "release_id": "router-v1",
+        "bundle_sha256": "c" * 64,
+        "binding": {
+            "assembly_contract": "turn-router-v1.0",
+            "output_protocol": "turn-router-code-v1.0",
+            "model_id": "router-model",
+            "model_version": "router-weights",
+        },
+        **texts,
+        "item_sha256": {key: _sha(value) for key, value in texts.items()},
+    }
+
+
+def test_router_snapshot_is_validated_for_request_owned_prompting() -> None:
+    snapshot = decode_router_prompt_snapshot(_router_snapshot())
+
+    assert snapshot.release_id == "router-v1"
+    assert snapshot.binding.model_id == "router-model"
+    assert snapshot.rules["system_prompt"] == "AGENT ROUTER POLICY"
+
+    corrupted = _router_snapshot()
+    corrupted["mcp_scope"] = "tampered"
+    with pytest.raises(ValueError, match="checksum"):
+        decode_router_prompt_snapshot(corrupted)
 
 
 def test_action_snapshot_is_validated_and_drives_prompt_assembly() -> None:
@@ -144,19 +176,21 @@ def test_action_snapshot_rejects_content_or_model_drift() -> None:
 
 def test_timeline_session_uses_agent_prompt_registry_and_receipt_identity() -> None:
     raw_snapshot = _timeline_snapshot()
-    start = _start_from_json({
-        "type": "session.start",
-        "contract_version": 2,
-        "session_id": "session-1",
-        "identity_epoch": 1,
-        "observer_epoch": 2,
-        "stream_epoch": 3,
-        "next_sequence": 1,
-        "audio_format": "pcm_s16le/16000/1",
-        "video_format": "jpeg",
-        "model_id": "event-model",
-        "prompt_snapshot": raw_snapshot,
-    })
+    start = _start_from_json(
+        {
+            "type": "session.start",
+            "contract_version": 2,
+            "session_id": "session-1",
+            "identity_epoch": 1,
+            "observer_epoch": 2,
+            "stream_epoch": 3,
+            "next_sequence": 1,
+            "audio_format": "pcm_s16le/16000/1",
+            "video_format": "jpeg",
+            "model_id": "event-model",
+            "prompt_snapshot": raw_snapshot,
+        }
+    )
 
     assert start.prompt_snapshot is not None
     assert start.prompt_snapshot.release_id == "timeline-1115-v1"
@@ -167,9 +201,7 @@ def test_timeline_session_uses_agent_prompt_registry_and_receipt_identity() -> N
     )
     assert names["E0"] == "event-0"
     assert names["E95"] == "event-95"
-    assert parse_event1115_output(
-        "E95", allowed_event_ids=frozenset(names)
-    ) == ["E95"]
+    assert parse_event1115_output("E95", allowed_event_ids=frozenset(names)) == ["E95"]
     with pytest.raises(ModelOutputError, match="outside"):
         parse_event1115_output("E96", allowed_event_ids=frozenset(names))
 

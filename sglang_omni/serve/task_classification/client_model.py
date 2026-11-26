@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import logging
 import time
 import wave
-from typing import Any, Protocol
 from types import MappingProxyType
+from typing import Any, Protocol
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.profiler.decision_timing import emit_decision_timing
@@ -16,10 +17,13 @@ from sglang_omni.profiler.decision_timing import emit_decision_timing
 from . import prompt_v09, prompt_v10, prompt_v11, prompt_v12
 from .contracts import (
     DEFAULT_ROUTER_PROFILE,
+    LEGACY_CONTRACT_VERSION,
     SUPPORTED_ROUTER_PROFILES,
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CompletionClient(Protocol):
@@ -45,18 +49,47 @@ class SglangClientTaskClassificationModel:
     ) -> None:
         if not model_id.strip() or not model_version.strip():
             raise ValueError("turn-router model_id and model_version are required")
-        if prompt_snapshot is not None and set(prompt_snapshot)!={"system_prompt","mcp_scope","multimodal_scope"}:
+        if prompt_snapshot is not None and set(prompt_snapshot) != {
+            "system_prompt",
+            "mcp_scope",
+            "multimodal_scope",
+        }:
             raise ValueError("complete Router prompt snapshot required")
-        self._prompt_snapshot = MappingProxyType(dict(prompt_snapshot)) if prompt_snapshot is not None else None
+        self._prompt_snapshot = (
+            MappingProxyType(dict(prompt_snapshot))
+            if prompt_snapshot is not None
+            else None
+        )
         self._client = client
         self.model_id = model_id
         self.model_version = model_version
 
     async def classify(self, request: TaskClassificationRequest) -> str:
-        if self._prompt_snapshot is not None and request.router_profile!="v1.0":
+        if self._prompt_snapshot is not None and request.router_profile != "v1.0":
             raise ValueError("debug snapshots require Router v1.0")
-        runtime = getattr(self, '_runtime_prompt_bundle', None)
-        snapshot = self._prompt_snapshot if self._prompt_snapshot is not None else (runtime.rules if runtime is not None and request.router_profile == 'v1.0' else None)
+        supplied = request.prompt_snapshot
+        if supplied is not None:
+            if (
+                supplied.binding.model_id != self.model_id
+                or supplied.binding.model_version != self.model_version_for(request)
+            ):
+                logger.warning(
+                    "Router prompt serving model drift",
+                    extra={
+                        "request_id": request.request_id,
+                        "root_session_id": request.session_id,
+                        "turn_id": request.turn_id,
+                        "release_id": supplied.release_id,
+                        "bundle_sha256": supplied.bundle_sha256,
+                        "bound_model_id": supplied.binding.model_id,
+                        "bound_model_version": supplied.binding.model_version,
+                        "serving_model_id": self.model_id,
+                        "serving_model_version": self.model_version_for(request),
+                    },
+                )
+            snapshot = supplied.rules
+        else:
+            snapshot = self._prompt_snapshot
         audio = request.media[0] if request.media else None
         prompt = _prompt_contract(request.router_profile)
         history = prompt.normalize_history(request.router_history)
@@ -65,8 +98,16 @@ class SglangClientTaskClassificationModel:
             query_mode=query_mode,
             text=request.text,
             history=history,
-            mcp_scope=(snapshot["mcp_scope"] if snapshot is not None else prompt.DEFAULT_MCP_SCOPE),
-            multimodal_scope=(snapshot["multimodal_scope"] if snapshot is not None else prompt.DEFAULT_MULTIMODAL_SCOPE),
+            mcp_scope=(
+                snapshot["mcp_scope"]
+                if snapshot is not None
+                else prompt.DEFAULT_MCP_SCOPE
+            ),
+            multimodal_scope=(
+                snapshot["multimodal_scope"]
+                if snapshot is not None
+                else prompt.DEFAULT_MULTIMODAL_SCOPE
+            ),
             has_active_agent=request.has_active_agent,
             pending_confirmation=request.pending_confirmation,
             follow_up_required=request.follow_up_required,
@@ -131,9 +172,11 @@ class SglangClientTaskClassificationModel:
                     content=(
                         snapshot["system_prompt"]
                         if snapshot is not None
-                        else prompt.SYSTEM_PROMPT
-                        if history
-                        else prompt.SINGLE_TURN_SYSTEM_PROMPT
+                        else (
+                            prompt.SYSTEM_PROMPT
+                            if history
+                            else prompt.SINGLE_TURN_SYSTEM_PROMPT
+                        )
                     ),
                 ),
                 Message(role="user", content=content),
@@ -226,6 +269,7 @@ class SglangClientTaskClassificationModel:
                     text="你好",
                     media=(),
                     router_profile=router_profile,
+                    contract_version=LEGACY_CONTRACT_VERSION,
                 )
             )
             if direct != "0":
@@ -243,11 +287,13 @@ class SglangClientTaskClassificationModel:
                     input_revision=0,
                     text="继续",
                     media=(),
-                    router_history=({
-                        "role": "assistant",
-                        "text": "需要我查询当前天气吗？",
-                        "playback_status": "completed",
-                    },),
+                    router_history=(
+                        {
+                            "role": "assistant",
+                            "text": "需要我查询当前天气吗？",
+                            "playback_status": "completed",
+                        },
+                    ),
                     has_active_agent=True,
                     follow_up_required=True,
                     active_task_goal="查询当前天气",
@@ -256,11 +302,10 @@ class SglangClientTaskClassificationModel:
                     active_task_phase="waiting_user",
                     active_task_awaiting_input="details",
                     router_profile=router_profile,
+                    contract_version=LEGACY_CONTRACT_VERSION,
                 )
             )
-            expected_delegate = (
-                "4" if router_profile in {"v1.1", "v1.2"} else "1"
-            )
+            expected_delegate = "4" if router_profile in {"v1.1", "v1.2"} else "1"
             if delegate != expected_delegate:
                 raise RuntimeError(
                     "turn-router prewarm expected an inherited MCP request to route "

@@ -1,17 +1,17 @@
 # Knowledge decision prompt workbenches
 
-Current development runtime integration (2026-11-03): Action E67, generic Action,
-Performance, and Router v1.0 now load selected Knowledge bundles once at startup
-through `sglang_omni/serve/prompt_runtime.py`. The separate D Reply bundle also
-covers event replies. Publishing and selecting a version do not hot-reload rules.
-Restart `sglang-omni-GPU0_1-dev.service` for Action/Performance and
-`sglang-omni-gpu3-decision-services.service` for Router, then verify each debug
-state response's `runtime.release_id`, `bundle_sha256`, and `loaded_at` against the
-Knowledge deployment. Invalid or missing enabled bundles block startup. Use the
-read-only token in the root-owned environment file; the non-secret template is
-`deploy/knowledge-runtime-prompts.env.example`. Existing legacy profiles and
-Timeline remain unchanged. Earlier debug-only restrictions below describe that
-implementation stage.
+Current development runtime integration: Action E67, generic Action, and
+Performance can load selected Knowledge bundles through
+`sglang_omni/serve/prompt_runtime.py`. Router v1.0 is different: Agent loads and
+freezes its immutable Knowledge release, then supplies that snapshot on every
+turn-router v7 request. Omni validates the consumer, protocol binding, release,
+and per-item checksums, but does not access Knowledge or hot-reload Router rules.
+Router v6 remains a rollback contract and does not accept a snapshot. The separate
+D Reply bundle also covers event replies. Publishing and selecting a version do
+not hot-reload rules; restart the owning Agent after changing the selected Router
+release. Invalid or missing enabled bundles block Agent startup. Existing Router
+profiles other than v1.0 remain on the legacy contract. Earlier debug-only
+restrictions below describe that implementation stage.
 
 The running classifier and action services expose authenticated `/v1/prompt-debug/state`
 and `/v1/prompt-debug/evaluate` hooks. Gateway exposes fixed-target management proxies at
@@ -27,7 +27,9 @@ client. No process-wide constant or runtime file is modified. Preview captures t
 GenerateRequest before inference; run delegates to the existing model client and parser.
 Default inference entry points remain. Performance now lives in serve/performance_control; embedded TTS and its text/buffer helpers live directly in serve. The old session Realtime entry and file overrides have retired.
 
-Router uses v1.0 platform scopes, not character persona. E67 uses its cached reference
+Router uses v1.0 platform scopes, not character persona. A serving-model identifier
+that differs from the snapshot's logical model binding is logged as drift and does
+not reject the request; protocol or checksum drift still fails closed. E67 uses its cached reference
 body; it does not interpolate dynamic character/session prompts. The generic proactive
 action branch does interpolate those inputs. Knowledge UI documents these differences.
 Trials select and validate actions only; they do not execute avatar output or tools.

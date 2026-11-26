@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sglang_omni.serve.task_classification.contracts import (
+    LEGACY_CONTRACT_VERSION,
     BrainRoute,
     MediaDirective,
     OutputDirective,
@@ -44,6 +45,7 @@ def _request(
         media=(),
         router_profile=router_profile,
         has_active_agent=has_active_agent,
+        contract_version=LEGACY_CONTRACT_VERSION,
     )
 
 
@@ -70,6 +72,7 @@ async def test_maps_the_four_codes_to_capability_requirements(
     assert result.task_directive is TaskDirective.KEEP
     assert result.media_directive is MediaDirective.NONE
     assert result.request_cue is None
+    assert result.contract_version == LEGACY_CONTRACT_VERSION
 
 
 @pytest.mark.asyncio
@@ -77,7 +80,6 @@ async def test_maps_the_four_codes_to_capability_requirements(
 async def test_rejects_everything_except_one_exact_code(raw: str) -> None:
     with pytest.raises(InvalidRouteOutput, match="exactly one of 0, 1, 2, 3"):
         await TaskClassificationPipeline(_Model(raw)).classify(_request())
-
 
 
 @pytest.mark.asyncio
@@ -119,6 +121,7 @@ async def test_v10_rejects_v11_relation_codes() -> None:
         await TaskClassificationPipeline(_Model("4")).classify(
             _request(router_profile="v1.0")
         )
+
 
 @pytest.mark.asyncio
 async def test_legacy_locale_is_derived_outside_model_authority() -> None:

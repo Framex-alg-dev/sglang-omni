@@ -8,13 +8,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from sglang_omni.serve.agent_prompt_snapshot import RouterPromptSnapshot
 
-CONTRACT_VERSION = 6
+LEGACY_CONTRACT_VERSION = 6
+CONTRACT_VERSION = 7
+SUPPORTED_CONTRACT_VERSIONS = (LEGACY_CONTRACT_VERSION, CONTRACT_VERSION)
 DEFAULT_ROUTER_PROFILE = "v1.0"
 SUPPORTED_ROUTER_PROFILES = ("v1.0", "v0.9", "v1.1", "v1.2")
 DEFAULT_BRAIN1_CAPABILITIES = (
-    "普通聊天、简单问答、计算、下游用户视频理解；"
-    "不处理应用能力、曲库或媒体播放查询"
+    "普通聊天、简单问答、计算、下游用户视频理解；" "不处理应用能力、曲库或媒体播放查询"
 )
 DEFAULT_BRAIN2_CAPABILITIES = (
     "搜索、天气、票务、日历、业务服务、多步Agent；"
@@ -181,6 +183,7 @@ class TaskClassificationRequest:
     active_task_phase: str | None = None
     active_task_awaiting_input: str | None = None
     router_profile: str = DEFAULT_ROUTER_PROFILE
+    prompt_snapshot: RouterPromptSnapshot | None = None
     contract_version: int = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -189,10 +192,23 @@ class TaskClassificationRequest:
         _required("turn_id", self.turn_id)
         if self.identity_epoch < 0 or self.input_revision < 0:
             raise ValueError("turn-router revisions must be non-negative")
-        if self.contract_version != CONTRACT_VERSION:
+        if self.contract_version not in SUPPORTED_CONTRACT_VERSIONS:
             raise ValueError("unsupported turn-router contract version")
         if self.router_profile not in SUPPORTED_ROUTER_PROFILES:
             raise ValueError("unsupported turn-router profile")
+        if (
+            self.contract_version == LEGACY_CONTRACT_VERSION
+            and self.prompt_snapshot is not None
+        ):
+            raise ValueError("turn-router v6 does not accept prompt_snapshot")
+        if self.prompt_snapshot is not None and self.router_profile != "v1.0":
+            raise ValueError("Agent Router prompt snapshot requires Router v1.0")
+        if (
+            self.contract_version == CONTRACT_VERSION
+            and self.router_profile == "v1.0"
+            and self.prompt_snapshot is None
+        ):
+            raise ValueError("turn-router v7 requires Agent prompt_snapshot")
         for name, value in (
             ("active_task_goal", self.active_task_goal),
             ("active_task_status", self.active_task_status),
@@ -206,7 +222,9 @@ class TaskClassificationRequest:
         if has_text == bool(self.media):
             raise ValueError("turn-router request needs exactly one of text or audio")
         if len(self.media) > 1:
-            raise ValueError("turn-router request accepts only one original audio input")
+            raise ValueError(
+                "turn-router request accepts only one original audio input"
+            )
         if not all(isinstance(item, dict) for item in self.router_history):
             raise ValueError("router_history entries must be objects")
         _required("brain1_capabilities", self.brain1_capabilities)

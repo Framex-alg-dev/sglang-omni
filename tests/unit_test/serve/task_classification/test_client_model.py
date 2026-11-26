@@ -5,14 +5,17 @@ import hashlib
 import pytest
 
 from sglang_omni.client.types import CompletionResult
+from sglang_omni.serve.agent_prompt_snapshot import decode_router_prompt_snapshot
+from sglang_omni.serve.task_classification import prompt_v09, prompt_v11, prompt_v12
 from sglang_omni.serve.task_classification.client_model import (
     SglangClientTaskClassificationModel,
 )
 from sglang_omni.serve.task_classification.contracts import (
+    CONTRACT_VERSION,
+    LEGACY_CONTRACT_VERSION,
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
-from sglang_omni.serve.task_classification import prompt_v09, prompt_v11, prompt_v12
 from sglang_omni.serve.task_classification.prompt_v10 import (
     SINGLE_TURN_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -47,6 +50,32 @@ def _model(client: _Client) -> SglangClientTaskClassificationModel:
     )
 
 
+def _prompt_snapshot():
+    rules = {
+        "system_prompt": "AGENT ROUTER SYSTEM",
+        "mcp_scope": "MCP SCOPE",
+        "multimodal_scope": "MULTIMODAL SCOPE",
+    }
+    return decode_router_prompt_snapshot(
+        {
+            "consumer": "sglang_omni.router.v1_0",
+            "release_id": "router-release-v1",
+            "bundle_sha256": "a" * 64,
+            "binding": {
+                "assembly_contract": "turn-router-v1.0",
+                "output_protocol": "turn-router-code-v1.0",
+                "model_id": "agent-logical-router",
+                "model_version": "omni-turn-router-v1.0",
+            },
+            **rules,
+            "item_sha256": {
+                key: hashlib.sha256(value.encode()).hexdigest()
+                for key, value in rules.items()
+            },
+        }
+    )
+
+
 def _request(
     *,
     text="你好",
@@ -61,6 +90,8 @@ def _request(
     active_task_phase=None,
     active_task_awaiting_input=None,
     router_profile="v1.0",
+    contract_version=LEGACY_CONTRACT_VERSION,
+    prompt_snapshot=None,
 ) -> TaskClassificationRequest:
     return TaskClassificationRequest(
         request_id="request-1",
@@ -80,6 +111,8 @@ def _request(
         active_task_phase=active_task_phase,
         active_task_awaiting_input=active_task_awaiting_input,
         router_profile=router_profile,
+        contract_version=contract_version,
+        prompt_snapshot=prompt_snapshot,
     )
 
 
@@ -103,8 +136,10 @@ async def test_single_turn_uses_exact_v10_prompt_and_one_token_decode() -> None:
     assert output == "1"
     request = client.calls[0][0]
     assert request.messages[0].content == SINGLE_TURN_SYSTEM_PROMPT
-    assert request.messages[1].content[-1]["text"].endswith(
-        "[输出]\n只输出 0、1、2 或 3："
+    assert (
+        request.messages[1]
+        .content[-1]["text"]
+        .endswith("[输出]\n只输出 0、1、2 或 3：")
     )
     assert request.sampling.temperature == 0.0
     assert request.sampling.top_p == 1.0
@@ -124,6 +159,26 @@ async def test_single_turn_uses_exact_v10_prompt_and_one_token_decode() -> None:
 
 
 @pytest.mark.asyncio
+async def test_v7_uses_agent_snapshot_and_model_drift_is_advisory(caplog) -> None:
+    client = _Client("1")
+
+    with caplog.at_level("WARNING"):
+        output = await _model(client).classify(
+            _request(
+                text="帮我查天气",
+                contract_version=CONTRACT_VERSION,
+                prompt_snapshot=_prompt_snapshot(),
+            )
+        )
+
+    assert output == "1"
+    request = client.calls[0][0]
+    assert request.messages[0].content == "AGENT ROUTER SYSTEM"
+    assert "MCP SCOPE" in str(request.messages[1].content)
+    assert "Router prompt serving model drift" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_v09_profile_uses_v09_prompt_and_separate_cache_namespace() -> None:
     client = _Client("0")
     model = _model(client)
@@ -136,7 +191,6 @@ async def test_v09_profile_uses_v09_prompt_and_separate_cache_namespace() -> Non
     assert model.model_version_for(_request(router_profile="v0.9")).endswith(
         "+prompt-v0.9"
     )
-
 
 
 @pytest.mark.asyncio
@@ -159,14 +213,17 @@ async def test_v11_profile_carries_active_task_goal_and_status() -> None:
     request = client.calls[0][0]
     assert request.messages[0].content == prompt_v11.SINGLE_TURN_SYSTEM_PROMPT
     prompt_text = str(request.messages[1].content)
-    assert "目标=\"唱一首歌\"" in prompt_text
+    assert '目标="唱一首歌"' in prompt_text
     assert "状态=waiting_user" in prompt_text
     assert "等待确认=是" in prompt_text
     assert request.metadata["router_profile"] == "v1.1"
     assert request.metadata["prefix_cache_namespace"] == "turn-router:v11"
 
+
 @pytest.mark.asyncio
-async def test_v12_profile_carries_structured_task_context_and_constrains_decode() -> None:
+async def test_v12_profile_carries_structured_task_context_and_constrains_decode() -> (
+    None
+):
     client = _Client("4")
     await _model(client).classify(
         _request(
@@ -223,18 +280,22 @@ async def test_multi_turn_uses_only_last_complete_assistant_reply() -> None:
 @pytest.mark.asyncio
 async def test_interrupted_history_reaches_prompt_with_runtime_task_flags() -> None:
     client = _Client("1")
-    history = ({
-        "role": "assistant",
-        "text": "要播放",
-        "playback_status": "interrupted",
-    },)
-    await _model(client).classify(_request(
-        text="继续",
-        history=history,
-        has_active_agent=True,
-        pending_confirmation=True,
-        follow_up_required=True,
-    ))
+    history = (
+        {
+            "role": "assistant",
+            "text": "要播放",
+            "playback_status": "interrupted",
+        },
+    )
+    await _model(client).classify(
+        _request(
+            text="继续",
+            history=history,
+            has_active_agent=True,
+            pending_confirmation=True,
+            follow_up_required=True,
+        )
+    )
 
     request = client.calls[0][0]
     assert request.messages[0].content == SYSTEM_PROMPT
@@ -249,11 +310,13 @@ async def test_interrupted_history_reaches_prompt_with_runtime_task_flags() -> N
 @pytest.mark.asyncio
 async def test_active_task_without_reply_history_uses_single_turn_prompt() -> None:
     client = _Client("1")
-    await _model(client).classify(_request(
-        text="继续",
-        has_active_agent=True,
-        follow_up_required=True,
-    ))
+    await _model(client).classify(
+        _request(
+            text="继续",
+            has_active_agent=True,
+            follow_up_required=True,
+        )
+    )
 
     request = client.calls[0][0]
     assert request.messages[0].content == SINGLE_TURN_SYSTEM_PROMPT

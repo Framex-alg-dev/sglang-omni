@@ -6,10 +6,10 @@ import re
 from typing import Protocol
 
 from .contracts import (
+    ROUTE_CODE_REQUIREMENTS,
     BrainRoute,
     MediaDirective,
     OutputDirective,
-    ROUTE_CODE_REQUIREMENTS,
     RouteToken,
     TaskClassificationRequest,
     TaskClassificationResult,
@@ -93,6 +93,7 @@ class TaskClassificationPipeline:
                 request_cue=None,
                 model_id=self._model.model_id,
                 model_version=model_version,
+                contract_version=request.contract_version,
             )
         except ValueError as exc:
             raise InvalidRouteOutput(

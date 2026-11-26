@@ -9,11 +9,12 @@
 | Gateway | `WS /v1/inference-session`，默认端口 `18003` | 无，仅限可信内网 |
 | Reply | `WS /v1/chat/completions/realtime`，通常端口 `18005` | 无，仅限可信内网 |
 | Reply | `POST /v1/chat/completions` | 无，仅限可信内网 |
+| Router | `POST /v1/task-classification`，或 Gateway `stage=classifier` | `Authorization: Bearer <token>` |
 | Action Recall | `WS/POST /v1/action-recall`，当前 `10.199.0.7:18049` | `Authorization: Bearer <token>` |
 | Action Decision | `WS /v1/action-decision/realtime`，当前端口 `18049` | `Authorization: Bearer <token>` |
 | Event | `WS /v1/timeline`，当前 `10.199.0.15:18118` | `Authorization: Bearer <token>` |
 
-## 2. Reply
+## 2. Reply 与 Router
 
 ### 2.1 WebSocket 首帧
 
@@ -81,6 +82,49 @@ HTTP 调用可用 `X-Request-ID`、`X-Root-Session-ID`、`X-Turn-ID`
 | `response.delta` | `request_id`、`response` | OpenAI 流式 chunk |
 | `response.completed` | `request_id`、`response` | 成功；流式模式下 `response={}` |
 | `error` | `request_id`、`code`、`detail` | 失败 |
+
+### 2.4 Router / Task Classification
+
+Router 同时接受 v6 与 v7；响应的 `contract_version` 与请求一致。
+
+- v6：回滚兼容协议，不接受 `prompt_snapshot`。
+- v7 + `router_profile=v1.0`：必须由 Agent 下发完整不可变的
+  `prompt_snapshot`。Omni 不读取 Knowledge，只校验并使用该快照。
+- v7 的快照必须绑定 `consumer=sglang_omni.router.v1_0`、
+  `assembly_contract=turn-router-v1.0` 和
+  `output_protocol=turn-router-code-v1.0`，并携带 `release_id`、
+  `bundle_sha256` 以及 `system_prompt`、`mcp_scope`、
+  `multimodal_scope` 三项内容和各自 SHA-256。
+- 模型标识不一致只记录漂移告警；消费者、协议、不可变发布 ID 或内容校验
+  不一致会拒绝请求。
+
+v7 请求示例省略业务上下文字段如下：
+
+```json
+{
+  "contract_version": 7,
+  "router_profile": "v1.0",
+  "prompt_snapshot": {
+    "consumer": "sglang_omni.router.v1_0",
+    "release_id": "router-release-v1",
+    "bundle_sha256": "<64 lowercase hex>",
+    "binding": {
+      "assembly_contract": "turn-router-v1.0",
+      "output_protocol": "turn-router-code-v1.0",
+      "model_id": "qwen3-omni-gpu3-task-decision",
+      "model_version": "omni-turn-router-v1.0"
+    },
+    "system_prompt": "...",
+    "mcp_scope": "...",
+    "multimodal_scope": "...",
+    "item_sha256": {
+      "system_prompt": "<64 lowercase hex>",
+      "mcp_scope": "<64 lowercase hex>",
+      "multimodal_scope": "<64 lowercase hex>"
+    }
+  }
+}
+```
 
 ## 3. Action Recall
 

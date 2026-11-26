@@ -16,30 +16,28 @@ from starlette.background import BackgroundTask
 from starlette.websockets import WebSocketDisconnect
 
 from sglang_omni.profiler.decision_timing import emit_decision_timing
-from sglang_omni.serve.streaming_request import (
-    receive_streamed_request,
-    run_until_websocket_disconnect,
-)
+from sglang_omni.serve.agent_prompt_snapshot import decode_router_prompt_snapshot
 from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from sglang_omni.serve.request_log_context import (
     model_request_log,
     payload_request_log_context,
     websocket_request_log,
 )
-from sglang_omni.utils.framex_service_logs import (
-    emit_service_event,
-    new_request_id,
+from sglang_omni.serve.streaming_request import (
+    receive_streamed_request,
+    run_until_websocket_disconnect,
 )
+from sglang_omni.utils.framex_service_logs import emit_service_event, new_request_id
 
 from .contracts import (
     CONTRACT_VERSION,
     DEFAULT_ROUTER_PROFILE,
+    SUPPORTED_CONTRACT_VERSIONS,
     SUPPORTED_ROUTER_PROFILES,
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
 from .pipeline import InvalidRouteOutput, TaskClassificationPipeline
-
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +55,6 @@ def create_task_classification_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        from sglang_omni.serve.prompt_runtime import install_router_runtime
-        # Configuration disabled preserves other/legacy model adapters.
-        import os
-        if os.environ.get('KNOWLEDGE_PROMPT_ENABLED','false').lower() == 'true':
-            await install_router_runtime(pipeline)
         try:
             await pipeline.prewarm()
         except Exception:
@@ -84,7 +77,10 @@ def create_task_classification_app(
             raise HTTPException(status_code=404, detail="not found")
 
     from sglang_omni.serve.prompt_debug import install_router_debug
-    install_router_debug(app, pipeline=pipeline, authenticate=authenticate, invoke=_classify_payload)
+
+    install_router_debug(
+        app, pipeline=pipeline, authenticate=authenticate, invoke=_classify_payload
+    )
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
@@ -94,6 +90,7 @@ def create_task_classification_app(
                 "ok": True,
                 "contract": f"turn-router.v{CONTRACT_VERSION}",
                 "contract_version": CONTRACT_VERSION,
+                "supported_contract_versions": list(SUPPORTED_CONTRACT_VERSIONS),
                 "router_profiles": list(SUPPORTED_ROUTER_PROFILES),
                 "default_router_profile": DEFAULT_ROUTER_PROFILE,
             }
@@ -413,16 +410,16 @@ def create_decision_services_app(
     return app
 
 
-async def _read_envelope(
-    request: Request, *, max_body_bytes: int
-) -> dict[str, Any]:
+async def _read_envelope(request: Request, *, max_body_bytes: int) -> dict[str, Any]:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
             if int(content_length) > max_body_bytes:
                 raise HTTPException(status_code=413, detail="request body too large")
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="invalid content-length") from exc
+            raise HTTPException(
+                status_code=400, detail="invalid content-length"
+            ) from exc
     body = await request.body()
     if len(body) > max_body_bytes:
         raise HTTPException(status_code=413, detail="request body too large")
@@ -459,6 +456,7 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         "active_task_family",
         "active_task_phase",
         "active_task_awaiting_input",
+        "prompt_snapshot",
         "log_context",
     }
     if not required_fields.issubset(raw) or not set(raw).issubset(
@@ -491,13 +489,16 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         active_task_status=_optional_string(raw, "active_task_status"),
         active_task_family=_optional_string(raw, "active_task_family"),
         active_task_phase=_optional_string(raw, "active_task_phase"),
-        active_task_awaiting_input=_optional_string(
-            raw, "active_task_awaiting_input"
-        ),
+        active_task_awaiting_input=_optional_string(raw, "active_task_awaiting_input"),
         router_profile=(
             _string(raw, "router_profile")
             if "router_profile" in raw
             else DEFAULT_ROUTER_PROFILE
+        ),
+        prompt_snapshot=(
+            decode_router_prompt_snapshot(raw["prompt_snapshot"])
+            if "prompt_snapshot" in raw
+            else None
         ),
         contract_version=_integer(raw, "contract_version"),
     )
