@@ -64,7 +64,7 @@ def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, s
     recovery and pruning. COS is also an operator-facing index, so make the
     root session the first lookup dimension and flatten invocations to files:
 
-      {prefix}/by-session/{session}/dt={date}/{stage}/
+      {prefix}/{session}/{date}/{stage}/
         {turn}__{request}__{invocation}.{kind}
     """
 
@@ -79,9 +79,7 @@ def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, s
         values.append(part[len(marker) :])
     day, root_session_id, turn_id, request_id, invocation_id = values
     bundle = f"{turn_id}__{request_id}__{invocation_id}"
-    directory = (
-        f"{prefix.strip('/')}/by-session/{root_session_id}/dt={day}/{stage}"
-    )
+    directory = f"{prefix.strip('/')}/{root_session_id}/{day}/{stage}"
     return directory, bundle
 
 
