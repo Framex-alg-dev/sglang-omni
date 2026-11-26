@@ -64,8 +64,8 @@ def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, s
     recovery and pruning. COS is also an operator-facing index, so make the
     root session the first lookup dimension and flatten invocations to files:
 
-      {prefix}/{session}/{date}/{stage}/
-        {turn}__{request}__{invocation}.{kind}
+      {prefix}/{session}/{date}/
+        {stage}__{turn}__{request}__{invocation}.{kind}
     """
 
     parts = relative_call.parts
@@ -78,8 +78,8 @@ def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, s
             raise ValueError("unsupported local model I/O component")
         values.append(part[len(marker) :])
     day, root_session_id, turn_id, request_id, invocation_id = values
-    bundle = f"{turn_id}__{request_id}__{invocation_id}"
-    directory = f"{prefix.strip('/')}/{root_session_id}/{day}/{stage}"
+    bundle = f"{stage}__{turn_id}__{request_id}__{invocation_id}"
+    directory = f"{prefix.strip('/')}/{root_session_id}/{day}"
     return directory, bundle
 
 

@@ -18,8 +18,9 @@ The uploader image must install `model-io-uploader-requirements.in`; the
 model-worker image does not need the COS SDK.
 
 The COS layout is intentionally shallow for console lookup:
-`omni/{root_session_id}/YYYY-MM-DD/{stage}/`.
-Each invocation is a flat set of `{turn_id}__{request_id}__{invocation_id}.input.json`,
+`omni/{root_session_id}/YYYY-MM-DD/`.
+All stages in a session share that directory. Each invocation is a flat set of
+`{stage}__{turn_id}__{request_id}__{invocation_id}.input.json`,
 `.output.json`, `.manifest.json`, and optional `.media.*` objects. The local spool keeps the more explicit
 `dt=/root=/turn=/request=/invocation=` hierarchy for recovery and pruning.
 The manifest owns the archive schema version, so the COS prefix does not repeat it.
