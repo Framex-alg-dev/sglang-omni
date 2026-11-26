@@ -57,6 +57,37 @@ def _service(stage: str) -> str:
     }[stage]
 
 
+def _remote_bundle_root(prefix: str, stage: str, relative_call: Path) -> str:
+    """Return a console-friendly COS directory for one model invocation.
+
+    The local spool keeps every correlation dimension as its own directory for
+    recovery and pruning. COS is also an operator-facing index, so collapse
+    turn/request/invocation into one bundle directory there:
+
+      {prefix}/{stage}/{date}/{session}/{turn}__{request}__{invocation}
+    """
+
+    parts = relative_call.parts
+    expected = ("dt=", "root=", "turn=", "request=", "invocation=")
+    if len(parts) != len(expected):
+        raise ValueError("unsupported local model I/O layout")
+    values: list[str] = []
+    for part, marker in zip(parts, expected, strict=True):
+        if not part.startswith(marker) or not part[len(marker) :]:
+            raise ValueError("unsupported local model I/O component")
+        values.append(part[len(marker) :])
+    day, root_session_id, turn_id, request_id, invocation_id = values
+    bundle = f"{turn_id}__{request_id}__{invocation_id}"
+    return f"{prefix.strip('/')}/{stage}/{day}/{root_session_id}/{bundle}"
+
+
+def _remote_file_name(relative_path: str) -> str:
+    return {
+        "input/request.json": "input.json",
+        "output/result.json": "output.json",
+    }.get(relative_path, relative_path)
+
+
 def _emit(stage: str, event: str, manifest: dict[str, Any], **fields: Any) -> None:
     try:
         emit_service_event(
@@ -143,7 +174,7 @@ def upload_pending(
                     raise ValueError("artifact total byte count mismatch")
                 stage = manifest["stage"]
                 relative_call = call_dir.relative_to(root / stage)
-                object_root = f"{prefix.strip('/')}/{stage}/{relative_call.as_posix()}"
+                object_root = _remote_bundle_root(prefix, stage, relative_call)
                 records = list(manifest["files"])
                 for record in records:
                     path = call_dir / record["path"]
@@ -158,7 +189,7 @@ def upload_pending(
                         raise ValueError("artifact checksum mismatch")
                     client.upload_file(
                         Bucket=bucket,
-                        Key=f"{object_root}/{record['path']}",
+                        Key=f"{object_root}/{_remote_file_name(record['path'])}",
                         LocalFilePath=str(path),
                         EnableMD5=True,
                         MAXThread=1,

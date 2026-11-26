@@ -17,8 +17,11 @@ shape: `{"secret_id":"...","secret_key":"...","token":"optional"}`.
 The uploader image must install `model-io-uploader-requirements.in`; the
 model-worker image does not need the COS SDK.
 
-The object layout is
-`omni/model-io/v1/{stage}/dt=YYYY-MM-DD/root={id}/turn={id}/request={id}/invocation={id}`.
+The COS layout is intentionally shallow for console lookup:
+`omni/model-io/v1/{stage}/YYYY-MM-DD/{root_session_id}/{turn_id}__{request_id}__{invocation_id}`.
+Each bundle contains `input.json`, `output.json`, `manifest.json`, and an
+optional `media/` directory. The local spool keeps the more explicit
+`dt=/root=/turn=/request=/invocation=` hierarchy for recovery and pruning.
 Payload objects are uploaded first with AES256 server-side encryption and
 `manifest.json` is uploaded last as the commit marker. Local `.cos-uploaded.json`
 and `.cos-retry.json` files provide idempotency, retention and exponential retry.
