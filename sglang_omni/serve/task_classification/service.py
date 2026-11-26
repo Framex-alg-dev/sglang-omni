@@ -122,6 +122,7 @@ def create_task_classification_app(
     @app.websocket("/v1/task-classification/realtime")
     async def classify_realtime(websocket: WebSocket) -> None:
         request_id = new_request_id()
+        context = None
         try:
             streamed = await receive_streamed_request(
                 websocket,
@@ -188,6 +189,10 @@ def create_task_classification_app(
                 level=logging.WARNING,
                 logger_name=__name__,
                 request_id=request_id,
+                root_session_id=(
+                    context.root_session_id if context is not None else None
+                ),
+                turn_id=context.turn_id if context is not None else None,
                 operation="task_classification",
                 status=400,
                 error_type=type(exc).__name__,

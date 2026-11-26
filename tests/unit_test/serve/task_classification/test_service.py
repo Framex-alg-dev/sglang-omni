@@ -269,6 +269,55 @@ def test_websocket_streams_binary_media_before_classification() -> None:
     assert completed["response"]["needs_multimodal"] is True
 
 
+def test_websocket_validation_failure_keeps_session_and_turn_context(
+    monkeypatch,
+) -> None:
+    events = []
+    monkeypatch.setattr(
+        classification_service,
+        "emit_service_event",
+        lambda event_service, event, **fields: events.append(
+            (event_service, event, fields)
+        ),
+    )
+    app = create_task_classification_app(
+        TaskClassificationPipeline(_Model()),
+        token="secret",
+    )
+    start_payload = msgpack.unpackb(_body("hello"), raw=False)
+    start_payload["brain1_capabilities"] = []
+    start_payload["log_context"] = {
+        "request_id": "trace-invalid-1",
+        "root_session_id": "root-invalid-1",
+        "turn_id": "turn-invalid-1",
+        "agent_session_id": "agent-invalid-1",
+    }
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/v1/task-classification/realtime",
+            headers={"Authorization": "Bearer secret"},
+        ) as socket:
+            socket.send_json(
+                {
+                    "type": "request.start",
+                    "contract_version": 2,
+                    "request_id": "request-invalid-1",
+                    "payload": start_payload,
+                }
+            )
+            assert socket.receive_json()["type"] == "request.ready"
+            socket.send_json(
+                {"type": "request.commit", "request_id": "request-invalid-1"}
+            )
+            assert socket.receive_json()["type"] == "error"
+
+    _, _, fields = next(item for item in events if item[1] == "ws.request.failed")
+    assert fields["request_id"] == "request-invalid-1"
+    assert fields["root_session_id"] == "root-invalid-1"
+    assert fields["turn_id"] == "turn-invalid-1"
+
+
 def test_invalid_model_output_is_upstream_failure() -> None:
     class _InvalidModel(_Model):
         async def classify(self, request):
