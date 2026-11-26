@@ -394,15 +394,20 @@ def test_action_stage_injects_its_channel(monkeypatch) -> None:
                 "type": "stage.request",
                 "request_id": "body-1",
                 "stage": "body",
-                "payload": {"turn_id": "t1"},
+                "payload": {"turn_id": "t1", "log_context": {"request_id": "trace-body-1"}},
                 "media_refs": [],
             }
         )
         assert socket.receive_json()["type"] == "stage.accepted"
         assert socket.receive_json()["type"] == "stage.completed"
 
+    from sglang_omni.serve.action_decision.service import _adopt_stream_log_request_id
+
     request_start = json.loads(upstreams[0].sent[0])
-    assert request_start["payload"]["channel"] == "body"
+    payload = request_start["payload"]
+    assert payload["channel"] == "body"
+    _adopt_stream_log_request_id(payload, request_start["request_id"], preserve_trace_id=True)
+    assert payload["log_context"]["request_id"] == upstreams[0].trace_context.request_id == "trace-body-1"
 
 
 def test_reply_stage_overwrites_cache_owner_with_gateway_session(monkeypatch) -> None:
@@ -1179,3 +1184,34 @@ def test_upstream_errors_are_failed_dependencies_without_success(monkeypatch):
         assert len(calls) == 1
         assert calls[0]["status"] == expected_status
         assert calls[0]["peer"] == "omni_task_brain"
+
+
+def test_invalid_stage_log_context_has_terminal_and_leaves_media_evictable():
+    client = TestClient(create_inference_gateway_app(_config(max_media_items=1)))
+    with client.websocket_connect("/v1/inference-session") as socket:
+        socket.send_json({"type": "session.open", "contract_version": 4, "session_id": "s1"})
+        socket.receive_json()
+
+        def put(media_id):
+            raw = media_id.encode()
+            socket.send_json({
+                "type": "media.put", "media_id": media_id, "kind": "image",
+                "start_ms": 0, "end_ms": 100, "encoding": "image/jpeg",
+                "checksum": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "payload_bytes": len(raw), "evidence_role": "user_camera",
+            })
+            socket.send_bytes(raw)
+
+        put("frame-1")
+        assert socket.receive_json()["type"] == "media.ack"
+        socket.send_json({
+            "type": "stage.request", "request_id": "r1", "stage": "body",
+            "payload": {"log_context": []}, "media_refs": ["frame-1"],
+        })
+        error = socket.receive_json()
+        assert (error["type"], error["request_id"], error["code"]) == (
+            "stage.error", "r1", "invalid_request",
+        )
+        put("frame-2")
+        assert socket.receive_json() == {"type": "media.evicted", "media_id": "frame-1"}
+        assert socket.receive_json()["type"] == "media.ack"

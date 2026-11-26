@@ -679,3 +679,44 @@ def test_cancel_removes_shielded_body_job_before_model_admission():
         await asyncio.sleep(0)
         assert retry.cancelled()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("input_fields", [
+    {"text": "你好"},
+    {"mode": "user_reaction", "user_input": {"text": "你好"}},
+])
+def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
+    monkeypatch, input_fields
+) -> None:
+    from sglang_omni.serve.action_decision import service
+
+    seen = []
+
+    async def decide(_engine, request, *, operation):
+        assert operation == "action_recall"
+        seen.append(request.trace_request_id)
+        return SimpleNamespace(
+            channel=request.channel, candidate_id="665", code="test", label="点头",
+            outcome="selected", occupies_channels=("body",),
+        )
+
+    monkeypatch.setattr(service, "_decide_with_service_log", decide)
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    payload = {"channel": "body", "character_prompt": "自然回应", **input_fields}
+    headers = {"Authorization": "Bearer secret"}
+    with TestClient(app) as client:
+        assert client.post("/v1/action-recall", json=payload, headers=headers).status_code == 200
+        with client.websocket_connect("/v1/action-recall", headers=headers) as socket:
+            operation_id = "req_0123456789abcdef"
+            trace_id = "req_fedcba9876543210"
+            socket.send_json({
+                "type": "request.start", "contract_version": 2, "request_id": operation_id,
+                "payload": {**payload, "log_context": {"request_id": trace_id}},
+            })
+            assert socket.receive_json()["type"] == "request.ready"
+            socket.send_json({"type": "request.commit", "request_id": operation_id})
+            result = socket.receive_json()
+            assert result["type"] == "response.completed", result
+            assert result["request_id"] == operation_id
+    assert seen[0]
+    assert seen[1] == trace_id

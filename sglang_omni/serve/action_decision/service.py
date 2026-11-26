@@ -657,7 +657,7 @@ def create_action_decision_app(
             # The outer ID is the end-to-end log correlation ID. The payload
             # ID remains the inference/idempotency key and may differ.
             payload.setdefault("request_id", request_id)
-            _adopt_stream_log_request_id(payload, request_id)
+            _adopt_stream_log_request_id(payload, request_id, preserve_trace_id=True)
             decision_request = _parse_request(payload, media=streamed.media, config=config)
             trace_request_id = decision_request.trace_request_id or request_id
             root_session_id = decision_request.root_session_id or correlation_id_or_digest(
@@ -788,7 +788,9 @@ def create_action_decision_app(
 
     def parse_recall(payload: Any, media: tuple[StreamedMedia, ...] = ()):
         decision_request, public_id = parse_simple_audio_request(
-            payload, engine.registry, media=media,
+            {key: value for key, value in payload.items() if key != "log_context"}
+            if isinstance(payload, dict) else payload,
+            engine.registry, media=media,
             model_id=config.model_id, model_version=config.model_version,
         )
         if not isinstance(payload, dict):
@@ -823,7 +825,7 @@ def create_action_decision_app(
         async def recall(streamed: StreamedRequest) -> dict[str, Any]:
             payload = dict(streamed.payload)
             payload.setdefault("request_id", streamed.request_id)
-            _adopt_stream_log_request_id(payload, streamed.request_id)
+            _adopt_stream_log_request_id(payload, streamed.request_id, preserve_trace_id=True)
             decision_request, public_id = parse_recall(payload, streamed.media)
             try:
                 decision = await _decide_with_service_log(
@@ -981,13 +983,16 @@ def _adopt_stream_log_request_id(
     request_id: str,
     *,
     root_session_id: str | None = None,
+    preserve_trace_id: bool = False,
 ) -> None:
     context = payload.get("log_context")
     if context is None:
         context = {}
     if not isinstance(context, dict):
         raise ValueError("log_context must be an object")
-    context = {**context, "request_id": request_id}
+    context = dict(context)
+    if not preserve_trace_id or context.get("request_id") is None:
+        context["request_id"] = request_id
     if root_session_id is not None:
         context.setdefault("root_session_id", root_session_id)
     payload["log_context"] = context

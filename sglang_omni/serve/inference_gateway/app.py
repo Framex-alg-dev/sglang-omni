@@ -407,6 +407,23 @@ class _Session:
                 }
             )
             return
+        try:
+            trace_request_id = _stage_trace_request_id(payload, request_id)
+            raw_turn_id = _optional_nonempty_string(payload, "turn_id")
+        except ValueError as exc:
+            await self.send({
+                "type": "stage.error",
+                "request_id": request_id,
+                "code": "invalid_request",
+                "detail": str(exc),
+                "retryable": False,
+            })
+            return
+        if stage in {"body", "expression"}:
+            payload["log_context"] = {
+                **(payload.get("log_context") or {}),
+                "request_id": trace_request_id,
+            }
         for media_id in media_refs:
             self.media_refcounts[media_id] += 1
         if speech_speculation is not None:
@@ -437,6 +454,8 @@ class _Session:
                 payload,
                 tuple(media_refs),
                 speech_speculation,
+                trace_request_id,
+                raw_turn_id,
             ),
             name=f"inference-gateway:{self.session_id}:{stage}:{request_id}",
         )
@@ -1268,9 +1287,9 @@ class _Session:
         payload: dict[str, Any],
         media_refs: tuple[str, ...],
         speech_speculation: tuple[str, str, str, str, int, str] | None,
+        trace_request_id: str,
+        raw_turn_id: str | None,
     ) -> None:
-        trace_request_id = _stage_trace_request_id(payload, request_id)
-        raw_turn_id = _optional_nonempty_string(payload, "turn_id")
         turn_id = (
             correlation_id_or_digest(raw_turn_id, prefix="legacy_turn")
             if raw_turn_id is not None
@@ -1830,11 +1849,11 @@ def _optional_correlation_string(
 def _stage_trace_request_id(payload: dict[str, Any], operation_id: str) -> str:
     raw = payload.get("log_context")
     if raw is None:
-        return operation_id
+        return correlation_id_or_digest(operation_id, prefix="legacy_operation")
     if not isinstance(raw, dict):
         raise ValueError("log_context must be an object")
     explicit = _optional_correlation_string(raw, "request_id")
-    return explicit or adopt_request_id(operation_id)[0]
+    return explicit or correlation_id_or_digest(operation_id, prefix="legacy_operation")
 
 
 def _stage_peer(stage: str) -> str:
