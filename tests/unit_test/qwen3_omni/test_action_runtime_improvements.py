@@ -40,6 +40,23 @@ def _payload(request_id: str) -> StagePayload:
     )
 
 
+def test_body_encoder_diagnostics_keep_correlation_without_raw_media(caplog):
+    from sglang_omni.models.qwen3_omni.stages import _log_action_media_event
+
+    payload = _payload("body-cache-proof")
+    payload.request.metadata.update(task="action_direct", channel="body",
+                                    session_id="s", turn_id="t")
+    payload.request.inputs = {"audio": ["private audio data"]}
+    with caplog.at_level("INFO"):
+        _log_action_media_event(payload, encoder_stage="audio_encoder",
+                                event="encoder_completed", cache_status="hit")
+    record = json.loads(caplog.records[-1].message.split("action_media ", 1)[1])
+    assert record["turn_id"] == "t"
+    assert record["action_stage"] == "body"
+    assert record["cache_status"] == "hit"
+    assert "private audio data" not in caplog.text
+
+
 def test_action_static_token_blueprint_is_reused_after_prewarm() -> None:
     preprocessor = object.__new__(Qwen3OmniPreprocessor)
     preprocessor._action_token_blueprints = OrderedDict()

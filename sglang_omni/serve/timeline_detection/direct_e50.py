@@ -125,6 +125,8 @@ class DirectE50Profile:
         *,
         model_id: str | None = None,
         model_version: str | None = None,
+        system_prompt_override: str | None = None,
+        prompt_version_override: str | None = None,
     ) -> DirectE50Profile | None:
         protocol = os.environ.get(
             "SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL", "v25-alias"
@@ -154,7 +156,7 @@ class DirectE50Profile:
                 prompt_snapshot.event_codebook_csv,
             )
         else:
-            system_prompt = _read_prompt(
+            system_prompt = system_prompt_override if system_prompt_override is not None else _read_prompt(
                 "SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", "system",
                 preserve_whitespace=native_video,
             )
@@ -166,7 +168,7 @@ class DirectE50Profile:
         prompt_version = (
             prompt_snapshot.release_id
             if prompt_snapshot is not None
-            else os.environ.get("SGLANG_OMNI_TIMELINE_PROMPT_VERSION", "").strip()
+            else prompt_version_override or os.environ.get("SGLANG_OMNI_TIMELINE_PROMPT_VERSION", "").strip()
         )
         if not prompt_version:
             raise ValueError("direct-e50 requires a timeline prompt version")

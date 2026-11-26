@@ -856,12 +856,6 @@ def test_chat_websocket_logs_final_model_input_without_binary_media(
     caplog,
 ) -> None:
     monkeypatch.setenv("SGLANG_OMNI_LOG_FULL_CHAT_INPUTS", "1")
-    monkeypatch.setattr(
-        "sglang_omni.serve.openai_api.effective_runtime_prompt",
-        lambda key, default, *, language: (
-            f"effective:{key}:{language}:{bool(default)}"
-        ),
-    )
     model = SuccessfulChatClient()
     raw_image = b"jpeg-frame-that-must-not-appear-in-text-logs"
     encoded_image = base64.b64encode(raw_image).decode("ascii")
@@ -880,8 +874,6 @@ def test_chat_websocket_logs_final_model_input_without_binary_media(
                             {"role": "system", "content": "application contract"},
                             {"role": "user", "content": "完整用户输入"},
                         ],
-                        "runtime_prompt_profile": "reply",
-                        "runtime_prompt_language": "zh-CN",
                         "temperature": 0.6,
                         "top_p": 0.95,
                         "top_k": 20,
@@ -919,11 +911,7 @@ def test_chat_websocket_logs_final_model_input_without_binary_media(
     )
     logged = json.loads(message.removeprefix("CHAT_MODEL_FULL_INPUT "))
     assert logged["request_id"] == "request-log-input"
-    assert logged["request"]["messages"][:3] == [
-        {
-            "role": "system",
-            "content": "effective:reply_rules:zh-CN:True",
-        },
+    assert logged["request"]["messages"] == [
         {"role": "system", "content": "application contract"},
         {
             "role": "user",
@@ -1304,34 +1292,6 @@ def test_chat_request_leaves_runtime_reply_policy_opt_in() -> None:
     assert "runtime_prompt_profile" not in gen_req.metadata
 
 
-def test_chat_request_injects_effective_reply_policy_before_caller_messages(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "sglang_omni.serve.openai_api.effective_runtime_prompt",
-        lambda key, default, *, language: (
-            f"effective:{key}:{language}:{bool(default)}"
-        ),
-    )
-    req = ChatCompletionRequest(
-        model="qwen3-omni",
-        messages=[
-            {"role": "system", "content": "application reply contract"},
-            {"role": "user", "content": "hello"},
-        ],
-        runtime_prompt_profile="reply",
-        runtime_prompt_language="en-US",
-    )
-
-    gen_req = _build_chat_generate_request(req)
-
-    assert [(item.role, item.content) for item in gen_req.messages] == [
-        ("system", "effective:reply_rules:en-US:True"),
-        ("system", "application reply contract"),
-        ("user", "hello"),
-    ]
-    assert gen_req.metadata["runtime_prompt_profile"] == "reply"
-    assert gen_req.metadata["runtime_prompt_language"] == "en-US"
 
 
 def test_chat_request_preserves_explicit_default_sampling_values() -> None:
@@ -1370,6 +1330,25 @@ def test_chat_request_does_not_mark_null_sampling_params_explicit() -> None:
     assert gen_req.sampling.top_p == 1.0
     assert gen_req.sampling.top_k == -1
     assert EXPLICIT_GENERATION_PARAMS_KEY not in gen_req.metadata
+
+
+def test_chat_request_propagates_compact_reply_grammar() -> None:
+    grammar = r"(1[NBEA]\n[\s\S]+|0[BEA]\n?)"
+    request = ChatCompletionRequest(
+        messages=[{"role": "user", "content": "hello"}], regex=grammar,
+    )
+    generated = _build_chat_generate_request(request)
+    assert generated.sampling.to_dict()["regex"] == grammar
+    assert generated.sampling.json_schema is None
+
+
+def test_chat_request_rejects_conflicting_output_grammars() -> None:
+    request = ChatCompletionRequest(
+        messages=[{"role": "user", "content": "hello"}], regex="1N",
+        response_format={"type": "json_object"},
+    )
+    with pytest.raises(ValueError, match="cannot both constrain"):
+        _build_chat_generate_request(request)
 
 
 def test_chat_request_propagates_strict_json_schema_to_sampling() -> None:
@@ -2337,3 +2316,22 @@ def test_stub_endpoint_checks_auth_before_501() -> None:
 
     resp = client.post("/update_weights_from_tensor", json={})
     assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("role", ["committed_reply", "speculative_reply", "tool_transition"])
+def test_reply_workload_class_reaches_the_runtime_admission(role):
+    request = ChatCompletionRequest(
+        model="qwen3-omni", messages=[{"role": "user", "content": "hi"}],
+        runtime_workload_class=role,
+    )
+    generated = _build_chat_generate_request(request)
+    assert generated.metadata["runtime_workload_class"] == role
+    assert "runtime_workload_class" not in request.model_dump()
+
+
+def test_unknown_reply_workload_class_is_rejected():
+    with pytest.raises(ValueError):
+        ChatCompletionRequest(
+            model="qwen3-omni", messages=[{"role": "user", "content": "hi"}],
+            runtime_workload_class="unregistered_workload",
+        )

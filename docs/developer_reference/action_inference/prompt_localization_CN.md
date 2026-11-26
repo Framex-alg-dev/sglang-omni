@@ -1,3 +1,5 @@
+> 当前说明（2026-11-04）：旧文件热覆盖与管理入口已退役，见 [退役记录](../prompt_retirement.md)。下文早期接口按历史保留；当前限定目录为 21 类、82 项，其中 27 项显式英文规则，其余按基础规则回退。
+
 # 回复与动作提示词的中英文维护
 
 回复提示词使用会话 `language`；动作和表情选择提示词使用 `action_language` / `action_locale`。两者独立选择，不根据当前用户输入临时切换。客户端提供的人设、当前请求、引用内容和上下文按原文保留。
@@ -33,7 +35,7 @@
 
 ## 动作目录
 
-当前 `character_limited_action_global_catalog.json` 的 25 个类别、117 个动作已补齐英文名称和基础描述，117 个动作都有英文用户响应与主动表达。
+早期 25 类、117 项目录曾有完整英文表达。该版本随后调整为当前 21 类、82 项；现有 27 项保留显式英文用户响应与主动表达，其余使用既有基础规则回退。当前路径、精确覆盖和摘要以 `tests/unit_test/fixtures/limited_action_catalog_contract.json` 为准。
 
 `prompt_text_by_locale.en-US` 含 `label` 和 `short_definition`，仅用于模型提示词展示。`expressions_by_locale.en-US` 保留原有结构，并补齐原先缺失的 37 个动作。
 

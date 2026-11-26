@@ -145,7 +145,15 @@ def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalo
     ):
         raise ValueError("action decision text fields must not contain NUL")
     profile = reference_prompt_profile(request)
-    if prompt_snapshot is not None and set(prompt_snapshot) != {"system_prompt"}:
+    agent_snapshot = None
+    if prompt_snapshot is not None:
+        if set(prompt_snapshot) == {"system_prompt"}:
+            agent_snapshot = prompt_snapshot["system_prompt"]
+        elif set(prompt_snapshot) != {"system_rules", "final_constraints"}:
+            raise ValueError("invalid Agent action prompt snapshot")
+    if request.runtime_context.get("prompt_profile") in PERSONA_PROFILES and (
+        prompt_snapshot is not None and agent_snapshot is None
+    ):
         raise ValueError("invalid Agent action prompt snapshot")
     if profile is not None:
         if prompt_snapshot is not None:
@@ -169,14 +177,10 @@ def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalo
         return build_persona_system_prompt(
             request,
             catalog,
-            agent_system_prompt=(
-                prompt_snapshot["system_prompt"] if prompt_snapshot is not None else None
-            ),
+            agent_system_prompt=agent_snapshot,
         )
-    if prompt_snapshot is not None:
-        return _build_agent_system_prompt(
-            request, catalog, prompt_snapshot["system_prompt"]
-        )
+    if agent_snapshot is not None:
+        return _build_agent_system_prompt(request, catalog, agent_snapshot)
     target = "身体动作" if request.channel is DecisionChannel.BODY else "面部表情"
     neutral = "IB0（不执行身体动作）" if request.channel is DecisionChannel.BODY else "IF0（保持当前表情）"
     lines = [

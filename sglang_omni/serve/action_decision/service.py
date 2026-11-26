@@ -567,7 +567,13 @@ def create_action_decision_app(
     performance_token: str | None = None,
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
-    app = FastAPI(title="sglang-omni-action-decision", version="1")
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def lifespan(app):
+        from sglang_omni.serve.prompt_runtime import install_action_runtime
+        await install_action_runtime(app, engine, include_performance=performance_token is not None)
+        yield
+    app = FastAPI(title="sglang-omni-action-decision", version="1", lifespan=lifespan)
     install_framex_http_logging(app, service="omni-action-worker")
     app.state.action_decision_engine = engine
 

@@ -7,7 +7,7 @@ from sglang_omni.models.qwen3_omni.action_scoring import (
     ActionSuffixScoreResult,
     CandidateScore,
 )
-from sglang_omni.serve.realtime.performance.service import (
+from sglang_omni.serve.performance_control.service import (
     register_performance_control,
 )
 
@@ -100,6 +100,35 @@ def test_performance_control_reuses_staging_expression_and_tts_policy() -> None:
     assert model.requests[0].session_instance_id == "performance:session-1"
 
 
+def test_performance_uses_generation_intent_without_redefining_obligation() -> None:
+    model = _Client()
+    payload = _payload()
+    payload["performance_intent"] = {
+        "response_purpose": "解释事实，克制表达",
+        "reply_mode": "normal_turn",
+        "voice_style": "平静自然",
+        "required_behavior_contract": "body",
+    }
+    response = TestClient(_app(model)).post(
+        "/v1/performance-control", headers={"Authorization": "Bearer secret"}, json=payload,
+    )
+    assert response.status_code == 200
+    assert "performance_intent" in model.requests[0].current_text
+    assert "解释事实，克制表达" in model.requests[0].current_text
+    assert "不得重新定义 REQUIRED" in model.requests[0].system_prompt
+
+
+def test_performance_cache_fences_are_strict_integers() -> None:
+    client = TestClient(_app(_Client()))
+    for key in ("identity_epoch", "input_revision"):
+        for invalid in (True, "1", 1.0, -1):
+            payload = _payload()
+            payload[key] = invalid
+            response = client.post("/v1/performance-control",
+                                   headers={"Authorization": "Bearer secret"}, json=payload)
+            assert response.status_code == 422
+
+
 def test_performance_control_requires_its_private_token() -> None:
     response = TestClient(_app(_Client())).post(
         "/v1/performance-control",
@@ -120,3 +149,55 @@ def test_performance_control_matches_session_fail_soft_default() -> None:
     assert response.json()["degraded"] is True
     assert response.json()["expression_id"] is None
     assert "自然平和" in response.json()["tts_instruction"]
+
+
+def test_full_behavior_role_context_reaches_model_without_truncation() -> None:
+    model = _Client()
+    payload = _payload()
+    context = (
+        "## 1. 身份与场景\n贴心生活助理。\n"
+        "## 2. 性格\n" + "亲切、细心、克制。" * 270
+        + "\n## 5. 行为规则\n鼓励用户时微笑；不擅自声称任务完成。"
+    )
+    assert 2048 < len(context) < 5000
+    payload["action_profile"]["visual_behavior_preferences"] = context
+    response = TestClient(_app(model)).post(
+        "/v1/performance-control", headers={"Authorization": "Bearer secret"},
+        json=payload,
+    )
+    assert response.status_code == 200
+    assert response.json()["expression_id"] == "154"
+    assert context in model.requests[0].system_prompt
+    assert "鼓励用户时微笑；不擅自声称任务完成。" in model.requests[0].system_prompt
+
+
+def test_behavior_role_budget_keeps_other_profile_fields_bounded() -> None:
+    from sglang_omni.serve.performance_control.context import SessionActionProfile
+
+    for field, text in (
+        ("visual_behavior_preferences", "x" * 5001),
+        ("category_preferences", "x" * 2049),
+        ("action_preferences", "x" * 2049),
+    ):
+        payload = _payload()
+        payload["action_profile"][field] = text
+        model = _Client()
+        try:
+            SessionActionProfile.from_payload(payload["action_profile"])
+        except ValueError as error:
+            assert field in str(error)
+        else:
+            raise AssertionError(f"oversized {field} was accepted")
+        assert not model.requests
+
+    # Valid individual fields still cannot overflow the aggregate contract.
+    try:
+        SessionActionProfile.from_payload({
+            "visual_behavior_preferences": "x" * 5000,
+            "category_preferences": "x" * 2000,
+            "action_preferences": "x" * 2000,
+        })
+    except ValueError as error:
+        assert "serialized characters" in str(error)
+    else:
+        raise AssertionError("oversized aggregate action profile was accepted")

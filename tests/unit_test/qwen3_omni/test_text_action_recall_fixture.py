@@ -20,6 +20,7 @@ def test_text_action_recall_fixture_is_complete_and_valid() -> None:
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
     cases = fixture["cases"]
+    contract = json.loads((ROOT / "tests/unit_test/fixtures/limited_action_catalog_contract.json").read_text())
     candidate_ids = {
         action["candidate_id"]
         for category in catalog["categories"]
@@ -27,16 +28,15 @@ def test_text_action_recall_fixture_is_complete_and_valid() -> None:
     }
 
     assert fixture["schema_version"] == 1
-    assert fixture["catalog_candidate_count"] == 117
-    assert fixture["case_count"] == len(cases) == 238
+    assert fixture["catalog_candidate_count"] == len(contract["candidate_ids"])
+    assert fixture["catalog_hash"] == contract["catalog_hash"]
+    assert candidate_ids == set(contract["candidate_ids"])
+    assert fixture["case_count"] == len(cases) == sum(contract["recall_fixture_groups"].values())
+    assert [row["case_id"] for row in fixture["excluded_natural_cases"]] == contract["omitted_natural_case_ids"]
+    assert all(row["absent_candidate_id"] not in candidate_ids for row in fixture["excluded_natural_cases"])
     assert len({case["id"] for case in cases}) == len(cases)
     assert all(case["text"].strip() for case in cases)
-    assert Counter(case["group"] for case in cases) == {
-        "canonical_label": 117,
-        "natural_request": 99,
-        "intent_boundary": 12,
-        "unsupported_request": 10,
-    }
+    assert Counter(case["group"] for case in cases) == contract["recall_fixture_groups"]
     assert {
         case["expected"]["candidate_ids"][0]
         for case in cases

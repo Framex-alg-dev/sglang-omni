@@ -8,6 +8,7 @@ import io
 import time
 import wave
 from typing import Any, Protocol
+from types import MappingProxyType
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.profiler.decision_timing import emit_decision_timing
@@ -40,14 +41,22 @@ class SglangClientTaskClassificationModel:
         *,
         model_id: str,
         model_version: str,
+        prompt_snapshot: dict[str, str] | None = None,
     ) -> None:
         if not model_id.strip() or not model_version.strip():
             raise ValueError("turn-router model_id and model_version are required")
+        if prompt_snapshot is not None and set(prompt_snapshot)!={"system_prompt","mcp_scope","multimodal_scope"}:
+            raise ValueError("complete Router prompt snapshot required")
+        self._prompt_snapshot = MappingProxyType(dict(prompt_snapshot)) if prompt_snapshot is not None else None
         self._client = client
         self.model_id = model_id
         self.model_version = model_version
 
     async def classify(self, request: TaskClassificationRequest) -> str:
+        if self._prompt_snapshot is not None and request.router_profile!="v1.0":
+            raise ValueError("debug snapshots require Router v1.0")
+        runtime = getattr(self, '_runtime_prompt_bundle', None)
+        snapshot = self._prompt_snapshot if self._prompt_snapshot is not None else (runtime.rules if runtime is not None and request.router_profile == 'v1.0' else None)
         audio = request.media[0] if request.media else None
         prompt = _prompt_contract(request.router_profile)
         history = prompt.normalize_history(request.router_history)
@@ -56,8 +65,8 @@ class SglangClientTaskClassificationModel:
             query_mode=query_mode,
             text=request.text,
             history=history,
-            mcp_scope=prompt.DEFAULT_MCP_SCOPE,
-            multimodal_scope=prompt.DEFAULT_MULTIMODAL_SCOPE,
+            mcp_scope=(snapshot["mcp_scope"] if snapshot is not None else prompt.DEFAULT_MCP_SCOPE),
+            multimodal_scope=(snapshot["multimodal_scope"] if snapshot is not None else prompt.DEFAULT_MULTIMODAL_SCOPE),
             has_active_agent=request.has_active_agent,
             pending_confirmation=request.pending_confirmation,
             follow_up_required=request.follow_up_required,
@@ -120,7 +129,9 @@ class SglangClientTaskClassificationModel:
                 Message(
                     role="system",
                     content=(
-                        prompt.SYSTEM_PROMPT
+                        snapshot["system_prompt"]
+                        if snapshot is not None
+                        else prompt.SYSTEM_PROMPT
                         if history
                         else prompt.SINGLE_TURN_SYSTEM_PROMPT
                     ),

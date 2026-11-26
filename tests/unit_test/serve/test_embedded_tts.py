@@ -12,7 +12,7 @@ from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 from websockets.protocol import State
 
-from sglang_omni.serve.realtime.embedded_tts import (
+from sglang_omni.serve.embedded_tts import (
     EmbeddedTTSConfig,
     EmbeddedTTSConnection,
     EmbeddedTTSError,
@@ -118,7 +118,7 @@ async def _send_text_only(parts, **settings):
 async def test_actual_append_normalization_and_payload_logging(monkeypatch):
     records = []
     monkeypatch.setattr(
-        "sglang_omni.serve.realtime.embedded_tts.emit_structured_log",
+        "sglang_omni.serve.embedded_tts.emit_structured_log",
         lambda kind, event, **fields: records.append((event, fields)),
     )
     sent = await _send_text_only(["  Hel", "lo ", "\r", "\n", " world\t ", "again.  "])
@@ -188,7 +188,7 @@ async def test_cumulative_text_budget_and_cancelled_normalizer():
 
 @pytest.mark.asyncio
 async def test_zero_wait_coalescing_preserves_carry_and_eof():
-    from sglang_omni.serve.realtime.tts_text import TTSTextAppend
+    from sglang_omni.serve.tts_text import TTSTextAppend
     manager = EmbeddedTTSConnection(
         EmbeddedTTSConfig(url="ws://tts.local/realtime", voice="v", text_coalesce=True, text_buffer_enabled=False,
                           text_append_target_chars=8), session_id="batch",

@@ -226,6 +226,7 @@ class SglangClientTimelineDetectionModel:
         start: TimelineSessionStart,
         *,
         model_version: str,
+        direct_profile: DirectE50Profile | None = None,
         max_attempts: int = 2,
         inference_interval_ms: int = 3_000,
         window_ms: int = 10_000,
@@ -235,15 +236,14 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline model_version is required")
         if max_attempts <= 0:
             raise ValueError("timeline max_attempts must be positive")
-        direct_profile = (
-            DirectE50Profile.from_environment(
+        if start.prompt_snapshot is not None:
+            direct_profile = DirectE50Profile.from_environment(
                 start.prompt_snapshot,
                 model_id=start.model_id,
                 model_version=model_version,
             )
-            if start.prompt_snapshot is not None
-            else DirectE50Profile.from_environment()
-        )
+        elif direct_profile is None:
+            direct_profile = DirectE50Profile.from_environment()
         first_hit_1s = direct_profile is not None and direct_profile.protocol == EVENT1115_PROTOCOL
         allowed_intervals = {500} if first_hit_1s else {1_000, 3_000}
         if inference_interval_ms not in allowed_intervals or window_ms != 10_000:

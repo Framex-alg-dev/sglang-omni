@@ -23,7 +23,7 @@ from sglang_omni.serve.inference_gateway.speech_synthesis import (
     GatewaySpeechSynthesizer,
 )
 from sglang_omni.serve.http_request_logs import install_framex_http_logging
-from sglang_omni.serve.realtime.embedded_tts import (
+from sglang_omni.serve.embedded_tts import (
     EmbeddedTTSConfig,
     EmbeddedTTSConnection,
     EmbeddedTTSError,
@@ -78,6 +78,7 @@ class InferenceGatewayConfig:
     adaptive_plain_reply_speech: bool = False
     plain_reply_segment_max_chars: int = 120
     plain_reply_segment_max_delay_ms: float = 160.0
+    prompt_debug_token: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         if set(self.stages) != _STAGES:
@@ -1747,6 +1748,9 @@ class _Session:
 def create_inference_gateway_app(config: InferenceGatewayConfig) -> FastAPI:
     app = FastAPI(title="sglang-omni-inference-gateway", version="4")
     install_framex_http_logging(app, service="omni-reply-worker")
+    if config.prompt_debug_token:
+        from sglang_omni.serve.prompt_debug_proxy import install_prompt_debug_proxy
+        install_prompt_debug_proxy(app, config)
 
     @app.get("/live")
     async def live() -> dict[str, object]:
