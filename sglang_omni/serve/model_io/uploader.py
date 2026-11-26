@@ -11,8 +11,10 @@ import os
 import shutil
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sglang_omni.utils.framex_service_logs import (
     configure_service_logging,
@@ -57,7 +59,13 @@ def _service(stage: str) -> str:
     }[stage]
 
 
-def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, str]:
+def _remote_bundle(
+    prefix: str,
+    stage: str,
+    relative_call: Path,
+    *,
+    archive_day: str | None = None,
+) -> tuple[str, str]:
     """Return the console-friendly COS directory and invocation file stem.
 
     The local spool keeps every correlation dimension as its own directory for
@@ -77,10 +85,23 @@ def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, s
         if not part.startswith(marker) or not part[len(marker) :]:
             raise ValueError("unsupported local model I/O component")
         values.append(part[len(marker) :])
-    day, root_session_id, turn_id, request_id, invocation_id = values
+    local_day, root_session_id, turn_id, request_id, invocation_id = values
+    day = archive_day or local_day
     bundle = f"{stage}__{turn_id}__{request_id}__{invocation_id}"
     directory = f"{prefix.strip('/')}/{root_session_id}/{day}"
     return directory, bundle
+
+
+def _manifest_day(
+    manifest: dict[str, Any], *, timezone: ZoneInfo
+) -> str | None:
+    started_at = manifest.get("started_at")
+    if not isinstance(started_at, str):
+        return None
+    value = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    if value.tzinfo is None:
+        raise ValueError("model I/O started_at must include a timezone")
+    return value.astimezone(timezone).date().isoformat()
 
 
 def _remote_file_name(bundle: str, relative_path: str) -> str:
@@ -116,11 +137,13 @@ def upload_pending(
     client: Any,
     bucket: str,
     prefix: str = "omni",
+    date_timezone: str = "Asia/Shanghai",
     now: float | None = None,
     local_retention_seconds: float = 86_400,
 ) -> dict[str, int]:
     root = root.resolve(strict=True)
     observed_at = time.time() if now is None else now
+    archive_timezone = ZoneInfo(date_timezone)
     counters = {"uploaded": 0, "failed": 0, "skipped": 0, "pruned": 0}
     with (root / ".cos-upload.lock").open("a") as lock:
         try:
@@ -178,7 +201,12 @@ def upload_pending(
                 stage = manifest["stage"]
                 relative_call = call_dir.relative_to(root / stage)
                 object_root, object_stem = _remote_bundle(
-                    prefix, stage, relative_call
+                    prefix,
+                    stage,
+                    relative_call,
+                    archive_day=_manifest_day(
+                        manifest, timezone=archive_timezone
+                    ),
                 )
                 records = list(manifest["files"])
                 for record in records:
@@ -275,6 +303,12 @@ def main() -> None:
         "--prefix",
         default=os.getenv("SGLANG_OMNI_MODEL_IO_COS_PREFIX", "omni"),
     )
+    parser.add_argument(
+        "--date-timezone",
+        default=os.getenv(
+            "SGLANG_OMNI_MODEL_IO_DATE_TIMEZONE", "Asia/Shanghai"
+        ),
+    )
     parser.add_argument("--credentials-file", type=Path)
     parser.add_argument("--interval", type=float, default=10)
     parser.add_argument("--local-retention-seconds", type=float, default=86_400)
@@ -322,6 +356,7 @@ def main() -> None:
                 client=client,
                 bucket=args.bucket,
                 prefix=args.prefix,
+                date_timezone=args.date_timezone,
                 local_retention_seconds=args.local_retention_seconds,
             )
             logger.info("COS model I/O upload progress %s", json.dumps(counters))

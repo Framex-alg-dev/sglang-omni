@@ -24,6 +24,8 @@ All stages in a session share that directory. Each invocation is a flat set of
 `.output.json`, `.manifest.json`, and optional `.media.*` objects. The local spool keeps the more explicit
 `dt=/root=/turn=/request=/invocation=` hierarchy for recovery and pruning.
 The manifest owns the archive schema version, so the COS prefix does not repeat it.
+The directory date defaults to `Asia/Shanghai`; exact manifest timestamps remain
+timezone-aware UTC values.
 Payload objects are uploaded first with AES256 server-side encryption and
 `manifest.json` is uploaded last as the commit marker. Local `.cos-uploaded.json`
 and `.cos-retry.json` files provide idempotency, retention and exponential retry.
