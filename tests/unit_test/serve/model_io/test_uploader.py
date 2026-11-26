@@ -76,14 +76,14 @@ def test_uploader_sends_manifest_last_and_is_idempotent(tmp_path: Path) -> None:
     assert first == {"uploaded": 1, "failed": 0, "skipped": 0, "pruned": 0}
     keys = [str(item["Key"]) for item in client.uploads]
     expected_root = (
-        "omni/model-io/v1/action/2027-01-15/session_1/"
+        "omni/model-io/v1/by-session/session_1/dt=2027-01-15/action/"
         "turn_1__req_1__inv_1"
     )
-    assert keys == [f"{expected_root}/input.json", f"{expected_root}/manifest.json"]
+    assert keys == [f"{expected_root}.input.json", f"{expected_root}.manifest.json"]
     assert all(item["ServerSideEncryption"] == "AES256" for item in client.uploads)
     assert json.loads((call_dir / ".cos-uploaded.json").read_text())[
         "manifest_key"
-    ] == f"{expected_root}/manifest.json"
+    ] == f"{expected_root}.manifest.json"
 
     second = upload_pending(
         tmp_path,

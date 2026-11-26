@@ -57,14 +57,15 @@ def _service(stage: str) -> str:
     }[stage]
 
 
-def _remote_bundle_root(prefix: str, stage: str, relative_call: Path) -> str:
-    """Return a console-friendly COS directory for one model invocation.
+def _remote_bundle(prefix: str, stage: str, relative_call: Path) -> tuple[str, str]:
+    """Return the console-friendly COS directory and invocation file stem.
 
     The local spool keeps every correlation dimension as its own directory for
-    recovery and pruning. COS is also an operator-facing index, so collapse
-    turn/request/invocation into one bundle directory there:
+    recovery and pruning. COS is also an operator-facing index, so make the
+    root session the first lookup dimension and flatten invocations to files:
 
-      {prefix}/{stage}/{date}/{session}/{turn}__{request}__{invocation}
+      {prefix}/by-session/{session}/dt={date}/{stage}/
+        {turn}__{request}__{invocation}.{kind}
     """
 
     parts = relative_call.parts
@@ -78,14 +79,18 @@ def _remote_bundle_root(prefix: str, stage: str, relative_call: Path) -> str:
         values.append(part[len(marker) :])
     day, root_session_id, turn_id, request_id, invocation_id = values
     bundle = f"{turn_id}__{request_id}__{invocation_id}"
-    return f"{prefix.strip('/')}/{stage}/{day}/{root_session_id}/{bundle}"
+    directory = (
+        f"{prefix.strip('/')}/by-session/{root_session_id}/dt={day}/{stage}"
+    )
+    return directory, bundle
 
 
-def _remote_file_name(relative_path: str) -> str:
-    return {
+def _remote_file_name(bundle: str, relative_path: str) -> str:
+    suffix = {
         "input/request.json": "input.json",
         "output/result.json": "output.json",
-    }.get(relative_path, relative_path)
+    }.get(relative_path, relative_path.replace("/", "."))
+    return f"{bundle}.{suffix}"
 
 
 def _emit(stage: str, event: str, manifest: dict[str, Any], **fields: Any) -> None:
@@ -174,7 +179,9 @@ def upload_pending(
                     raise ValueError("artifact total byte count mismatch")
                 stage = manifest["stage"]
                 relative_call = call_dir.relative_to(root / stage)
-                object_root = _remote_bundle_root(prefix, stage, relative_call)
+                object_root, object_stem = _remote_bundle(
+                    prefix, stage, relative_call
+                )
                 records = list(manifest["files"])
                 for record in records:
                     path = call_dir / record["path"]
@@ -189,14 +196,17 @@ def upload_pending(
                         raise ValueError("artifact checksum mismatch")
                     client.upload_file(
                         Bucket=bucket,
-                        Key=f"{object_root}/{_remote_file_name(record['path'])}",
+                        Key=(
+                            f"{object_root}/"
+                            f"{_remote_file_name(object_stem, record['path'])}"
+                        ),
                         LocalFilePath=str(path),
                         EnableMD5=True,
                         MAXThread=1,
                         ServerSideEncryption="AES256",
                     )
                 # The manifest is the remote commit marker and must be last.
-                manifest_key = f"{object_root}/manifest.json"
+                manifest_key = f"{object_root}/{object_stem}.manifest.json"
                 client.upload_file(
                     Bucket=bucket,
                     Key=manifest_key,
