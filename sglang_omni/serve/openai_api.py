@@ -84,6 +84,7 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import (
     GlobalActionCatalogPrewarmStatus,
 )
 from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
+from sglang_omni.serve.model_io import get_model_io_recorder
 from sglang_omni.serve.protocol import (
     DEFAULT_TTS_BATCH_MAX_ITEMS,
     ActionScoreRequest,
@@ -885,21 +886,75 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             audio_format = "wav"
             if req.audio and isinstance(req.audio, dict):
                 audio_format = req.audio.get("format", "wav")
-            await run_until_websocket_disconnect(
-                websocket,
-                _send_chat_websocket_response(
-                    websocket=websocket,
-                    client=client,
-                    req=req,
-                    gen_req=gen_req,
-                    request_id=request_id,
-                    outer_request_id=streamed.request_id,
-                    response_id=response_id,
-                    created=created,
-                    model=model,
-                    audio_format=audio_format,
+            archive_started = time.time()
+            archive_context = {
+                "request_id": trace_request_id,
+                "provider_request_id": request_id,
+                "root_session_id": root_session_id,
+                "agent_session_id": agent_session_id,
+                "turn_id": turn_id,
+                "operation_id": logged_operation_id,
+                "model_id": model,
+                "model_version": gen_req.metadata.get("model_version"),
+                "release_id": gen_req.metadata.get("release_id"),
+                "prompt_snapshot_sha256": gen_req.metadata.get(
+                    "prompt_snapshot_sha256"
                 ),
-                abort=lambda: client.abort(request_id),
+            }
+            try:
+                archived_output = await run_until_websocket_disconnect(
+                    websocket,
+                    _send_chat_websocket_response(
+                        websocket=websocket,
+                        client=client,
+                        req=req,
+                        gen_req=gen_req,
+                        request_id=request_id,
+                        outer_request_id=streamed.request_id,
+                        response_id=response_id,
+                        created=created,
+                        model=model,
+                        audio_format=audio_format,
+                    ),
+                    abort=lambda: client.abort(request_id),
+                )
+            except asyncio.CancelledError:
+                get_model_io_recorder("reply").record(
+                    stage="reply",
+                    input_value=gen_req,
+                    output_value={"error_type": "CancelledError"},
+                    context=archive_context,
+                    status="cancelled",
+                    started_at=archive_started,
+                )
+                raise
+            except WebSocketDisconnect:
+                get_model_io_recorder("reply").record(
+                    stage="reply",
+                    input_value=gen_req,
+                    output_value={"error_type": "WebSocketDisconnect"},
+                    context=archive_context,
+                    status="cancelled",
+                    started_at=archive_started,
+                )
+                raise
+            except Exception as exc:
+                get_model_io_recorder("reply").record(
+                    stage="reply",
+                    input_value=gen_req,
+                    output_value={"error_type": type(exc).__name__, "detail": str(exc)},
+                    context=archive_context,
+                    status="error",
+                    started_at=archive_started,
+                )
+                raise
+            get_model_io_recorder("reply").record(
+                stage="reply",
+                input_value=gen_req,
+                output_value=archived_output,
+                context=archive_context,
+                status="success",
+                started_at=archive_started,
             )
             emit_service_event(
                 "omni-reply-worker",
@@ -1043,8 +1098,9 @@ async def _send_chat_websocket_response(
     created: int,
     model: str,
     audio_format: str,
-) -> None:
+) -> dict[str, Any]:
     if req.stream:
+        archived_events: list[dict[str, Any]] = []
         async for event in _chat_stream(
             client,
             gen_req,
@@ -1058,11 +1114,13 @@ async def _send_chat_websocket_response(
             encoded = event.removeprefix("data:").strip()
             if encoded == STREAM_DONE_SENTINEL:
                 continue
+            response_value = json.loads(encoded)
+            archived_events.append(response_value)
             await websocket.send_json(
                 {
                     "type": "response.delta",
                     "request_id": outer_request_id,
-                    "response": json.loads(encoded),
+                    "response": response_value,
                 }
             )
         await websocket.send_json(
@@ -1072,7 +1130,7 @@ async def _send_chat_websocket_response(
                 "response": {},
             }
         )
-        return
+        return {"stream": True, "events": archived_events}
     response = await _chat_non_stream(
         client,
         gen_req,
@@ -1083,13 +1141,15 @@ async def _send_chat_websocket_response(
         req,
         audio_format,
     )
+    response_value = json.loads(response.body)
     await websocket.send_json(
         {
             "type": "response.completed",
             "request_id": outer_request_id,
-            "response": json.loads(response.body),
+            "response": response_value,
         }
     )
+    return {"stream": False, "response": response_value}
 
 
 async def _chat_non_stream(

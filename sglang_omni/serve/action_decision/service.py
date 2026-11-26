@@ -19,6 +19,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.serve.http_request_logs import install_framex_http_logging
+from sglang_omni.serve.model_io import get_model_io_recorder
 from sglang_omni.serve.streaming_request import (
     StreamedMedia,
     StreamedRequest,
@@ -439,28 +440,80 @@ class ActionDecisionEngine:
             ]
         legal_codes = (catalog.hard_bound.code,) if catalog.hard_bound is not None else tuple(entry.code for entry in catalog.entries)
         grammar = "(?:" + "|".join(re.escape(code) for code in legal_codes) + ")"
-        result = await self._client.completion(
-            GenerateRequest(
-                model=self.config.model_id,
-                messages=[
-                    Message(role="system", content=system_prompt),
-                    Message(role="user", content=content),
-                ],
-                sampling=SamplingParams(
-                    temperature=0.0,
-                    top_p=1.0,
-                    seed=0,
-                    max_new_tokens=2,
-                    min_new_tokens=2,
-                    ignore_eos=True,
-                    regex=grammar,
-                ),
-                stream=False,
-                max_tokens=2,
-                output_modalities=["text"],
-                metadata=metadata,
+        generate_request = GenerateRequest(
+            model=self.config.model_id,
+            messages=[
+                Message(role="system", content=system_prompt),
+                Message(role="user", content=content),
+            ],
+            sampling=SamplingParams(
+                temperature=0.0,
+                top_p=1.0,
+                seed=0,
+                max_new_tokens=2,
+                min_new_tokens=2,
+                ignore_eos=True,
+                regex=grammar,
             ),
-            request_id=request.request_id,
+            stream=False,
+            max_tokens=2,
+            output_modalities=["text"],
+            metadata=metadata,
+        )
+        archive_started = time.time()
+        archive_context = {
+            "request_id": request.trace_request_id or request.request_id,
+            "provider_request_id": request.request_id,
+            "root_session_id": request.root_session_id or request.session_id,
+            "agent_session_id": request.agent_session_id,
+            "turn_id": request.turn_id,
+            "source_turn_id": request.runtime_context.get("source_turn_id"),
+            "decision_point_id": request.decision_point_id,
+            "model_id": self.config.model_id,
+            "model_version": self.config.model_version,
+            "release_id": (
+                request.prompt_snapshot.release_id
+                if request.prompt_snapshot is not None
+                else None
+            ),
+            "prompt_snapshot_sha256": (
+                request.prompt_snapshot.bundle_sha256
+                if request.prompt_snapshot is not None
+                else request.runtime_context.get("expected_prompt_sha256")
+            ),
+        }
+        try:
+            result = await self._client.completion(
+                generate_request,
+                request_id=request.request_id,
+            )
+        except asyncio.CancelledError:
+            get_model_io_recorder("action").record(
+                stage="action",
+                input_value=generate_request,
+                output_value={"error_type": "CancelledError"},
+                context=archive_context,
+                status="cancelled",
+                started_at=archive_started,
+            )
+            raise
+        except Exception as exc:
+            get_model_io_recorder("action").record(
+                stage="action",
+                input_value=generate_request,
+                output_value={"error_type": type(exc).__name__, "detail": str(exc)},
+                context=archive_context,
+                status="error",
+                started_at=archive_started,
+            )
+            raise
+        get_model_io_recorder("action").record(
+            stage="action",
+            input_value=generate_request,
+            output_value=result,
+            context=archive_context,
+            status="success",
+            started_at=archive_started,
         )
         code = str(result.text)
         # Constrained backends normally return the assigned two-token code, but

@@ -17,6 +17,7 @@ from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE, Window
 from PIL import Image, ImageOps
 
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
+from sglang_omni.serve.model_io import get_model_io_recorder
 from sglang_omni.serve.request_log_context import (
     RequestLogContext,
     model_request_log,
@@ -619,6 +620,29 @@ class SglangClientTimelineDetectionModel:
                 input_build_ms=round(input_build_ms, 1),
             )
             inference_started = time.perf_counter()
+            archive_started = time.time()
+            log_context = self._window_log_context(work)
+            archive_context = {
+                "request_id": log_context.request_id,
+                "provider_request_id": f"{logical_request_id}:{attempt + 1}",
+                "root_session_id": log_context.root_session_id,
+                "agent_session_id": log_context.agent_session_id,
+                "turn_id": log_context.turn_id,
+                "window_id": f"{work.stream_epoch}:{work.window.end_ms}",
+                "attempt": attempt + 1,
+                "model_id": self.model_id,
+                "model_version": self.model_version,
+                "release_id": (
+                    self._start.prompt_snapshot.release_id
+                    if self._start.prompt_snapshot is not None
+                    else None
+                ),
+                "prompt_snapshot_sha256": (
+                    self._start.prompt_snapshot.bundle_sha256
+                    if self._start.prompt_snapshot is not None
+                    else None
+                ),
+            }
             self._artifacts.record_attempt_input(
                 stream_epoch=work.stream_epoch, window=work.window,
                 attempt=attempt + 1, request=request,
@@ -626,11 +650,10 @@ class SglangClientTimelineDetectionModel:
             )
             try:
                 model_operation_id = f"{logical_request_id}:{attempt + 1}"
-                context = self._window_log_context(work)
                 async with model_request_log(
                     "omni-event-worker",
                     "timeline_model_call",
-                    context,
+                    log_context,
                     operation_id=model_operation_id,
                     logger_name=__name__,
                 ):
@@ -639,6 +662,21 @@ class SglangClientTimelineDetectionModel:
                         request_id=model_operation_id,
                     )
             except (Exception, asyncio.CancelledError) as exc:
+                get_model_io_recorder("event").record(
+                    stage="event",
+                    input_value=request,
+                    output_value={
+                        "error_type": type(exc).__name__,
+                        "detail": str(exc),
+                    },
+                    context=archive_context,
+                    status=(
+                        "cancelled"
+                        if isinstance(exc, asyncio.CancelledError)
+                        else "error"
+                    ),
+                    started_at=archive_started,
+                )
                 self._artifacts.record_attempt_result(
                     stream_epoch=work.stream_epoch, window=work.window,
                     attempt=attempt + 1,
@@ -650,6 +688,14 @@ class SglangClientTimelineDetectionModel:
                     },
                 )
                 raise
+            get_model_io_recorder("event").record(
+                stage="event",
+                input_value=request,
+                output_value=result,
+                context=archive_context,
+                status="success",
+                started_at=archive_started,
+            )
             inference_ms = (time.perf_counter() - inference_started) * 1_000
             raw_output = str(result.text)
             try:
