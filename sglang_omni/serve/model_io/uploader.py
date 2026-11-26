@@ -115,7 +115,7 @@ def upload_pending(
     *,
     client: Any,
     bucket: str,
-    prefix: str = "omni/model-io/v1",
+    prefix: str = "omni",
     now: float | None = None,
     local_retention_seconds: float = 86_400,
 ) -> dict[str, int]:
@@ -273,7 +273,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--prefix",
-        default=os.getenv("SGLANG_OMNI_MODEL_IO_COS_PREFIX", "omni/model-io/v1"),
+        default=os.getenv("SGLANG_OMNI_MODEL_IO_COS_PREFIX", "omni"),
     )
     parser.add_argument("--credentials-file", type=Path)
     parser.add_argument("--interval", type=float, default=10)
