@@ -29,6 +29,7 @@ from sglang_omni.serve.streaming_request import (
     serve_streamed_requests,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 from sglang_omni.utils.framex_service_logs import (
     adopt_request_id,
     bind_service_log_context,
@@ -59,6 +60,77 @@ class CompletionClient(Protocol):
     ) -> Any: ...
 
     async def abort(self, request_id: str) -> Any: ...
+
+
+def _action_agent_request(request: ActionDecisionRequest) -> dict[str, Any]:
+    return {
+        "contract_version": 1,
+        "request_id": request.request_id,
+        "session_id": request.session_id,
+        "turn_id": request.turn_id,
+        "decision_point_id": request.decision_point_id,
+        "channel": request.channel.value,
+        "text": request.text,
+        "language": request.language,
+        "character_prompt": request.character_prompt,
+        "session_prompt": request.session_prompt,
+        "reply_prefix": request.reply_prefix,
+        "avatar_current_text": request.avatar_current_text,
+        "avatar_history_text": request.avatar_history_text,
+        "runtime_context": request.runtime_context,
+        "allowed_candidate_ids": list(request.allowed_candidate_ids),
+        "excluded_candidate_ids": list(request.excluded_candidate_ids),
+        "channel_enabled": request.channel_enabled,
+        "prohibited": request.prohibited,
+        "turn_origin": request.turn_origin,
+        "requested_action": request.requested_action,
+        "prompt_snapshot": request.prompt_snapshot,
+        "media": [item.header() for item in request.media],
+    }
+
+
+def _emit_action_agent_request(
+    request: ActionDecisionRequest, *, operation: str, transport: str
+) -> None:
+    emit_model_trace(
+        "action",
+        "agent.request.received",
+        component="action_decision",
+        request_id=request.trace_request_id or request.request_id,
+        invocation_id=request.request_id,
+        sequence=1,
+        operation=operation,
+        transport=transport,
+        root_session_id=request.root_session_id or request.session_id,
+        agent_session_id=request.agent_session_id,
+        turn_id=request.turn_id,
+        agent_request=_action_agent_request(request),
+    )
+
+
+def _emit_action_agent_response(
+    request: ActionDecisionRequest,
+    response: dict[str, Any],
+    *,
+    operation: str,
+    transport: str,
+    total_ms: float,
+) -> None:
+    emit_model_trace(
+        "action",
+        "agent.response.sent",
+        component="action_decision",
+        request_id=request.trace_request_id or request.request_id,
+        invocation_id=request.request_id,
+        sequence=6,
+        operation=operation,
+        transport=transport,
+        root_session_id=request.root_session_id or request.session_id,
+        agent_session_id=request.agent_session_id,
+        turn_id=request.turn_id,
+        agent_response=response,
+        total_ms=round(total_ms, 3),
+    )
 
 
 async def _decide_with_service_log(
@@ -399,6 +471,7 @@ class ActionDecisionEngine:
         content = user_message_content(request, catalog)
         system_prompt = build_system_prompt(request, catalog, prompt_snapshot=self._effective_prompt_snapshot(request))
         snapshot = await asyncio.to_thread(input_snapshot, request, catalog, system_prompt, content)
+        input_prepare_ms = (time.perf_counter() - started) * 1000.0
         emit_structured_log("action", "action_recall_model_input", component="action_decision",
                             request_id=request.request_id, session_id=request.session_id,
                             turn_id=request.turn_id, channel=request.channel.value,
@@ -460,6 +533,30 @@ class ActionDecisionEngine:
             output_modalities=["text"],
             metadata=metadata,
         )
+        emit_model_trace(
+            "action",
+            "model.input.prepared",
+            component="action_decision",
+            request_id=request.trace_request_id or request.request_id,
+            invocation_id=request.request_id,
+            sequence=2,
+            root_session_id=request.root_session_id or request.session_id,
+            agent_session_id=request.agent_session_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            channel=request.channel.value,
+            model_id=self.config.model_id,
+            model_version=self.config.model_version,
+            model_input={
+                "system_prompt": system_prompt,
+                "user_content": content,
+                "sampling": generate_request.sampling,
+                "max_tokens": generate_request.max_tokens,
+                "output_modalities": generate_request.output_modalities,
+                "media": [item.header() for item in request.media],
+            },
+            input_prepare_ms=round(input_prepare_ms, 3),
+        )
         archive_started = time.time()
         archive_context = {
             "request_id": request.trace_request_id or request.request_id,
@@ -482,6 +579,23 @@ class ActionDecisionEngine:
                 else request.runtime_context.get("expected_prompt_sha256")
             ),
         }
+        model_started = time.perf_counter()
+        emit_model_trace(
+            "action",
+            "model.request.started",
+            component="action_decision",
+            request_id=request.trace_request_id or request.request_id,
+            invocation_id=request.request_id,
+            sequence=3,
+            root_session_id=request.root_session_id or request.session_id,
+            agent_session_id=request.agent_session_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            channel=request.channel.value,
+            model_id=self.config.model_id,
+            model_version=self.config.model_version,
+            input_prepare_ms=round(input_prepare_ms, 3),
+        )
         try:
             result = await self._client.completion(
                 generate_request,
@@ -496,6 +610,22 @@ class ActionDecisionEngine:
                 status="cancelled",
                 started_at=archive_started,
             )
+            emit_model_trace(
+                "action",
+                "model.response.received",
+                component="action_decision",
+                request_id=request.trace_request_id or request.request_id,
+                invocation_id=request.request_id,
+                sequence=4,
+                root_session_id=request.root_session_id or request.session_id,
+                agent_session_id=request.agent_session_id,
+                turn_id=request.turn_id,
+                status="cancelled",
+                model_inference_ms=round(
+                    (time.perf_counter() - model_started) * 1000.0, 3
+                ),
+                model_output={"error_type": "CancelledError"},
+            )
             raise
         except Exception as exc:
             get_model_io_recorder("action").record(
@@ -506,7 +636,27 @@ class ActionDecisionEngine:
                 status="error",
                 started_at=archive_started,
             )
+            emit_model_trace(
+                "action",
+                "model.response.received",
+                component="action_decision",
+                request_id=request.trace_request_id or request.request_id,
+                invocation_id=request.request_id,
+                sequence=4,
+                root_session_id=request.root_session_id or request.session_id,
+                agent_session_id=request.agent_session_id,
+                turn_id=request.turn_id,
+                status="error",
+                model_inference_ms=round(
+                    (time.perf_counter() - model_started) * 1000.0, 3
+                ),
+                model_output={
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc),
+                },
+            )
             raise
+        model_inference_ms = (time.perf_counter() - model_started) * 1000.0
         get_model_io_recorder("action").record(
             stage="action",
             input_value=generate_request,
@@ -516,6 +666,25 @@ class ActionDecisionEngine:
             started_at=archive_started,
         )
         code = str(result.text)
+        emit_model_trace(
+            "action",
+            "model.response.received",
+            component="action_decision",
+            request_id=request.trace_request_id or request.request_id,
+            invocation_id=request.request_id,
+            sequence=4,
+            root_session_id=request.root_session_id or request.session_id,
+            agent_session_id=request.agent_session_id,
+            status="success",
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            channel=request.channel.value,
+            model_output=code,
+            usage=result.usage.to_dict() if result.usage is not None else None,
+            weight_version=result.weight_version,
+            model_inference_ms=round(model_inference_ms, 3),
+        )
+        resolve_started = time.perf_counter()
         # Constrained backends normally return the assigned two-token code, but
         # some deployments decode control tokens to their canonical candidate
         # ID (for example ``IB0``). Both identify the same catalog entry.
@@ -559,6 +728,10 @@ class ActionDecisionEngine:
             reason_code=reason_code,
             weight_version=result.weight_version,
             usage=usage,
+            model_output=code,
+            input_prepare_ms=input_prepare_ms,
+            model_inference_ms=model_inference_ms,
+            resolve_ms=(time.perf_counter() - resolve_started) * 1000.0,
         )
 
     def _decision(
@@ -572,6 +745,10 @@ class ActionDecisionEngine:
         reason_code: str,
         weight_version: str | None = None,
         usage: dict[str, Any] | None = None,
+        model_output: str | None = None,
+        input_prepare_ms: float | None = None,
+        model_inference_ms: float | None = None,
+        resolve_ms: float | None = None,
     ) -> ActionDecision:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         outcome = _outcome(request.channel, entry.candidate_id)
@@ -609,6 +786,42 @@ class ActionDecisionEngine:
             component="action_decision",
             recall_variant=recall_variant(request),
             **decision.to_dict(),
+        )
+        emit_model_trace(
+            "action",
+            "action.resolved",
+            component="action_decision",
+            request_id=request.trace_request_id or request.request_id,
+            invocation_id=request.request_id,
+            sequence=5,
+            root_session_id=request.root_session_id or request.session_id,
+            agent_session_id=request.agent_session_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            model_output=model_output,
+            resolved_action={
+                "candidate_id": decision.candidate_id,
+                "action_id": decision.action_id,
+                "code": decision.code,
+                "label": decision.label,
+                "outcome": decision.outcome,
+                "reason_code": decision.reason_code,
+                "occupies_channels": list(decision.occupies_channels),
+            },
+            catalog_version=decision.catalog_version,
+            catalog_hash=decision.catalog_hash,
+            mapping_version=decision.mapping_version,
+            mapping_hash=decision.mapping_hash,
+            input_prepare_ms=(
+                round(input_prepare_ms, 3) if input_prepare_ms is not None else None
+            ),
+            model_inference_ms=(
+                round(model_inference_ms, 3)
+                if model_inference_ms is not None
+                else None
+            ),
+            resolve_ms=round(resolve_ms, 3) if resolve_ms is not None else None,
+            total_ms=decision.elapsed_ms,
         )
         return decision
 
@@ -667,6 +880,7 @@ def create_action_decision_app(
 
     @app.post("/v1/action-decision")
     async def decide(request: Request) -> JSONResponse:
+        request_started = time.perf_counter()
         authenticate(request)
         body = await request.body()
         if len(body) > config.max_body_bytes:
@@ -680,15 +894,27 @@ def create_action_decision_app(
                     root_session_id=request.state.framex_root_session_id,
                 )
             decision_request = _parse_request(raw, media=(), config=config)
+            _emit_action_agent_request(
+                decision_request, operation="action_decision", transport="http"
+            )
             decision = await _decide_with_service_log(
                 engine, decision_request, operation="action_decision"
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse(_with_prompt_receipt(decision.to_dict(), decision_request))
+        response = _with_prompt_receipt(decision.to_dict(), decision_request)
+        _emit_action_agent_response(
+            decision_request,
+            response,
+            operation="action_decision",
+            transport="http",
+            total_ms=(time.perf_counter() - request_started) * 1000.0,
+        )
+        return JSONResponse(response)
 
     @app.websocket("/v1/action-decision/realtime")
     async def decide_realtime(websocket: WebSocket) -> None:
+        request_started = time.perf_counter()
         request_id = new_request_id()
         trace_request_id = request_id
         root_session_id: str | None = None
@@ -712,6 +938,11 @@ def create_action_decision_app(
             payload.setdefault("request_id", request_id)
             _adopt_stream_log_request_id(payload, request_id, preserve_trace_id=True)
             decision_request = _parse_request(payload, media=streamed.media, config=config)
+            _emit_action_agent_request(
+                decision_request,
+                operation="action_decision",
+                transport="websocket",
+            )
             trace_request_id = decision_request.trace_request_id or request_id
             root_session_id = decision_request.root_session_id or correlation_id_or_digest(
                 decision_request.session_id, prefix="legacy_root"
@@ -741,14 +972,20 @@ def create_action_decision_app(
                 ),
                 abort=lambda: engine.cancel(decision_request.request_id),
             )
+            response = _with_prompt_receipt(decision.to_dict(), decision_request)
             await websocket.send_json(
                 {
                     "type": "response.completed",
                     "request_id": request_id,
-                    "response": _with_prompt_receipt(
-                        decision.to_dict(), decision_request
-                    ),
+                    "response": response,
                 }
+            )
+            _emit_action_agent_response(
+                decision_request,
+                response,
+                operation="action_decision",
+                transport="websocket",
+                total_ms=(time.perf_counter() - request_started) * 1000.0,
             )
         except WebSocketDisconnect:
             close_reason = "peer_disconnected"
@@ -819,6 +1056,7 @@ def create_action_decision_app(
 
     @app.post("/v1/action-recall")
     async def recall_audio(request: Request) -> JSONResponse:
+        request_started = time.perf_counter()
         authenticate(request)
         body = await request.body()
         if len(body) > config.max_body_bytes:
@@ -831,15 +1069,28 @@ def create_action_decision_app(
                     request.state.framex_request_id,
                     root_session_id=request.state.framex_root_session_id,
                 )
-            decision_request, public_id = parse_recall(raw)
+            decision_request, public_id = parse_recall(raw, transport="http")
             decision = await _decide_with_service_log(
                 engine, decision_request, operation="action_recall"
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return JSONResponse(_recall_response(public_id, decision, decision_request))
+        response = _recall_response(public_id, decision, decision_request)
+        _emit_action_agent_response(
+            decision_request,
+            response,
+            operation="action_recall",
+            transport="http",
+            total_ms=(time.perf_counter() - request_started) * 1000.0,
+        )
+        return JSONResponse(response)
 
-    def parse_recall(payload: Any, media: tuple[StreamedMedia, ...] = ()):
+    def parse_recall(
+        payload: Any,
+        media: tuple[StreamedMedia, ...] = (),
+        *,
+        transport: str = "internal",
+    ):
         decision_request, public_id = parse_simple_audio_request(
             {key: value for key, value in payload.items() if key != "log_context"}
             if isinstance(payload, dict) else payload,
@@ -871,15 +1122,22 @@ def create_action_decision_app(
             target_text_present=bool(target_text),
             target_text_chars=len(target_text) if isinstance(target_text, str) else 0,
         )
+        _emit_action_agent_request(
+            decision_request, operation="action_recall", transport=transport
+        )
         return decision_request, public_id
 
     @app.websocket("/v1/action-recall")
     async def recall_audio_realtime(websocket: WebSocket) -> None:
+        sent_requests: dict[str, ActionDecisionRequest] = {}
+
         async def recall(streamed: StreamedRequest) -> dict[str, Any]:
             payload = dict(streamed.payload)
             payload.setdefault("request_id", streamed.request_id)
             _adopt_stream_log_request_id(payload, streamed.request_id, preserve_trace_id=True)
-            decision_request, public_id = parse_recall(payload, streamed.media)
+            decision_request, public_id = parse_recall(
+                payload, streamed.media, transport="websocket"
+            )
             try:
                 decision = await _decide_with_service_log(
                     engine, decision_request, operation="action_recall"
@@ -889,12 +1147,29 @@ def create_action_decision_app(
                     await engine.cancel(decision_request.request_id)
                     raise
                 raise ValueError("recall request was cancelled") from None
+            sent_requests[streamed.request_id] = decision_request
             return _recall_response(public_id, decision, decision_request)
+
+        def response_sent(
+            streamed: StreamedRequest, event: dict[str, Any], total_ms: float
+        ) -> None:
+            decision_request = sent_requests.pop(streamed.request_id, None)
+            response = event.get("response")
+            if decision_request is None or not isinstance(response, dict):
+                return
+            _emit_action_agent_response(
+                decision_request,
+                response,
+                operation="action_recall",
+                transport="websocket",
+                total_ms=total_ms,
+            )
 
         await serve_streamed_requests(
             websocket, recall, expected_authorization=f"Bearer {config.token}",
             max_requests=4, max_media_items=3, max_item_bytes=MAX_RECALL_AUDIO_BYTES,
             max_total_bytes=config.max_body_bytes, allowed_audio_roles=ACTION_AUDIO_ROLES,
+            on_response_sent=response_sent,
         )
 
     if performance_token is not None:

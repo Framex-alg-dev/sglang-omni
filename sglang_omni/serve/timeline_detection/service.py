@@ -34,6 +34,7 @@ from sglang_omni.utils.framex_service_logs import (
     emit_service_event,
     new_request_id,
 )
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 
 
 TimelineModelFactory = Callable[[TimelineSessionStart], TimelineDetectionModel]
@@ -172,7 +173,35 @@ def create_timeline_detection_app(
                                     "root_session_id": context.root_session_id,
                                     "turn_id": context.turn_id,
                                 }
+                            send_started = time.perf_counter()
                             await send_json(payload)
+                            emit_model_trace(
+                                "diagnostic",
+                                "agent.response.sent",
+                                component="timeline_detection",
+                                request_id=(
+                                    context.request_id
+                                    if context is not None
+                                    else connection_request_id
+                                ),
+                                invocation_id=(
+                                    context.request_id
+                                    if context is not None
+                                    else connection_request_id
+                                ),
+                                sequence=6,
+                                root_session_id=start.root_session_id
+                                or start.session_id,
+                                agent_session_id=start.agent_session_id
+                                or start.session_id,
+                                turn_id=context.turn_id if context else None,
+                                transport="websocket",
+                                agent_response=payload,
+                                response_send_ms=round(
+                                    (time.perf_counter() - send_started) * 1000.0,
+                                    3,
+                                ),
+                            )
                             emit_service_event(
                                 "omni-event-worker",
                                 "inference.completed",
@@ -191,8 +220,37 @@ def create_timeline_detection_app(
                                 model_id=start.model_id,
                             )
                         else:
-                            for event in events:
-                                await send_json(_event_to_json(event))
+                            payloads = [_event_to_json(event) for event in events]
+                            send_started = time.perf_counter()
+                            for payload in payloads:
+                                await send_json(payload)
+                            emit_model_trace(
+                                "diagnostic",
+                                "agent.response.sent",
+                                component="timeline_detection",
+                                request_id=(
+                                    context.request_id
+                                    if context is not None
+                                    else connection_request_id
+                                ),
+                                invocation_id=(
+                                    context.request_id
+                                    if context is not None
+                                    else connection_request_id
+                                ),
+                                sequence=6,
+                                root_session_id=start.root_session_id
+                                or start.session_id,
+                                agent_session_id=start.agent_session_id
+                                or start.session_id,
+                                turn_id=context.turn_id if context else None,
+                                transport="websocket",
+                                agent_response=payloads,
+                                response_send_ms=round(
+                                    (time.perf_counter() - send_started) * 1000.0,
+                                    3,
+                                ),
+                            )
                             emit_service_event(
                                 "omni-event-worker",
                                 "inference.completed",

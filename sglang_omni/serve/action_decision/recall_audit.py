@@ -88,9 +88,9 @@ def input_snapshot(request, catalog, system_prompt, user_content) -> dict:
         except OSError as exc:
             replay_save_error = type(exc).__name__
 
-    # Only this bounded metadata is allowed into ordinary service diagnostics.
-    # Raw text, prompts, catalog definitions and media stay in the explicitly
-    # configured replay store above, which is not a CLS collection path.
+    # Keep the legacy diagnostic event bounded. The correlated model-trace
+    # events separately publish textual input/output to CLS while replacing
+    # binary media with metadata; the replay store remains the full artifact.
     return dict(
         recall_variant=recall_variant(request),
         requested_action_present=request.requested_action is not None,

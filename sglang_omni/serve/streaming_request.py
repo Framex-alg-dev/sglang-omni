@@ -217,6 +217,9 @@ async def serve_streamed_requests(
     max_item_bytes: int,
     max_total_bytes: int,
     allowed_audio_roles: frozenset[str],
+    on_response_sent: Callable[
+        [StreamedRequest, dict[str, Any], float], None
+    ] | None = None,
 ) -> None:
     """Receive several requests on one socket and dispatch commits concurrently."""
     if not await _accept_stream(websocket, expected_authorization):
@@ -231,6 +234,7 @@ async def serve_streamed_requests(
 
     async def complete(request: StreamedRequest) -> None:
         request_id = request.request_id
+        started = asyncio.get_running_loop().time()
         try:
             try:
                 response = await handle(request)
@@ -239,7 +243,14 @@ async def serve_streamed_requests(
                 event = {"type": "error", "code": "invalid_request", "detail": str(exc)}
             except Exception:
                 event = {"type": "error", "code": "model_error", "detail": "recall failed"}
-            await send({**event, "request_id": request_id})
+            wire_event = {**event, "request_id": request_id}
+            await send(wire_event)
+            if on_response_sent is not None:
+                on_response_sent(
+                    request,
+                    wire_event,
+                    (asyncio.get_running_loop().time() - started) * 1000.0,
+                )
         except WebSocketDisconnect:
             pass
         finally:

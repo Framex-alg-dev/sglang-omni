@@ -28,6 +28,7 @@ from sglang_omni.serve.streaming_request import (
     run_until_websocket_disconnect,
 )
 from sglang_omni.utils.framex_service_logs import emit_service_event, new_request_id
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 
 from .contracts import (
     CONTRACT_VERSION,
@@ -255,6 +256,19 @@ async def _classify_payload_with_context(
     classification_request = _request_from_json(body)
     metadata = _timing_metadata(classification_request)
     started = time.perf_counter()
+    emit_model_trace(
+        "reply",
+        "agent.request.received",
+        component="turn_router",
+        request_id=classification_request.request_id,
+        sequence=1,
+        root_session_id=classification_request.session_id,
+        agent_session_id=classification_request.session_id,
+        session_id=classification_request.session_id,
+        turn_id=classification_request.turn_id,
+        transport=transport,
+        agent_request=body,
+    )
     emit_decision_timing(
         "decision_request_received",
         request_id=classification_request.request_id,
@@ -327,6 +341,7 @@ async def _classify_payload_with_context(
         "model": result.model_id,
         "model_version": result.model_version,
     }
+    server_total_ms = (time.perf_counter() - started) * 1000.0
     emit_decision_timing(
         "decision_response_completed",
         request_id=classification_request.request_id,
@@ -335,10 +350,24 @@ async def _classify_payload_with_context(
         status="success",
         transport=transport,
         route_code=result.route_code,
-        server_total_ms=round(
-            (time.perf_counter() - started) * 1000.0,
-            3,
-        ),
+        server_total_ms=round(server_total_ms, 3),
+    )
+    emit_model_trace(
+        "reply",
+        "router.resolved",
+        component="turn_router",
+        request_id=classification_request.request_id,
+        sequence=5,
+        root_session_id=classification_request.session_id,
+        agent_session_id=classification_request.session_id,
+        session_id=classification_request.session_id,
+        turn_id=classification_request.turn_id,
+        route_code=result.route_code,
+        route=result.route.value,
+        route_token=result.route_token.value,
+        needs_mcp=result.needs_mcp,
+        needs_multimodal=result.needs_multimodal,
+        server_total_ms=round(server_total_ms, 3),
     )
     return response
 
@@ -386,6 +415,19 @@ def _emit_response_sent(response: dict[str, Any], transport: str) -> None:
         component="turn_router",
         transport=transport,
         response_chunk_count=1,
+    )
+    emit_model_trace(
+        "reply",
+        "agent.response.sent",
+        component="turn_router",
+        request_id=request_id,
+        sequence=6,
+        root_session_id=response.get("session_id"),
+        agent_session_id=response.get("session_id"),
+        session_id=response.get("session_id"),
+        turn_id=response.get("turn_id"),
+        transport=transport,
+        agent_response=response,
     )
 
 

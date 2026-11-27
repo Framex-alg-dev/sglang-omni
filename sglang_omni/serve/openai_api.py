@@ -145,6 +145,7 @@ from sglang_omni.utils.structured_logs import (
     emit_structured_log,
     get_structured_log_writer,
 )
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 from sglang_omni.utils.framex_service_logs import (
     adopt_request_id,
     bind_service_log_context,
@@ -861,6 +862,7 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 agent_session_id=agent_session_id,
             )
             connected = True
+            input_prepare_started = time.perf_counter()
             payload = inject_openai_media(streamed.payload, streamed.media)
             req = ChatCompletionRequest.model_validate(payload)
             client: Client = app.state.client
@@ -869,11 +871,32 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             response_id = f"chatcmpl-{request_id}"
             created = int(time.time())
             model = req.model or default_model
+            emit_model_trace(
+                "reply",
+                "agent.request.received",
+                component="chat_completion",
+                request_id=trace_request_id,
+                invocation_id=request_id,
+                sequence=1,
+                root_session_id=root_session_id,
+                agent_session_id=agent_session_id,
+                turn_id=turn_id,
+                transport="websocket",
+                agent_request=streamed.payload,
+                media=[item.header() for item in streamed.media],
+            )
             gen_req = _build_chat_generate_request(req)
             model_input = _log_full_chat_model_input(
                 request_id=request_id,
                 request=gen_req,
                 media_headers=tuple(item.header() for item in streamed.media),
+                trace_request_id=trace_request_id,
+                root_session_id=root_session_id,
+                agent_session_id=agent_session_id,
+                turn_id=turn_id,
+                input_prepare_ms=round(
+                    (time.perf_counter() - input_prepare_started) * 1000.0, 3
+                ),
             )
             if model_input is not None:
                 await websocket.send_json(
@@ -886,6 +909,20 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
             audio_format = "wav"
             if req.audio and isinstance(req.audio, dict):
                 audio_format = req.audio.get("format", "wav")
+            emit_model_trace(
+                "reply",
+                "model.request.started",
+                component="chat_completion",
+                request_id=trace_request_id,
+                invocation_id=request_id,
+                sequence=3,
+                root_session_id=root_session_id,
+                agent_session_id=agent_session_id,
+                turn_id=turn_id,
+                model_id=model,
+                model_version=gen_req.metadata.get("model_version"),
+            )
+            model_started = time.perf_counter()
             archive_started = time.time()
             archive_context = {
                 "request_id": trace_request_id,
@@ -927,6 +964,22 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                     status="cancelled",
                     started_at=archive_started,
                 )
+                emit_model_trace(
+                    "reply",
+                    "model.response.received",
+                    component="chat_completion",
+                    request_id=trace_request_id,
+                    invocation_id=request_id,
+                    sequence=4,
+                    root_session_id=root_session_id,
+                    agent_session_id=agent_session_id,
+                    turn_id=turn_id,
+                    status="cancelled",
+                    model_output={"error_type": "CancelledError"},
+                    model_inference_ms=round(
+                        (time.perf_counter() - model_started) * 1000.0, 3
+                    ),
+                )
                 raise
             except WebSocketDisconnect:
                 get_model_io_recorder("reply").record(
@@ -936,6 +989,22 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                     context=archive_context,
                     status="cancelled",
                     started_at=archive_started,
+                )
+                emit_model_trace(
+                    "reply",
+                    "model.response.received",
+                    component="chat_completion",
+                    request_id=trace_request_id,
+                    invocation_id=request_id,
+                    sequence=4,
+                    root_session_id=root_session_id,
+                    agent_session_id=agent_session_id,
+                    turn_id=turn_id,
+                    status="cancelled",
+                    model_output={"error_type": "WebSocketDisconnect"},
+                    model_inference_ms=round(
+                        (time.perf_counter() - model_started) * 1000.0, 3
+                    ),
                 )
                 raise
             except Exception as exc:
@@ -947,6 +1016,25 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                     status="error",
                     started_at=archive_started,
                 )
+                emit_model_trace(
+                    "reply",
+                    "model.response.received",
+                    component="chat_completion",
+                    request_id=trace_request_id,
+                    invocation_id=request_id,
+                    sequence=4,
+                    root_session_id=root_session_id,
+                    agent_session_id=agent_session_id,
+                    turn_id=turn_id,
+                    status="error",
+                    model_output={
+                        "error_type": type(exc).__name__,
+                        "detail": str(exc),
+                    },
+                    model_inference_ms=round(
+                        (time.perf_counter() - model_started) * 1000.0, 3
+                    ),
+                )
                 raise
             get_model_io_recorder("reply").record(
                 stage="reply",
@@ -955,6 +1043,50 @@ def _register_chat_completions_realtime(app: FastAPI) -> None:
                 context=archive_context,
                 status="success",
                 started_at=archive_started,
+            )
+            model_inference_ms = (time.perf_counter() - model_started) * 1000.0
+            emit_model_trace(
+                "reply",
+                "model.response.received",
+                component="chat_completion",
+                request_id=trace_request_id,
+                invocation_id=request_id,
+                sequence=4,
+                root_session_id=root_session_id,
+                agent_session_id=agent_session_id,
+                turn_id=turn_id,
+                status="success",
+                model_output=archived_output,
+                model_inference_ms=round(model_inference_ms, 3),
+                model_stream_and_send_ms=round(model_inference_ms, 3),
+            )
+            emit_model_trace(
+                "reply",
+                "reply.resolved",
+                component="chat_completion",
+                request_id=trace_request_id,
+                invocation_id=request_id,
+                sequence=5,
+                root_session_id=root_session_id,
+                agent_session_id=agent_session_id,
+                turn_id=turn_id,
+                reply_output=archived_output,
+                model_inference_ms=round(model_inference_ms, 3),
+                model_stream_and_send_ms=round(model_inference_ms, 3),
+            )
+            emit_model_trace(
+                "reply",
+                "agent.response.sent",
+                component="chat_completion",
+                request_id=trace_request_id,
+                invocation_id=request_id,
+                sequence=6,
+                root_session_id=root_session_id,
+                agent_session_id=agent_session_id,
+                turn_id=turn_id,
+                transport="websocket",
+                agent_response=archived_output,
+                total_ms=round((time.perf_counter() - started) * 1000.0, 3),
             )
             emit_service_event(
                 "omni-reply-worker",
@@ -1370,9 +1502,32 @@ def _log_full_chat_model_input(
     request_id: str,
     request: GenerateRequest,
     media_headers: tuple[dict[str, object], ...],
+    trace_request_id: str | None = None,
+    root_session_id: str | None = None,
+    agent_session_id: str | None = None,
+    turn_id: str | None = None,
+    input_prepare_ms: float | None = None,
 ) -> dict[str, Any] | None:
     """Log and return the final request while keeping binary media out of logs."""
 
+    record = {
+        "request_id": request_id,
+        "request": _replace_data_uris_for_log(request.to_dict()),
+        "media": list(media_headers),
+    }
+    emit_model_trace(
+        "reply",
+        "model.input.prepared",
+        component="chat_completion",
+        request_id=trace_request_id or request_id,
+        invocation_id=request_id,
+        sequence=2,
+        root_session_id=root_session_id,
+        agent_session_id=agent_session_id,
+        turn_id=turn_id,
+        model_input=record,
+        input_prepare_ms=input_prepare_ms,
+    )
     if os.environ.get("SGLANG_OMNI_LOG_FULL_CHAT_INPUTS", "").strip().lower() not in {
         "1",
         "true",
@@ -1380,11 +1535,6 @@ def _log_full_chat_model_input(
         "on",
     }:
         return None
-    record = {
-        "request_id": request_id,
-        "request": _replace_data_uris_for_log(request.to_dict()),
-        "media": list(media_headers),
-    }
     logger.info(
         "CHAT_MODEL_FULL_INPUT %s",
         json.dumps(record, ensure_ascii=False, separators=(",", ":")),

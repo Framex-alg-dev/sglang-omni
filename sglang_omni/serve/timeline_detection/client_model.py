@@ -26,6 +26,7 @@ from sglang_omni.utils.framex_service_logs import (
     correlation_id_or_digest,
     new_request_id,
 )
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 
 from .artifacts import TimelineArtifactRecorder, observation_records
 from .diagnostics import log_diagnostic
@@ -619,9 +620,74 @@ class SglangClientTimelineDetectionModel:
                 submitted_images=len(request.metadata.get("images", [])),
                 input_build_ms=round(input_build_ms, 1),
             )
-            inference_started = time.perf_counter()
-            archive_started = time.time()
             log_context = self._window_log_context(work)
+            emit_model_trace(
+                "diagnostic",
+                "agent.request.received",
+                component="timeline_detection",
+                request_id=log_context.request_id,
+                invocation_id=work.request_id,
+                sequence=1,
+                root_session_id=log_context.root_session_id,
+                agent_session_id=log_context.agent_session_id,
+                turn_id=log_context.turn_id,
+                attempt=attempt + 1,
+                agent_request={
+                    "session_id": self._start.session_id,
+                    "observer_epoch": self._start.observer_epoch,
+                    "stream_epoch": work.stream_epoch,
+                    "window": {
+                        "start_ms": work.window.start_ms,
+                        "current_start_ms": work.window.current_start_ms,
+                        "end_ms": work.window.end_ms,
+                        "evidence_mode": work.window.evidence_mode,
+                        "audio_status": work.window.audio_status.value,
+                    },
+                    "media": [
+                        {
+                            "sequence": frame.sequence,
+                            "kind": frame.kind.value,
+                            "start_ms": frame.start_ms,
+                            "end_ms": frame.end_ms,
+                            "encoding": frame.encoding,
+                            "payload_bytes": len(frame.payload),
+                        }
+                        for frame in frames
+                    ],
+                    "prompt_snapshot": self._start.prompt_snapshot,
+                },
+            )
+            emit_model_trace(
+                "diagnostic",
+                "model.input.prepared",
+                component="timeline_detection",
+                request_id=log_context.request_id,
+                invocation_id=work.request_id,
+                sequence=2,
+                root_session_id=log_context.root_session_id,
+                agent_session_id=log_context.agent_session_id,
+                turn_id=log_context.turn_id,
+                attempt=attempt + 1,
+                model_id=self.model_id,
+                model_version=self.model_version,
+                model_input=request,
+                input_prepare_ms=round(input_build_ms, 3),
+            )
+            emit_model_trace(
+                "diagnostic",
+                "model.request.started",
+                component="timeline_detection",
+                request_id=log_context.request_id,
+                invocation_id=work.request_id,
+                sequence=3,
+                root_session_id=log_context.root_session_id,
+                agent_session_id=log_context.agent_session_id,
+                turn_id=log_context.turn_id,
+                attempt=attempt + 1,
+                model_id=self.model_id,
+                model_version=self.model_version,
+                input_prepare_ms=round(input_build_ms, 3),
+            )
             archive_context = {
                 "request_id": log_context.request_id,
                 "provider_request_id": f"{logical_request_id}:{attempt + 1}",
@@ -648,6 +714,8 @@ class SglangClientTimelineDetectionModel:
                 attempt=attempt + 1, request=request,
                 video_mp4=video_mp4, image_jpegs=image_jpegs,
             )
+            inference_started = time.perf_counter()
+            archive_started = time.time()
             try:
                 model_operation_id = f"{logical_request_id}:{attempt + 1}"
                 async with model_request_log(
@@ -687,6 +755,30 @@ class SglangClientTimelineDetectionModel:
                         "raw_output": None,
                     },
                 )
+                emit_model_trace(
+                    "diagnostic",
+                    "model.response.received",
+                    component="timeline_detection",
+                    request_id=log_context.request_id,
+                    invocation_id=work.request_id,
+                    sequence=4,
+                    root_session_id=log_context.root_session_id,
+                    agent_session_id=log_context.agent_session_id,
+                    turn_id=log_context.turn_id,
+                    attempt=attempt + 1,
+                    status=(
+                        "cancelled"
+                        if isinstance(exc, asyncio.CancelledError)
+                        else "error"
+                    ),
+                    model_output={
+                        "error_type": type(exc).__name__,
+                        "detail": str(exc),
+                    },
+                    model_inference_ms=round(
+                        (time.perf_counter() - inference_started) * 1000.0, 3
+                    ),
+                )
                 raise
             get_model_io_recorder("event").record(
                 stage="event",
@@ -698,6 +790,27 @@ class SglangClientTimelineDetectionModel:
             )
             inference_ms = (time.perf_counter() - inference_started) * 1_000
             raw_output = str(result.text)
+            emit_model_trace(
+                "diagnostic",
+                "model.response.received",
+                component="timeline_detection",
+                request_id=log_context.request_id,
+                invocation_id=work.request_id,
+                sequence=4,
+                root_session_id=log_context.root_session_id,
+                agent_session_id=log_context.agent_session_id,
+                turn_id=log_context.turn_id,
+                attempt=attempt + 1,
+                status="success",
+                model_output=raw_output,
+                usage=(
+                    result.usage.to_dict()
+                    if getattr(result, "usage", None) is not None
+                    else None
+                ),
+                weight_version=getattr(result, "weight_version", None),
+                model_inference_ms=round(inference_ms, 3),
+            )
             try:
                 if self._event1115_names is not None:
                     event_ids = parse_event1115_output(
@@ -849,6 +962,19 @@ class SglangClientTimelineDetectionModel:
             }
             if frequency_decision is not None:
                 artifact_result["frequency_gate"] = frequency_decision.to_record()
+            emit_model_trace(
+                "diagnostic",
+                "event.resolved",
+                component="timeline_detection",
+                request_id=log_context.request_id,
+                invocation_id=work.request_id,
+                sequence=5,
+                root_session_id=log_context.root_session_id,
+                agent_session_id=log_context.agent_session_id,
+                turn_id=log_context.turn_id,
+                attempt=attempt + 1,
+                event_result=artifact_result,
+            )
             self._log_work(
                 "inference_result", work, attempt=attempt + 1,
                 status=artifact_result["status"], raw_output=raw_output[:512],

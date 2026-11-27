@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
 from sglang_omni.profiler.decision_timing import emit_decision_timing
 from sglang_omni.serve.model_io import get_model_io_recorder
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 
 from . import prompt_v09, prompt_v10, prompt_v11, prompt_v12
 from .contracts import (
@@ -66,6 +67,7 @@ class SglangClientTaskClassificationModel:
         self.model_version = model_version
 
     async def classify(self, request: TaskClassificationRequest) -> str:
+        input_started = time.perf_counter()
         if self._prompt_snapshot is not None and request.router_profile != "v1.0":
             raise ValueError("debug snapshots require Router v1.0")
         supplied = request.prompt_snapshot
@@ -165,21 +167,19 @@ class SglangClientTaskClassificationModel:
                     3,
                 ),
             )
+        system_prompt = (
+            snapshot["system_prompt"]
+            if snapshot is not None
+            else (
+                prompt.SYSTEM_PROMPT
+                if history
+                else prompt.SINGLE_TURN_SYSTEM_PROMPT
+            )
+        )
         generate_request = GenerateRequest(
             model=self.model_id,
             messages=[
-                Message(
-                    role="system",
-                    content=(
-                        snapshot["system_prompt"]
-                        if snapshot is not None
-                        else (
-                            prompt.SYSTEM_PROMPT
-                            if history
-                            else prompt.SINGLE_TURN_SYSTEM_PROMPT
-                        )
-                    ),
-                ),
+                Message(role="system", content=system_prompt),
                 Message(role="user", content=content),
             ],
             sampling=(
@@ -204,6 +204,27 @@ class SglangClientTaskClassificationModel:
             output_modalities=["text"],
             metadata=metadata,
         )
+        input_prepare_ms = (time.perf_counter() - input_started) * 1000.0
+        emit_model_trace(
+            "reply",
+            "model.input.prepared",
+            component="turn_router",
+            request_id=request.request_id,
+            sequence=2,
+            root_session_id=request.session_id,
+            agent_session_id=request.session_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            model_id=self.model_id,
+            model_version=self.model_version_for(request),
+            model_input={
+                "system_prompt": system_prompt,
+                "user_prompt": content,
+                "sampling": generate_request.sampling,
+                "media": request.media,
+            },
+            input_prepare_ms=round(input_prepare_ms, 3),
+        )
         model_started = time.perf_counter()
         archive_started = time.time()
         archive_context = {
@@ -222,6 +243,20 @@ class SglangClientTaskClassificationModel:
             request_id=request.request_id,
             metadata=metadata,
             component="turn_router",
+        )
+        emit_model_trace(
+            "reply",
+            "model.request.started",
+            component="turn_router",
+            request_id=request.request_id,
+            sequence=3,
+            root_session_id=request.session_id,
+            agent_session_id=request.session_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            model_id=self.model_id,
+            model_version=self.model_version_for(request),
+            input_prepare_ms=round(input_prepare_ms, 3),
         )
         try:
             result = await self._client.completion(
@@ -248,6 +283,21 @@ class SglangClientTaskClassificationModel:
                     3,
                 ),
             )
+            emit_model_trace(
+                "reply",
+                "model.response.received",
+                component="turn_router",
+                request_id=request.request_id,
+                sequence=4,
+                root_session_id=request.session_id,
+                agent_session_id=request.session_id,
+                turn_id=request.turn_id,
+                status="cancelled",
+                model_inference_ms=round(
+                    (time.perf_counter() - model_started) * 1000.0, 3
+                ),
+                model_output={"error_type": "CancelledError"},
+            )
             raise
         except Exception as exc:
             get_model_io_recorder("router").record(
@@ -270,7 +320,26 @@ class SglangClientTaskClassificationModel:
                     3,
                 ),
             )
+            emit_model_trace(
+                "reply",
+                "model.response.received",
+                component="turn_router",
+                request_id=request.request_id,
+                sequence=4,
+                root_session_id=request.session_id,
+                agent_session_id=request.session_id,
+                turn_id=request.turn_id,
+                status="error",
+                model_inference_ms=round(
+                    (time.perf_counter() - model_started) * 1000.0, 3
+                ),
+                model_output={
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc),
+                },
+            )
             raise
+        model_inference_ms = (time.perf_counter() - model_started) * 1000.0
         emit_decision_timing(
             "decision_model_request_completed",
             request_id=request.request_id,
@@ -290,7 +359,28 @@ class SglangClientTaskClassificationModel:
             status="success",
             started_at=archive_started,
         )
-        return str(result.text)
+        model_output = str(result.text)
+        emit_model_trace(
+            "reply",
+            "model.response.received",
+            component="turn_router",
+            request_id=request.request_id,
+            sequence=4,
+            root_session_id=request.session_id,
+            agent_session_id=request.session_id,
+            status="success",
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            model_output=model_output,
+            usage=(
+                result.usage.to_dict()
+                if getattr(result, "usage", None) is not None
+                else None
+            ),
+            weight_version=getattr(result, "weight_version", None),
+            model_inference_ms=round(model_inference_ms, 3),
+        )
+        return model_output
 
     async def prewarm(self) -> None:
         """Populate every supported prompt prefix and verify route invariants."""
