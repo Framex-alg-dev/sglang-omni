@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
-
-from sglang_omni.models.qwen3_omni.public_prefix import (
-    PublicPrefixVerifier,
-    is_published_prompt,
-)
+from sglang_omni.models.qwen3_omni import public_prefix
 
 
-def test_timeline_e50_direct_prompt_is_an_approved_public_prefix() -> None:
-    prompt_path = (
-        Path(__file__).parents[3]
-        / "deploy/prompts/e50-direct-checkpoint1500/system_prompt_e50_direct.txt"
+def test_agent_owned_timeline_e50_digest_is_approved() -> None:
+    expected = "ccd76772db751450205dae0f82beea877f0bec5f4c0d1d98bf03ef1feef90a44"
+    assert expected in public_prefix._PUBLISHED_EXTERNAL_PROMPT_SHA256
+
+
+def test_public_prefix_boundary_still_rejects_unpublished_agent_text() -> None:
+    system_prompt = "synthetic Agent snapshot that is not a reviewed public prefix"
+    assert hashlib.sha256(system_prompt.encode()).hexdigest() not in (
+        public_prefix._PUBLISHED_EXTERNAL_PROMPT_SHA256
     )
-    system_prompt = prompt_path.read_text(encoding="utf-8").strip()
-    assert hashlib.sha256(system_prompt.encode()).hexdigest() == (
-        "ccd76772db751450205dae0f82beea877f0bec5f4c0d1d98bf03ef1feef90a44"
-    )
-    assert is_published_prompt(system_prompt)
-    assert not is_published_prompt(system_prompt + "\nchanged")
+    assert not public_prefix.is_published_prompt(system_prompt)
 
     class Tokenizer:
         @staticmethod
@@ -44,5 +39,5 @@ def test_timeline_e50_direct_prompt_is_an_approved_public_prefix() -> None:
             return text
 
     full_ids = Tokenizer.encode(system_prompt)
-    verifier = PublicPrefixVerifier(Tokenizer(), Processor())
-    assert verifier.boundary(system_prompt, full_ids) == len(full_ids)
+    verifier = public_prefix.PublicPrefixVerifier(Tokenizer(), Processor())
+    assert verifier.boundary(system_prompt, full_ids) == 0

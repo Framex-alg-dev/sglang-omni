@@ -16,8 +16,9 @@
 `topics` 的键恰好是三个服务名，值为不同 TopicId。`host_log_root` 必须是宿主机实际挂载目录。
 应用内路径仍是代码常量，不新增日志路径环境变量。
 
-当前 10 号机的三个容器均将 `/var/log/framex` 绑定到宿主机 `/data/nvme1/sglang-omni-unified-b1e5ff16-20261124/logs/framex`；采集路径须使用这个宿主机目录。
-09 号机的 Omni inference gateway 另写 `/var/log/framex/omni-reply-worker/app.log`，应采入同一个 Reply 主题。该机只部署 Reply 采集规则，生成与审计命令都加 `--service omni-reply-worker`；不要给不存在的角色建立采集规则。
+容器部署必须把 `/var/log/framex` 挂载到宿主机持久目录，并把该宿主机目录写入
+`host_log_root`。一台机器只为实际部署的角色创建采集规则；生成与审计命令使用
+`--service <role>` 限定角色，不要给不存在的角色建立规则。
 
 ```sh
 python scripts/prepare_omni_cls.py --targets /private-deploy/targets.json > /private-deploy/collection-requests.json
@@ -37,7 +38,10 @@ python scripts/prepare_omni_cls.py --targets /private-deploy/targets.json > /pri
 使用[腾讯云官方安装指南](https://cloud.tencent.com/document/product/614/122939)安装宿主机 LogListener，指定真实 CLS 地域及网络方式。
 凭据只交给 LogListener 并使用其加密存储；部署私密文件须为 0600。不放入 Git、示例、镜像、服务业务环境或验收报告。
 每个写入身份仅能上传到所属主题。配置与查询由独立管理/只读身份完成，不给 Worker 扩大权限。
-不要采内部 replay/diagnostic、提示词、ASR/LLM 内容、媒体与签名 URL；上线前先关闭逐帧服务日志。
+不要采内部 replay/diagnostic、原始媒体、签名 URL 或任何凭据；上线前先关闭逐帧服务日志。
+六阶段模型调用日志允许保存经过凭据与手机号脱敏的文本提示词、文本输入、模型文本输出
+和最终 Agent payload，以便在 CLS 中直接核对下发结果。音频、视频、图片等二进制内容只写
+有界元数据，完整内容由 COS 归档承担。
 
 ## 验收
 
