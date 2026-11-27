@@ -1,7 +1,6 @@
 import hashlib
 import json
 import httpx
-import msgpack
 import pytest
 from fastapi.testclient import TestClient
 
@@ -199,7 +198,8 @@ def test_router_never_loads_knowledge_inside_omni(monkeypatch):
     from sglang_omni.serve.task_classification.service import (
         create_task_classification_app,
     )
-    from tests.unit_test.serve.test_prompt_debug import _FakeClient, router_payload
+    from tests.unit_test.serve.task_classification.test_service import _body, _prompt_snapshot
+    from tests.unit_test.serve.test_prompt_debug import _FakeClient
 
     client_model = _FakeClient(code="0")
 
@@ -211,17 +211,17 @@ def test_router_never_loads_knowledge_inside_omni(monkeypatch):
     app = create_task_classification_app(
         TaskClassificationPipeline(
             SglangClientTaskClassificationModel(
-                client_model, model_id="model", model_version="weights"
+                client_model, model_id="turn-router", model_version="prompt-v1"
             )
         ),
         token="secret",
     )
     with TestClient(app) as client:
-        payload = router_payload()
+        snapshot = _prompt_snapshot()
         r = client.post(
             "/v1/task-classification",
             headers={"Authorization": "Bearer secret"},
-            content=msgpack.packb(payload, use_bin_type=True),
+            content=_body("查天气", prompt_snapshot=snapshot),
         )
         assert r.status_code == 200, r.text
-        assert "FIRST" not in client_model.requests[-1][1].messages[0].content
+        assert client_model.requests[-1][1].messages[0].content == snapshot["system_prompt"]
