@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+from sglang_omni.utils import framex_service_logs
 from sglang_omni.utils.framex_service_logs import (
     REQUEST_ID_ALPHABET,
     adopt_request_id,
@@ -14,6 +15,12 @@ from sglang_omni.utils.framex_service_logs import (
     emit_service_event,
     shutdown_service_logging,
 )
+
+
+def test_deployed_version_is_used_without_git_metadata(monkeypatch) -> None:
+    monkeypatch.setenv("SGLANG_OMNI_VERSION", "4a34da984907")
+
+    assert framex_service_logs._git_version() == "4a34da984907"
 
 
 def _records(tmp_path, service: str) -> list[dict]:

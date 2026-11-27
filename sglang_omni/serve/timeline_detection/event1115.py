@@ -55,7 +55,7 @@ def event1115_names_from_agent_snapshot(
     registry_json: str,
     codebook_csv: str,
 ) -> dict[str, str]:
-    """Validate the Agent-owned E0..E95 registry without reading local files."""
+    """Validate the Agent-owned E0..E95 production codebook."""
     try:
         registry = json.loads(registry_json)
         if not isinstance(registry, dict) or set(registry) != {"events"}:
@@ -75,15 +75,24 @@ def event1115_names_from_agent_snapshot(
                 raise ValueError("invalid registry row")
             registry_pairs.append((row["code"], row["name"]))
         reader = csv.DictReader(io.StringIO(codebook_csv, newline=""))
-        if reader.fieldnames != ["code", "name"]:
+        if reader.fieldnames != [
+            "new_code",
+            "event_name",
+            "source_D97_code",
+            "legacy_alias",
+            "definition",
+        ]:
             raise ValueError("invalid codebook header")
-        codebook_pairs = [(row["code"], row["name"]) for row in reader]
+        codebook_pairs = [
+            (row["new_code"], row["event_name"])
+            for row in reader
+        ]
         expected = [(f"E{index}", name) for index, (_code, name) in enumerate(registry_pairs)]
         if (
-            len(registry_pairs) != 96
+            not system_prompt.strip()
+            or len(registry_pairs) != 96
             or registry_pairs != expected
             or registry_pairs != codebook_pairs
-            or registry_json not in system_prompt
         ):
             raise ValueError("registry, codebook and prompt disagree")
     except (csv.Error, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:

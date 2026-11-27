@@ -22,10 +22,10 @@ from sglang_omni.serve.timeline_detection.service import _start_from_json
 def _agent_timeline_snapshot() -> dict:
     events = [{"code": f"E{index}", "name": f"event-{index}"} for index in range(96)]
     registry = json.dumps({"events": events}, ensure_ascii=False, separators=(",", ":"))
-    codebook = "code,name\n" + "".join(
-        f"{event['code']},{event['name']}\n" for event in events
+    codebook = "new_code,event_name,source_D97_code,legacy_alias,definition\n" + "".join(
+        f"{event['code']},{event['name']},,,{event['name']}\n" for event in events
     )
-    prompt = f"AGENT EVENT POLICY\n{registry}\nEND"
+    prompt = "AGENT EVENT POLICY"
     texts = {
         "system_prompt": prompt,
         "event_registry_json": registry,

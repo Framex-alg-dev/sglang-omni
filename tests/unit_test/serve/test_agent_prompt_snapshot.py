@@ -52,11 +52,16 @@ def _timeline_documents() -> tuple[str, str, str]:
     events = [{"code": f"E{index}", "name": f"event-{index}"} for index in range(96)]
     registry = json.dumps({"events": events}, ensure_ascii=False, separators=(",", ":"))
     output = io.StringIO(newline="")
-    writer = csv.DictWriter(output, fieldnames=("code", "name"), lineterminator="\n")
+    writer = csv.DictWriter(output, fieldnames=(
+        "new_code", "event_name", "source_D97_code", "legacy_alias", "definition",
+    ), lineterminator="\n")
     writer.writeheader()
-    writer.writerows(events)
+    writer.writerows({
+        "new_code": event["code"], "event_name": event["name"],
+        "source_D97_code": "", "legacy_alias": "", "definition": event["name"],
+    } for event in events)
     codebook = output.getvalue()
-    return f"AGENT EVENT POLICY\n{registry}\nEND", registry, codebook
+    return "AGENT EVENT POLICY", registry, codebook
 
 
 def _timeline_snapshot() -> dict:

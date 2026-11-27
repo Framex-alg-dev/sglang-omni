@@ -154,6 +154,9 @@ def bind_service_log_context(
 
 
 def _git_version() -> str:
+    deployed = os.environ.get("SGLANG_OMNI_VERSION", "").strip()
+    if deployed:
+        return deployed
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short=12", "HEAD"],
