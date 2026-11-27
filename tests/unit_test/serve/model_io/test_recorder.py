@@ -20,8 +20,13 @@ def _wait_for_ready(root: Path) -> Path:
 
 
 def test_recorder_extracts_inline_media_and_commits_manifest_last(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    events = []
+    monkeypatch.setattr(
+        "sglang_omni.serve.model_io.recorder.emit_service_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
     recorder = ModelIORecorder(tmp_path, queue_size=2, max_bytes=1_000_000)
     audio = b"RIFF-test-audio"
     assert recorder.record(
@@ -39,6 +44,7 @@ def test_recorder_extracts_inline_media_and_commits_manifest_last(
         context={
             "request_id": "req_1",
             "root_session_id": "session_1",
+            "agent_session_id": "agent_session_1",
             "turn_id": "turn_1",
             "model_id": "router-model",
             "model_version": "v1",
@@ -64,6 +70,8 @@ def test_recorder_extracts_inline_media_and_commits_manifest_last(
     assert (call_dir / result["audio"]["data"]["$media"]).read_bytes() == audio
     assert "base64" not in (call_dir / "input/request.json").read_text()
     recorder.close()
+    archive_event = next(event for event in events if event[0][1] == "artifact.archive.persisted")
+    assert archive_event[1]["agent_session_id"] == "agent_session_1"
 
 
 def test_disabled_recorder_is_fail_open() -> None:

@@ -154,7 +154,6 @@ def test_static_prefill_keeps_media_private_and_approves_exact_prompt():
 @pytest.mark.asyncio
 async def test_model_observations_preserve_control_and_thumbs_up_ids(monkeypatch, tmp_path):
     monkeypatch.setenv('SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT', str(tmp_path))
-    monkeypatch.setattr(DirectE50Profile, 'from_environment', classmethod(lambda cls: profile()))
     class Client:
         async def completion(self, request, *, request_id, **kwargs):
             return SimpleNamespace(text='E13,E14,E20,E21')
@@ -162,7 +161,8 @@ async def test_model_observations_preserve_control_and_thumbs_up_ids(monkeypatch
         stream_epoch=0, audio_format='pcm_s16le/16000/1', video_format='image/jpeg',
         model_id='qwen3-omni-gpu4-timeline')
     model = SglangClientTimelineDetectionModel(Client(), start,
-        model_version='partial30-checkpoint-1750-fp8-20261020', inference_interval_ms=1000)
+        model_version='partial30-checkpoint-1750-fp8-20261020',
+        direct_profile=profile(), inference_interval_ms=1000)
     try:
         result = await model._detect(_WindowWork(0, 0, window()))
         assert [event.event_type for event in result.events] == ['E13', 'E14', 'E20', 'E21']
@@ -204,8 +204,6 @@ async def test_e49_observation_uses_partial30_name_and_saves_aligned_audio(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setenv('SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT', str(tmp_path))
-    monkeypatch.setattr(DirectE50Profile, 'from_environment',
-                        classmethod(lambda cls: profile()))
 
     class Client:
         async def completion(self, request, *, request_id, **kwargs):
@@ -217,7 +215,8 @@ async def test_e49_observation_uses_partial30_name_and_saves_aligned_audio(
         model_id='qwen3-omni-gpu4-timeline',
     )
     model = SglangClientTimelineDetectionModel(
-        Client(), start, model_version='partial30-test', inference_interval_ms=1000,
+        Client(), start, model_version='partial30-test', direct_profile=profile(),
+        inference_interval_ms=1000,
     )
     try:
         result = await model._detect(_WindowWork(0, 0, window()))

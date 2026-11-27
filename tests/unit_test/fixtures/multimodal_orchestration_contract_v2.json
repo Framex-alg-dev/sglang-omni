@@ -56,7 +56,7 @@
         "language": "zh-CN"
       },
       "model_id": "qwen3-omni-gpu3-decision-services",
-      "model_version": "omni-turn-router-prompt-v6",
+      "model_version": "omni-turn-router-v1.0",
       "route_code": 1,
       "needs_mcp": true,
       "needs_multimodal": false

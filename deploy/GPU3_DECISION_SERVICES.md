@@ -5,14 +5,17 @@ port 18006. It must not run a second classifier or Brain model process.
 
 | Capability | Endpoint | Scheduling |
 | --- | --- | --- |
-| classifier / turn router | `POST /classifier/v1/task-classification` | short, high-priority `direct`/`delegate`/`cancel` decision |
+| classifier / turn router | `POST /classifier/v1/task-classification` | short, high-priority v7 capability-code decision |
 | task Brain | `POST /brain/v1/chat/completions` | bounded concurrency 2, short structured decision |
 
-The classifier accepts either committed text or one original audio item. It
-uses the prompt contract from `sglang_omni/serve/task_classification/prompt.py`
-and returns both the exact token (`direct`, `delegate`, or `cancel`) and its stable route
-(`BRAIN1`, `BRAIN2`, or `CONTROL`). It does not use ASR text for audio and does not accept
-images or video.
+The classifier accepts either committed text or one original audio item and
+requires the immutable Router prompt snapshot supplied by Agent. Omni does not
+read Knowledge or fall back to a local live prompt. Request assembly lives in
+`sglang_omni/serve/task_classification/prompt_v10.py`; prompt text and capability
+scopes remain Agent-owned. The model must return exactly one code (`0`, `1`, `2`,
+or `3`). The service derives `direct`/`BRAIN1` or `delegate`/`BRAIN2` from the MCP
+bit and returns the multimodal bit independently. It does not use ASR text for
+audio and does not accept images or video.
 
 The Brain endpoint accepts only the non-streaming OpenAI subset used by D's
 `task-decision-v1` adapter. It requires JSON output, rejects non-`none`
@@ -33,8 +36,9 @@ continuous sliding-window workload is not on the Turn decision critical path.
 3. Install `sglang-omni-gpu3-decision-services.service` as a systemd unit.
 4. Before starting, verify physical GPU3 is free and port 18006 is unused.
 
-This prompted shared-base deployment intentionally does not require a release
-manifest. If classifier or Brain later receives its own checkpoint, run its
+This prompted shared-base deployment intentionally does not keep a local prompt
+release manifest; every Router request carries the Agent-frozen Knowledge release
+and checksums. If classifier or Brain later receives its own checkpoint, run its
 standalone service role and generate an immutable manifest with
 `scripts/generate_model_release_manifest.py`; the model adapter seam and wire
 contract do not need to change.

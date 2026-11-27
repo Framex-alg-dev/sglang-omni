@@ -70,7 +70,8 @@ def payload_request_log_context(
             or _fallback_id(fallback_turn_id, prefix="legacy_turn")
         ),
         agent_session_id=(
-            _optional_id(context, "agent_session_id")
+            bound.agent_session_id
+            or _optional_id(context, "agent_session_id")
             or _fallback_id(fallback_agent_session_id, prefix="legacy_agent")
         ),
     )
@@ -94,6 +95,7 @@ async def model_request_log(
     with bind_service_log_context(
         request_id=context.request_id,
         root_session_id=context.root_session_id,
+        agent_session_id=context.agent_session_id,
         turn_id=context.turn_id,
     ):
         emit_service_event(
@@ -164,9 +166,9 @@ async def websocket_request_log(
         request_id=context.request_id,
         root_session_id=context.root_session_id,
         turn_id=context.turn_id,
+        agent_session_id=context.agent_session_id,
         connection_type=connection_type,
         operation_id=logged_operation_id,
-        agent_session_id=context.agent_session_id,
     )
     reason = "completed"
     try:
@@ -188,6 +190,7 @@ async def websocket_request_log(
             request_id=context.request_id,
             root_session_id=context.root_session_id,
             turn_id=context.turn_id,
+            agent_session_id=context.agent_session_id,
             connection_type=connection_type,
             operation_id=logged_operation_id,
             reason=reason,

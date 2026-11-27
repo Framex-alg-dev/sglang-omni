@@ -10,11 +10,10 @@ from typing import Any
 
 from sglang_omni.serve.agent_prompt_snapshot import RouterPromptSnapshot
 
-LEGACY_CONTRACT_VERSION = 6
 CONTRACT_VERSION = 7
-SUPPORTED_CONTRACT_VERSIONS = (LEGACY_CONTRACT_VERSION, CONTRACT_VERSION)
+SUPPORTED_CONTRACT_VERSIONS = (CONTRACT_VERSION,)
 DEFAULT_ROUTER_PROFILE = "v1.0"
-SUPPORTED_ROUTER_PROFILES = ("v1.0", "v0.9", "v1.1", "v1.2")
+SUPPORTED_ROUTER_PROFILES = (DEFAULT_ROUTER_PROFILE,)
 DEFAULT_BRAIN1_CAPABILITIES = (
     "普通聊天、简单问答、计算、下游用户视频理解；" "不处理应用能力、曲库或媒体播放查询"
 )
@@ -177,11 +176,6 @@ class TaskClassificationRequest:
     has_active_agent: bool = False
     pending_confirmation: bool = False
     follow_up_required: bool = False
-    active_task_goal: str | None = None
-    active_task_status: str | None = None
-    active_task_family: str | None = None
-    active_task_phase: str | None = None
-    active_task_awaiting_input: str | None = None
     router_profile: str = DEFAULT_ROUTER_PROFILE
     prompt_snapshot: RouterPromptSnapshot | None = None
     contract_version: int = CONTRACT_VERSION
@@ -196,28 +190,8 @@ class TaskClassificationRequest:
             raise ValueError("unsupported turn-router contract version")
         if self.router_profile not in SUPPORTED_ROUTER_PROFILES:
             raise ValueError("unsupported turn-router profile")
-        if (
-            self.contract_version == LEGACY_CONTRACT_VERSION
-            and self.prompt_snapshot is not None
-        ):
-            raise ValueError("turn-router v6 does not accept prompt_snapshot")
-        if self.prompt_snapshot is not None and self.router_profile != "v1.0":
-            raise ValueError("Agent Router prompt snapshot requires Router v1.0")
-        if (
-            self.contract_version == CONTRACT_VERSION
-            and self.router_profile == "v1.0"
-            and self.prompt_snapshot is None
-        ):
+        if self.prompt_snapshot is None:
             raise ValueError("turn-router v7 requires Agent prompt_snapshot")
-        for name, value in (
-            ("active_task_goal", self.active_task_goal),
-            ("active_task_status", self.active_task_status),
-            ("active_task_family", self.active_task_family),
-            ("active_task_phase", self.active_task_phase),
-            ("active_task_awaiting_input", self.active_task_awaiting_input),
-        ):
-            if value is not None and not value.strip():
-                raise ValueError(f"{name} cannot be blank")
         has_text = bool((self.text or "").strip())
         if has_text == bool(self.media):
             raise ValueError("turn-router request needs exactly one of text or audio")

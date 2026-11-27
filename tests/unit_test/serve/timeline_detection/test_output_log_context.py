@@ -18,7 +18,7 @@ from tests.unit_test.serve.test_agent_prompt_snapshot import _timeline_snapshot
 
 
 @pytest.mark.asyncio
-async def test_retry_and_queued_output_keep_one_window_operation(monkeypatch):
+async def test_retry_and_queued_output_keep_one_window_operation():
     class CapturingClient(Client):
         def __init__(self):
             super().__init__(["invalid", "N"])
@@ -32,14 +32,14 @@ async def test_retry_and_queued_output_keep_one_window_operation(monkeypatch):
         user_prompt="strict training user prompt",
         prompt_version="timeline-v3-test",
     )
-    monkeypatch.setattr(
-        DirectE50Profile,
-        "from_environment",
-        classmethod(lambda cls: profile),
+    request = replace(
+        start(),
+        root_session_id="canonical-call",
+        agent_session_id="sess-browser-1",
     )
-    request = replace(start(), root_session_id="canonical-call")
     model = SglangClientTimelineDetectionModel(client, request,
-        model_version="log-contract-test", inference_interval_ms=1000)
+        model_version="log-contract-test", direct_profile=profile,
+        inference_interval_ms=1000)
     try:
         await model.start(request)
         await feed_first_window(model)
@@ -48,6 +48,7 @@ async def test_retry_and_queued_output_keep_one_window_operation(monkeypatch):
         result = model.output_log_context
         assert first.request_id == retry.request_id == result.request_id
         assert result.root_session_id == "canonical-call"
+        assert first.agent_session_id == retry.agent_session_id == "sess-browser-1"
         assert first.turn_id == retry.turn_id == result.turn_id == "timeline:session-1:0:0:3000"
         assert client.calls[0][1] == "timeline:session-1:0:0:3000:1"
         assert client.calls[1][1] == "timeline:session-1:0:0:3000:2"
@@ -77,7 +78,8 @@ def test_raw_window_transport_logs_dequeued_identity_without_wire_metadata(tmp_p
         with TestClient(app) as client, client.websocket_connect('/v1/timeline',
                 headers={'Authorization':'Bearer secret'}) as ws:
             ws.send_json(dict(type="session.start", contract_version=3, session_id="session-1",
-                root_session_id="call-root", request_id="incoming-start", identity_epoch=2,
+                root_session_id="call-root", agent_session_id="sess-browser-1",
+                request_id="incoming-start", identity_epoch=2,
                 observer_epoch=0, stream_epoch=0, next_sequence=1, audio_format="pcm16/16000/mono",
                 video_format="jpeg", model_id="timeline-model",
                 prompt_snapshot=_timeline_snapshot()))
@@ -90,6 +92,7 @@ def test_raw_window_transport_logs_dequeued_identity_without_wire_metadata(tmp_p
             window=next(r for r in results if r['type']=='window.result')
             metadata = window.pop('log_context')
             assert metadata['request_id'] == 'req_0123456789abcdef'
+            assert metadata['agent_session_id'] == 'sess-browser-1'
             assert DetectionWindow.from_wire(window).events[0].event_type == 'E5'
             ws.send_json({'type':'session.close'})
             assert ws.receive_json()['type']=='session.closed'
@@ -99,5 +102,6 @@ def test_raw_window_transport_logs_dequeued_identity_without_wire_metadata(tmp_p
     done=next(r for r in records if r.get('operation')=='timeline_window')
     assert done['request_id']=='req_0123456789abcdef'
     assert done['root_session_id']=='call-root'
+    assert done['agent_session_id']=='sess-browser-1'
     assert done['turn_id']==done['operation_id']=='timeline:session-1:0:0:200'
     assert next(r for r in records if r['event']=='ws.connected')['request_id']=='incoming-start'

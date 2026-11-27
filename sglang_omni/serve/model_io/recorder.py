@@ -350,6 +350,7 @@ class ModelIORecorder:
             "agent_session_id": context.get("agent_session_id"),
             "turn_id": context.get("turn_id"),
             "source_turn_id": context.get("source_turn_id"),
+            "provider_turn_id": context.get("provider_turn_id"),
             "request_id": context.get("request_id"),
             "parent_request_id": context.get("parent_request_id"),
             "provider_request_id": context.get("provider_request_id"),
@@ -407,6 +408,7 @@ class ModelIORecorder:
                 request_id=item.context.get("request_id"),
                 root_session_id=item.context.get("root_session_id")
                 or item.context.get("session_id"),
+                agent_session_id=item.context.get("agent_session_id"),
                 turn_id=item.context.get("turn_id"),
                 stage=item.stage,
                 **fields,

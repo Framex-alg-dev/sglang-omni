@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import logging
 import time
 from collections import OrderedDict
@@ -13,9 +12,9 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from framex_event_policy.windows import DetectionWindow, WindowEvent
-from PIL import Image, ImageOps
+from PIL import Image
 
-from sglang_omni.client.types import GenerateRequest, Message, SamplingParams
+from sglang_omni.client.types import GenerateRequest
 from sglang_omni.serve.model_io import get_model_io_recorder
 from sglang_omni.serve.request_log_context import (
     RequestLogContext,
@@ -50,23 +49,13 @@ from .event1115 import (
     event1115_names_from_agent_snapshot,
     parse_event1115_output,
 )
-from .catalog import EVENT_ID_SET
-from .prompt import (
-    EVENT_SUMMARIES,
-    PROMPT_VERSION,
-    RETRY_PROMPT,
-    SYSTEM_PROMPT,
-    USER_PROMPT,
-)
+from .catalog import EVENT_ID_SET, EVENT_SUMMARIES
 from .window import EventDetectionWindow, EventWindowAssembler
 
 
 logger = logging.getLogger(__name__)
 
 
-MODEL_IMAGE_WIDTH = 448
-MODEL_IMAGE_HEIGHT = 252
-NORMALIZED_FRAME_CACHE_SIZE = 64
 DIRECT_E50_PREFILL_TIMEOUT_SECONDS = 30.0
 
 
@@ -148,7 +137,7 @@ class SglangClientTimelineDetectionModel:
             ):
                 emit_service_event(
                     "omni-event-worker",
-                    "prompt.binding_drift",
+                    "prompt.binding.drift",
                     level=logging.WARNING,
                     logger_name=__name__,
                     root_session_id=start.root_session_id or start.session_id,
@@ -159,10 +148,11 @@ class SglangClientTimelineDetectionModel:
                     serving_model_id=resolved_model_id,
                     serving_model_version=model_version,
                 )
-        elif direct_profile is None:
-            direct_profile = DirectE50Profile.from_environment()
         if direct_profile is None:
-            raise ValueError("timeline v3 requires a direct event model")
+            raise ValueError(
+                "timeline v3 requires Agent prompt_snapshot or an explicit "
+                "debug profile"
+            )
         first_hit_1s = direct_profile.protocol == EVENT1115_PROTOCOL
         allowed_intervals = {500} if first_hit_1s else {1_000, 3_000}
         if inference_interval_ms not in allowed_intervals or window_ms != 10_000:
@@ -212,11 +202,6 @@ class SglangClientTimelineDetectionModel:
             max_buffer_bytes=max_window_bytes,
             window_event_sink=self._artifacts.record_window_event,
         )
-        # Adjacent one-second windows retain 18 of their 20 selected frames.
-        # Keep the deterministic JPEG normalization result per media sequence
-        # so those retained frames do not repeat CPU decode/resize/encode work.
-        # The cache is instance-local and is cleared on every stream epoch.
-        self._normalized_frames: OrderedDict[tuple[int, int], bytes] = OrderedDict()
         self._decoded_video_frames: OrderedDict[tuple[int, int], Image.Image] = OrderedDict()
         self._windows: asyncio.Queue[_WindowWork] = asyncio.Queue(maxsize=1)
         self._outputs: asyncio.Queue[_QueuedOutput] = asyncio.Queue(maxsize=1)
@@ -326,7 +311,6 @@ class SglangClientTimelineDetectionModel:
         )
         self._generation += 1
         self._assembler.clear()
-        self._normalized_frames.clear()
         self._decoded_video_frames.clear()
         _drain(self._windows)
         _drain(self._outputs)
@@ -336,7 +320,6 @@ class SglangClientTimelineDetectionModel:
             return
         self._closed = True
         self._assembler.clear()
-        self._normalized_frames.clear()
         self._decoded_video_frames.clear()
         worker = self._worker
         if worker is not None:
@@ -441,45 +424,31 @@ class SglangClientTimelineDetectionModel:
         )
         input_started = time.perf_counter()
         frames = (*work.window.history_frames, *work.window.current_frames)
-        if self._direct_e50 is not None:
-            video_mp4 = encode_hc_video_mp4(
-                frames,
-                fps=self._direct_e50.video_fps,
-                preset="ultrafast" if self._event1115_names is not None else "veryfast",
-                frame_cache=self._decoded_video_frames if self._event1115_names is not None else None,
-            )
-            image_jpegs: tuple[bytes, ...] = ()
-        else:
-            video_mp4 = None
-            image_jpegs = tuple(self._normalized_frame_jpeg(frame) for frame in frames)
+        video_mp4 = encode_hc_video_mp4(
+            frames,
+            fps=self._direct_e50.video_fps,
+            preset="ultrafast" if self._event1115_names is not None else "veryfast",
+            frame_cache=(
+                self._decoded_video_frames
+                if self._event1115_names is not None
+                else None
+            ),
+        )
+        image_jpegs: tuple[bytes, ...] = ()
         input_build_ms = (time.perf_counter() - input_started) * 1_000
         for attempt in range(self._max_attempts):
-            if self._direct_e50 is not None:
-                assert video_mp4 is not None
-                request = build_direct_e50_request(
-                    profile=self._direct_e50,
-                    model_id=self.model_id,
-                    session_id=self._start.session_id,
-                    window=work.window,
-                    video_mp4=video_mp4,
-                    retry=attempt > 0,
-                    logical_request_id=logical_request_id,
-                    contract_version=self._start.contract_version,
-                    observer_epoch=self._start.observer_epoch,
-                    stream_epoch=work.stream_epoch,
-                )
-            else:
-                request = _generate_request(
-                    model_id=self.model_id,
-                    window=work.window,
-                    image_jpegs=image_jpegs,
-                    retry=attempt > 0,
-                    logical_request_id=logical_request_id,
-                    contract_version=self._start.contract_version,
-                    observer_epoch=self._start.observer_epoch,
-                    stream_epoch=work.stream_epoch,
-                    attribution_duration_ms=self._attribution_duration_ms,
-                )
+            request = build_direct_e50_request(
+                profile=self._direct_e50,
+                model_id=self.model_id,
+                session_id=self._start.session_id,
+                window=work.window,
+                video_mp4=video_mp4,
+                retry=attempt > 0,
+                logical_request_id=logical_request_id,
+                contract_version=self._start.contract_version,
+                observer_epoch=self._start.observer_epoch,
+                stream_epoch=work.stream_epoch,
+            )
             self._log_work(
                 "model_request_submitted", work, attempt=attempt + 1,
                 prompt_version=self.prompt_version, model_version=self.model_version,
@@ -851,182 +820,6 @@ class SglangClientTimelineDetectionModel:
             f"model did not return usable event JSON after {self._max_attempts} "
             f"attempts: {last_error}"
         )
-
-    def _normalized_frame_jpeg(self, frame: TimelineMediaChunk) -> bytes:
-        key = (frame.stream_epoch, frame.sequence)
-        cached = self._normalized_frames.get(key)
-        if cached is not None:
-            self._normalized_frames.move_to_end(key)
-            return cached
-        normalized = _normalize_frame_jpeg(frame.payload)
-        self._normalized_frames[key] = normalized
-        if len(self._normalized_frames) > NORMALIZED_FRAME_CACHE_SIZE:
-            self._normalized_frames.popitem(last=False)
-        return normalized
-
-
-def _generate_request(
-    *,
-    model_id: str,
-    window: EventDetectionWindow,
-    image_jpegs: tuple[bytes, ...],
-    retry: bool,
-    logical_request_id: str,
-    contract_version: int,
-    observer_epoch: int,
-    stream_epoch: int,
-    attribution_duration_ms: int,
-) -> GenerateRequest:
-    history_seconds = window.history_duration_ms / 1_000
-    total_seconds = (window.end_ms - window.start_ms) / 1_000
-    mode = "冷启动" if window.history_duration_ms < 7_000 else "标准稳态"
-    audio_status = window.audio_status.value
-    attribution_seconds = attribution_duration_ms / 1_000
-    audio_start_ms = window.audio_start_ms
-    audio_duration_seconds = (
-        (window.end_ms - audio_start_ms) / 1_000
-        if audio_start_ms is not None
-        else 0
-    )
-    full_audio = audio_start_ms == window.start_ms
-    if window.audio_wav is None:
-        audio_description = f"{audio_status}，本次为纯视觉判断"
-    elif full_audio:
-        audio_description = f"完整覆盖H+C共{total_seconds:g}秒"
-    else:
-        audio_description = f"完整覆盖C共{audio_duration_seconds:g}秒，H无音频"
-    user_prompt = (
-        f"本次为{mode}窗口：H={history_seconds:g}秒/"
-        f"{len(window.history_frames)}张图片，C=3秒/"
-        f"{len(window.current_frames)}张图片，完整C={attribution_seconds:g}秒均为本轮判定范围，"
-        f"音频状态={audio_description}。\n"
-        f"{USER_PROMPT}"
-    )
-    if retry:
-        user_prompt = f"{user_prompt}\n\n{RETRY_PROMPT}"
-    content: list[dict[str, str]] = [
-        {
-            "type": "text",
-            "text": (
-                f"【HISTORY H｜仅作历史基线｜{history_seconds:g}秒｜"
-                f"{len(window.history_frames)}张图片开始】"
-            ),
-        },
-        *({"type": "image"} for _ in window.history_frames),
-        {
-            "type": "text",
-            "text": "【HISTORY H结束｜与CURRENT C连续、无重叠无间隙】",
-        },
-        {
-            "type": "text",
-            "text": (
-                f"【CURRENT C开始｜{attribution_seconds:g}秒｜"
-                "完整C=(T-3s,T]均为本轮判定范围｜"
-                f"{len(window.current_frames)}张图片开始】"
-            ),
-        },
-        *({"type": "image"} for _ in window.current_frames),
-        {
-            "type": "text",
-            "text": "【CURRENT C结束｜H只作取证，达标点落在完整C内即可输出】",
-        },
-    ]
-    if window.audio_wav is not None:
-        audio_boundary = (
-            f"0-{history_seconds:g}秒为H，"
-            f"{history_seconds:g}-{total_seconds:g}秒为C；"
-            "使用完整H+C音频取证"
-            if full_audio
-            else "仅覆盖CURRENT C；H只有图片，不得推测H内声音"
-        )
-        content.extend(
-            (
-                {
-                    "type": "text",
-                    "text": (
-                        f"【同步音频完整覆盖{audio_duration_seconds:g}秒："
-                        f"{audio_boundary}，"
-                        "完整CURRENT C均为本轮判定范围】"
-                    ),
-                },
-                {"type": "audio"},
-            )
-        )
-    else:
-        content.append(
-            {
-                "type": "text",
-                "text": (
-                    f"【本窗口没有完整同步音频，状态={audio_status}；"
-                    "只依据有序图片，不得推测现场安静或存在任何声音】"
-                ),
-            }
-        )
-    content.append({"type": "text", "text": user_prompt})
-    metadata: dict[str, Any] = {
-        "task": "timeline_detection",
-        "task_role": "timeline_detection",
-        "logical_request_id": logical_request_id,
-        "contract_version": contract_version,
-        "observer_epoch": observer_epoch,
-        "stream_epoch": stream_epoch,
-        "prompt_version": PROMPT_VERSION,
-        "evidence_mode": window.evidence_mode,
-        "audio_status": audio_status,
-        "audio_scope": (
-            "history_current"
-            if full_audio
-            else "current_only"
-            if window.audio_wav is not None
-            else "none"
-        ),
-        "input_layout": "ordered_hc_images",
-        "attribution_duration_ms": attribution_duration_ms,
-        "history_frame_count": len(window.history_frames),
-        "current_frame_count": len(window.current_frames),
-        "image_width": MODEL_IMAGE_WIDTH,
-        "image_height": MODEL_IMAGE_HEIGHT,
-        "images": [_data_url("image/jpeg", payload) for payload in image_jpegs],
-    }
-    if window.audio_wav is not None:
-        metadata["audios"] = [_data_url("audio/wav", window.audio_wav)]
-    return GenerateRequest(
-        model=model_id,
-        messages=[
-            Message(role="system", content=SYSTEM_PROMPT),
-            Message(role="user", content=content),
-        ],
-        sampling=SamplingParams(
-            temperature=0.0,
-            top_p=1.0,
-            seed=0,
-            max_new_tokens=48,
-        ),
-        stream=False,
-        max_tokens=48,
-        output_modalities=["text"],
-        metadata=metadata,
-    )
-
-
-def _data_url(mime: str, payload: bytes) -> str:
-    return f"data:{mime};base64," + base64.b64encode(payload).decode("ascii")
-
-
-def _normalize_frame_jpeg(payload: bytes) -> bytes:
-    """Fit a camera frame into the V25 visual budget without cropping people."""
-
-    with Image.open(io.BytesIO(payload)) as source:
-        image = ImageOps.pad(
-            source.convert("RGB"),
-            (MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT),
-            method=Image.Resampling.LANCZOS,
-            color=(0, 0, 0),
-        )
-        output = io.BytesIO()
-        image.save(output, format="JPEG", quality=90, optimize=True)
-    return output.getvalue()
-
 
 def _drain(queue: asyncio.Queue[Any]) -> None:
     while True:

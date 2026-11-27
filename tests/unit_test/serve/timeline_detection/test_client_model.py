@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import lru_cache
 from io import BytesIO
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import pytest
 from PIL import Image
 
 from sglang_omni.serve.timeline_detection import client_model as client_model_module
+from sglang_omni.serve.agent_prompt_snapshot import decode_timeline_prompt_snapshot
 from sglang_omni.serve.timeline_detection.client_model import SglangClientTimelineDetectionModel
 from sglang_omni.serve.timeline_detection.contracts import (
     MediaKind,
@@ -15,6 +17,7 @@ from sglang_omni.serve.timeline_detection.contracts import (
     TimelineSessionStart,
 )
 from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
+from tests.unit_test.serve.test_agent_prompt_snapshot import _timeline_snapshot
 
 
 class Client:
@@ -46,6 +49,40 @@ def start() -> TimelineSessionStart:
         video_format="image/jpeg",
         model_id="timeline-model",
     )
+
+
+def test_prompt_binding_drift_is_advisory(monkeypatch) -> None:
+    profile = DirectE50Profile(
+        system_prompt="strict training system prompt",
+        user_prompt="strict training user prompt",
+        prompt_version="event-e50-direct-checkpoint1500-v1",
+    )
+    monkeypatch.setattr(
+        client_model_module.DirectE50Profile,
+        "from_environment",
+        classmethod(lambda cls, *_args, **_kwargs: profile),
+    )
+    events = []
+    real_emit_service_event = client_model_module.emit_service_event
+
+    def capture_event(component, event, **fields):
+        real_emit_service_event(component, event, **fields)
+        events.append((component, event, fields))
+
+    monkeypatch.setattr(client_model_module, "emit_service_event", capture_event)
+    request = replace(
+        start(),
+        prompt_snapshot=decode_timeline_prompt_snapshot(_timeline_snapshot()),
+    )
+
+    SglangClientTimelineDetectionModel(
+        Client([]),
+        request,
+        serving_model_id="serving-event-model",
+        model_version="serving-event-version",
+    )
+
+    assert events[0][1] == "prompt.binding.drift"
 
 
 def audio(sequence: int = 1) -> TimelineMediaChunk:
@@ -102,23 +139,18 @@ async def feed_first_video_only_window(
 
 @pytest.mark.asyncio
 async def test_direct_e50_prewarms_static_prefix_before_inference(
-    monkeypatch,
 ) -> None:
     profile = DirectE50Profile(
         system_prompt="strict training system prompt",
         user_prompt="strict training user prompt",
         prompt_version="event-e50-direct-checkpoint1500-v1",
     )
-    monkeypatch.setattr(
-        client_model_module.DirectE50Profile,
-        "from_environment",
-        classmethod(lambda cls: profile),
-    )
     client = PrefillClient([])
     model = SglangClientTimelineDetectionModel(
         client,
         start(),
         model_version="e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+        direct_profile=profile,
         inference_interval_ms=1_000,
     )
 
@@ -134,21 +166,17 @@ async def test_direct_e50_prewarms_static_prefix_before_inference(
 
 
 @pytest.mark.asyncio
-async def test_direct_model_emits_raw_event_without_server_frequency(monkeypatch) -> None:
+async def test_direct_model_emits_raw_event_without_server_frequency() -> None:
     profile = DirectE50Profile(
         system_prompt="strict training system prompt",
         user_prompt="strict training user prompt",
         prompt_version="event-e50-direct-checkpoint1500-v1",
     )
-    monkeypatch.setattr(
-        client_model_module.DirectE50Profile,
-        "from_environment",
-        classmethod(lambda cls: profile),
-    )
     model = SglangClientTimelineDetectionModel(
         Client(["E20"]),
         start(),
         model_version="e50-direct-checkpoint-1500-fp8-sidecar-fixed",
+        direct_profile=profile,
         inference_interval_ms=1_000,
     )
     await model.start(start())

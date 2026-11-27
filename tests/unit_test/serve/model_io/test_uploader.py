@@ -62,9 +62,26 @@ def _write_bundle(root: Path) -> Path:
     return call_dir
 
 
-def test_uploader_sends_manifest_last_and_is_idempotent(tmp_path: Path) -> None:
+def test_uploader_sends_manifest_last_and_is_idempotent(tmp_path: Path, monkeypatch) -> None:
     call_dir = _write_bundle(tmp_path)
     client = FakeCOSClient()
+    events = []
+    monkeypatch.setattr(
+        "sglang_omni.serve.model_io.uploader.emit_service_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    manifest_path = call_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["agent_session_id"] = "agent_session_1"
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+    ready_path = call_dir / "ready.json"
+    ready = json.loads(ready_path.read_text())
+    ready["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    ready["total_bytes"] = (
+        (call_dir / "input/request.json").stat().st_size
+        + manifest_path.stat().st_size
+    )
+    ready_path.write_text(json.dumps(ready))
 
     first = upload_pending(
         tmp_path,
@@ -95,6 +112,11 @@ def test_uploader_sends_manifest_last_and_is_idempotent(tmp_path: Path) -> None:
     )
     assert second["skipped"] == 1
     assert len(client.uploads) == 2
+    committed = next(
+        event for event in events
+        if event[0][1] == "artifact.upload.completed"
+    )
+    assert committed[1]["agent_session_id"] == "agent_session_1"
 
 
 def test_uploader_retries_checksum_failure_without_remote_commit(

@@ -7,17 +7,17 @@ from sglang.srt.mem_cache.radix_cache import RadixKey
 from sglang_omni.scheduling.sglang_backend.scoped_cache import PrefixScopes, ScopedRadixCache
 
 
-def test_current_router_generation_prompt_stays_out_of_catalog_public_prefix():
+def test_agent_router_prompt_stays_out_of_catalog_public_prefix():
     from sglang_omni.models.qwen3_omni.public_prefix import (
         PublicPrefixVerifier,
         is_published_prompt,
     )
-    from sglang_omni.serve.task_classification.prompt_v10 import SYSTEM_PROMPT
+    system_prompt = "Agent-owned Router system prompt"
 
     # The current generative Router is not the retired v5 candidate scorer.
     # Its caller rules are private unless separately approved by exact digest.
-    assert not is_published_prompt(SYSTEM_PROMPT)
-    assert not is_published_prompt(SYSTEM_PROMPT + "\nchanged")
+    assert not is_published_prompt(system_prompt)
+    assert not is_published_prompt(system_prompt + "\nchanged")
 
     class Tokenizer:
         @staticmethod
@@ -32,37 +32,9 @@ def test_current_router_generation_prompt_stays_out_of_catalog_public_prefix():
             assert add_generation_prompt is False
             return messages[0]["content"][0]["text"]
 
-    full_ids = Tokenizer.encode(SYSTEM_PROMPT)
+    full_ids = Tokenizer.encode(system_prompt)
     verifier = PublicPrefixVerifier(Tokenizer(), Processor())
-    assert verifier.boundary(SYSTEM_PROMPT, full_ids) == 0
-
-
-def test_timeline_v25_prompt_is_an_approved_public_prefix():
-    from sglang_omni.models.qwen3_omni.public_prefix import (
-        PublicPrefixVerifier,
-        is_published_prompt,
-    )
-    from sglang_omni.serve.timeline_detection.prompt import SYSTEM_PROMPT
-
-    assert is_published_prompt(SYSTEM_PROMPT)
-    assert not is_published_prompt(SYSTEM_PROMPT + "\nchanged")
-
-    class Tokenizer:
-        @staticmethod
-        def encode(text, add_special_tokens=False):
-            assert add_special_tokens is False
-            return list(text.encode("utf-8"))
-
-    class Processor:
-        @staticmethod
-        def apply_chat_template(messages, *, tokenize, add_generation_prompt):
-            assert tokenize is False
-            assert add_generation_prompt is False
-            return messages[0]["content"][0]["text"]
-
-    full_ids = Tokenizer.encode(SYSTEM_PROMPT)
-    verifier = PublicPrefixVerifier(Tokenizer(), Processor())
-    assert verifier.boundary(SYSTEM_PROMPT, full_ids) == len(full_ids)
+    assert verifier.boundary(system_prompt, full_ids) == 0
 
 
 @pytest.mark.parametrize('page', [1, 2, 4])

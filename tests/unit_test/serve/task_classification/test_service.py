@@ -11,7 +11,6 @@ from sglang_omni.serve.task_classification.contracts import (
     CONTRACT_VERSION,
     DEFAULT_BRAIN1_CAPABILITIES,
     DEFAULT_BRAIN2_CAPABILITIES,
-    LEGACY_CONTRACT_VERSION,
 )
 from sglang_omni.serve.task_classification.pipeline import TaskClassificationPipeline
 from sglang_omni.serve.task_classification.service import (
@@ -52,12 +51,17 @@ def _prompt_snapshot() -> dict:
     }
 
 
+_DEFAULT_PROMPT = object()
+
+
 def _body(
     text: str,
     *,
-    contract_version: int = LEGACY_CONTRACT_VERSION,
-    prompt_snapshot: dict | None = None,
+    contract_version: int = CONTRACT_VERSION,
+    prompt_snapshot: dict | None | object = _DEFAULT_PROMPT,
 ) -> bytes:
+    if prompt_snapshot is _DEFAULT_PROMPT:
+        prompt_snapshot = _prompt_snapshot()
     payload = {
         "contract_version": contract_version,
         "request_id": "request-1",
@@ -89,29 +93,9 @@ def test_requires_the_exact_request_contract() -> None:
     assert parsed.brain1_capabilities == DEFAULT_BRAIN1_CAPABILITIES
     assert parsed.brain2_capabilities == DEFAULT_BRAIN2_CAPABILITIES
     assert parsed.router_profile == "v1.0"
-    assert parsed.active_task_goal is None
-    assert parsed.active_task_status is None
-    assert parsed.contract_version == LEGACY_CONTRACT_VERSION
-    assert parsed.prompt_snapshot is None
+    assert parsed.contract_version == CONTRACT_VERSION
+    assert parsed.prompt_snapshot is not None
     assert "曲库查询" in parsed.brain2_capabilities
-    raw["router_profile"] = "v0.9"
-    assert _request_from_json(raw).router_profile == "v0.9"
-    raw["router_profile"] = "v1.1"
-    raw["active_task_goal"] = "查询天气"
-    raw["active_task_status"] = "waiting_user"
-    parsed_v11 = _request_from_json(raw)
-    assert parsed_v11.router_profile == "v1.1"
-    assert parsed_v11.active_task_goal == "查询天气"
-    assert parsed_v11.active_task_status == "waiting_user"
-    raw["router_profile"] = "v1.2"
-    raw["active_task_family"] = "weather"
-    raw["active_task_phase"] = "waiting_user"
-    raw["active_task_awaiting_input"] = "details"
-    parsed_v12 = _request_from_json(raw)
-    assert parsed_v12.router_profile == "v1.2"
-    assert parsed_v12.active_task_family == "weather"
-    assert parsed_v12.active_task_phase == "waiting_user"
-    assert parsed_v12.active_task_awaiting_input == "details"
     raw["router_profile"] = "unknown"
     try:
         _request_from_json(raw)
@@ -119,7 +103,7 @@ def test_requires_the_exact_request_contract() -> None:
         assert str(exc) == "unsupported turn-router profile"
     else:
         raise AssertionError("unknown router profiles must be rejected")
-    raw["router_profile"] = "v0.9"
+    raw["router_profile"] = "v1.0"
     raw.pop("brain2_capabilities")
     try:
         _request_from_json(raw)
@@ -157,7 +141,7 @@ def test_authenticated_turn_router_contract(monkeypatch) -> None:
     assert response.json()["needs_mcp"] is True
     assert response.json()["needs_multimodal"] is False
     assert response.json()["input_revision"] == 4
-    assert response.json()["contract_version"] == LEGACY_CONTRACT_VERSION
+    assert response.json()["contract_version"] == CONTRACT_VERSION
     assert response.json()["request_cue"] is None
     assert [event for event, _ in timing_events] == [
         "decision_request_received",
@@ -191,21 +175,32 @@ def test_v7_accepts_agent_prompt_snapshot_and_echoes_contract() -> None:
     assert response.json()["contract_version"] == CONTRACT_VERSION
 
 
-def test_v7_requires_snapshot_and_v6_rejects_it() -> None:
+def test_v7_requires_snapshot_and_v6_is_retired() -> None:
     v7_without_snapshot = msgpack.unpackb(
-        _body("hello", contract_version=CONTRACT_VERSION), raw=False
+        _body("hello", prompt_snapshot=None), raw=False
     )
     with pytest.raises(ValueError, match="v7 requires Agent prompt_snapshot"):
         _request_from_json(v7_without_snapshot)
 
     v6_with_snapshot = msgpack.unpackb(
-        _body("hello", prompt_snapshot=_prompt_snapshot()), raw=False
+        _body(
+            "hello",
+            contract_version=6,
+            prompt_snapshot=_prompt_snapshot(),
+        ),
+        raw=False,
     )
-    with pytest.raises(ValueError, match="v6 does not accept prompt_snapshot"):
+    with pytest.raises(ValueError, match="unsupported turn-router contract version"):
         _request_from_json(v6_with_snapshot)
 
 
-def test_websocket_streams_binary_media_before_classification() -> None:
+def test_websocket_streams_binary_media_before_classification(monkeypatch) -> None:
+    traces = []
+    monkeypatch.setattr(
+        classification_service,
+        "emit_model_trace",
+        lambda stream, event, **fields: traces.append((stream, event, fields)),
+    )
     class _MediaModel(_Model):
         async def classify(self, request):
             assert request.text is None
@@ -267,6 +262,21 @@ def test_websocket_streams_binary_media_before_classification() -> None:
     assert completed["response"]["route"] == "BRAIN2"
     assert completed["response"]["route_code"] == 3
     assert completed["response"]["needs_multimodal"] is True
+    router_traces = [
+        fields
+        for stream, event, fields in traces
+        if stream == "reply"
+        and event in {
+            "agent.request.received",
+            "router.resolved",
+            "agent.response.sent",
+        }
+    ]
+    assert len(router_traces) == 3
+    assert all(item["request_id"] == "trace-request-1" for item in router_traces)
+    assert all(item["root_session_id"] == "root-1" for item in router_traces)
+    assert all(item["agent_session_id"] == "agent-1" for item in router_traces)
+    assert all(item["turn_id"] == "turn-1" for item in router_traces)
 
 
 def test_websocket_validation_failure_keeps_session_and_turn_context(

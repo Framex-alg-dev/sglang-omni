@@ -48,6 +48,7 @@ def test_payload_context_is_bound_to_the_complete_model_lifecycle(
                 "req_0123456789abcdfg"
             )
             assert current_service_log_context().root_session_id == "root-1"
+            assert current_service_log_context().agent_session_id == "agent-1"
             assert current_service_log_context().turn_id == "turn-1"
 
     asyncio.run(run())
@@ -64,6 +65,7 @@ def test_bound_http_context_wins_over_payload_context() -> None:
     with bind_service_log_context(
         request_id="http-request",
         root_session_id="http-root",
+        agent_session_id="http-agent",
         turn_id="http-turn",
     ):
         context = payload_request_log_context(
@@ -79,6 +81,7 @@ def test_bound_http_context_wins_over_payload_context() -> None:
 
     assert context.request_id == "http-request"
     assert context.root_session_id == "http-root"
+    assert context.agent_session_id == "http-agent"
     assert context.turn_id == "http-turn"
 
 

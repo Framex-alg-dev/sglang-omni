@@ -72,6 +72,9 @@ _request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _root_session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "framex_root_session_id", default=None
 )
+_agent_session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "framex_agent_session_id", default=None
+)
 _turn_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "framex_turn_id", default=None
 )
@@ -118,6 +121,7 @@ def _optional_correlation_id(name: str, value: str | None) -> str | None:
 class ServiceLogContext:
     request_id: str | None = None
     root_session_id: str | None = None
+    agent_session_id: str | None = None
     turn_id: str | None = None
 
 
@@ -125,6 +129,7 @@ def current_service_log_context() -> ServiceLogContext:
     return ServiceLogContext(
         request_id=_request_id_var.get(),
         root_session_id=_root_session_id_var.get(),
+        agent_session_id=_agent_session_id_var.get(),
         turn_id=_turn_id_var.get(),
     )
 
@@ -134,16 +139,21 @@ def bind_service_log_context(
     *,
     request_id: str | None = None,
     root_session_id: str | None = None,
+    agent_session_id: str | None = None,
     turn_id: str | None = None,
 ) -> Iterator[ServiceLogContext]:
     """Bind correlation IDs to the current async/task context."""
 
     request_id = _optional_correlation_id("request_id", request_id)
     root_session_id = _optional_correlation_id("root_session_id", root_session_id)
+    agent_session_id = _optional_correlation_id(
+        "agent_session_id", agent_session_id
+    )
     turn_id = _optional_correlation_id("turn_id", turn_id)
     tokens = (
         (_request_id_var, _request_id_var.set(request_id)),
         (_root_session_id_var, _root_session_id_var.set(root_session_id)),
+        (_agent_session_id_var, _agent_session_id_var.set(agent_session_id)),
         (_turn_id_var, _turn_id_var.set(turn_id)),
     )
     try:
@@ -255,7 +265,12 @@ class _FramexJsonFormatter(logging.Formatter):
         message = record.getMessage()
         if message:
             value["message"] = _redact_text(message)
-        for name in ("request_id", "root_session_id", "turn_id"):
+        for name in (
+            "request_id",
+            "root_session_id",
+            "agent_session_id",
+            "turn_id",
+        ):
             item = getattr(record, f"framex_{name}", None)
             if item is not None:
                 value[name] = item
@@ -274,7 +289,12 @@ class _FramexJsonFormatter(logging.Formatter):
 class _ContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         context = current_service_log_context()
-        for name in ("request_id", "root_session_id", "turn_id"):
+        for name in (
+            "request_id",
+            "root_session_id",
+            "agent_session_id",
+            "turn_id",
+        ):
             explicit = getattr(record, f"framex_{name}", None)
             if explicit is None:
                 setattr(record, f"framex_{name}", getattr(context, name))
@@ -433,6 +453,7 @@ def emit_service_event(
     logger_name: str | None = None,
     request_id: str | None = None,
     root_session_id: str | None = None,
+    agent_session_id: str | None = None,
     turn_id: str | None = None,
     **fields: Any,
 ) -> None:
@@ -443,6 +464,7 @@ def emit_service_event(
     for name, value in (
         ("request_id", request_id),
         ("root_session_id", root_session_id),
+        ("agent_session_id", agent_session_id),
         ("turn_id", turn_id),
     ):
         _optional_correlation_id(name, value)
@@ -466,6 +488,7 @@ def emit_service_event(
             "framex_logger": logger_name or logger.name,
             "framex_request_id": request_id,
             "framex_root_session_id": root_session_id,
+            "framex_agent_session_id": agent_session_id,
             "framex_turn_id": turn_id,
             "framex_fields": safe,
         },

@@ -389,6 +389,9 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
         )
         assert request_start["contract_version"] == 2
         assert upstream.trace_context.request_id == f"trace-{request_start['request_id']}"
+        assert upstream.trace_context.root_session_id == "root-1"
+        assert upstream.trace_context.agent_session_id == "agent-1"
+        assert upstream.trace_context.turn_id == "turn-1"
         if request_start["request_id"] == "r2":
             assert "log_context" not in request_start["payload"]
         else:

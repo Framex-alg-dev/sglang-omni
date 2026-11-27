@@ -1,1 +1,1 @@
-"""Private direct/delegate/cancel turn-router service."""
+"""Private v7 capability router deriving direct or delegate routes."""

@@ -23,6 +23,7 @@ def _wire_request() -> dict:
             "request_id": "req_0123456789abcdfg",
             "root_session_id": "ses_0123456789abcdfg",
             "agent_session_id": "agent-session-1",
+            "turn_id": "turn-trace-1",
         },
     }
 
@@ -36,12 +37,15 @@ def test_action_log_context_is_separate_from_operation_idempotency() -> None:
     assert request.trace_request_id == "req_0123456789abcdfg"
     assert request.root_session_id == "ses_0123456789abcdfg"
     assert request.agent_session_id == "agent-session-1"
+    assert request.turn_id == "turn-1"
+    assert request.trace_turn_id == "turn-trace-1"
 
     retried = replace(
         request,
         trace_request_id="req_z123456789abcdfg",
         root_session_id="ses_other",
         agent_session_id="agent-session-2",
+        trace_turn_id="turn-trace-2",
     )
     assert _request_digest(retried) == _request_digest(request)
 
@@ -55,6 +59,7 @@ def test_action_websocket_request_id_is_log_only() -> None:
         "request_id": "req_z123456789abcdfg",
         "root_session_id": "ses_0123456789abcdfg",
         "agent_session_id": "agent-session-1",
+        "turn_id": "turn-trace-1",
     }
 
 

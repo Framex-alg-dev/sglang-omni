@@ -49,6 +49,7 @@ class ActionDecisionRequest:
     trace_request_id: str | None = None
     root_session_id: str | None = None
     agent_session_id: str | None = None
+    trace_turn_id: str | None = None
 
 
 @dataclass(frozen=True)

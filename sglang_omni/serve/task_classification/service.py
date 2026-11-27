@@ -6,7 +6,6 @@ import asyncio
 import hmac
 import logging
 import time
-from contextlib import asynccontextmanager
 from typing import Any
 
 import msgpack
@@ -19,6 +18,7 @@ from sglang_omni.profiler.decision_timing import emit_decision_timing
 from sglang_omni.serve.agent_prompt_snapshot import decode_router_prompt_snapshot
 from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from sglang_omni.serve.request_log_context import (
+    RequestLogContext,
     model_request_log,
     payload_request_log_context,
     websocket_request_log,
@@ -54,20 +54,9 @@ def create_task_classification_app(
     if max_body_bytes <= 0:
         raise ValueError("max_body_bytes must be positive")
 
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        try:
-            await pipeline.prewarm()
-        except Exception:
-            # Warmup is an optimization. Keep the service available and let the
-            # first live request populate the cache if the model was not ready.
-            logger.warning("turn-router prefix prewarm failed", exc_info=True)
-        yield
-
     app = FastAPI(
         title="sglang-omni-turn-router",
-        version="6",
-        lifespan=lifespan,
+        version="7",
     )
     install_framex_http_logging(app, service="omni-reply-worker")
 
@@ -102,10 +91,12 @@ def create_task_classification_app(
         authenticate(request)
         body = await _read_envelope(request, max_body_bytes=max_body_bytes)
         try:
+            context = _classification_log_context(body)
             payload = await _classify_payload(
                 pipeline,
                 body,
                 transport="http",
+                context=context,
             )
             return JSONResponse(
                 payload,
@@ -113,6 +104,7 @@ def create_task_classification_app(
                     _emit_response_sent,
                     payload,
                     "http",
+                    context,
                 ),
             )
         except InvalidRouteOutput as exc:
@@ -148,19 +140,8 @@ def create_task_classification_app(
                 }
                 for item in streamed.media
             ]
-            context = payload_request_log_context(
-                body,
-                fallback_request_id=request_id,
-                fallback_root_session_id=(
-                    body.get("session_id")
-                    if isinstance(body.get("session_id"), str)
-                    else None
-                ),
-                fallback_turn_id=(
-                    body.get("turn_id")
-                    if isinstance(body.get("turn_id"), str)
-                    else None
-                ),
+            context = _classification_log_context(
+                body, fallback_request_id=request_id
             )
             async with websocket_request_log(
                 "omni-reply-worker",
@@ -171,7 +152,12 @@ def create_task_classification_app(
             ):
                 result = await run_until_websocket_disconnect(
                     websocket,
-                    _classify_payload(pipeline, body, transport="websocket"),
+                    _classify_payload(
+                        pipeline,
+                        body,
+                        transport="websocket",
+                        context=context,
+                    ),
                 )
                 await websocket.send_json(
                     {
@@ -180,7 +166,7 @@ def create_task_classification_app(
                         "response": result,
                     }
                 )
-                _emit_response_sent(result, "websocket")
+                _emit_response_sent(result, "websocket", context)
         except WebSocketDisconnect:
             return
         except (InvalidRouteOutput, ValueError) as exc:
@@ -194,6 +180,9 @@ def create_task_classification_app(
                     context.root_session_id if context is not None else None
                 ),
                 turn_id=context.turn_id if context is not None else None,
+                agent_session_id=(
+                    context.agent_session_id if context is not None else None
+                ),
                 operation="task_classification",
                 status=400,
                 error_type=type(exc).__name__,
@@ -216,9 +205,35 @@ async def _classify_payload(
     body: dict[str, Any],
     *,
     transport: str = "internal",
+    context: RequestLogContext | None = None,
 ) -> dict[str, Any]:
-    fallback_request_id = body.get("request_id")
-    if not isinstance(fallback_request_id, str):
+    context = context or _classification_log_context(body)
+    async with model_request_log(
+        "omni-reply-worker",
+        "task_classification",
+        context,
+        operation_id=(
+            body.get("request_id")
+            if isinstance(body.get("request_id"), str)
+            else context.request_id
+        ),
+        logger_name=__name__,
+    ):
+        return await _classify_payload_with_context(
+            pipeline,
+            body,
+            transport=transport,
+            context=context,
+        )
+
+
+def _classification_log_context(
+    body: dict[str, Any], *, fallback_request_id: str | None = None
+) -> RequestLogContext:
+    body_request_id = body.get("request_id")
+    if isinstance(body_request_id, str):
+        fallback_request_id = body_request_id
+    elif fallback_request_id is None:
         fallback_request_id = ""
     fallback_session_id = body.get("session_id")
     if not isinstance(fallback_session_id, str):
@@ -226,25 +241,13 @@ async def _classify_payload(
     fallback_turn_id = body.get("turn_id")
     if not isinstance(fallback_turn_id, str):
         fallback_turn_id = None
-    context = payload_request_log_context(
+    return payload_request_log_context(
         body,
         fallback_request_id=fallback_request_id,
         fallback_root_session_id=fallback_session_id,
         fallback_turn_id=fallback_turn_id,
         fallback_agent_session_id=fallback_session_id,
     )
-    async with model_request_log(
-        "omni-reply-worker",
-        "task_classification",
-        context,
-        operation_id=fallback_request_id,
-        logger_name=__name__,
-    ):
-        return await _classify_payload_with_context(
-            pipeline,
-            body,
-            transport=transport,
-        )
 
 
 async def _classify_payload_with_context(
@@ -252,6 +255,7 @@ async def _classify_payload_with_context(
     body: dict[str, Any],
     *,
     transport: str,
+    context: RequestLogContext,
 ) -> dict[str, Any]:
     classification_request = _request_from_json(body)
     metadata = _timing_metadata(classification_request)
@@ -260,12 +264,12 @@ async def _classify_payload_with_context(
         "reply",
         "agent.request.received",
         component="turn_router",
-        request_id=classification_request.request_id,
+        request_id=context.request_id,
         sequence=1,
-        root_session_id=classification_request.session_id,
-        agent_session_id=classification_request.session_id,
+        root_session_id=context.root_session_id or classification_request.session_id,
+        agent_session_id=context.agent_session_id or classification_request.session_id,
         session_id=classification_request.session_id,
-        turn_id=classification_request.turn_id,
+        turn_id=context.turn_id or classification_request.turn_id,
         transport=transport,
         agent_request=body,
     )
@@ -356,12 +360,12 @@ async def _classify_payload_with_context(
         "reply",
         "router.resolved",
         component="turn_router",
-        request_id=classification_request.request_id,
+        request_id=context.request_id,
         sequence=5,
-        root_session_id=classification_request.session_id,
-        agent_session_id=classification_request.session_id,
+        root_session_id=context.root_session_id or classification_request.session_id,
+        agent_session_id=context.agent_session_id or classification_request.session_id,
         session_id=classification_request.session_id,
-        turn_id=classification_request.turn_id,
+        turn_id=context.turn_id or classification_request.turn_id,
         route_code=result.route_code,
         route=result.route.value,
         route_token=result.route_token.value,
@@ -390,7 +394,11 @@ def _timing_metadata(request: TaskClassificationRequest) -> dict[str, Any]:
     }
 
 
-def _emit_response_sent(response: dict[str, Any], transport: str) -> None:
+def _emit_response_sent(
+    response: dict[str, Any],
+    transport: str,
+    context: RequestLogContext,
+) -> None:
     request_id = response.get("request_id")
     if not isinstance(request_id, str) or not request_id:
         return
@@ -420,12 +428,12 @@ def _emit_response_sent(response: dict[str, Any], transport: str) -> None:
         "reply",
         "agent.response.sent",
         component="turn_router",
-        request_id=request_id,
+        request_id=context.request_id,
         sequence=6,
-        root_session_id=response.get("session_id"),
-        agent_session_id=response.get("session_id"),
+        root_session_id=context.root_session_id or response.get("session_id"),
+        agent_session_id=context.agent_session_id or response.get("session_id"),
         session_id=response.get("session_id"),
-        turn_id=response.get("turn_id"),
+        turn_id=context.turn_id or response.get("turn_id"),
         transport=transport,
         agent_response=response,
     )
@@ -438,18 +446,9 @@ def create_decision_services_app(
 ) -> FastAPI:
     """Expose both task contracts while classifier and Brain share one runtime."""
 
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        # Starlette does not run mounted sub-application lifespans. Enter the
-        # classifier lifespan explicitly so its immutable route prefix is warm
-        # before the combined decision service accepts traffic.
-        async with classifier_app.router.lifespan_context(classifier_app):
-            yield
-
     app = FastAPI(
         title="sglang-omni-decision-services",
-        version="1",
-        lifespan=lifespan,
+        version="7",
     )
     install_framex_http_logging(app, service="omni-reply-worker")
     app.mount("/classifier", classifier_app)
@@ -498,11 +497,6 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
     }
     optional_fields = {
         "router_profile",
-        "active_task_goal",
-        "active_task_status",
-        "active_task_family",
-        "active_task_phase",
-        "active_task_awaiting_input",
         "prompt_snapshot",
         "log_context",
     }
@@ -532,11 +526,6 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         has_active_agent=_boolean(raw, "has_active_agent"),
         pending_confirmation=_boolean(raw, "pending_confirmation"),
         follow_up_required=_boolean(raw, "follow_up_required"),
-        active_task_goal=_optional_string(raw, "active_task_goal"),
-        active_task_status=_optional_string(raw, "active_task_status"),
-        active_task_family=_optional_string(raw, "active_task_family"),
-        active_task_phase=_optional_string(raw, "active_task_phase"),
-        active_task_awaiting_input=_optional_string(raw, "active_task_awaiting_input"),
         router_profile=(
             _string(raw, "router_profile")
             if "router_profile" in raw

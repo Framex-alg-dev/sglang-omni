@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import string
 from dataclasses import dataclass
 
 from .v25_contract import R9_CONTRACTS, R9_TEMPORAL_COMPONENTS
+
+_ALIASES = tuple(
+    char
+    for char in string.ascii_uppercase + string.ascii_lowercase
+    if char not in {"N", "n"}
+)
+P_TO_ALIAS = {f"P{index}": alias for index, alias in enumerate(_ALIASES)}
+ALIAS_TO_P = {alias: code for code, alias in P_TO_ALIAS.items()}
 
 
 @dataclass(frozen=True)

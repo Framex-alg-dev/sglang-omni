@@ -1,10 +1,9 @@
 from sglang_omni.serve.task_classification.prompt_v10 import (
-    DEFAULT_MCP_SCOPE,
-    SINGLE_TURN_SYSTEM_PROMPT,
-    SYSTEM_PROMPT,
     build_user_prompt,
     normalize_history,
 )
+
+MCP_SCOPE = "唱歌、搜索（含天气）、查交通"
 
 
 def _text_prompt(text: str, *, history=(), **state) -> str:
@@ -12,21 +11,11 @@ def _text_prompt(text: str, *, history=(), **state) -> str:
         query_mode="text",
         text=text,
         history=history,
-        mcp_scope=DEFAULT_MCP_SCOPE,
+        mcp_scope=MCP_SCOPE,
         multimodal_scope="用户当前摄像头画面",
         **state,
     )
     return "\n".join(part["text"] for part in parts)
-
-
-def test_v10_uses_one_natural_language_prefix_with_strong_rules() -> None:
-    assert SYSTEM_PROMPT == SINGLE_TURN_SYSTEM_PROMPT
-    assert "[ROUTER_VERSION]\nv1.0" in SYSTEM_PROMPT
-    assert "**上一条数字人明确询问或提议唱歌、搜索或查交通" in SYSTEM_PROMPT
-    assert "**活动任务状态只是判断是否继续旧任务的证据" in SYSTEM_PROMPT
-    assert "**当前存在活动 MCP 任务" in SYSTEM_PROMPT
-    assert "**如果上一条数字人话语已经明确给出" in SYSTEM_PROMPT
-    assert "**只能输出一个字符：0、1、2 或 3。**" in SYSTEM_PROMPT
 
 
 def test_history_keeps_latest_assistant_utterance_and_its_ending() -> None:
@@ -95,7 +84,7 @@ def test_audio_prompt_contains_raw_audio_without_asr_text() -> None:
         query_mode="audio",
         text=None,
         history=(),
-        mcp_scope=DEFAULT_MCP_SCOPE,
+        mcp_scope=MCP_SCOPE,
         multimodal_scope="用户当前摄像头画面",
     )
 

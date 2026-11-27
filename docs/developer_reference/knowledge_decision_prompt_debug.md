@@ -7,7 +7,7 @@ validates consumer, protocol, release, content checksums, and required documents
 it does not access Knowledge or fall back to a local live prompt. A missing or
 invalid Agent snapshot rejects Action, Timeline Event, and Router v7 requests.
 Logical model identifiers are observability metadata: a mismatch with the model
-actually deployed by Omni emits `prompt.binding_drift` with both bindings but does
+actually deployed by Omni emits `prompt.binding.drift` with both bindings but does
 not block inference. Publishing or selecting a release therefore takes effect
 only after the owning Agent reloads it. The hooks below remain authenticated
 diagnostic tools and do not change this ownership boundary.

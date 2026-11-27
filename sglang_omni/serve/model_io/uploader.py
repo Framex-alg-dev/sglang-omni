@@ -120,6 +120,7 @@ def _emit(stage: str, event: str, manifest: dict[str, Any], **fields: Any) -> No
             logger_name=__name__,
             request_id=manifest.get("request_id"),
             root_session_id=manifest.get("root_session_id"),
+            agent_session_id=manifest.get("agent_session_id"),
             turn_id=manifest.get("turn_id"),
             artifact_id=manifest.get("artifact_id"),
             stage=stage,

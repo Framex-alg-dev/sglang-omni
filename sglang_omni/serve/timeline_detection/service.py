@@ -162,6 +162,7 @@ def create_timeline_detection_app(
                     with bind_service_log_context(
                         request_id=context.request_id if context else connection_request_id,
                         root_session_id=start.root_session_id or start.session_id,
+                        agent_session_id=start.agent_session_id or start.session_id,
                         turn_id=context.turn_id if context else None,
                     ):
                         payload = window.to_wire()
@@ -169,6 +170,11 @@ def create_timeline_detection_app(
                             payload["log_context"] = {
                                 "request_id": context.request_id,
                                 "root_session_id": context.root_session_id,
+                                "agent_session_id": (
+                                    context.agent_session_id
+                                    or start.agent_session_id
+                                    or start.session_id
+                                ),
                                 "turn_id": context.turn_id,
                             }
                         send_started = time.perf_counter()
@@ -317,12 +323,26 @@ def create_timeline_detection_app(
                     await work_queue.join()
                     if worker is not None and worker.done():
                         await worker
+                    if observation_worker is not None:
+                        observation_worker.cancel()
+                        await asyncio.gather(
+                            observation_worker, return_exceptions=True
+                        )
+                        observation_worker = None
+                    if worker is not None:
+                        worker.cancel()
+                        await asyncio.gather(worker, return_exceptions=True)
+                        worker = None
+                    if session is not None:
+                        await session.close()
                     await send_json(
                         {
                             "type": "session.closed",
                             "observer_epoch": start.observer_epoch,
                         }
                     )
+                    await websocket.close(code=1000)
+                    await websocket.receive()
                     return
                 else:
                     raise ValueError(f"unsupported timeline message type: {message_type!r}")

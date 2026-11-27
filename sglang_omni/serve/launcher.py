@@ -744,8 +744,8 @@ async def _run_server(
                 ),
                 agent_policy_path=os.environ.get(
                     "SGLANG_OMNI_AGENT_ACTION_POLICY_PATH",
-                    os.path.join(artifact_root, "agent_action_policy.json"),
-                ),
+                    "",
+                ).strip() or None,
                 max_body_bytes=int(
                     os.environ.get(
                         "SGLANG_OMNI_ACTION_DECISION_MAX_BODY_BYTES",
@@ -774,6 +774,28 @@ async def _run_server(
                 app.state.action_decision_engine.registry.verify_tokenizer(
                     pipeline_config.model_path
                 )
+            warmup_enabled = os.environ.get(
+                "SGLANG_OMNI_ACTION_WARMUP", "1"
+            ).strip().lower() not in {"0", "false", "off", "no"}
+            if warmup_enabled:
+                action_warmup = await app.state.action_decision_engine.warmup(
+                    timeout_s=float(
+                        os.environ.get(
+                            "SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30"
+                        )
+                    )
+                )
+                logger.info("[ACTION_WARMUP] readiness=%s", action_warmup)
+            else:
+                action_warmup = {
+                    "enabled": False,
+                    "ready": False,
+                    "reason": "disabled",
+                }
+                logger.info(
+                    "[ACTION_WARMUP] disabled by SGLANG_OMNI_ACTION_WARMUP"
+                )
+            app.state.action_decision_warmup = action_warmup
         elif service_role == "openai":
             warmup_enabled = os.environ.get(
                 "SGLANG_OMNI_ACTION_WARMUP", "1"

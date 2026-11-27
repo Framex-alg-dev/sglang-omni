@@ -51,6 +51,7 @@ def test_framex_service_log_contract_and_context(tmp_path) -> None:
         with bind_service_log_context(
             request_id="req_0123456789abcdfg",
             root_session_id="ses_0123456789abcdfg",
+            agent_session_id="agent-1",
             turn_id="turn-1",
         ):
             emit_service_event(
@@ -61,7 +62,6 @@ def test_framex_service_log_contract_and_context(tmp_path) -> None:
                 operation="reply",
                 status=200,
                 duration_ms=12.5,
-                agent_session_id="agent-1",
             )
     finally:
         shutdown_service_logging(service)

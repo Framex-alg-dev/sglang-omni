@@ -595,6 +595,7 @@ class _Session:
                 logger_name=__name__,
                 request_id=adopt_request_id(request_id)[0],
                 root_session_id=self.root_session_id or None,
+                agent_session_id=self.agent_session_id or None,
                 peer="tts_worker",
                 operation="speech_synthesis",
                 status=503,
@@ -682,6 +683,7 @@ class _Session:
                 logger_name=__name__,
                 request_id=trace_request_id,
                 root_session_id=self.root_session_id or None,
+                agent_session_id=self.agent_session_id or None,
                 peer="tts_worker",
                 operation="speech_synthesis",
                 status=200,
@@ -696,6 +698,7 @@ class _Session:
                 logger_name=__name__,
                 request_id=trace_request_id,
                 root_session_id=self.root_session_id or None,
+                agent_session_id=self.agent_session_id or None,
                 peer="tts_worker",
                 operation="speech_synthesis",
                 status=499,
@@ -712,6 +715,7 @@ class _Session:
                 logger_name=__name__,
                 request_id=trace_request_id,
                 root_session_id=self.root_session_id or None,
+                agent_session_id=self.agent_session_id or None,
                 peer="tts_worker",
                 operation="speech_synthesis",
                 status=504 if exc.phase == "timeout" else 502,
@@ -738,6 +742,7 @@ class _Session:
                 logger_name=__name__,
                 request_id=trace_request_id,
                 root_session_id=self.root_session_id or None,
+                agent_session_id=self.agent_session_id or None,
                 peer="tts_worker",
                 operation="speech_synthesis",
                 status=502,
@@ -1303,6 +1308,7 @@ class _Session:
         with bind_service_log_context(
             request_id=trace_request_id,
             root_session_id=self.root_session_id,
+            agent_session_id=self.agent_session_id,
             turn_id=turn_id,
         ):
             await self._run_stage_with_context(

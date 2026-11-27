@@ -63,12 +63,12 @@ class ActionCatalogRegistry:
         mapping_path: str | Path,
         full_mapping_path: str | Path,
         product_catalog_path: str | Path,
-        agent_policy_path: str | Path,
+        agent_policy_path: str | Path | None = None,
     ) -> None:
         current = _object(mapping_path)
         full = _object(full_mapping_path)
         product = _object(product_catalog_path)
-        policy = _object(agent_policy_path)
+        policy = _object(agent_policy_path) if agent_policy_path else {}
         self.catalog_version = str(product["action_catalog_version"])
         self.catalog_hash = str(product["action_catalog_hash"])
         self.mapping_version = str(current["mapping_version"])
@@ -312,6 +312,45 @@ class ActionCatalogRegistry:
             entry = self._entry(control)
             if len(entry.token_ids) != 2:
                 raise ValueError(f"control {control} is not a two-token output")
+        self._validate_agent_bindings()
+
+    def _validate_agent_bindings(self) -> None:
+        """Reject policy/mapping mixtures before the service becomes healthy."""
+        for agent_event, binding in self._agent_bindings.items():
+            if not isinstance(agent_event, str) or not agent_event:
+                raise ValueError("agent action policy event names must be nonempty strings")
+            if not isinstance(binding, dict):
+                raise ValueError(f"agent action policy binding must be an object: {agent_event}")
+
+            injected_raw = binding.get("inject_candidate_ids", [])
+            if not isinstance(injected_raw, list):
+                raise ValueError(
+                    f"agent action policy inject_candidate_ids must be an array: {agent_event}"
+                )
+            injected = {str(candidate_id) for candidate_id in injected_raw}
+            missing = injected - set(self._full_mapping_by_id)
+            if missing:
+                raise ValueError(
+                    "agent action policy candidates missing from full mapping: "
+                    f"{agent_event}: {sorted(missing)}"
+                )
+
+            runtime_context = binding.get("runtime_context", {})
+            if not isinstance(runtime_context, dict):
+                raise ValueError(
+                    f"agent action policy runtime_context must be an object: {agent_event}"
+                )
+            registered_event = runtime_context.get("agent_event")
+            if registered_event is not None and registered_event != agent_event:
+                raise ValueError(
+                    f"agent action policy runtime_context event mismatch: {agent_event}"
+                )
+            required = runtime_context.get("required_action_candidate_id")
+            if required is not None and str(required) not in injected:
+                raise ValueError(
+                    "agent action policy required candidate must be injected: "
+                    f"{agent_event}: {required}"
+                )
 
 
 def _object(path: str | Path) -> dict[str, Any]:

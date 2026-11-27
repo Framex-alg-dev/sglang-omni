@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -33,7 +35,10 @@ import os
 # Match deploy/launch_dual_gpu_dev.sh; callers can select an explicit artifact set.
 ASSETS = os.getenv(
     "ACTION_ARTIFACT_ROOT",
-    "/data/xingmt/model_repo/action_prediction_model/assets/e67_v116",
+    str(
+        Path(__file__).resolve().parents[3]
+        / "sglang_omni/assets/persona_window_v1"
+    ),
 )
 
 
@@ -45,7 +50,6 @@ def _config() -> ActionDecisionConfig:
         mapping_path=f"{ASSETS}/action_pair_token_map_current.json",
         full_mapping_path=f"{ASSETS}/action_pair_token_map_full.json",
         product_catalog_path=f"{ASSETS}/action_catalog.json",
-        agent_policy_path=f"{ASSETS}/agent_action_policy.json",
     )
 
 
@@ -110,6 +114,55 @@ class _FakeClient:
     async def prefill_completion_prefix(self, request, *, request_id):
         self.prefill_requests.append((request_id, request))
         return True
+
+
+class _WarmupFakeClient(_FakeClient):
+    async def completion(self, request, *, request_id, audio_format="wav"):
+        self.requests.append((request_id, request))
+        code = "_ctrl_b" if request.metadata["task_role"] == "body" else "_ctrl_f"
+        return SimpleNamespace(
+            text=code,
+            usage=UsageInfo(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+            weight_version="weights-1",
+        )
+
+
+def test_action_warmup_exercises_both_channels_without_live_cache_or_cos(
+    monkeypatch,
+) -> None:
+    async def run():
+        recorded = []
+        monkeypatch.setattr(
+            "sglang_omni.serve.action_decision.service.get_model_io_recorder",
+            lambda _stage: SimpleNamespace(record=lambda **value: recorded.append(value)),
+        )
+        client = _WarmupFakeClient()
+        engine = ActionDecisionEngine(client, config=_config())
+        result = await engine.warmup(timeout_s=1.0)
+        return client, engine, result, recorded
+
+    client, engine, result, recorded = asyncio.run(run())
+    assert result["ready"] is True
+    assert set(result["channels"]) == {"body", "expression"}
+    assert [item[1].metadata["task_role"] for item in client.requests] == [
+        "body",
+        "expression",
+    ]
+    assert engine._completed == {}
+    assert recorded == []
+
+
+def test_action_warmup_failure_is_reported_without_raising() -> None:
+    class FailingClient(_FakeClient):
+        async def completion(self, request, *, request_id, audio_format="wav"):
+            raise RuntimeError("warmup failed")
+
+    result = asyncio.run(
+        ActionDecisionEngine(FailingClient(), config=_config()).warmup(timeout_s=1.0)
+    )
+    assert result["ready"] is False
+    assert result["channels"]["body"]["error_type"] == "RuntimeError"
+    assert result["channels"]["expression"]["error_type"] == "RuntimeError"
 
 
 def test_catalog_partitions_body_and_expression_and_controls() -> None:
@@ -178,24 +231,46 @@ def test_advisory_model_binding_does_not_block_inference() -> None:
     asyncio.run(run())
 
 
-def test_registered_agent_binding_injects_and_hard_binds_full_mapping_action() -> None:
-    registry = _registry()
-    catalog = registry.resolve(
-        _request(
-            DecisionChannel.BODY,
-            runtime_context={"agent_event": "agent.search.started"},
+def test_unregistered_agent_event_is_rejected_without_policy() -> None:
+    with pytest.raises(ValueError, match="unregistered agent_event"):
+        _registry().resolve(
+            _request(
+                DecisionChannel.BODY,
+                runtime_context={"agent_event": "agent.search.started"},
+            )
         )
+
+
+def test_agent_policy_mapping_mismatch_fails_during_startup(tmp_path) -> None:
+    policy_path = tmp_path / "agent_action_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "bindings": {
+                    "agent.search.started": {
+                        "inject_candidate_ids": ["missing-candidate"],
+                        "runtime_context": {
+                            "agent_event": "agent.search.started",
+                            "required_action_candidate_id": "missing-candidate",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
     )
-    assert catalog.hard_bound is not None
-    assert catalog.hard_bound.candidate_id == "481"
-    expression = registry.resolve(
-        _request(
-            DecisionChannel.EXPRESSION,
-            runtime_context={"agent_event": "agent.search.started"},
+    config = _config()
+
+    with pytest.raises(
+        ValueError,
+        match="agent action policy candidates missing from full mapping",
+    ):
+        ActionCatalogRegistry(
+            mapping_path=config.mapping_path,
+            full_mapping_path=config.full_mapping_path,
+            product_catalog_path=config.product_catalog_path,
+            agent_policy_path=policy_path,
         )
-    )
-    assert expression.hard_bound is None
-    assert "required_action_candidate_id" not in expression.runtime_context
 
 
 def test_disabled_channel_is_deterministic_and_skips_model() -> None:
@@ -543,6 +618,20 @@ def test_health_reports_live_workload_queues_only_to_authenticated_clients() -> 
     assert client.requests == []
 
 
+def test_health_rejects_traffic_until_enabled_startup_warmup_is_ready() -> None:
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    app.state.action_decision_warmup = {"enabled": True, "ready": False}
+    with TestClient(app) as http:
+        response = http.get('/health', headers={"Authorization": "Bearer secret"})
+        assert response.status_code == 503
+        assert response.json()["ok"] is False
+
+        app.state.action_decision_warmup = {"enabled": True, "ready": True}
+        response = http.get('/health', headers={"Authorization": "Bearer secret"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+
 def test_websocket_service_accepts_text_request() -> None:
     client = _FakeClient()
     app = create_action_decision_app(client, config=_config())
@@ -701,7 +790,7 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
 
     async def decide(_engine, request, *, operation):
         assert operation == "action_recall"
-        seen.append(request.trace_request_id)
+        seen.append(request)
         return SimpleNamespace(
             channel=request.channel, candidate_id="665", code="test", label="点头",
             outcome="selected", occupies_channels=("body",),
@@ -736,8 +825,11 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
             result = socket.receive_json()
             assert result["type"] == "response.completed", result
             assert result["request_id"] == operation_id
-    assert seen[0]
-    assert seen[1] == trace_id
+    assert seen[0].trace_request_id
+    assert seen[1].trace_request_id == trace_id
+    assert seen[1].root_session_id == "session-root"
+    assert seen[1].agent_session_id == "sess-browser"
+    assert seen[1].trace_turn_id == "turn-1"
 
 
 def test_action_public_transports_reject_missing_agent_prompt_snapshot() -> None:
@@ -774,10 +866,16 @@ def test_action_model_binding_drift_is_logged_without_blocking(monkeypatch) -> N
     from sglang_omni.serve.action_decision import service
 
     events = []
+    real_emit_service_event = service.emit_service_event
+
+    def capture_event(component, event, **fields):
+        real_emit_service_event(component, event, **fields)
+        events.append((component, event, fields))
+
     monkeypatch.setattr(
         service,
         "emit_service_event",
-        lambda component, event, **fields: events.append((component, event, fields)),
+        capture_event,
     )
     snapshot = _raw_action_snapshot()
     snapshot["binding"]["model_id"] = "knowledge-logical-action"
@@ -801,6 +899,6 @@ def test_action_model_binding_drift_is_logged_without_blocking(monkeypatch) -> N
         )
 
     assert response.status_code == 200, response.text
-    drift = next(fields for _, event, fields in events if event == "prompt.binding_drift")
+    drift = next(fields for _, event, fields in events if event == "prompt.binding.drift")
     assert drift["bound_model_id"] == "knowledge-logical-action"
     assert drift["serving_model_id"] == "action-model"
