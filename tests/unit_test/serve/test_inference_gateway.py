@@ -154,6 +154,22 @@ def test_bearer_uses_first_configured_fallback(monkeypatch) -> None:
     ) == "Bearer action-token"
 
 
+def test_gateway_main_preserves_framex_logging_handlers(monkeypatch) -> None:
+    observed = {}
+    monkeypatch.setattr(gateway_main, "configure_service_logging", lambda *_args: None)
+    monkeypatch.setattr(gateway_main, "emit_service_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gateway_main, "create_inference_gateway_app", lambda _config: object())
+    monkeypatch.setattr(
+        gateway_main.uvicorn,
+        "run",
+        lambda _app, **kwargs: observed.update(kwargs),
+    )
+
+    gateway_main.main()
+
+    assert observed["log_config"] is None
+
+
 def test_reply_speech_envelope_accepts_marker_without_newline() -> None:
     extractor = gateway_module._ReplySpeechTextExtractor("reply_envelope_v1")
 

@@ -163,6 +163,7 @@ def main() -> None:
         host=os.environ.get("SGLANG_OMNI_GATEWAY_HOST", "127.0.0.1"),
         port=int(os.environ.get("SGLANG_OMNI_GATEWAY_PORT", "18003")),
         log_level=os.environ.get("SGLANG_OMNI_GATEWAY_LOG_LEVEL", "info"),
+        log_config=None,
     )
     emit_service_event(
         "omni-reply-worker",
