@@ -24,6 +24,7 @@ from sglang_omni.serve.request_log_context import (
 )
 from sglang_omni.utils.framex_service_logs import (
     correlation_id_or_digest,
+    emit_service_event,
     new_request_id,
 )
 from sglang_omni.utils.model_trace_logs import emit_model_trace
@@ -228,6 +229,7 @@ class SglangClientTimelineDetectionModel:
         start: TimelineSessionStart,
         *,
         model_version: str,
+        serving_model_id: str | None = None,
         direct_profile: DirectE50Profile | None = None,
         max_attempts: int = 2,
         inference_interval_ms: int = 3_000,
@@ -238,12 +240,33 @@ class SglangClientTimelineDetectionModel:
             raise ValueError("timeline model_version is required")
         if max_attempts <= 0:
             raise ValueError("timeline max_attempts must be positive")
+        resolved_model_id = (serving_model_id or start.model_id).strip()
+        if not resolved_model_id:
+            raise ValueError("timeline serving_model_id is required")
         if start.prompt_snapshot is not None:
             direct_profile = DirectE50Profile.from_environment(
                 start.prompt_snapshot,
-                model_id=start.model_id,
+                model_id=resolved_model_id,
                 model_version=model_version,
             )
+            binding = start.prompt_snapshot.binding
+            if (
+                binding.model_id != resolved_model_id
+                or binding.model_version != model_version
+            ):
+                emit_service_event(
+                    "omni-event-worker",
+                    "prompt.binding_drift",
+                    level=logging.WARNING,
+                    logger_name=__name__,
+                    root_session_id=start.root_session_id or start.session_id,
+                    release_id=start.prompt_snapshot.release_id,
+                    bundle_sha256=start.prompt_snapshot.bundle_sha256,
+                    bound_model_id=binding.model_id,
+                    bound_model_version=binding.model_version,
+                    serving_model_id=resolved_model_id,
+                    serving_model_version=model_version,
+                )
         elif direct_profile is None:
             direct_profile = DirectE50Profile.from_environment()
         first_hit_1s = direct_profile is not None and direct_profile.protocol == EVENT1115_PROTOCOL
@@ -275,7 +298,7 @@ class SglangClientTimelineDetectionModel:
             else event1115_names(direct_profile.system_prompt) if first_hit_1s
             else None
         )
-        self.model_id = start.model_id
+        self.model_id = resolved_model_id
         self.model_version = model_version
         self.prompt_version = (
             self._direct_e50.prompt_version

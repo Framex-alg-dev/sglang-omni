@@ -88,8 +88,7 @@ def install_action_debug(app,*,engine,authenticate,parser,factory):
         elif profile=='generic':
             rules={'system_rules':action_prompt.E57_SYSTEM_RULES,'final_constraints':action_prompt.E57_FINAL_TASK_CONSTRAINTS};consumer='sglang_omni.action.generic'
         else:raise HTTPException(422,'unsupported action profile')
-        bundle=engine._runtime_prompt_bundles.get(profile)
-        if bundle is not None:rules=dict(bundle.rules)
+        bundle = None
         return _state('action',rules,engine.config.model_id,engine.config.model_version,consumer=consumer,profile=profile,
             catalog_version=engine.registry.catalog_version,mapping_version=engine.registry.mapping_version,mapping_hash=engine.registry.mapping_hash,assembly_version="behavior-role-125-v1", runtime=bundle.status() if bundle is not None else {"integration_enabled":False,"release_id":None})
     @app.get('/v1/prompt-debug/state')

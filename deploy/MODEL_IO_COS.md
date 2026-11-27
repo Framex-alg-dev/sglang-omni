@@ -32,4 +32,7 @@ and `.cos-retry.json` files provide idempotency, retention and exponential retry
 
 COS outages, queue exhaustion and local byte-cap exhaustion fail open for the
 model call. CLS receives metadata-only `artifact.archive.*` and
-`artifact.upload.*` records; raw prompts, media and outputs stay out of CLS.
+`artifact.upload.*` records plus the six correlated model-call stages. Text
+prompts, text outputs and the final Agent payload are retained after credential
+and phone-number redaction. Audio, video, images and other binary payloads are
+replaced by bounded metadata in CLS; their complete values remain in COS.

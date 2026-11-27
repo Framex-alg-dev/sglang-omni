@@ -40,7 +40,7 @@ class ClsDeploymentTest(unittest.TestCase):
             if case == 'wildcard': t['host_log_root'] = '/logs/*'
             with self.subTest(case=case), self.assertRaises(ValueError): cls.collection_requests(t)
 
-    def test_audit_rejects_content_and_wrong_role_without_printing_it(self):
+    def test_audit_allows_text_but_rejects_credentials_and_wrong_role(self):
         with tempfile.TemporaryDirectory() as d:
             for service in cls.SERVICES:
                 p = Path(d) / service / 'app.log'
@@ -49,14 +49,18 @@ class ClsDeploymentTest(unittest.TestCase):
                            env='shared', version='revision', host='host', logger='module',
                            event='inference.completed', message='完成', request_id='req_owner',
                            root_session_id='root', turn_id='turn')
-                if service == cls.SERVICES[0]: row['log_params'] = {'prompt': 'private user data'}
+                if service == cls.SERVICES[0]:
+                    row['model_input'] = {'system_prompt': 'private user text is allowed'}
                 if service == cls.SERVICES[1]: row['service'] = cls.SERVICES[0]
+                if service == cls.SERVICES[2]:
+                    row['model_input'] = {'system_prompt': 'AKID' + 'A' * 20}
                 p.write_text(json.dumps(row, ensure_ascii=False) + '\n')
             report = cls.audit(Path(d), limit=100, root_session='root')
             self.assertFalse(report['successful'])
-            self.assertEqual(report['services'][cls.SERVICES[0]]['violations']['forbidden_content'], 1)
+            self.assertNotIn('forbidden_content', report['services'][cls.SERVICES[0]]['violations'])
             self.assertEqual(report['services'][cls.SERVICES[1]]['violations']['wrong_service'], 1)
-            self.assertNotIn('private user data', json.dumps(report))
+            self.assertEqual(report['services'][cls.SERVICES[2]]['violations']['forbidden_content'], 1)
+            self.assertNotIn('private user text', json.dumps(report))
             self.assertNotIn('prompt', json.dumps(report))
 
 

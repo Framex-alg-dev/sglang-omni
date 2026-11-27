@@ -462,17 +462,15 @@ def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
     session_id = _string(raw, "session_id")
     root_session_id = _optional_string(raw, "root_session_id")
     agent_session_id = _optional_string(raw, "agent_session_id")
-    prompt_snapshot = (
-        decode_timeline_prompt_snapshot(raw["prompt_snapshot"], model_id=model_id)
-        if raw.get("prompt_snapshot") is not None else None
+    if raw.get("prompt_snapshot") is None:
+        raise ValueError("timeline session requires Agent prompt_snapshot")
+    prompt_snapshot = decode_timeline_prompt_snapshot(raw["prompt_snapshot"])
+    from .event1115 import event1115_names_from_agent_snapshot
+    event1115_names_from_agent_snapshot(
+        prompt_snapshot.system_prompt,
+        prompt_snapshot.event_registry_json,
+        prompt_snapshot.event_codebook_csv,
     )
-    if prompt_snapshot is not None:
-        from .event1115 import event1115_names_from_agent_snapshot
-        event1115_names_from_agent_snapshot(
-            prompt_snapshot.system_prompt,
-            prompt_snapshot.event_registry_json,
-            prompt_snapshot.event_codebook_csv,
-        )
     return TimelineSessionStart(
         session_id=session_id,
         identity_epoch=_integer(raw, "identity_epoch"),

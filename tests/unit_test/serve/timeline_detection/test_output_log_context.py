@@ -13,6 +13,7 @@ from sglang_omni.utils.framex_service_logs import (
     configure_service_logging, current_service_log_context, shutdown_service_logging,
 )
 from .test_client_model import Client, start, feed_first_window
+from tests.unit_test.serve.test_agent_prompt_snapshot import _timeline_snapshot
 
 
 @pytest.mark.asyncio
@@ -67,7 +68,8 @@ def test_raw_window_transport_logs_dequeued_identity_without_wire_metadata(tmp_p
             ws.send_json(dict(type="session.start", contract_version=2, session_id="session-1",
                 root_session_id="call-root", request_id="incoming-start", identity_epoch=2,
                 observer_epoch=0, stream_epoch=0, next_sequence=1, audio_format="pcm16/16000/mono",
-                video_format="jpeg", model_id="timeline-model", result_mode=RAW_WINDOW_MODE))
+                video_format="jpeg", model_id="timeline-model", result_mode=RAW_WINDOW_MODE,
+                prompt_snapshot=_timeline_snapshot()))
             assert ws.receive_json()['type'] == 'session.ready'
             ws.send_json(dict(type="media", session_id="session-1", identity_epoch=2, observer_epoch=0,
                 stream_epoch=0, sequence=1, kind="video", start_ms=100, end_ms=200,

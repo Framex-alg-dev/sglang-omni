@@ -258,7 +258,6 @@ class ActionDecisionEngine:
         prompt_snapshot: dict[str, str] | None = None,
     ) -> None:
         self._prompt_snapshot = dict(prompt_snapshot) if prompt_snapshot is not None else None
-        self._runtime_prompt_bundles = {}
         self._client = client
         self.config = config
         self.registry = registry or ActionCatalogRegistry(
@@ -277,15 +276,11 @@ class ActionDecisionEngine:
             return dict(request.prompt_snapshot.rules)
         if self._prompt_snapshot is not None:
             return self._prompt_snapshot
-        from .prompt import reference_prompt_profile, E67_REFERENCE_PROFILE
-        reference = reference_prompt_profile(request)
-        if reference is not None and reference != E67_REFERENCE_PROFILE:
-            return None  # Preserve explicitly requested legacy reference profiles.
-        profile = 'e67' if reference == E67_REFERENCE_PROFILE else 'generic'
-        bundle = self._runtime_prompt_bundles.get(profile)
-        return bundle.rules if bundle is not None else None
+        raise ValueError("action decision requires Agent prompt_snapshot")
 
     async def decide(self, request: ActionDecisionRequest) -> ActionDecision:
+        if request.prompt_snapshot is None and self._prompt_snapshot is None:
+            raise ValueError("action decision requires Agent prompt_snapshot")
         digest = _request_digest(request)
         async with self._lock:
             if request.request_id in self._cancelled:
@@ -833,13 +828,7 @@ def create_action_decision_app(
     performance_token: str | None = None,
 ) -> FastAPI:
     engine = ActionDecisionEngine(client, config=config)
-    from contextlib import asynccontextmanager
-    @asynccontextmanager
-    async def lifespan(app):
-        from sglang_omni.serve.prompt_runtime import install_action_runtime
-        await install_action_runtime(app, engine, include_performance=performance_token is not None)
-        yield
-    app = FastAPI(title="sglang-omni-action-decision", version="1", lifespan=lifespan)
+    app = FastAPI(title="sglang-omni-action-decision", version="1")
     install_framex_http_logging(app, service="omni-action-worker")
     app.state.action_decision_engine = engine
 
@@ -852,7 +841,10 @@ def create_action_decision_app(
 
     from sglang_omni.serve.prompt_debug import install_action_debug
     install_action_debug(app, engine=engine, authenticate=authenticate,
-                         parser=lambda raw, *, media: _parse_request(raw, media=media, config=config),
+                         parser=lambda raw, *, media: _parse_request(
+                             raw, media=media, config=config,
+                             require_prompt_snapshot=False,
+                         ),
                          factory=lambda capture, snapshot: ActionDecisionEngine(capture, config=config, registry=engine.registry, prompt_snapshot=snapshot))
 
     @app.get("/health")
@@ -1108,6 +1100,7 @@ def create_action_decision_app(
             root_session_id=root_session_id,
             agent_session_id=agent_session_id,
         )
+        _emit_prompt_binding_drift(decision_request, config)
         mode = payload.get("mode")
         target_text = (
             payload.get("user_input", {}).get("text")
@@ -1219,11 +1212,39 @@ def _with_prompt_receipt(
     }
 
 
+def _emit_prompt_binding_drift(
+    request: ActionDecisionRequest,
+    config: ActionDecisionConfig,
+) -> None:
+    snapshot = request.prompt_snapshot
+    if snapshot is None or (
+        snapshot.binding.model_id == config.model_id
+        and snapshot.binding.model_version == config.model_version
+    ):
+        return
+    emit_service_event(
+        "omni-action-worker",
+        "prompt.binding_drift",
+        level=logging.WARNING,
+        logger_name=__name__,
+        request_id=request.trace_request_id or request.request_id,
+        root_session_id=request.root_session_id or request.session_id,
+        turn_id=request.turn_id,
+        release_id=snapshot.release_id,
+        bundle_sha256=snapshot.bundle_sha256,
+        bound_model_id=snapshot.binding.model_id,
+        bound_model_version=snapshot.binding.model_version,
+        serving_model_id=config.model_id,
+        serving_model_version=config.model_version,
+    )
+
+
 def _parse_request(
     raw: Any,
     *,
     media: tuple[StreamedMedia, ...],
     config: ActionDecisionConfig,
+    require_prompt_snapshot: bool = True,
 ) -> ActionDecisionRequest:
     if not isinstance(raw, dict):
         raise ValueError("action decision payload must be an object")
@@ -1238,15 +1259,14 @@ def _parse_request(
         raw, default_session_id=_required_string(raw, "session_id")
     )
     from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
+    if require_prompt_snapshot and raw.get("prompt_snapshot") is None:
+        raise ValueError("action decision requires Agent prompt_snapshot")
     prompt_snapshot = (
-        decode_action_prompt_snapshot(
-            raw["prompt_snapshot"],
-            model_id=config.model_id,
-            model_version=config.model_version,
-        )
-        if raw.get("prompt_snapshot") is not None else None
+        decode_action_prompt_snapshot(raw["prompt_snapshot"])
+        if raw.get("prompt_snapshot") is not None
+        else None
     )
-    return ActionDecisionRequest(
+    request = ActionDecisionRequest(
         request_id=request_id,
         session_id=_required_string(raw, "session_id"),
         turn_id=_required_string(raw, "turn_id"),
@@ -1275,6 +1295,8 @@ def _parse_request(
         root_session_id=root_session_id,
         agent_session_id=agent_session_id,
     )
+    _emit_prompt_binding_drift(request, config)
+    return request
 
 
 def _parse_log_context(

@@ -116,9 +116,7 @@ def test_router_snapshot_is_validated_for_request_owned_prompting() -> None:
 
 
 def test_action_snapshot_is_validated_and_drives_prompt_assembly() -> None:
-    snapshot = decode_action_prompt_snapshot(
-        _action_snapshot(), model_id="action-model", model_version="action-v10"
-    )
+    snapshot = decode_action_prompt_snapshot(_action_snapshot())
     request = ActionDecisionRequest(
         request_id="request-1",
         session_id="session-1",
@@ -161,17 +159,26 @@ def test_action_snapshot_is_validated_and_drives_prompt_assembly() -> None:
     }
 
 
-def test_action_snapshot_rejects_content_or_model_drift() -> None:
+def test_action_snapshot_rejects_content_or_protocol_drift() -> None:
     corrupted = _action_snapshot()
     corrupted["system_prompt"] = "tampered"
     with pytest.raises(ValueError, match="checksum"):
-        decode_action_prompt_snapshot(
-            corrupted, model_id="action-model", model_version="action-v10"
-        )
-    with pytest.raises(ValueError, match="binding"):
-        decode_action_prompt_snapshot(
-            _action_snapshot(), model_id="other-model", model_version="action-v10"
-        )
+        decode_action_prompt_snapshot(corrupted)
+    corrupted = _action_snapshot()
+    corrupted["binding"]["output_protocol"] = "wrong"
+    with pytest.raises(ValueError, match="protocol binding"):
+        decode_action_prompt_snapshot(corrupted)
+
+
+def test_action_snapshot_preserves_nonblocking_logical_model_binding() -> None:
+    raw = _action_snapshot()
+    raw["binding"]["model_id"] = "knowledge-logical-model"
+    raw["binding"]["model_version"] = "knowledge-release"
+
+    snapshot = decode_action_prompt_snapshot(raw)
+
+    assert snapshot.binding.model_id == "knowledge-logical-model"
+    assert snapshot.binding.model_version == "knowledge-release"
 
 
 def test_timeline_session_uses_agent_prompt_registry_and_receipt_identity() -> None:
@@ -210,22 +217,38 @@ def test_timeline_snapshot_rejects_item_checksum_drift() -> None:
     raw = _timeline_snapshot()
     raw["event_registry_json"] = "{}"
     with pytest.raises(ValueError, match="checksum"):
-        decode_timeline_prompt_snapshot(raw, model_id="event-model")
+        decode_timeline_prompt_snapshot(raw)
+
+
+def test_timeline_session_rejects_missing_agent_prompt_snapshot() -> None:
+    with pytest.raises(ValueError, match="requires Agent prompt_snapshot"):
+        _start_from_json(
+            {
+                "type": "session.start",
+                "contract_version": 2,
+                "session_id": "session-1",
+                "identity_epoch": 1,
+                "observer_epoch": 2,
+                "stream_epoch": 3,
+                "next_sequence": 1,
+                "audio_format": "pcm_s16le/16000/1",
+                "video_format": "jpeg",
+                "model_id": "event-model",
+            }
+        )
 
 
 def test_timeline_profile_uses_agent_documents_without_local_prompt_files(
     monkeypatch,
 ) -> None:
-    snapshot = decode_timeline_prompt_snapshot(
-        _timeline_snapshot(), model_id="event-model"
-    )
+    snapshot = decode_timeline_prompt_snapshot(_timeline_snapshot())
     monkeypatch.setenv("SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL", "direct-1115-v1")
     monkeypatch.delenv("SGLANG_OMNI_TIMELINE_SYSTEM_PROMPT_PATH", raising=False)
 
     profile = DirectE50Profile.from_environment(
         snapshot,
-        model_id="event-model",
-        model_version="checkpoint-6138-fp8",
+        model_id="deployed-event-model",
+        model_version="deployed-weights",
     )
 
     assert profile is not None

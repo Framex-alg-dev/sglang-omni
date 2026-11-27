@@ -143,11 +143,6 @@ class DirectE50Profile:
         if prompt_snapshot is not None:
             if protocol != EVENT1115_PROTOCOL:
                 raise ValueError("Agent timeline prompt requires direct-1115-v1")
-            if (
-                prompt_snapshot.binding.model_id != model_id
-                or prompt_snapshot.binding.model_version != model_version
-            ):
-                raise ValueError("Agent timeline prompt serving model mismatch")
             from .event1115 import event1115_names_from_agent_snapshot
             system_prompt = prompt_snapshot.system_prompt
             agent_event_names = event1115_names_from_agent_snapshot(

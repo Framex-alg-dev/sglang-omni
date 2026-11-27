@@ -20,6 +20,36 @@ from sglang_omni.serve.timeline_detection.parser import ModelOutputError
 from sglang_omni.serve.timeline_detection.service import _start_from_json
 
 
+def _agent_timeline_snapshot() -> dict:
+    events = [{"code": f"E{index}", "name": f"event-{index}"} for index in range(96)]
+    registry = json.dumps({"events": events}, ensure_ascii=False, separators=(",", ":"))
+    codebook = "code,name\n" + "".join(
+        f"{event['code']},{event['name']}\n" for event in events
+    )
+    prompt = f"AGENT EVENT POLICY\n{registry}\nEND"
+    texts = {
+        "system_prompt": prompt,
+        "event_registry_json": registry,
+        "event_codebook_csv": codebook,
+    }
+    return {
+        "consumer": "d_video_call.timeline.detection",
+        "release_id": "timeline-test",
+        "bundle_sha256": "b" * 64,
+        "binding": {
+            "assembly_contract": "d-timeline-detection-v1",
+            "output_protocol": "d-timeline-observation-v2",
+            "model_id": "event-1115-v1-fp8",
+            "model_version": "1115_v1-checkpoint-6138-fp8",
+        },
+        **texts,
+        "item_sha256": {
+            key: hashlib.sha256(value.encode()).hexdigest()
+            for key, value in texts.items()
+        },
+    }
+
+
 def _install_frozen_codebook(tmp_path, monkeypatch) -> None:
     codes = [f"E{index}" for index in range(96)]
     names = {code: f"event-{code[1:]}" for code in codes}
@@ -71,6 +101,7 @@ def test_raw_window_session_start_matches_agent_contract() -> None:
             "video_format": "jpeg",
             "model_id": "event-1115-v1-fp8",
             "result_mode": RAW_WINDOW_MODE,
+            "prompt_snapshot": _agent_timeline_snapshot(),
         }
     )
 

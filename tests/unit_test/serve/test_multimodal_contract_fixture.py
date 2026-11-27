@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import csv
+import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -25,6 +28,36 @@ def _fixture() -> dict:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
+def _timeline_snapshot(model_id: str) -> dict:
+    events = [{"code": f"E{index}", "name": f"event-{index}"} for index in range(96)]
+    registry = json.dumps({"events": events}, ensure_ascii=False, separators=(",", ":"))
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=("code", "name"), lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(events)
+    texts = {
+        "system_prompt": f"AGENT EVENT POLICY\n{registry}\nEND",
+        "event_registry_json": registry,
+        "event_codebook_csv": output.getvalue(),
+    }
+    return {
+        "consumer": "d_video_call.timeline.detection",
+        "release_id": "timeline-contract-test",
+        "bundle_sha256": "b" * 64,
+        "binding": {
+            "assembly_contract": "d-timeline-detection-v1",
+            "output_protocol": "d-timeline-observation-v2",
+            "model_id": model_id,
+            "model_version": "fixture-weights",
+        },
+        **texts,
+        "item_sha256": {
+            key: hashlib.sha256(value.encode()).hexdigest()
+            for key, value in texts.items()
+        },
+    }
+
+
 def test_sg_accepts_classification_fixture() -> None:
     request = _fixture()["task_classification"]["request"]
     wire = dict(request)
@@ -46,7 +79,9 @@ def test_sg_accepts_classification_fixture() -> None:
 
 def test_sg_accepts_timeline_fixture_and_emits_same_observation() -> None:
     timeline = _fixture()["timeline_detection"]
-    start = _start_from_json(timeline["session_start"])
+    start_wire = dict(timeline["session_start"])
+    start_wire["prompt_snapshot"] = _timeline_snapshot(start_wire["model_id"])
+    start = _start_from_json(start_wire)
     payload = base64.b64decode(timeline["media_payload_base64"], validate=True)
     chunk = _chunk_from_json(timeline["media_header"], payload)
     event_values = dict(timeline["observation"])

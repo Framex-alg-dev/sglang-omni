@@ -1,7 +1,5 @@
 import hashlib
 import json
-from types import MappingProxyType
-
 import httpx
 import msgpack
 import pytest
@@ -9,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from sglang_omni.serve.prompt_runtime import (
     SPECS,
-    RuntimePromptBundle,
     decode_bundle,
     load_runtime_bundle,
 )
@@ -141,139 +138,54 @@ async def test_unavailable_or_unselected_bundle_has_no_default_fallback():
             )
 
 
-def test_normal_action_and_performance_use_frozen_releases_until_restart(monkeypatch):
+def test_action_uses_agent_snapshot_without_knowledge_io(monkeypatch):
     import sglang_omni.serve.prompt_runtime as runtime
     from sglang_omni.serve.action_decision.service import create_action_decision_app
-    from sglang_omni.serve.performance_control.prompts import PERFORMANCE_RULES
-    from tests.unit_test.serve.test_action_decision_service import _config, _FakeClient
-    from tests.unit_test.serve.test_performance_control_service import _Client, _payload
+    from tests.unit_test.serve.test_action_decision_service import (
+        _config,
+        _FakeClient,
+        _raw_action_snapshot,
+    )
 
-    generation = ["FIRST"]
-    scorer = _Client()
     model = _FakeClient()
-    model.score_action_suffixes = scorer.score_action_suffixes
 
-    async def load(profile, **kwargs):
-        rules = (
-            dict(PERFORMANCE_RULES)
-            if profile == "performance"
-            else (
-                {"system_prompt": "ACTUAL-" + generation[0]}
-                if profile == "e67"
-                else {
-                    "system_rules": "GENERIC-" + generation[0],
-                    "final_constraints": "constraints",
-                }
-            )
-        )
-        if profile == "performance":
-            rules["system_rules.zh-CN"] += "\nPERFORMANCE-" + generation[0]
-        return RuntimePromptBundle(
-            SPECS[profile][0],
-            "release-" + generation[0],
-            "active",
-            "hash",
-            MappingProxyType(rules),
-            MappingProxyType(
-                {
-                    "assembly_contract": SPECS[profile][1],
-                    "output_protocol": SPECS[profile][2],
-                    **EXPECTED,
-                }
-            ),
-            "now",
-        )
+    async def load(*args, **kwargs):
+        raise AssertionError("Action Knowledge I/O belongs to Agent")
 
     monkeypatch.setattr(runtime, "load_runtime_bundle", load)
+    monkeypatch.setenv("KNOWLEDGE_PROMPT_ENABLED", "true")
+    app = create_action_decision_app(model, config=_config())
+    payload = {
+        "request_id": "one",
+        "session_id": "session",
+        "turn_id": "one",
+        "decision_point_id": "point",
+        "channel": "body",
+        "text": "挥手",
+        "runtime_context": {"prompt_profile": "e67_v116_step695_fp8"},
+        "prompt_snapshot": _raw_action_snapshot("AGENT-FIRST"),
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/action-decision",
+            headers={"Authorization": "Bearer secret"},
+            json=payload,
+        )
+        assert response.status_code == 200, response.text
+        assert model.requests[-1][1].messages[0].content == "AGENT-FIRST"
 
-    def app():
-        return create_action_decision_app(
-            model, config=_config(), performance_token="secret"
+        payload.update(
+            request_id="two",
+            turn_id="two",
+            prompt_snapshot=_raw_action_snapshot("AGENT-SECOND"),
         )
-
-    payload = dict(
-        request_id="one",
-        session_id="session",
-        turn_id="one",
-        decision_point_id="point",
-        channel="body",
-        text="挥手",
-        runtime_context={"prompt_profile": "e67_v116_step695_fp8"},
-    )
-    with TestClient(app()) as client:
-        r = client.post(
+        response = client.post(
             "/v1/action-decision",
             headers={"Authorization": "Bearer secret"},
             json=payload,
         )
-        assert r.status_code == 200, r.text
-        assert "ACTUAL-FIRST" in model.requests[-1][1].messages[0].content
-        generation[0] = "SECOND"
-        payload.update(request_id="two", turn_id="two")
-        r = client.post(
-            "/v1/action-decision",
-            headers={"Authorization": "Bearer secret"},
-            json=payload,
-        )
-        assert r.status_code == 200
-        assert (
-            "ACTUAL-FIRST" in model.requests[-1][1].messages[0].content
-            and "SECOND" not in model.requests[-1][1].messages[0].content
-        )
-        generic = {
-            **payload,
-            "request_id": "generic-first",
-            "turn_id": "generic-first",
-            "runtime_context": {"prompt_profile": "generic"},
-        }
-        r = client.post(
-            "/v1/action-decision",
-            headers={"Authorization": "Bearer secret"},
-            json=generic,
-        )
-        assert r.status_code == 200, r.text
-        assert (
-            "GENERIC-FIRST" in model.requests[-1][1].messages[0].content
-            and "SECOND" not in model.requests[-1][1].messages[0].content
-        )
-        r = client.post(
-            "/v1/performance-control",
-            headers={"Authorization": "Bearer secret"},
-            json=_payload(),
-        )
-        assert r.status_code == 200
-        assert "PERFORMANCE-FIRST" in scorer.requests[-1].system_prompt
-        assert (
-            client.get(
-                "/v1/prompt-debug/state?profile=e67",
-                headers={"Authorization": "Bearer secret"},
-            ).json()["runtime"]["release_id"]
-            == "release-FIRST"
-        )
-    with TestClient(app()) as client:
-        payload.update(request_id="three", turn_id="three")
-        r = client.post(
-            "/v1/action-decision",
-            headers={"Authorization": "Bearer secret"},
-            json=payload,
-        )
-        assert r.status_code == 200
-        assert "ACTUAL-SECOND" in model.requests[-1][1].messages[0].content
-        generic.update(request_id="generic-second", turn_id="generic-second")
-        r = client.post(
-            "/v1/action-decision",
-            headers={"Authorization": "Bearer secret"},
-            json=generic,
-        )
-        assert r.status_code == 200, r.text
-        assert "GENERIC-SECOND" in model.requests[-1][1].messages[0].content
-        r = client.post(
-            "/v1/performance-control",
-            headers={"Authorization": "Bearer secret"},
-            json=_payload(),
-        )
-        assert r.status_code == 200
-        assert "PERFORMANCE-SECOND" in scorer.requests[-1].system_prompt
+        assert response.status_code == 200, response.text
+        assert model.requests[-1][1].messages[0].content == "AGENT-SECOND"
 
 
 def test_router_never_loads_knowledge_inside_omni(monkeypatch):

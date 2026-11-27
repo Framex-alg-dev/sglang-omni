@@ -1,17 +1,16 @@
 # Knowledge decision prompt workbenches
 
-Current development runtime integration: Action E67, generic Action, and
-Performance can load selected Knowledge bundles through
-`sglang_omni/serve/prompt_runtime.py`. Router v1.0 is different: Agent loads and
-freezes its immutable Knowledge release, then supplies that snapshot on every
-turn-router v7 request. Omni validates the consumer, protocol binding, release,
-and per-item checksums, but does not access Knowledge or hot-reload Router rules.
-Router v6 remains a rollback contract and does not accept a snapshot. The separate
-D Reply bundle also covers event replies. Publishing and selecting a version do
-not hot-reload rules; restart the owning Agent after changing the selected Router
-release. Invalid or missing enabled bundles block Agent startup. Existing Router
-profiles other than v1.0 remain on the legacy contract. Earlier debug-only
-restrictions below describe that implementation stage.
+Current live runtime integration: Agent owns Knowledge access for Action,
+Timeline Event, Router, and Reply. It freezes immutable releases and sends the
+corresponding prompt snapshot (or Reply messages) with each model request. Omni
+validates consumer, protocol, release, content checksums, and required documents;
+it does not access Knowledge or fall back to a local live prompt. A missing or
+invalid Agent snapshot rejects Action, Timeline Event, and Router v7 requests.
+Logical model identifiers are observability metadata: a mismatch with the model
+actually deployed by Omni emits `prompt.binding_drift` with both bindings but does
+not block inference. Publishing or selecting a release therefore takes effect
+only after the owning Agent reloads it. The hooks below remain authenticated
+diagnostic tools and do not change this ownership boundary.
 
 The running classifier and action services expose authenticated `/v1/prompt-debug/state`
 and `/v1/prompt-debug/evaluate` hooks. Gateway exposes fixed-target management proxies at

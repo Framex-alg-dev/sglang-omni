@@ -685,24 +685,13 @@ async def _run_server(
                 "SGLANG_OMNI_TIMELINE_MODEL_VERSION",
                 os.environ.get("SGLANG_OMNI_MODEL_VERSION", ""),
             ).strip()
-            from sglang_omni.serve.prompt_runtime import load_runtime_bundle
-            from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
             from sglang_omni.serve.timeline_prompt_debug import install_timeline_prompt_debug
-            timeline_bundle = await load_runtime_bundle('partial30', expected={
-                'model_id': model_name or pipeline_config.name, 'model_version': model_version,
-                'catalog_version': None, 'mapping_version': None,
-            })
-            # One immutable profile for every session, including prefix prefill.
-            timeline_profile = DirectE50Profile.from_environment(
-                system_prompt_override=timeline_bundle.rules['system_prompt'] if timeline_bundle else None,
-                prompt_version_override=timeline_bundle.release_id if timeline_bundle else None,
-            )
             app = create_timeline_detection_app(
                 lambda start: SglangClientTimelineDetectionModel(
                     client,
                     start,
                     model_version=model_version,
-                    direct_profile=timeline_profile,
+                    serving_model_id=model_name or pipeline_config.name,
                     inference_interval_ms=int(
                         os.environ.get(
                             "SGLANG_OMNI_TIMELINE_INFERENCE_INTERVAL_MS", "3000"
@@ -720,37 +709,9 @@ async def _run_server(
                 ),
                 token=token,
             )
-            install_timeline_prompt_debug(app, client=client, profile=timeline_profile,
-                bundle=timeline_bundle, model_id=model_name or pipeline_config.name,
+            install_timeline_prompt_debug(app, client=client, profile=None,
+                bundle=None, model_id=model_name or pipeline_config.name,
                 model_version=model_version, token=token)
-            if os.environ.get("SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL") == "direct-1115-v1":
-                from sglang_omni.serve.timeline_detection.direct_e50 import (
-                    DirectE50Profile,
-                    build_direct_e50_prefill_request,
-                )
-
-                profile = DirectE50Profile.from_environment()
-
-                async def prewarm_timeline_prefix() -> None:
-                    request_id = "timeline:1115-v1:startup-prefix"
-                    request = build_direct_e50_prefill_request(
-                        profile=profile,
-                        model_id=model_name or pipeline_config.name,
-                        session_id="1115-v1-startup",
-                        logical_request_id=request_id,
-                    )
-                    try:
-                        ready = await asyncio.wait_for(
-                            client.prefill_completion_prefix(request, request_id=request_id),
-                            timeout=60,
-                        )
-                    except TimeoutError:
-                        await client.abort(request_id)
-                        logger.warning("1115_v1 timeline startup prefix prefill timed out")
-                    else:
-                        logger.info("1115_v1 timeline startup prefix prefill ready=%s", ready)
-
-                app.router.add_event_handler("startup", prewarm_timeline_prefix)
         elif service_role == "action-decision":
             from sglang_omni.serve.action_decision.service import (
                 ActionDecisionConfig,

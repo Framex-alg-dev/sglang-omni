@@ -17,10 +17,17 @@ logger = logging.getLogger(__name__)
 
 _SECRET_FIELDS = {
     "api_key",
+    "access_key",
+    "access_key_id",
     "authorization",
+    "cookie",
+    "password",
+    "private_key",
     "secret",
     "secret_id",
     "secret_key",
+    "secretid",
+    "secretkey",
     "access_token",
     "token",
 }
@@ -32,7 +39,18 @@ _SERVICE_BY_LOG_TYPE = {
 _SECRET_TEXT_RE = re.compile(
     r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+|"
     r"(bearer\s+)[A-Za-z0-9._~+/=-]+|"
-    r"((?:cookie|secret|token|api[_-]?key)\s*[:=]\s*)[^\s,;]+"
+    r"((?:cookie|password|private[_-]?key|secret(?:[_-]?(?:id|key))?|"
+    r"access[_-]?key(?:[_-]?id)?|token|api[_-]?key)\s*[:=]\s*)[^\s,;]+"
+)
+_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&](?:authorization|password|secret(?:id|key)?|token|"
+    r"access[_-]?key(?:[_-]?id)?|api[_-]?key)=)[^&#\s]+"
+)
+_BARE_CREDENTIAL_RE = re.compile(
+    r"\b(?:AKID|AKIA|ASIA)[A-Za-z0-9]{12,}\b|"
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}\b|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+    re.DOTALL,
 )
 _PHONE_RE = re.compile(r"(?<!\d)(1\d{2})\d{4}(\d{4})(?!\d)")
 
@@ -42,7 +60,10 @@ def _redact_text(value: str) -> str:
         prefix = match.group(1) or match.group(2) or match.group(3) or ""
         return prefix + "***"
 
-    return _PHONE_RE.sub(r"\1****\2", _SECRET_TEXT_RE.sub(replace_secret, value))
+    redacted = _SECRET_TEXT_RE.sub(replace_secret, value)
+    redacted = _QUERY_SECRET_RE.sub(r"\1***", redacted)
+    redacted = _BARE_CREDENTIAL_RE.sub("[REDACTED]", redacted)
+    return _PHONE_RE.sub(r"\1****\2", redacted)
 
 
 def cls_safe(value: Any, *, _path: tuple[str, ...] = ()) -> Any:

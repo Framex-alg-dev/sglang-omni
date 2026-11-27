@@ -157,8 +157,8 @@ def _build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalo
         raise ValueError("invalid Agent action prompt snapshot")
     if profile is not None:
         if prompt_snapshot is not None:
-            if profile != E67_REFERENCE_PROFILE or set(prompt_snapshot)!={"system_prompt"}:
-                raise ValueError("invalid E67 prompt snapshot")
+            if set(prompt_snapshot) != {"system_prompt"}:
+                raise ValueError("invalid reference prompt snapshot")
             base = prompt_snapshot["system_prompt"]
         else:
             base = _reference_system_prompt(profile)

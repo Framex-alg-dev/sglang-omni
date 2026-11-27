@@ -78,9 +78,6 @@ class RouterPromptSnapshot:
 
 def decode_action_prompt_snapshot(
     raw: Any,
-    *,
-    model_id: str,
-    model_version: str,
 ) -> ActionPromptSnapshot:
     expected = {
         "consumer",
@@ -95,8 +92,6 @@ def decode_action_prompt_snapshot(
         value["binding"],
         assembly_contract=ACTION_ASSEMBLY_CONTRACT,
         output_protocol=ACTION_OUTPUT_PROTOCOL,
-        model_id=model_id,
-        model_version=model_version,
     )
     if value["consumer"] != ACTION_CONSUMER:
         raise ValueError("action prompt_snapshot consumer mismatch")
@@ -115,8 +110,6 @@ def decode_action_prompt_snapshot(
 
 def decode_timeline_prompt_snapshot(
     raw: Any,
-    *,
-    model_id: str,
 ) -> TimelinePromptSnapshot:
     expected = {
         "consumer",
@@ -129,20 +122,10 @@ def decode_timeline_prompt_snapshot(
         "item_sha256",
     }
     value = _object_with_exact_keys(raw, expected, "timeline prompt_snapshot")
-    binding_value = _object_with_exact_keys(
-        value["binding"],
-        {"assembly_contract", "output_protocol", "model_id", "model_version"},
-        "timeline prompt binding",
-    )
-    model_version = binding_value.get("model_version")
-    if not isinstance(model_version, str) or not model_version.strip():
-        raise ValueError("timeline prompt binding model_version is required")
     binding = _binding(
-        binding_value,
+        value["binding"],
         assembly_contract=TIMELINE_ASSEMBLY_CONTRACT,
         output_protocol=TIMELINE_OUTPUT_PROTOCOL,
-        model_id=model_id,
-        model_version=model_version,
     )
     if value["consumer"] != TIMELINE_CONSUMER:
         raise ValueError("timeline prompt_snapshot consumer mismatch")
@@ -233,23 +216,25 @@ def _binding(
     *,
     assembly_contract: str,
     output_protocol: str,
-    model_id: str,
-    model_version: str,
 ) -> AgentPromptBinding:
     value = _object_with_exact_keys(
         raw,
         {"assembly_contract", "output_protocol", "model_id", "model_version"},
         "prompt binding",
     )
-    expected = {
-        "assembly_contract": assembly_contract,
-        "output_protocol": output_protocol,
-        "model_id": model_id,
-        "model_version": model_version,
-    }
-    if value != expected:
-        raise ValueError("prompt_snapshot model or protocol binding mismatch")
-    return AgentPromptBinding(**expected)
+    if (
+        value["assembly_contract"] != assembly_contract
+        or value["output_protocol"] != output_protocol
+    ):
+        raise ValueError("prompt_snapshot protocol binding mismatch")
+    return AgentPromptBinding(
+        assembly_contract=assembly_contract,
+        output_protocol=output_protocol,
+        model_id=_prompt_text(value["model_id"], "binding.model_id"),
+        model_version=_prompt_text(
+            value["model_version"], "binding.model_version"
+        ),
+    )
 
 
 def _object_with_exact_keys(raw: Any, keys: set[str], name: str) -> dict[str, Any]:

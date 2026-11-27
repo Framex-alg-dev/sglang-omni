@@ -17,10 +17,13 @@ SERVICES = ('omni-event-worker', 'omni-reply-worker', 'omni-action-worker')
 REQUIRED = {'timestamp', 'level', 'service', 'env', 'version', 'host', 'logger', 'event'}
 ID = re.compile(r'^[A-Za-z0-9_.:-]{1,128}$')
 STAMP = re.compile(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$')
-FORBIDDEN = {'session_id', 'authorization', 'cookie', 'secret_id', 'secret_key',
-             'secretid', 'secretkey', 'token', 'messages', 'prompt', 'negative_prompt',
-             'user_text', 'assistant_text', 'audio', 'video', 'image', 'payload'}
-SENSITIVE = re.compile(r'AKID[A-Za-z0-9]{16,}|Bearer\s+(?!\[REDACTED\])[^\s,;]+', re.I)
+FORBIDDEN = {'authorization', 'cookie', 'password', 'private_key', 'secret',
+             'secret_id', 'secret_key', 'secretid', 'secretkey', 'access_key',
+             'access_key_id', 'token', 'api_key'}
+SENSITIVE = re.compile(
+    r'AKID[A-Za-z0-9]{12,}|AKIA[A-Za-z0-9]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|'
+    r'Bearer\s+(?!\[REDACTED\]|\*\*\*)[^\s,;]+|data:[^,;]+;base64,', re.I,
+)
 
 
 def collection_requests(targets: dict, *, services=SERVICES) -> list[dict]:

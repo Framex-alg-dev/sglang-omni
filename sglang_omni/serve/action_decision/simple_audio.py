@@ -246,14 +246,11 @@ def parse_simple_audio_request(
         if current_text is None:
             context["speech_window"] = {"window_id": "focus", "start_ms": focus.start_ms, "end_ms": focus.end_ms}
     from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
-    if raw.get("prompt_snapshot") is not None and (not model_id or not model_version):
+    if raw.get("prompt_snapshot") is None:
+        raise ValueError("action recall requires Agent prompt_snapshot")
+    if not model_id or not model_version:
         raise ValueError("action prompt_snapshot requires the serving model binding")
-    prompt_snapshot = (
-        decode_action_prompt_snapshot(
-            raw["prompt_snapshot"], model_id=model_id, model_version=model_version,
-        )
-        if raw.get("prompt_snapshot") is not None else None
-    )
+    prompt_snapshot = decode_action_prompt_snapshot(raw["prompt_snapshot"])
     req = ActionDecisionRequest(
         request_id=internal_id, session_id=internal_id, turn_id=internal_id, decision_point_id=internal_id,
         channel=channel, text=user_text if text_request else user_context, character_prompt=persona,

@@ -51,14 +51,22 @@ def test_cls_safe_handles_immutable_prompt_snapshot_mappings() -> None:
 
 
 def test_cls_safe_redacts_secrets_embedded_in_text() -> None:
+    cloud_id = "AKID" + "A" * 20
+    github_token = "ghp_" + "B" * 24
     value = cls_safe(
         {
-            "system_prompt": "Authorization: Bearer abc.def and phone 13812345678",
+            "system_prompt": (
+                "Authorization: Bearer abc.def and phone 13812345678 "
+                f"cloud {cloud_id} github {github_token} "
+                "url https://example.test/?token=visible"
+            ),
         }
     )
 
     assert value["system_prompt"] == (
-        "Authorization: Bearer *** and phone 138****5678"
+        "Authorization: Bearer *** and phone 138****5678 "
+        "cloud [REDACTED] github [REDACTED] "
+        "url https://example.test/?token=***"
     )
 
 
@@ -104,6 +112,10 @@ def test_emit_model_trace_is_fail_open(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "sglang_omni.utils.model_trace_logs.emit_structured_log", fail
+    )
+    monkeypatch.setattr(
+        "sglang_omni.utils.model_trace_logs._emit_cls_service_log",
+        lambda *_args, **_kwargs: False,
     )
 
     assert not emit_model_trace(

@@ -29,7 +29,9 @@ def _wire_request() -> dict:
 
 def test_action_log_context_is_separate_from_operation_idempotency() -> None:
     config = SimpleNamespace(model_id="action-model", model_version="v1")
-    request = _parse_request(_wire_request(), media=(), config=config)
+    request = _parse_request(
+        _wire_request(), media=(), config=config, require_prompt_snapshot=False
+    )
     assert request.request_id == "operation-1"
     assert request.trace_request_id == "req_0123456789abcdfg"
     assert request.root_session_id == "ses_0123456789abcdfg"

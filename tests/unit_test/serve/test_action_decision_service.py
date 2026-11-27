@@ -27,6 +27,7 @@ from sglang_omni.serve.action_decision.service import (
     ActionDecisionEngine,
     create_action_decision_app,
 )
+from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
 from sglang_omni.serve.streaming_request import StreamedMedia
 from sglang_omni.serve.launcher import _run_server
 
@@ -61,6 +62,22 @@ def _registry() -> ActionCatalogRegistry:
     )
 
 
+def _raw_action_snapshot(prompt: str = "AGENT ACTION POLICY") -> dict:
+    return {
+        "consumer": "d_video_call.action.decision",
+        "release_id": "action-test",
+        "bundle_sha256": "a" * 64,
+        "binding": {
+            "assembly_contract": "d-action-decision-v1",
+            "output_protocol": "d-action-decision-response-v1",
+            "model_id": "action-model",
+            "model_version": "e43",
+        },
+        "system_prompt": prompt,
+        "system_prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+    }
+
+
 def _request(channel: DecisionChannel, **updates) -> ActionDecisionRequest:
     values = {
         "request_id": f"r-{channel.value}",
@@ -69,6 +86,7 @@ def _request(channel: DecisionChannel, **updates) -> ActionDecisionRequest:
         "decision_point_id": "dp1",
         "channel": channel,
         "text": "你好",
+        "prompt_snapshot": decode_action_prompt_snapshot(_raw_action_snapshot()),
     }
     values.update(updates)
     return ActionDecisionRequest(**values)
@@ -556,6 +574,7 @@ def test_websocket_service_accepts_text_request() -> None:
                     "decision_point_id": "dp1",
                     "channel": "body",
                     "text": "你好",
+                    "prompt_snapshot": _raw_action_snapshot(),
                 },
             }
         )
@@ -702,7 +721,12 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
 
     monkeypatch.setattr(service, "_decide_with_service_log", decide)
     app = create_action_decision_app(_FakeClient(), config=_config())
-    payload = {"channel": "body", "character_prompt": "自然回应", **input_fields}
+    payload = {
+        "channel": "body",
+        "character_prompt": "自然回应",
+        "prompt_snapshot": _raw_action_snapshot(),
+        **input_fields,
+    }
     headers = {"Authorization": "Bearer secret"}
     with TestClient(app) as client:
         assert client.post("/v1/action-recall", json=payload, headers=headers).status_code == 200
@@ -720,3 +744,69 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
             assert result["request_id"] == operation_id
     assert seen[0]
     assert seen[1] == trace_id
+
+
+def test_action_public_transports_reject_missing_agent_prompt_snapshot() -> None:
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    headers = {"Authorization": "Bearer secret"}
+    payload = {"channel": "body", "character_prompt": "自然回应", "text": "你好"}
+    with TestClient(app) as client:
+        response = client.post("/v1/action-recall", json=payload, headers=headers)
+        assert response.status_code == 422
+        assert "requires Agent prompt_snapshot" in response.text
+
+        with client.websocket_connect("/v1/action-recall", headers=headers) as socket:
+            socket.send_json(
+                {
+                    "type": "request.start",
+                    "contract_version": 2,
+                    "request_id": "req_0123456789abcdef",
+                    "payload": payload,
+                }
+            )
+            assert socket.receive_json()["type"] == "request.ready"
+            socket.send_json(
+                {
+                    "type": "request.commit",
+                    "request_id": "req_0123456789abcdef",
+                }
+            )
+            rejected = socket.receive_json()
+            assert rejected["type"] == "error"
+            assert "requires Agent prompt_snapshot" in rejected["detail"]
+
+
+def test_action_model_binding_drift_is_logged_without_blocking(monkeypatch) -> None:
+    from sglang_omni.serve.action_decision import service
+
+    events = []
+    monkeypatch.setattr(
+        service,
+        "emit_service_event",
+        lambda component, event, **fields: events.append((component, event, fields)),
+    )
+    snapshot = _raw_action_snapshot()
+    snapshot["binding"]["model_id"] = "knowledge-logical-action"
+    snapshot["binding"]["model_version"] = "knowledge-release"
+    payload = {
+        "request_id": "business-r1",
+        "session_id": "s1",
+        "turn_id": "t1",
+        "decision_point_id": "dp1",
+        "channel": "body",
+        "text": "你好",
+        "prompt_snapshot": snapshot,
+    }
+
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/action-decision",
+            json=payload,
+            headers={"Authorization": "Bearer secret"},
+        )
+
+    assert response.status_code == 200, response.text
+    drift = next(fields for _, event, fields in events if event == "prompt.binding_drift")
+    assert drift["bound_model_id"] == "knowledge-logical-action"
+    assert drift["serving_model_id"] == "action-model"
