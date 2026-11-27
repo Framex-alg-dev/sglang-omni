@@ -153,4 +153,3 @@ def test_secret_values_are_redacted_from_message_and_error(tmp_path) -> None:
     assert "another-secret" not in record["error_message"]
     assert "13812345678" not in record["error_message"]
     assert "138****5678" in record["error_message"]
-

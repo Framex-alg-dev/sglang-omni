@@ -94,4 +94,3 @@ def test_action_input_snapshot_excludes_user_content_and_prompts(monkeypatch) ->
         assert private not in serialized
     assert snapshot["system_sha256"]
     assert snapshot["media"] == []
-

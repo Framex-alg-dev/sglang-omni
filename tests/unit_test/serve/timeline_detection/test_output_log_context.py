@@ -79,7 +79,7 @@ def test_raw_window_transport_logs_dequeued_identity_without_wire_metadata(tmp_p
             window=next(r for r in results if r['type']=='window.result')
             metadata = window.pop('log_context')
             assert metadata['request_id'] == 'req_0123456789abcdef'
-            assert DetectionWindow.from_wire(window).events[0].event_type == 'E5' 
+            assert DetectionWindow.from_wire(window).events[0].event_type == 'E5'
             ws.send_json({'type':'session.close'})
             assert ws.receive_json()['type']=='session.closed'
     finally:
