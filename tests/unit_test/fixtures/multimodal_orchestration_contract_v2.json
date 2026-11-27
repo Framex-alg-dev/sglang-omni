@@ -65,7 +65,7 @@
   "inference_session": {
     "session_open": {
       "type": "session.open",
-      "contract_version": 2,
+      "contract_version": 3,
       "session_id": "session-contract-1"
     },
     "reply_stage_request": {
@@ -103,7 +103,7 @@
   "timeline_detection": {
     "session_start": {
       "type": "session.start",
-      "contract_version": 2,
+      "contract_version": 3,
       "session_id": "session-contract-1",
       "identity_epoch": 2,
       "observer_epoch": 4,
@@ -141,22 +141,27 @@
       "observer_epoch": 4,
       "sequence": 1
     },
-    "observation": {
-      "type": "observation",
-      "contract_version": 2,
-      "observation_id": "observation-contract-1",
+    "window_result": {
+      "type": "window.result",
+      "contract_version": 3,
+      "status": "complete",
       "session_id": "session-contract-1",
       "identity_epoch": 2,
       "observer_epoch": 4,
       "stream_epoch": 3,
-      "event_type": "E32",
-      "summary": "入画",
-      "evidence_start_ms": 7000,
-      "evidence_end_ms": 10000,
+      "window_sequence": 1,
+      "evidence_start_ms": 100,
+      "evidence_end_ms": 200,
       "model_id": "qwen3-omni-gpu4-timeline",
       "model_version": "event-v2.0-h7c3-a1-43-prompt-only",
       "evidence_mode": "video_only",
-      "audio_status": "missing"
+      "audio_status": "missing",
+      "events": [
+        {
+          "event_type": "E32",
+          "summary": "入画"
+        }
+      ]
     },
     "session_close": {
       "type": "session.close"

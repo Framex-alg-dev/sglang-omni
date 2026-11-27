@@ -1,5 +1,6 @@
 import base64
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -73,3 +74,61 @@ def test_disabled_recorder_is_fail_open() -> None:
         output_value={},
         context={},
     )
+
+
+def test_close_drains_a_full_queue_and_joins_writer(tmp_path, monkeypatch) -> None:
+    recorder = ModelIORecorder(tmp_path, queue_size=1)
+    write_started = threading.Event()
+    release_write = threading.Event()
+    original_write = recorder._write
+
+    def blocked_write(item):
+        write_started.set()
+        assert release_write.wait(2)
+        original_write(item)
+
+    monkeypatch.setattr(recorder, "_write", blocked_write)
+    assert recorder.record(
+        stage="reply", input_value={"index": 1}, output_value={},
+        context={"session_id": "session", "turn_id": "turn"},
+    )
+    assert write_started.wait(2)
+    assert recorder.record(
+        stage="reply", input_value={"index": 2}, output_value={},
+        context={"session_id": "session", "turn_id": "turn"},
+    )
+
+    closer = threading.Thread(target=lambda: recorder.close(timeout=2))
+    closer.start()
+    release_write.set()
+    closer.join(2)
+
+    assert not closer.is_alive()
+    assert recorder._thread is not None and not recorder._thread.is_alive()
+    assert recorder._queue.empty()
+    assert len(list(tmp_path.rglob("ready.json"))) == 2
+
+
+def test_close_reports_timeout_without_losing_stop_request(tmp_path, monkeypatch) -> None:
+    recorder = ModelIORecorder(tmp_path, queue_size=1)
+    write_started = threading.Event()
+    release_write = threading.Event()
+    original_write = recorder._write
+
+    def blocked_write(item):
+        write_started.set()
+        assert release_write.wait(2)
+        original_write(item)
+
+    monkeypatch.setattr(recorder, "_write", blocked_write)
+    assert recorder.record(
+        stage="reply", input_value={}, output_value={},
+        context={"session_id": "session", "turn_id": "turn"},
+    )
+    assert write_started.wait(2)
+
+    assert recorder.close(timeout=0.01) is False
+    release_write.set()
+    assert recorder._thread is not None
+    recorder._thread.join(2)
+    assert not recorder._thread.is_alive()

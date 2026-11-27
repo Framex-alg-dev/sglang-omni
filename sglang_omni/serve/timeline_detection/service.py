@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE, LEGACY_OBSERVATION_MODE
+from framex_event_policy.windows import DetectionWindow
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
@@ -20,7 +20,6 @@ from sglang_omni.serve.http_request_logs import install_framex_http_logging
 from .contracts import (
     CONTRACT_VERSION,
     MediaKind,
-    ObservationEvent,
     TimelineDiscontinuity,
     TimelineMediaChunk,
     TimelineSessionStart,
@@ -158,115 +157,66 @@ def create_timeline_detection_app(
             try:
                 while True:
                     started = time.perf_counter()
-                    events = await session.next_observations()
+                    window = await session.next_observations()
                     context = session.output_log_context
                     with bind_service_log_context(
                         request_id=context.request_id if context else connection_request_id,
                         root_session_id=start.root_session_id or start.session_id,
                         turn_id=context.turn_id if context else None,
                     ):
-                        if isinstance(events, DetectionWindow):
-                            payload = events.to_wire()
-                            if context is not None:
-                                payload["log_context"] = {
-                                    "request_id": context.request_id,
-                                    "root_session_id": context.root_session_id,
-                                    "turn_id": context.turn_id,
-                                }
-                            send_started = time.perf_counter()
-                            await send_json(payload)
-                            emit_model_trace(
-                                "diagnostic",
-                                "agent.response.sent",
-                                component="timeline_detection",
-                                request_id=(
-                                    context.request_id
-                                    if context is not None
-                                    else connection_request_id
-                                ),
-                                invocation_id=(
-                                    context.request_id
-                                    if context is not None
-                                    else connection_request_id
-                                ),
-                                sequence=6,
-                                root_session_id=start.root_session_id
-                                or start.session_id,
-                                agent_session_id=start.agent_session_id
-                                or start.session_id,
-                                turn_id=context.turn_id if context else None,
-                                transport="websocket",
-                                agent_response=payload,
-                                response_send_ms=round(
-                                    (time.perf_counter() - send_started) * 1000.0,
-                                    3,
-                                ),
-                            )
-                            emit_service_event(
-                                "omni-event-worker",
-                                "inference.completed",
-                                logger_name=__name__,
-                                root_session_id=(
-                                    start.root_session_id or start.session_id
-                                ),
-                                operation="timeline_window",
-                                operation_id=context.turn_id if context else None,
-                                window_id=events.evidence_end_ms,
-                                status=200,
-                                duration_ms=round(
-                                    (time.perf_counter() - started) * 1000, 3
-                                ),
-                                event_count=len(events.events),
-                                model_id=start.model_id,
-                            )
-                        else:
-                            payloads = [_event_to_json(event) for event in events]
-                            send_started = time.perf_counter()
-                            for payload in payloads:
-                                await send_json(payload)
-                            emit_model_trace(
-                                "diagnostic",
-                                "agent.response.sent",
-                                component="timeline_detection",
-                                request_id=(
-                                    context.request_id
-                                    if context is not None
-                                    else connection_request_id
-                                ),
-                                invocation_id=(
-                                    context.request_id
-                                    if context is not None
-                                    else connection_request_id
-                                ),
-                                sequence=6,
-                                root_session_id=start.root_session_id
-                                or start.session_id,
-                                agent_session_id=start.agent_session_id
-                                or start.session_id,
-                                turn_id=context.turn_id if context else None,
-                                transport="websocket",
-                                agent_response=payloads,
-                                response_send_ms=round(
-                                    (time.perf_counter() - send_started) * 1000.0,
-                                    3,
-                                ),
-                            )
-                            emit_service_event(
-                                "omni-event-worker",
-                                "inference.completed",
-                                logger_name=__name__,
-                                root_session_id=(
-                                    start.root_session_id or start.session_id
-                                ),
-                                operation="timeline_observation",
-                                operation_id=context.turn_id if context else None,
-                                status=200,
-                                duration_ms=round(
-                                    (time.perf_counter() - started) * 1000, 3
-                                ),
-                                event_count=len(events),
-                                model_id=start.model_id,
-                            )
+                        payload = window.to_wire()
+                        if context is not None:
+                            payload["log_context"] = {
+                                "request_id": context.request_id,
+                                "root_session_id": context.root_session_id,
+                                "turn_id": context.turn_id,
+                            }
+                        send_started = time.perf_counter()
+                        await send_json(payload)
+                        emit_model_trace(
+                            "diagnostic",
+                            "agent.response.sent",
+                            component="timeline_detection",
+                            request_id=(
+                                context.request_id
+                                if context is not None
+                                else connection_request_id
+                            ),
+                            invocation_id=(
+                                context.request_id
+                                if context is not None
+                                else connection_request_id
+                            ),
+                            sequence=6,
+                            root_session_id=start.root_session_id
+                            or start.session_id,
+                            agent_session_id=start.agent_session_id
+                            or start.session_id,
+                            turn_id=context.turn_id if context else None,
+                            transport="websocket",
+                            agent_response=payload,
+                            response_send_ms=round(
+                                (time.perf_counter() - send_started) * 1000.0,
+                                3,
+                            ),
+                        )
+                        emit_service_event(
+                            "omni-event-worker",
+                            "inference.completed",
+                            logger_name=__name__,
+                            root_session_id=(
+                                start.root_session_id or start.session_id
+                            ),
+                            operation="timeline_window",
+                            operation_id=context.turn_id if context else None,
+                            window_id=window.evidence_end_ms,
+                            status=200,
+                            duration_ms=round(
+                                (time.perf_counter() - started) * 1000, 3
+                            ),
+                            event_count=len(window.events),
+                            model_id=start.model_id,
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -312,7 +262,6 @@ def create_timeline_detection_app(
                     "contract_version": start.contract_version,
                     "root_session_id": start.root_session_id or start.session_id,
                     "agent_session_id": start.agent_session_id or start.session_id,
-                    **({"result_mode": RAW_WINDOW_MODE} if start.result_mode == RAW_WINDOW_MODE else {}),
                     **(
                         {
                             "prompt_release_id": start.prompt_snapshot.release_id,
@@ -457,6 +406,8 @@ def create_timeline_detection_app(
 def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
     if raw.get("type") != "session.start":
         raise ValueError("first message must be session.start")
+    if "result_mode" in raw:
+        raise ValueError("timeline v3 does not accept result_mode")
     from sglang_omni.serve.agent_prompt_snapshot import decode_timeline_prompt_snapshot
     model_id = _string(raw, "model_id")
     session_id = _string(raw, "session_id")
@@ -481,7 +432,6 @@ def _start_from_json(raw: dict[str, Any]) -> TimelineSessionStart:
         observer_epoch=_integer(raw, "observer_epoch"),
         next_sequence=_integer(raw, "next_sequence"),
         contract_version=_integer(raw, "contract_version"),
-        result_mode=raw.get("result_mode", LEGACY_OBSERVATION_MODE),
         prompt_snapshot=prompt_snapshot,
         root_session_id=root_session_id or correlation_id_or_digest(
             session_id, prefix="legacy_root"
@@ -516,26 +466,6 @@ def _discontinuity_from_json(raw: dict[str, Any]) -> TimelineDiscontinuity:
         reason=_string(raw, "reason"),
         observer_epoch=_integer(raw, "observer_epoch"),
     )
-
-
-def _event_to_json(event: ObservationEvent) -> dict[str, Any]:
-    return {
-        "type": "observation",
-        "contract_version": event.contract_version,
-        "observation_id": event.observation_id,
-        "session_id": event.session_id,
-        "identity_epoch": event.identity_epoch,
-        "observer_epoch": event.observer_epoch,
-        "stream_epoch": event.stream_epoch,
-        "event_type": event.event_type,
-        "summary": event.summary,
-        "evidence_start_ms": event.evidence_start_ms,
-        "evidence_end_ms": event.evidence_end_ms,
-        "model_id": event.model_id,
-        "model_version": event.model_version,
-        "evidence_mode": event.evidence_mode,
-        "audio_status": event.audio_status,
-    }
 
 
 def _object(raw: Any, name: str) -> dict[str, Any]:

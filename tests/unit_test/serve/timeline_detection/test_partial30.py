@@ -28,7 +28,7 @@ def profile():
     return DirectE50Profile(system_prompt=(PROMPTS / "system_prompt.txt").read_text(),
                             user_prompt="", prompt_version="partial30-test",
                             max_tokens=128, video_max_pixels=137625,
-                            protocol=PARTIAL30_PROTOCOL, confirmation_windows=1)
+                            protocol=PARTIAL30_PROTOCOL)
 
 
 def window():
@@ -53,7 +53,7 @@ def window():
 def request(value):
     return build_direct_e50_request(profile=profile(), model_id="qwen3-omni-gpu4-timeline",
         session_id="test-partial30", window=value, video_mp4=b"native-video",
-        retry=False, logical_request_id="test", contract_version=2,
+        retry=False, logical_request_id="test", contract_version=3,
         observer_epoch=0, stream_epoch=0)
 
 
@@ -164,9 +164,9 @@ async def test_model_observations_preserve_control_and_thumbs_up_ids(monkeypatch
     model = SglangClientTimelineDetectionModel(Client(), start,
         model_version='partial30-checkpoint-1750-fp8-20261020', inference_interval_ms=1000)
     try:
-        observations = await model._detect(_WindowWork(0, 0, window()))
-        assert [event.event_type for event in observations] == ['E13', 'E14', 'E20', 'E21']
-        assert [event.summary for event in observations] == ['点赞', 'OK手势', '嘘手势', '暂停手势']
+        result = await model._detect(_WindowWork(0, 0, window()))
+        assert [event.event_type for event in result.events] == ['E13', 'E14', 'E20', 'E21']
+        assert [event.summary for event in result.events] == ['点赞', 'OK手势', '嘘手势', '暂停手势']
     finally:
         await model.close()
 
@@ -220,8 +220,8 @@ async def test_e49_observation_uses_partial30_name_and_saves_aligned_audio(
         Client(), start, model_version='partial30-test', inference_interval_ms=1000,
     )
     try:
-        observations = await model._detect(_WindowWork(0, 0, window()))
-        assert [event.summary for event in observations] == ['频繁看手表']
+        result = await model._detect(_WindowWork(0, 0, window()))
+        assert [event.summary for event in result.events] == ['频繁看手表']
     finally:
         await model.close()
 

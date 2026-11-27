@@ -54,7 +54,7 @@ def install_performance_debug(app, *, token, response_factory):
     async def evaluate(request: Request):
         authenticate(request)
         current = state()
-        data = await _body(request, current)
+        data = await _body(request, current, set(current['rules']))
         from .performance_control.service import PerformanceControlRequest
         try:
             native = PerformanceControlRequest.model_validate(data['payload'])

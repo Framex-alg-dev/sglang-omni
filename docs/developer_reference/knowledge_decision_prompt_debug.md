@@ -19,18 +19,21 @@ and `/v1/prompt-debug/evaluate` hooks. Gateway exposes fixed-target management p
 The proxy reuses configured classifier/body upstream addresses and service authorization.
 It preserves a mounted classifier URL prefix, and never accepts an arbitrary destination.
 
-State reports actual loaded rules, model version, and action registry identities.
-Evaluation requires its exact state SHA-256, a complete rule set, and a native payload.
+State reports model version and action registry identities, but deliberately does
+not expose or retain prompt text. Knowledge supplies the complete Agent-owned rule
+set for each evaluation. Evaluation requires the exact service-state SHA-256, a
+complete rule set, and a native payload.
 Each trial uses an independent model/engine instance with the original registry and model
 client. No process-wide constant or runtime file is modified. Preview captures the real
 GenerateRequest before inference; run delegates to the existing model client and parser.
-Default inference entry points remain. Performance now lives in serve/performance_control; embedded TTS and its text/buffer helpers live directly in serve. The old session Realtime entry and file overrides have retired.
+Default inference entry points remain. Performance now lives in serve/performance_control; embedded TTS and its text/buffer helpers live directly in serve. The old session Realtime entry, local Action prompt copies, and file overrides have retired.
 
 Router uses v1.0 platform scopes, not character persona. A serving-model identifier
 that differs from the snapshot's logical model binding is logged as drift and does
-not reject the request; protocol or checksum drift still fails closed. E67 uses its cached reference
-body; it does not interpolate dynamic character/session prompts. The generic proactive
-action branch does interpolate those inputs. Knowledge UI documents these differences.
+not reject the request; protocol or checksum drift still fails closed. E67 uses the
+Agent-supplied system prompt and never reads a cached Omni copy. Character and session
+values remain request-scoped trusted data rendered under that policy. Knowledge UI
+documents these differences.
 Trials select and validate actions only; they do not execute avatar output or tools.
 
 Development systemd configuration uses a root-only `/etc/sglang-omni/prompt-debug.env`

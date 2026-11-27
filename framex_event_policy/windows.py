@@ -7,8 +7,7 @@ from typing import Any, Mapping
 
 from .rules import EVENT_IDS, validate_event_ids
 
-RAW_WINDOW_MODE = "raw_windows.v1"
-LEGACY_OBSERVATION_MODE = "observations"
+TIMELINE_CONTRACT_VERSION = 3
 WINDOW_FIELDS = frozenset({
     "session_id", "identity_epoch", "observer_epoch", "stream_epoch", "window_sequence",
     "evidence_start_ms", "evidence_end_ms", "model_id", "model_version",
@@ -67,7 +66,9 @@ class DetectionWindow:
 
     def to_wire(self) -> dict[str, Any]:
         return {
-            "type": "window.result", "contract_version": 2, "status": "complete",
+            "type": "window.result",
+            "contract_version": TIMELINE_CONTRACT_VERSION,
+            "status": "complete",
             **asdict(self),
             "events": [asdict(event) for event in self.events],
         }
@@ -77,7 +78,7 @@ class DetectionWindow:
         if (
             raw.get("type") != "window.result"
             or type(raw.get("contract_version")) is not int
-            or raw["contract_version"] != 2
+            or raw["contract_version"] != TIMELINE_CONTRACT_VERSION
             or raw.get("status") != "complete"
             or set(raw) != WINDOW_FIELDS | {"type", "contract_version", "status"}
         ):

@@ -72,7 +72,7 @@ def _timeline_snapshot() -> dict:
         "bundle_sha256": "b" * 64,
         "binding": {
             "assembly_contract": "d-timeline-detection-v1",
-            "output_protocol": "d-timeline-observation-v2",
+            "output_protocol": "event1115-code-v1",
             "model_id": "event-model",
             "model_version": "checkpoint-6138-fp8",
         },
@@ -186,7 +186,7 @@ def test_timeline_session_uses_agent_prompt_registry_and_receipt_identity() -> N
     start = _start_from_json(
         {
             "type": "session.start",
-            "contract_version": 2,
+            "contract_version": 3,
             "session_id": "session-1",
             "identity_epoch": 1,
             "observer_epoch": 2,
@@ -225,7 +225,7 @@ def test_timeline_session_rejects_missing_agent_prompt_snapshot() -> None:
         _start_from_json(
             {
                 "type": "session.start",
-                "contract_version": 2,
+                "contract_version": 3,
                 "session_id": "session-1",
                 "identity_epoch": 1,
                 "observer_epoch": 2,

@@ -16,9 +16,6 @@ from sglang_omni.serve.action_decision.contracts import (
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
 from sglang_omni.serve.action_decision.prompt import (
-    E65_REFERENCE_SYSTEM_PROMPT_PATH,
-    E66_REFERENCE_SYSTEM_PROMPT_PATH,
-    E67_REFERENCE_SYSTEM_PROMPT_PATH,
     build_system_prompt,
     build_user_prompt,
 )
@@ -168,14 +165,16 @@ def test_turn_execution_revision_rejects_malformed_fences(value) -> None:
                                     runtime_context={"input_revision": value}))
 
 
-def test_engine_rejects_frozen_model_mismatch_before_inference() -> None:
+def test_advisory_model_binding_does_not_block_inference() -> None:
     async def run():
         client = _FakeClient()
         engine = ActionDecisionEngine(client, config=_config())
-        with pytest.raises(ValueError, match="frozen model release"):
-            await engine.decide(_request(DecisionChannel.BODY,
-                runtime_context={"expected_model_version": "wrong-release"}))
-        assert client.requests == []
+        result = await engine.decide(_request(
+            DecisionChannel.BODY,
+            runtime_context={"expected_model_version": "wrong-release"},
+        ))
+        assert result.model_invoked is True
+        assert len(client.requests) == 1
     asyncio.run(run())
 
 
@@ -229,14 +228,12 @@ def test_e57_prompt_contract_preserves_production_channel_and_catalog() -> None:
     )
     catalog = _registry().resolve(request)
     prompt = build_system_prompt(request, catalog)
-    assert "[SELECTION_RULES]" in prompt
-    assert "[ACTIVE_CHANNEL]" in prompt
-    assert "本次只决定身体动作通道" in prompt
-    assert "[CHARACTER_PROMPT]\n角色提示" in prompt
-    assert "[SESSION_PROMPT]\n会话提示" in prompt
-    assert f"candidate_count={len(catalog.entries)}" in prompt
-    assert "[FINAL_TASK_CONSTRAINTS]" in prompt
-    assert "结果映射：1=_x_b，2=_x_c" in prompt
+    assert prompt.startswith("AGENT ACTION POLICY")
+    assert "[TRUSTED_RUNTIME_CONTEXT]" in prompt
+    assert "[CHARACTER_PERSONA]\n角色提示" in prompt
+    assert "[SESSION_CONTEXT]\n会话提示" in prompt
+    assert "[ACTION_CATALOG]" in prompt
+    assert catalog.entries[0].candidate_id in prompt
 
 
 def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None:
@@ -273,8 +270,7 @@ def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None
         runtime_context={"prompt_profile": "e65_step1512_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E65_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    assert build_system_prompt(request, catalog) == expected_system
+    assert build_system_prompt(request, catalog) == "AGENT ACTION POLICY"
     user_prompt = build_user_prompt(request, catalog)
     assert "user_video：按时间顺序提供的用户侧画面" in user_prompt
     assert "user_audio：这是本轮用户原始音频" in user_prompt
@@ -282,30 +278,22 @@ def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None
     assert "ASR" not in user_prompt
 
 
-def test_e66_reference_profile_uses_frozen_v116_training_prompt() -> None:
+def test_e66_reference_profile_uses_agent_prompt_snapshot() -> None:
     request = _request(
         DecisionChannel.BODY,
         runtime_context={"prompt_profile": "e66_v116_step935_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E66_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    assert build_system_prompt(request, catalog) == expected_system
-    assert hashlib.sha256(expected_system.encode()).hexdigest() == (
-        "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
-    )
+    assert build_system_prompt(request, catalog) == "AGENT ACTION POLICY"
 
 
-def test_e67_reference_profile_uses_frozen_v116_training_prompt() -> None:
+def test_e67_reference_profile_uses_agent_prompt_snapshot() -> None:
     request = _request(
         DecisionChannel.BODY,
         runtime_context={"prompt_profile": "e67_v116_step695_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E67_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    assert build_system_prompt(request, catalog) == expected_system
-    assert hashlib.sha256(expected_system.encode()).hexdigest() == (
-        "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
-    )
+    assert build_system_prompt(request, catalog) == "AGENT ACTION POLICY"
 
 
 @pytest.mark.skip(reason="V10 runtime validates candidate subsets without legacy role_pool_v1")

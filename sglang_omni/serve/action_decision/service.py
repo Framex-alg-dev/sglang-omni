@@ -389,15 +389,6 @@ class ActionDecisionEngine:
 
     async def _decide_once(self, request: ActionDecisionRequest) -> ActionDecision:
         started = time.perf_counter()
-        expected_version = request.runtime_context.get("expected_model_version")
-        if expected_version and expected_version != self.config.model_version:
-            raise ValueError("Body frozen model release does not match the running model")
-        expected_prompt = request.runtime_context.get("expected_prompt_sha256")
-        if expected_prompt:
-            from .prompt import _reference_system_prompt, reference_prompt_profile
-            profile = reference_prompt_profile(request)
-            if profile is None or hashlib.sha256(_reference_system_prompt(profile).encode()).hexdigest() != expected_prompt:
-                raise ValueError("Body frozen prompt digest does not match the running prompt")
         catalog = self.registry.resolve(request)
         emit_structured_log(
             "action",

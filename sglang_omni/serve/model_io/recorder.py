@@ -201,8 +201,10 @@ class ModelIORecorder:
     ) -> None:
         self.root = root
         self.max_bytes = max_bytes
-        self._queue: queue.Queue[_Record | None] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[_Record] = queue.Queue(maxsize=queue_size)
         self._thread: threading.Thread | None = None
+        self._state_lock = threading.Lock()
+        self._stop_requested = threading.Event()
         self._closed = False
         if root is not None:
             root.mkdir(parents=True, exist_ok=True)
@@ -213,7 +215,8 @@ class ModelIORecorder:
 
     @property
     def enabled(self) -> bool:
-        return self.root is not None and not self._closed
+        with self._state_lock:
+            return self.root is not None and not self._closed
 
     def record(
         self,
@@ -229,8 +232,6 @@ class ModelIORecorder:
     ) -> bool:
         """Enqueue a record and return immediately; never raise into inference."""
 
-        if not self.enabled:
-            return False
         completed = time.time() if completed_at is None else completed_at
         item = _Record(
             stage=stage,
@@ -242,39 +243,53 @@ class ModelIORecorder:
             completed_at=completed,
             invocation_id=invocation_id or uuid.uuid4().hex,
         )
-        try:
-            self._queue.put_nowait(item)
-            return True
-        except queue.Full:
-            self._emit(item, "artifact.archive.dropped", reason="queue_full")
-            return False
-        except Exception:
-            logger.exception("model I/O enqueue failed")
-            return False
-
-    def close(self, *, timeout: float = 5.0) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._thread is not None:
+        with self._state_lock:
+            if self.root is None or self._closed:
+                return False
             try:
-                self._queue.put_nowait(None)
+                self._queue.put_nowait(item)
+                return True
             except queue.Full:
-                pass
+                self._emit(item, "artifact.archive.dropped", reason="queue_full")
+                return False
+            except Exception:
+                logger.exception("model I/O enqueue failed")
+                return False
+
+    def close(self, *, timeout: float = 5.0) -> bool:
+        """Stop accepting records and drain accepted work within ``timeout``."""
+
+        with self._state_lock:
+            if self._closed:
+                return self._thread is None or not self._thread.is_alive()
+            self._closed = True
+            self._stop_requested.set()
+        if self._thread is not None:
             self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.error(
+                    "model I/O recorder did not drain before shutdown timeout "
+                    "pending_records=%d timeout_seconds=%.3f",
+                    self._queue.qsize(),
+                    timeout,
+                )
+                return False
+        return True
 
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
             try:
-                if item is None:
+                item = self._queue.get(timeout=0.05)
+            except queue.Empty:
+                if self._stop_requested.is_set():
                     return
+                continue
+            try:
                 self._write(item)
             except Exception as exc:
-                if item is not None:
-                    self._emit(
-                        item, "artifact.archive.failed", reason=type(exc).__name__
-                    )
+                self._emit(
+                    item, "artifact.archive.failed", reason=type(exc).__name__
+                )
                 logger.exception("model I/O local archive failed")
             finally:
                 self._queue.task_done()

@@ -114,10 +114,5 @@ include = ["sglang_omni*", "framex_event_policy*"]
     "assets/*.html",
     "assets/**/*.json",
 ]
-"sglang_omni.serve.action_decision" = [
-    "e57a_system_prompt.txt",
-    "e66_v116_step935_system_prompt.txt",
-    "e67_v116_step695_system_prompt.txt",
-]
 "sglang_omni.models.fishaudio_s2_pro" = ["fish_speech/configs/*.yaml"]
 "sglang_omni.models.higgs_tts" = ["configs/*.json"]

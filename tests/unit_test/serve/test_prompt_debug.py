@@ -18,11 +18,13 @@ def test_router_debug_uses_live_assembler_and_does_not_change_defaults():
     client=TestClient(app);headers={'Authorization':'Bearer secret'}
     assert client.get('/v1/prompt-debug/state').status_code==404
     state=client.get('/v1/prompt-debug/state',headers=headers).json()
-    body={'payload':router_payload(),'expected_state_sha256':state['state_sha256'],'rules':dict(state['rules']),'operation':'preview'}
+    rules={'system_prompt':'Agent router policy','mcp_scope':'MCP scope','multimodal_scope':'Multimodal scope'}
+    assert state['rules']=={} and state['prompt_owner']=='agent'
+    body={'payload':router_payload(),'expected_state_sha256':state['state_sha256'],'rules':rules,'operation':'preview'}
     response=client.post('/v1/prompt-debug/evaluate',headers=headers,json=body)
     assert response.status_code==200,response.text
     assert not model_client.requests
-    assert response.json()['requests'][0]['payload']['messages'][0]['content']==state['rules']['system_prompt']
+    assert response.json()['requests'][0]['payload']['messages'][0]['content']==rules['system_prompt']
     body['rules']['system_prompt']+='\nUnique draft instruction.';body['rules']['mcp_scope']='changed scope';body['operation']='run'
     result=client.post('/v1/prompt-debug/evaluate',headers=headers,json=body)
     assert result.status_code==200,result.text
@@ -36,12 +38,13 @@ def test_router_debug_uses_live_assembler_and_does_not_change_defaults():
 def test_action_debug_uses_real_engine_and_keeps_reference_prefix_immutable():
     model_client=_FakeClient();client=TestClient(create_action_decision_app(model_client,config=_config()));headers={'Authorization':'Bearer secret'}
     state=client.get('/v1/prompt-debug/state?profile=e67',headers=headers).json()
+    assert state['rules']=={} and state['prompt_owner']=='agent'
     payload=dict(request_id='debug-body',session_id='debug-session',turn_id='debug-turn',decision_point_id='debug-point',channel='body',text='挥挥手',runtime_context={'prompt_profile':'e67_v116_step695_fp8'})
-    body={'payload':payload,'rules':dict(state['rules']),'expected_state_sha256':state['state_sha256'],'operation':'preview'}
+    body={'payload':payload,'rules':{'system_prompt':'Agent action policy'},'expected_state_sha256':state['state_sha256'],'operation':'preview'}
     response=client.post('/v1/prompt-debug/evaluate?profile=e67',json=body,headers=headers)
     assert response.status_code==200,response.text
     assert not model_client.requests
-    assert response.json()['requests'][0]['payload']['messages'][0]['content']==state['rules']['system_prompt']
+    assert response.json()['requests'][0]['payload']['messages'][0]['content']==body['rules']['system_prompt']
     body['rules']['system_prompt']+='\nUnique body draft.';body['operation']='run'
     response=client.post('/v1/prompt-debug/evaluate?profile=e67',json=body,headers=headers)
     assert response.status_code==200,response.text
@@ -86,12 +89,14 @@ def test_gateway_debug_proxy_uses_only_configured_target_and_dedicated_auth(monk
 def test_e67_uses_character_behavior_in_final_model_request_and_keeps_snapshot_isolated():
     model=_FakeClient();client=TestClient(create_action_decision_app(model,config=_config()));headers={'Authorization':'Bearer secret'}
     state=client.get('/v1/prompt-debug/state?profile=e67',headers=headers).json()
+    assert state['rules']=={} and state['prompt_owner']=='agent'
     payload=dict(request_id='behavior-check',session_id='behavior-check',turn_id='turn',decision_point_id='point',channel='body',text='普通聊天',
         character_prompt='## 1. 身份与场景\n老师\n## 2. 性格\n克制\n## 5. 行为规则\n倾听时不挥手',runtime_context={'prompt_profile':'e67_v116_step695_fp8'})
-    response=client.post('/v1/prompt-debug/evaluate?profile=e67',headers=headers,json={'payload':payload,'rules':state['rules'],'expected_state_sha256':state['state_sha256'],'operation':'preview'})
+    rules={'system_prompt':'Agent behavior policy'}
+    response=client.post('/v1/prompt-debug/evaluate?profile=e67',headers=headers,json={'payload':payload,'rules':rules,'expected_state_sha256':state['state_sha256'],'operation':'preview'})
     assert response.status_code==200,response.text
     final=response.json()['requests'][0]['payload']['messages'][0]['content']
-    assert final.startswith(state['rules']['system_prompt']) and payload['character_prompt'] in final
+    assert final.startswith(rules['system_prompt']) and payload['character_prompt'] in final
     assert 'TRUSTED_CHARACTER_BEHAVIOR' in final
     assert not model.requests
     assert client.get('/v1/prompt-debug/state?profile=e67',headers=headers).json()==state

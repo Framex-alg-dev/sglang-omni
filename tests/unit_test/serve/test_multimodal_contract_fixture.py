@@ -7,12 +7,11 @@ import io
 import json
 from pathlib import Path
 
+from framex_event_policy.windows import DetectionWindow
 from sglang_omni.serve.task_classification.service import _request_from_json
 from sglang_omni.serve.inference_gateway.app import _speculative_speech_hash
-from sglang_omni.serve.timeline_detection.contracts import ObservationEvent
 from sglang_omni.serve.timeline_detection.service import (
     _chunk_from_json,
-    _event_to_json,
     _start_from_json,
 )
 
@@ -46,7 +45,7 @@ def _timeline_snapshot(model_id: str) -> dict:
         "bundle_sha256": "b" * 64,
         "binding": {
             "assembly_contract": "d-timeline-detection-v1",
-            "output_protocol": "d-timeline-observation-v2",
+            "output_protocol": "event1115-code-v1",
             "model_id": model_id,
             "model_version": "fixture-weights",
         },
@@ -77,20 +76,18 @@ def test_sg_accepts_classification_fixture() -> None:
     )
 
 
-def test_sg_accepts_timeline_fixture_and_emits_same_observation() -> None:
+def test_sg_accepts_timeline_v3_fixture_and_emits_same_window() -> None:
     timeline = _fixture()["timeline_detection"]
     start_wire = dict(timeline["session_start"])
     start_wire["prompt_snapshot"] = _timeline_snapshot(start_wire["model_id"])
     start = _start_from_json(start_wire)
     payload = base64.b64decode(timeline["media_payload_base64"], validate=True)
     chunk = _chunk_from_json(timeline["media_header"], payload)
-    event_values = dict(timeline["observation"])
-    event_values.pop("type")
-    event = ObservationEvent(**event_values)
+    window = DetectionWindow.from_wire(timeline["window_result"])
 
     assert start.observer_epoch == 4
     assert chunk.payload == b"jpeg-frame"
-    assert _event_to_json(event) == timeline["observation"]
+    assert window.to_wire() == timeline["window_result"]
 
 
 def test_sg_accepts_speculative_speech_generation_fence_fixture() -> None:

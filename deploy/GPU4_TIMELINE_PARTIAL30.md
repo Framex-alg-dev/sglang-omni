@@ -1,7 +1,8 @@
 # Partial30 checkpoint-1750 FP8: main-repository integration
 
 This is an opt-in GPU4 timeline profile. Adding these files does not switch or
-restart the running service, and does not replace its weights or frequency policy.
+restart the running service, and does not replace its weights. Event confirmation,
+frequency control and downstream admission are owned by D_video_call.
 The baseline is `origin/dev/genesis2.0` at `c8c6b26e`; the isolated source being
 integrated is `/data/xingmt/sglang-omni-event-partial30-1750-20261021`.
 
@@ -11,7 +12,7 @@ integrated is `/data/xingmt/sglang-omni-event-partial30-1750-20261021`.
   wrapper, actual frame timestamps, H/C ownership, synchronized audio alignment
   and the retained 30-event catalog.
 - `direct_e50.py` and `client_model.py`: select `direct-partial30`, validate its
-  native E-code output, preserve observation IDs/names and capture the exact
+  native E-code output, preserve event IDs/names and capture the exact
   audio actually submitted to inference. Existing V25/direct-E50 paths remain.
 - `sglang_omni/preprocessing/video.py` and the Qwen preprocessor: opt-in training
   patch grid and prevention of a second HF video resize.
@@ -35,7 +36,8 @@ Do not copy weights into this repository or edit hardlinked shards in place.
 
 ## Preserved input/output contract
 
-- Bearer-authenticated `WS /v1/timeline`, transport contract version 2.
+- Bearer-authenticated `WS /v1/timeline`, transport contract version 3; every
+  completed inference returns `window.result` and no `result_mode` is negotiated.
 - Video-driven windows advance every 1 second. C is the latest 3 seconds;
   H supplies up to 7 preceding seconds. Cold start can have no H.
 - One continuous native H+C MP4, 2 FPS, C=6 frames, total 6-20 frames. The
@@ -51,15 +53,15 @@ Do not copy weights into this repository or edit hardlinked shards in place.
   temperature=0, top_p=1, seed=42, max_tokens=128.
 - Raw model output is `N` or comma-separated native E-codes, not JSON/P-codes.
   Independent E22/E38/E44 instances may repeat. Unsupported codes fail closed.
-  Accepted events become transport `observation` JSON only after frequency gating.
+  Every completed inference becomes one v3 `window.result`; Omni does not confirm,
+  suppress or frequency-limit detected events.
 - Retained IDs: E0,E2,E5,E6,E7,E8,E9,E10,E11,E12,E13,E14,E15,E19,E20,E21,E22,E23,
   E24,E32,E33,E34,E36,E37,E38,E44,E46,E47,E49,E50. No renumbering or thumbs-up/OK
   collapse. E49 is named `频繁看手表`.
 
-Frequency is not part of the training prompt. The overlay intentionally does
-not change the existing event cooldown, control cooldown, confirmation-window,
-rearm-window or silent-event settings. Those remain owned by the base GPU4 env;
-D_video_call separately owns UI hiding, reply/action admission and interruption.
+Frequency is not part of the training prompt or the Omni runtime. D_video_call
+owns confirmation windows, ordinary-event cooldowns, reply/action admission,
+UI hiding and interruption policy.
 
 The two `PARTIAL30_*` preprocessing settings apply to the entire service process.
 Set them only for the dedicated Partial30 GPU4 service, not shared action/reply,
@@ -80,7 +82,7 @@ PYTHONPATH="$PWD" PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest \
 
 The tests cover all 30 retained IDs, removed-code rejection, exact prompt bytes,
 native-video/audio wrapper, cold start, static prefill, aligned artifact audio,
-frequency gates, transport parsing, and preprocessing opt-in/default behavior.
+v3 raw-window transport parsing, and preprocessing opt-in/default behavior.
 They do not allocate GPU model weights or alter the active service.
 
 Integration validation on 2026-10-26: the event, preprocessing, Qwen pipeline,
@@ -109,7 +111,7 @@ not a new GPU deployment or per-event recognition accuracy.
    `sglang-omni-gpu4-timeline.service`. Its venv, service name, port 18008 and
    `qwen3-omni-gpu4-timeline` alias stay unchanged. No D_video_call or other model
    service restart is needed for this source-path switch.
-5. Verify authenticated health, raw E-code and downstream observation replay,
+5. Verify authenticated health, raw E-code and downstream `window.result` replay,
    1-second window cadence and cached static prefix tokens before acceptance.
 6. To roll back, restore the previous `partial30.conf` pointing to the isolated
    env, reload systemd and restart only GPU4. Do not delete the isolated source

@@ -5,9 +5,10 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from framex_event_policy.windows import DetectionWindow, RAW_WINDOW_MODE, WindowEvent
+from framex_event_policy.windows import DetectionWindow, WindowEvent
 from sglang_omni.serve.request_log_context import RequestLogContext
 from sglang_omni.serve.timeline_detection.client_model import SglangClientTimelineDetectionModel
+from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
 from sglang_omni.serve.timeline_detection.service import create_timeline_detection_app
 from sglang_omni.utils.framex_service_logs import (
     configure_service_logging, current_service_log_context, shutdown_service_logging,
@@ -17,7 +18,7 @@ from tests.unit_test.serve.test_agent_prompt_snapshot import _timeline_snapshot
 
 
 @pytest.mark.asyncio
-async def test_retry_and_queued_output_keep_one_window_operation():
+async def test_retry_and_queued_output_keep_one_window_operation(monkeypatch):
     class CapturingClient(Client):
         def __init__(self):
             super().__init__(["invalid", "N"])
@@ -26,13 +27,23 @@ async def test_retry_and_queued_output_keep_one_window_operation():
             self.contexts.append(current_service_log_context())
             return await super().completion(*args, **kwargs)
     client = CapturingClient()
+    profile = DirectE50Profile(
+        system_prompt="strict training system prompt",
+        user_prompt="strict training user prompt",
+        prompt_version="timeline-v3-test",
+    )
+    monkeypatch.setattr(
+        DirectE50Profile,
+        "from_environment",
+        classmethod(lambda cls: profile),
+    )
     request = replace(start(), root_session_id="canonical-call")
     model = SglangClientTimelineDetectionModel(client, request,
         model_version="log-contract-test", inference_interval_ms=1000)
     try:
         await model.start(request)
         await feed_first_window(model)
-        assert await model.next_observations() == ()
+        assert (await model.next_observations()).events == ()
         first, retry = client.contexts
         result = model.output_log_context
         assert first.request_id == retry.request_id == result.request_id
@@ -65,10 +76,10 @@ def test_raw_window_transport_logs_dequeued_identity_without_wire_metadata(tmp_p
         app = create_timeline_detection_app(lambda _: Model(), token="secret")
         with TestClient(app) as client, client.websocket_connect('/v1/timeline',
                 headers={'Authorization':'Bearer secret'}) as ws:
-            ws.send_json(dict(type="session.start", contract_version=2, session_id="session-1",
+            ws.send_json(dict(type="session.start", contract_version=3, session_id="session-1",
                 root_session_id="call-root", request_id="incoming-start", identity_epoch=2,
                 observer_epoch=0, stream_epoch=0, next_sequence=1, audio_format="pcm16/16000/mono",
-                video_format="jpeg", model_id="timeline-model", result_mode=RAW_WINDOW_MODE,
+                video_format="jpeg", model_id="timeline-model",
                 prompt_snapshot=_timeline_snapshot()))
             assert ws.receive_json()['type'] == 'session.ready'
             ws.send_json(dict(type="media", session_id="session-1", identity_epoch=2, observer_epoch=0,

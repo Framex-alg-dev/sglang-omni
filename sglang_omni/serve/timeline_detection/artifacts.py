@@ -19,7 +19,7 @@ from typing import Any
 
 from sglang_omni.client.types import GenerateRequest
 
-from .contracts import ObservationEvent, TimelineSessionStart
+from .contracts import TimelineSessionStart
 from .window import EventDetectionWindow
 
 
@@ -420,10 +420,6 @@ class TimelineArtifactRecorder:
             _remove_tree(item)
             total -= size
             logger.info("pruned timeline artifact session path=%s bytes=%s", item, size)
-
-
-def observation_records(events: tuple[ObservationEvent, ...]) -> list[dict[str, Any]]:
-    return [asdict(event) for event in events]
 
 
 def _request_record(

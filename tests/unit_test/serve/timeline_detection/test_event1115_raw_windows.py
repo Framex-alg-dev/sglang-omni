@@ -8,7 +8,6 @@ import pytest
 
 from framex_event_policy.windows import (
     DetectionWindow,
-    RAW_WINDOW_MODE,
     WindowEvent,
 )
 from sglang_omni.serve.timeline_detection.event1115 import (
@@ -38,7 +37,7 @@ def _agent_timeline_snapshot() -> dict:
         "bundle_sha256": "b" * 64,
         "binding": {
             "assembly_contract": "d-timeline-detection-v1",
-            "output_protocol": "d-timeline-observation-v2",
+            "output_protocol": "event1115-code-v1",
             "model_id": "event-1115-v1-fp8",
             "model_version": "1115_v1-checkpoint-6138-fp8",
         },
@@ -91,7 +90,7 @@ def test_raw_window_session_start_matches_agent_contract() -> None:
     start = _start_from_json(
         {
             "type": "session.start",
-            "contract_version": 2,
+            "contract_version": 3,
             "session_id": "session-41035",
             "identity_epoch": 3,
             "observer_epoch": 4,
@@ -100,14 +99,33 @@ def test_raw_window_session_start_matches_agent_contract() -> None:
             "audio_format": "pcm_s16le/16000/1",
             "video_format": "jpeg",
             "model_id": "event-1115-v1-fp8",
-            "result_mode": RAW_WINDOW_MODE,
             "prompt_snapshot": _agent_timeline_snapshot(),
         }
     )
 
-    assert start.result_mode == RAW_WINDOW_MODE
+    assert start.contract_version == 3
     assert start.observer_epoch == 4
     assert start.next_sequence == 6
+
+
+def test_timeline_v3_rejects_retired_result_mode() -> None:
+    payload = {
+        "type": "session.start",
+        "contract_version": 3,
+        "session_id": "session-41035",
+        "identity_epoch": 3,
+        "observer_epoch": 4,
+        "stream_epoch": 5,
+        "next_sequence": 6,
+        "audio_format": "pcm_s16le/16000/1",
+        "video_format": "jpeg",
+        "model_id": "event-1115-v1-fp8",
+        "prompt_snapshot": _agent_timeline_snapshot(),
+    }
+    payload["result_mode"] = "raw_windows.v1"
+
+    with pytest.raises(ValueError, match="does not accept result_mode"):
+        _start_from_json(payload)
 
 
 @pytest.mark.parametrize(
