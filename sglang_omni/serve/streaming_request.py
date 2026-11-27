@@ -154,7 +154,19 @@ def _parse_stream_start(value: Any) -> tuple[str, dict[str, Any]]:
         raise ValueError("first message must be request.start")
     if _integer(message, "contract_version") != 2:
         raise ValueError("unsupported stream request contract_version")
-    return _string(message, "request_id"), _object(message.get("payload"), "request payload")
+    payload = dict(_object(message.get("payload"), "request payload"))
+    envelope_context = message.get("log_context")
+    if envelope_context is not None:
+        if not isinstance(envelope_context, dict):
+            raise ValueError("log_context must be an object")
+        payload_context = payload.get("log_context")
+        if payload_context is not None and not isinstance(payload_context, dict):
+            raise ValueError("payload.log_context must be an object")
+        payload["log_context"] = {
+            **(payload_context or {}),
+            **envelope_context,
+        }
+    return _string(message, "request_id"), payload
 
 
 def _check_media_size(

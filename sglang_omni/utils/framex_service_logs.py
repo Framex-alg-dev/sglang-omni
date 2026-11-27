@@ -309,18 +309,23 @@ class _LockedRotatingFileHandler(logging.handlers.RotatingFileHandler):
     def __init__(self, filename: Path, **kwargs: Any) -> None:
         super().__init__(filename, **kwargs)
         self._lock_stream = Path(f"{filename}.lock").open("a+")
+        self._lifecycle_lock = threading.RLock()
+        self._closed = False
 
     def emit(self, record: logging.LogRecord) -> None:
-        fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_EX)
-        try:
-            self._reopen_if_rotated_by_peer()
-            if self.shouldRollover(record):
-                self.doRollover()
-            logging.FileHandler.emit(self, record)
-        except Exception:
-            self.handleError(record)
-        finally:
-            fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_EX)
+            try:
+                self._reopen_if_rotated_by_peer()
+                if self.shouldRollover(record):
+                    self.doRollover()
+                logging.FileHandler.emit(self, record)
+            except Exception:
+                self.handleError(record)
+            finally:
+                fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
 
     def _reopen_if_rotated_by_peer(self) -> None:
         if self.stream is None:
@@ -340,10 +345,14 @@ class _LockedRotatingFileHandler(logging.handlers.RotatingFileHandler):
             self.stream = self._open()
 
     def close(self) -> None:
-        try:
-            self._lock_stream.close()
-        finally:
-            super().close()
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._lock_stream.close()
+            finally:
+                super().close()
 
 
 @dataclass

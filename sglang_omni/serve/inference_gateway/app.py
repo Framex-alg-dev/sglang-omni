@@ -408,8 +408,18 @@ class _Session:
             )
             return
         try:
+            payload["log_context"] = _stage_log_context(
+                message,
+                payload,
+                operation_id=request_id,
+                root_session_id=self.root_session_id,
+                agent_session_id=self.agent_session_id,
+            )
             trace_request_id = _stage_trace_request_id(payload, request_id)
-            raw_turn_id = _optional_nonempty_string(payload, "turn_id")
+            raw_turn_id = (
+                _optional_nonempty_string(payload, "turn_id")
+                or _optional_correlation_string(payload["log_context"], "turn_id")
+            )
         except ValueError as exc:
             await self.send({
                 "type": "stage.error",
@@ -419,11 +429,6 @@ class _Session:
                 "retryable": False,
             })
             return
-        if stage in {"body", "expression"}:
-            payload["log_context"] = {
-                **(payload.get("log_context") or {}),
-                "request_id": trace_request_id,
-            }
         for media_id in media_refs:
             self.media_refcounts[media_id] += 1
         if speech_speculation is not None:
@@ -1854,6 +1859,39 @@ def _stage_trace_request_id(payload: dict[str, Any], operation_id: str) -> str:
         raise ValueError("log_context must be an object")
     explicit = _optional_correlation_string(raw, "request_id")
     return explicit or correlation_id_or_digest(operation_id, prefix="legacy_operation")
+
+
+def _stage_log_context(
+    message: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    operation_id: str,
+    root_session_id: str,
+    agent_session_id: str,
+) -> dict[str, str]:
+    """Merge compatible lineage locations under the authoritative session binding."""
+
+    merged: dict[str, Any] = {}
+    for owner, raw in (
+        ("payload.log_context", payload.get("log_context")),
+        ("log_context", message.get("log_context")),
+    ):
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            raise ValueError(f"{owner} must be an object")
+        merged.update(raw)
+    request_id = _optional_correlation_string(merged, "request_id")
+    result = {
+        "request_id": request_id
+        or correlation_id_or_digest(operation_id, prefix="legacy_operation"),
+        "root_session_id": root_session_id,
+        "agent_session_id": agent_session_id,
+    }
+    turn_id = _optional_correlation_string(merged, "turn_id")
+    if turn_id is not None:
+        result["turn_id"] = turn_id
+    return result
 
 
 def _stage_peer(stage: str) -> str:

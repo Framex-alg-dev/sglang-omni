@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import pytest
@@ -21,6 +22,15 @@ def test_deployed_version_is_used_without_git_metadata(monkeypatch) -> None:
     monkeypatch.setenv("SGLANG_OMNI_VERSION", "4a34da984907")
 
     assert framex_service_logs._git_version() == "4a34da984907"
+
+
+def test_rotating_handler_drops_late_record_after_close(tmp_path) -> None:
+    handler = framex_service_logs._LockedRotatingFileHandler(
+        tmp_path / "app.log", maxBytes=1024, backupCount=1, encoding="utf-8"
+    )
+    handler.close()
+
+    handler.emit(logging.LogRecord("late", logging.INFO, __file__, 1, "late", (), None))
 
 
 def _records(tmp_path, service: str) -> list[dict]:

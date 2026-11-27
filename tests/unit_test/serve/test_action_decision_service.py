@@ -723,7 +723,13 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
             trace_id = "req_fedcba9876543210"
             socket.send_json({
                 "type": "request.start", "contract_version": 2, "request_id": operation_id,
-                "payload": {**payload, "log_context": {"request_id": trace_id}},
+                "payload": payload,
+                "log_context": {
+                    "request_id": trace_id,
+                    "root_session_id": "session-root",
+                    "agent_session_id": "sess-browser",
+                    "turn_id": "turn-1",
+                },
             })
             assert socket.receive_json()["type"] == "request.ready"
             socket.send_json({"type": "request.commit", "request_id": operation_id})

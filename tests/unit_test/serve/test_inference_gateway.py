@@ -303,7 +303,13 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
+            {
+                "type": "session.open",
+                "contract_version": 4,
+                "session_id": "s1",
+                "root_session_id": "root-1",
+                "agent_session_id": "agent-1",
+            }
         )
         assert socket.receive_json()["type"] == "session.ready"
         socket.send_json(
@@ -339,15 +345,18 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
                 "turn_id": "turn-1",
                 "agent_session_id": "agent-1",
             }
-            socket.send_json(
-                {
-                    "type": "stage.request",
-                    "request_id": request_id,
-                    "stage": stage,
-                    "payload": {"log_context": log_context},
-                    "media_refs": ["frame-1"],
-                }
-            )
+            request = {
+                "type": "stage.request",
+                "request_id": request_id,
+                "stage": stage,
+                "payload": {},
+                "media_refs": ["frame-1"],
+            }
+            if stage == "classifier":
+                request["log_context"] = log_context
+            else:
+                request["payload"]["log_context"] = log_context
+            socket.send_json(request)
             assert socket.receive_json()["type"] == "stage.accepted"
             completed = socket.receive_json()
             assert completed["type"] == "stage.completed"
