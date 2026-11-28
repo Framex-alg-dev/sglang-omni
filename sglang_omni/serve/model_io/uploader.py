@@ -124,6 +124,8 @@ def _emit(stage: str, event: str, manifest: dict[str, Any], **fields: Any) -> No
             turn_id=manifest.get("turn_id"),
             artifact_id=manifest.get("artifact_id"),
             stage=stage,
+            action_batch_id=manifest.get("action_batch_id"),
+            channel=manifest.get("channel"),
             **fields,
         )
     except Exception:

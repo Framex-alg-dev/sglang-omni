@@ -28,7 +28,6 @@ from sglang_omni.serve.action_decision.service import (
 )
 from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
 from sglang_omni.serve.streaming_request import StreamedMedia
-from sglang_omni.serve.launcher import _run_server
 
 
 import os
@@ -735,6 +734,8 @@ def test_sampling_params_carry_server_side_constraints() -> None:
 
 @pytest.mark.asyncio
 async def test_action_role_requires_private_token_before_pipeline_start(monkeypatch) -> None:
+    from sglang_omni.serve.launcher import _run_server
+
     monkeypatch.setenv("SGLANG_OMNI_SERVICE_ROLE", "action-decision")
     monkeypatch.delenv("SGLANG_OMNI_ACTION_DECISION_TOKEN", raising=False)
     monkeypatch.setenv("SGLANG_OMNI_MODEL_VERSION", "e43")
@@ -744,6 +745,8 @@ async def test_action_role_requires_private_token_before_pipeline_start(monkeypa
 
 @pytest.mark.asyncio
 async def test_action_role_requires_model_version_before_pipeline_start(monkeypatch) -> None:
+    from sglang_omni.serve.launcher import _run_server
+
     monkeypatch.setenv("SGLANG_OMNI_SERVICE_ROLE", "action-decision")
     monkeypatch.setenv("SGLANG_OMNI_ACTION_DECISION_TOKEN", "secret")
     monkeypatch.delenv("SGLANG_OMNI_MODEL_VERSION", raising=False)
@@ -807,6 +810,9 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
     headers = {"Authorization": "Bearer secret"}
     with TestClient(app) as client:
         assert client.post("/v1/action-recall", json=payload, headers=headers).status_code == 200
+        assert client.post("/v1/action-recall", json=payload, headers={
+            **headers, "X-Action-Batch-Id": "action_batch_http",
+        }).status_code == 200
         with client.websocket_connect("/v1/action-recall", headers=headers) as socket:
             operation_id = "req_0123456789abcdef"
             trace_id = "req_fedcba9876543210"
@@ -818,6 +824,7 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
                     "root_session_id": "session-root",
                     "agent_session_id": "sess-browser",
                     "turn_id": "turn-1",
+                    "action_batch_id": "action_batch_socket",
                 },
             })
             assert socket.receive_json()["type"] == "request.ready"
@@ -826,10 +833,57 @@ def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
             assert result["type"] == "response.completed", result
             assert result["request_id"] == operation_id
     assert seen[0].trace_request_id
-    assert seen[1].trace_request_id == trace_id
-    assert seen[1].root_session_id == "session-root"
-    assert seen[1].agent_session_id == "sess-browser"
-    assert seen[1].trace_turn_id == "turn-1"
+    assert seen[0].trace_action_batch_id is None
+    assert seen[1].trace_action_batch_id == "action_batch_http"
+    assert seen[2].trace_request_id == trace_id
+    assert seen[2].root_session_id == "session-root"
+    assert seen[2].agent_session_id == "sess-browser"
+    assert seen[2].trace_turn_id == "turn-1"
+    assert seen[2].trace_action_batch_id == "action_batch_socket"
+
+
+def test_action_batch_metadata_does_not_change_inference_or_idempotency(monkeypatch) -> None:
+    from sglang_omni.serve.action_decision import service
+
+    traces, lifecycle, archives = [], [], []
+    monkeypatch.setattr(service, "emit_model_trace", lambda _, event, **fields: traces.append((event, fields)))
+    monkeypatch.setattr(service, "emit_service_event", lambda _, event, **fields: lifecycle.append((event, fields)))
+    monkeypatch.setattr(service, "get_model_io_recorder", lambda _: SimpleNamespace(
+        record=lambda **fields: archives.append(fields["context"])))
+    class ConstrainedModel(_FakeClient):
+        async def completion(self, request, *, request_id, audio_format="wav"):
+            self.code = request.sampling.regex[3:-1].split("|", 1)[0]
+            return await super().completion(request, request_id=request_id, audio_format=audio_format)
+
+    model = ConstrainedModel()
+    app = create_action_decision_app(model, config=_config())
+    headers = {"Authorization": "Bearer secret"}
+    payload = {
+        "channel": "body", "character_prompt": "自然回应", "text": "你好",
+        "request_id": "operation-batch-test", "prompt_snapshot": _raw_action_snapshot(),
+    }
+    with TestClient(app) as client:
+        first = client.post("/v1/action-recall", json=payload, headers={
+            **headers, "X-Action-Batch-Id": "action_batch_http",
+        })
+        repeated = client.post("/v1/action-recall", json=payload, headers={
+            **headers, "X-Action-Batch-Id": "invalid batch id",
+        })
+    assert first.status_code == repeated.status_code == 200
+    assert first.json() == repeated.json()
+    assert len(model.requests) == 1
+    assert "action_batch" not in repr(model.requests[0][1])
+    expected = {
+        "agent.request.received", "model.input.prepared", "model.request.started",
+        "model.response.received", "action.resolved", "agent.response.sent",
+        "inference.started", "inference.completed",
+    }
+    assert {event for event, fields in traces + lifecycle
+            if fields.get("action_batch_id") == "action_batch_http"} == expected
+    assert all(fields["channel"] == "body" for _, fields in traces + lifecycle
+               if "action_batch_id" in fields)
+    assert archives[0]["action_batch_id"] == "action_batch_http"
+    assert archives[0]["channel"] == "body"
 
 
 def test_action_public_transports_reject_missing_agent_prompt_snapshot() -> None:

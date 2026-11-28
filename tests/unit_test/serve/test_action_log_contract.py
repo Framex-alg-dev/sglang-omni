@@ -46,6 +46,7 @@ def test_action_log_context_is_separate_from_operation_idempotency() -> None:
         root_session_id="ses_other",
         agent_session_id="agent-session-2",
         trace_turn_id="turn-trace-2",
+        trace_action_batch_id="action_batch_other",
     )
     assert _request_digest(retried) == _request_digest(request)
 

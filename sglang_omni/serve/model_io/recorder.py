@@ -375,6 +375,8 @@ class ModelIORecorder:
             "duration_ms": round((item.completed_at - item.started_at) * 1000, 3),
             "files": files,
         }
+        if item.stage == "action" and context.get("action_batch_id"):
+            manifest.update(action_batch_id=context["action_batch_id"], channel=context.get("channel"))
         manifest_payload = _atomic_json(call_dir / "manifest.json", manifest)
         manifest_sha = hashlib.sha256(manifest_payload).hexdigest()
         total_bytes = sum(record["bytes"] for record in files) + len(manifest_payload)
@@ -411,6 +413,8 @@ class ModelIORecorder:
                 agent_session_id=item.context.get("agent_session_id"),
                 turn_id=item.context.get("turn_id"),
                 stage=item.stage,
+                action_batch_id=item.context.get("action_batch_id"),
+                channel=item.context.get("channel") if item.context.get("action_batch_id") else None,
                 **fields,
             )
         except Exception:
