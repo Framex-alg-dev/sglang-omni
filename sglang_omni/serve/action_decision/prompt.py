@@ -36,10 +36,6 @@ def uses_reference_prompt(request: ActionDecisionRequest) -> bool:
     return reference_prompt_profile(request) is not None
 
 
-def uses_e65_reference_prompt(request: ActionDecisionRequest) -> bool:
-    """Backward-compatible predicate for callers that still name E65."""
-    return reference_prompt_profile(request) == E65_REFERENCE_PROFILE
-
 def build_system_prompt(request: ActionDecisionRequest, catalog: ResolvedCatalog, *, prompt_snapshot: dict[str, str] | None = None) -> str:
     if prompt_snapshot is None and request.prompt_snapshot is not None:
         prompt_snapshot = dict(request.prompt_snapshot.rules)
