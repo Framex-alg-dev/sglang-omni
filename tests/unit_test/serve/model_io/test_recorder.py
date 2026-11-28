@@ -74,6 +74,24 @@ def test_recorder_extracts_inline_media_and_commits_manifest_last(
     assert archive_event[1]["agent_session_id"] == "agent_session_1"
 
 
+def test_action_archive_keeps_batch_and_channel_for_the_uploader(tmp_path: Path, monkeypatch) -> None:
+    events = []
+    monkeypatch.setattr(
+        "sglang_omni.serve.model_io.recorder.emit_service_event",
+        lambda _, event, **fields: events.append((event, fields)),
+    )
+    recorder = ModelIORecorder(tmp_path, queue_size=2, max_bytes=100_000)
+    try:
+        assert recorder.record(stage="action", input_value={}, output_value={},
+                               context={"action_batch_id": "action_batch_1", "channel": "expression"})
+        manifest = json.loads((_wait_for_ready(tmp_path).parent / "manifest.json").read_text())
+    finally:
+        recorder.close()
+    assert (manifest["action_batch_id"], manifest["channel"]) == ("action_batch_1", "expression")
+    event = next(fields for name, fields in events if name == "artifact.archive.persisted")
+    assert (event["action_batch_id"], event["channel"]) == ("action_batch_1", "expression")
+
+
 def test_disabled_recorder_is_fail_open() -> None:
     recorder = ModelIORecorder(None)
     assert not recorder.record(

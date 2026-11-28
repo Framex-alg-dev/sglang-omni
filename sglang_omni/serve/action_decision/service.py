@@ -112,6 +112,7 @@ def _emit_action_agent_request(
         agent_session_id=request.agent_session_id,
         turn_id=request.trace_turn_id or request.turn_id,
         agent_request=_action_agent_request(request),
+        **_action_trace_fields(request),
     )
 
 
@@ -137,7 +138,15 @@ def _emit_action_agent_response(
         turn_id=request.trace_turn_id or request.turn_id,
         agent_response=response,
         total_ms=round(total_ms, 3),
+        **_action_trace_fields(request),
     )
+
+
+def _action_trace_fields(request: ActionDecisionRequest) -> dict[str, str]:
+    fields = {"channel": request.channel.value}
+    if request.trace_action_batch_id is not None:
+        fields["action_batch_id"] = request.trace_action_batch_id
+    return fields
 
 
 async def _decide_with_service_log(
@@ -178,8 +187,8 @@ async def _decide_with_service_log(
             operation=operation,
             operation_id=operation_id,
             decision_point_id=decision_point_id,
-            channel=request.channel.value,
             agent_session_id=agent_session_id,
+            **_action_trace_fields(request),
         )
         try:
             decision = await engine.decide(request)
@@ -194,7 +203,7 @@ async def _decide_with_service_log(
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=operation_id,
                 decision_point_id=decision_point_id,
-                channel=request.channel.value,
+                **_action_trace_fields(request),
             )
             raise
         except Exception as exc:
@@ -208,8 +217,8 @@ async def _decide_with_service_log(
                 duration_ms=round((time.perf_counter() - started) * 1000, 3),
                 operation_id=operation_id,
                 decision_point_id=decision_point_id,
-                channel=request.channel.value,
                 error_type=type(exc).__name__,
+                **_action_trace_fields(request),
             )
             raise
         emit_service_event(
@@ -221,11 +230,11 @@ async def _decide_with_service_log(
             duration_ms=decision.elapsed_ms,
             operation_id=operation_id,
             decision_point_id=decision_point_id,
-            channel=request.channel.value,
             outcome=decision.outcome,
             candidate_id=decision.candidate_id,
             model_id=decision.model_id,
             model_version=decision.model_version,
+            **_action_trace_fields(request),
         )
         return decision
 
@@ -613,7 +622,6 @@ class ActionDecisionEngine:
             agent_session_id=request.agent_session_id,
             session_id=request.session_id,
             turn_id=request.trace_turn_id or request.turn_id,
-            channel=request.channel.value,
             model_id=self.config.model_id,
             model_version=self.config.model_version,
             model_input={
@@ -625,6 +633,7 @@ class ActionDecisionEngine:
                 "media": [item.header() for item in request.media],
             },
             input_prepare_ms=round(input_prepare_ms, 3),
+            **_action_trace_fields(request),
         )
         archive_started = time.time()
         archive_context = {
@@ -636,6 +645,7 @@ class ActionDecisionEngine:
             "provider_turn_id": request.turn_id,
             "source_turn_id": request.trace_turn_id,
             "decision_point_id": request.decision_point_id,
+            **_action_trace_fields(request),
             "model_id": self.config.model_id,
             "model_version": self.config.model_version,
             "release_id": (
@@ -661,10 +671,10 @@ class ActionDecisionEngine:
             agent_session_id=request.agent_session_id,
             session_id=request.session_id,
             turn_id=request.trace_turn_id or request.turn_id,
-            channel=request.channel.value,
             model_id=self.config.model_id,
             model_version=self.config.model_version,
             input_prepare_ms=round(input_prepare_ms, 3),
+            **_action_trace_fields(request),
         )
         try:
             result = await self._client.completion(
@@ -696,6 +706,7 @@ class ActionDecisionEngine:
                     (time.perf_counter() - model_started) * 1000.0, 3
                 ),
                 model_output={"error_type": "CancelledError"},
+                **_action_trace_fields(request),
             )
             raise
         except Exception as exc:
@@ -726,6 +737,7 @@ class ActionDecisionEngine:
                     "error_type": type(exc).__name__,
                     "detail": str(exc),
                 },
+                **_action_trace_fields(request),
             )
             raise
         model_inference_ms = (time.perf_counter() - model_started) * 1000.0
@@ -751,11 +763,11 @@ class ActionDecisionEngine:
             status="success",
             session_id=request.session_id,
             turn_id=request.trace_turn_id or request.turn_id,
-            channel=request.channel.value,
             model_output=code,
             usage=result.usage.to_dict() if result.usage is not None else None,
             weight_version=result.weight_version,
             model_inference_ms=round(model_inference_ms, 3),
+            **_action_trace_fields(request),
         )
         resolve_started = time.perf_counter()
         # Constrained backends normally return the assigned two-token code, but
@@ -860,6 +872,7 @@ class ActionDecisionEngine:
         decision_log["agent_session_id"] = request.agent_session_id
         decision_log["provider_turn_id"] = decision.turn_id
         decision_log["turn_id"] = request.trace_turn_id or decision.turn_id
+        decision_log.update(_action_trace_fields(request))
         emit_structured_log(
             "action",
             "action_decision_completed",
@@ -892,6 +905,7 @@ class ActionDecisionEngine:
             catalog_hash=decision.catalog_hash,
             mapping_version=decision.mapping_version,
             mapping_hash=decision.mapping_hash,
+            **_action_trace_fields(request),
             input_prepare_ms=(
                 round(input_prepare_ms, 3) if input_prepare_ms is not None else None
             ),
@@ -1155,7 +1169,9 @@ def create_action_decision_app(
                     request.state.framex_request_id,
                     root_session_id=request.state.framex_root_session_id,
                 )
-            decision_request, public_id = parse_recall(raw, transport="http")
+            decision_request, public_id = parse_recall(
+                raw, transport="http", action_batch_id=request.headers.get("X-Action-Batch-Id")
+            )
             decision = await _decide_with_service_log(
                 engine, decision_request, operation="action_recall"
             )
@@ -1176,6 +1192,7 @@ def create_action_decision_app(
         media: tuple[StreamedMedia, ...] = (),
         *,
         transport: str = "internal",
+        action_batch_id: str | None = None,
     ):
         decision_request, public_id = parse_simple_audio_request(
             {key: value for key, value in payload.items() if key != "log_context"}
@@ -1193,12 +1210,18 @@ def create_action_decision_app(
         ) = _parse_log_context(
             payload, default_session_id=decision_request.session_id
         )
+        if not valid_correlation_id(action_batch_id):
+            action_batch_id = payload.get("log_context", {}).get("action_batch_id")
+        # Malformed optional telemetry must never reject an inference request.
+        if not valid_correlation_id(action_batch_id):
+            action_batch_id = None
         decision_request = replace(
             decision_request,
             trace_request_id=trace_request_id,
             root_session_id=root_session_id,
             agent_session_id=agent_session_id,
             trace_turn_id=trace_turn_id,
+            trace_action_batch_id=action_batch_id,
         )
         _emit_prompt_binding_drift(decision_request, config)
         mode = payload.get("mode")
@@ -1219,6 +1242,7 @@ def create_action_decision_app(
             recall_variant=recall_variant(decision_request), input_mode=mode,
             target_text_present=bool(target_text),
             target_text_chars=len(target_text) if isinstance(target_text, str) else 0,
+            **_action_trace_fields(decision_request),
         )
         _emit_action_agent_request(
             decision_request, operation="action_recall", transport=transport
@@ -1341,6 +1365,7 @@ def _emit_prompt_binding_drift(
         bound_model_version=snapshot.binding.model_version,
         serving_model_id=config.model_id,
         serving_model_version=config.model_version,
+        **_action_trace_fields(request),
     )
 
 
@@ -1523,6 +1548,7 @@ def _request_digest(request: ActionDecisionRequest) -> str:
                 "root_session_id",
                 "agent_session_id",
                 "trace_turn_id",
+                "trace_action_batch_id",
             }
         },
         "media": [

@@ -73,6 +73,8 @@ def test_uploader_sends_manifest_last_and_is_idempotent(tmp_path: Path, monkeypa
     manifest_path = call_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["agent_session_id"] = "agent_session_1"
+    manifest["action_batch_id"] = "action_batch_1"
+    manifest["channel"] = "body"
     manifest_path.write_text(json.dumps(manifest) + "\n")
     ready_path = call_dir / "ready.json"
     ready = json.loads(ready_path.read_text())
@@ -117,6 +119,8 @@ def test_uploader_sends_manifest_last_and_is_idempotent(tmp_path: Path, monkeypa
         if event[0][1] == "artifact.upload.completed"
     )
     assert committed[1]["agent_session_id"] == "agent_session_1"
+    assert committed[1]["action_batch_id"] == "action_batch_1"
+    assert committed[1]["channel"] == "body"
 
 
 def test_uploader_retries_checksum_failure_without_remote_commit(
