@@ -28,7 +28,7 @@ def profile():
     return DirectE50Profile(system_prompt=(PROMPTS / "system_prompt.txt").read_text(),
                             user_prompt="", prompt_version="partial30-test",
                             max_tokens=128, video_max_pixels=137625,
-                            protocol=PARTIAL30_PROTOCOL, confirmation_windows=1)
+                            protocol=PARTIAL30_PROTOCOL)
 
 
 def window():
@@ -53,7 +53,7 @@ def window():
 def request(value):
     return build_direct_e50_request(profile=profile(), model_id="qwen3-omni-gpu4-timeline",
         session_id="test-partial30", window=value, video_mp4=b"native-video",
-        retry=False, logical_request_id="test", contract_version=2,
+        retry=False, logical_request_id="test", contract_version=3,
         observer_epoch=0, stream_epoch=0)
 
 
@@ -154,7 +154,6 @@ def test_static_prefill_keeps_media_private_and_approves_exact_prompt():
 @pytest.mark.asyncio
 async def test_model_observations_preserve_control_and_thumbs_up_ids(monkeypatch, tmp_path):
     monkeypatch.setenv('SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT', str(tmp_path))
-    monkeypatch.setattr(DirectE50Profile, 'from_environment', classmethod(lambda cls: profile()))
     class Client:
         async def completion(self, request, *, request_id, **kwargs):
             return SimpleNamespace(text='E13,E14,E20,E21')
@@ -162,11 +161,12 @@ async def test_model_observations_preserve_control_and_thumbs_up_ids(monkeypatch
         stream_epoch=0, audio_format='pcm_s16le/16000/1', video_format='image/jpeg',
         model_id='qwen3-omni-gpu4-timeline')
     model = SglangClientTimelineDetectionModel(Client(), start,
-        model_version='partial30-checkpoint-1750-fp8-20261020', inference_interval_ms=1000)
+        model_version='partial30-checkpoint-1750-fp8-20261020',
+        direct_profile=profile(), inference_interval_ms=1000)
     try:
-        observations = await model._detect(_WindowWork(0, 0, window()))
-        assert [event.event_type for event in observations] == ['E13', 'E14', 'E20', 'E21']
-        assert [event.summary for event in observations] == ['点赞', 'OK手势', '嘘手势', '暂停手势']
+        result = await model._detect(_WindowWork(0, 0, window()))
+        assert [event.event_type for event in result.events] == ['E13', 'E14', 'E20', 'E21']
+        assert [event.summary for event in result.events] == ['点赞', 'OK手势', '嘘手势', '暂停手势']
     finally:
         await model.close()
 
@@ -204,8 +204,6 @@ async def test_e49_observation_uses_partial30_name_and_saves_aligned_audio(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setenv('SGLANG_OMNI_TIMELINE_ARTIFACT_ROOT', str(tmp_path))
-    monkeypatch.setattr(DirectE50Profile, 'from_environment',
-                        classmethod(lambda cls: profile()))
 
     class Client:
         async def completion(self, request, *, request_id, **kwargs):
@@ -217,11 +215,12 @@ async def test_e49_observation_uses_partial30_name_and_saves_aligned_audio(
         model_id='qwen3-omni-gpu4-timeline',
     )
     model = SglangClientTimelineDetectionModel(
-        Client(), start, model_version='partial30-test', inference_interval_ms=1000,
+        Client(), start, model_version='partial30-test', direct_profile=profile(),
+        inference_interval_ms=1000,
     )
     try:
-        observations = await model._detect(_WindowWork(0, 0, window()))
-        assert [event.summary for event in observations] == ['频繁看手表']
+        result = await model._detect(_WindowWork(0, 0, window()))
+        assert [event.summary for event in result.events] == ['频繁看手表']
     finally:
         await model.close()
 

@@ -451,6 +451,14 @@ async def test_launcher_uses_runner_and_mounts_profiler_routes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from sglang_omni.serve import launcher
+
+    configure_service_logging = launcher.configure_service_logging
+    monkeypatch.setattr(
+        launcher,
+        "configure_service_logging",
+        lambda service: configure_service_logging(service, log_root=tmp_path / "logs"),
+    )
     config = _make_config(tmp_path)
     server_serve = AsyncMock(return_value=None)
 

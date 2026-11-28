@@ -6,10 +6,10 @@ import re
 from typing import Protocol
 
 from .contracts import (
+    ROUTE_CODE_REQUIREMENTS,
     BrainRoute,
     MediaDirective,
     OutputDirective,
-    ROUTE_CODE_REQUIREMENTS,
     RouteToken,
     TaskClassificationRequest,
     TaskClassificationResult,
@@ -36,11 +36,6 @@ class TaskClassificationPipeline:
     def __init__(self, model: TaskClassificationModel) -> None:
         self._model = model
 
-    async def prewarm(self) -> None:
-        prewarm = getattr(self._model, "prewarm", None)
-        if callable(prewarm):
-            await prewarm()
-
     async def classify(
         self,
         request: TaskClassificationRequest,
@@ -52,25 +47,13 @@ class TaskClassificationPipeline:
             if callable(version_resolver)
             else self._model.model_version
         )
-        allowed = (
-            {"0", "1", "2", "3", "4", "5"}
-            if request.router_profile in {"v1.1", "v1.2"}
-            else {"0", "1", "2", "3"}
-        )
+        allowed = {"0", "1", "2", "3"}
         if raw not in allowed:
             vocabulary = ", ".join(sorted(allowed))
             raise InvalidRouteOutput(
                 f"turn-router model must output exactly one of {vocabulary}"
             )
         route_code = int(raw)
-        if (
-            request.router_profile == "v1.2"
-            and route_code in {4, 5}
-            and not request.has_active_agent
-        ):
-            raise InvalidRouteOutput(
-                "turn-router continuation code requires an active MCP task"
-            )
         needs_mcp, needs_multimodal = ROUTE_CODE_REQUIREMENTS[route_code]
         route_token = RouteToken.DELEGATE if needs_mcp else RouteToken.DIRECT
         route = BrainRoute.BRAIN2 if needs_mcp else BrainRoute.BRAIN1
@@ -93,6 +76,7 @@ class TaskClassificationPipeline:
                 request_cue=None,
                 model_id=self._model.model_id,
                 model_version=model_version,
+                contract_version=request.contract_version,
             )
         except ValueError as exc:
             raise InvalidRouteOutput(

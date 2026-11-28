@@ -36,6 +36,12 @@ def _payload() -> dict[str, object]:
         "reasoning_effort": "none",
         "temperature": 0,
         "max_tokens": 128,
+        "log_context": {
+            "request_id": "trace-brain-1",
+            "root_session_id": "root-1",
+            "turn_id": "turn-1",
+            "agent_session_id": "agent-1",
+        },
     }
 
 

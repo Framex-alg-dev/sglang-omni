@@ -20,4 +20,3 @@ class PerformanceDecision:
     expression_unsupported: bool
     tts_instruction: str
     elapsed_ms: float
-

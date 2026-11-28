@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=user
 Group=user
+LogsDirectory=framex/omni-reply-worker
 WorkingDirectory=/data/fanshide/sglang-omni-dev
 Environment=PYTHONPATH=/data/fanshide/sglang-omni-dev
 Environment=PYTHONUNBUFFERED=1

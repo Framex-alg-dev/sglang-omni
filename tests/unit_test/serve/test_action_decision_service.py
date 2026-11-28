@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,9 +18,6 @@ from sglang_omni.serve.action_decision.contracts import (
 )
 from sglang_omni.serve.action_decision.fusion import fuse_action_decisions
 from sglang_omni.serve.action_decision.prompt import (
-    E65_REFERENCE_SYSTEM_PROMPT_PATH,
-    E66_REFERENCE_SYSTEM_PROMPT_PATH,
-    E67_REFERENCE_SYSTEM_PROMPT_PATH,
     build_system_prompt,
     build_user_prompt,
 )
@@ -27,6 +26,7 @@ from sglang_omni.serve.action_decision.service import (
     ActionDecisionEngine,
     create_action_decision_app,
 )
+from sglang_omni.serve.agent_prompt_snapshot import decode_action_prompt_snapshot
 from sglang_omni.serve.streaming_request import StreamedMedia
 from sglang_omni.serve.launcher import _run_server
 
@@ -35,7 +35,10 @@ import os
 # Match deploy/launch_dual_gpu_dev.sh; callers can select an explicit artifact set.
 ASSETS = os.getenv(
     "ACTION_ARTIFACT_ROOT",
-    "/data/xingmt/model_repo/action_prediction_model/assets/e67_v116",
+    str(
+        Path(__file__).resolve().parents[3]
+        / "sglang_omni/assets/persona_window_v1"
+    ),
 )
 
 
@@ -47,7 +50,6 @@ def _config() -> ActionDecisionConfig:
         mapping_path=f"{ASSETS}/action_pair_token_map_current.json",
         full_mapping_path=f"{ASSETS}/action_pair_token_map_full.json",
         product_catalog_path=f"{ASSETS}/action_catalog.json",
-        agent_policy_path=f"{ASSETS}/agent_action_policy.json",
     )
 
 
@@ -61,6 +63,22 @@ def _registry() -> ActionCatalogRegistry:
     )
 
 
+def _raw_action_snapshot(prompt: str = "AGENT ACTION POLICY") -> dict:
+    return {
+        "consumer": "d_video_call.action.decision",
+        "release_id": "action-test",
+        "bundle_sha256": "a" * 64,
+        "binding": {
+            "assembly_contract": "d-action-decision-v1",
+            "output_protocol": "d-action-decision-response-v1",
+            "model_id": "action-model",
+            "model_version": "e43",
+        },
+        "system_prompt": prompt,
+        "system_prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+    }
+
+
 def _request(channel: DecisionChannel, **updates) -> ActionDecisionRequest:
     values = {
         "request_id": f"r-{channel.value}",
@@ -69,6 +87,7 @@ def _request(channel: DecisionChannel, **updates) -> ActionDecisionRequest:
         "decision_point_id": "dp1",
         "channel": channel,
         "text": "你好",
+        "prompt_snapshot": decode_action_prompt_snapshot(_raw_action_snapshot()),
     }
     values.update(updates)
     return ActionDecisionRequest(**values)
@@ -78,6 +97,7 @@ class _FakeClient:
     def __init__(self, code: str = "_ctrl_b") -> None:
         self.code = code
         self.requests = []
+        self.prefill_requests = []
         self.aborted = []
 
     async def completion(self, request, *, request_id, audio_format="wav"):
@@ -90,6 +110,59 @@ class _FakeClient:
 
     async def abort(self, request_id):
         self.aborted.append(request_id)
+
+    async def prefill_completion_prefix(self, request, *, request_id):
+        self.prefill_requests.append((request_id, request))
+        return True
+
+
+class _WarmupFakeClient(_FakeClient):
+    async def completion(self, request, *, request_id, audio_format="wav"):
+        self.requests.append((request_id, request))
+        code = "_ctrl_b" if request.metadata["task_role"] == "body" else "_ctrl_f"
+        return SimpleNamespace(
+            text=code,
+            usage=UsageInfo(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+            weight_version="weights-1",
+        )
+
+
+def test_action_warmup_exercises_both_channels_without_live_cache_or_cos(
+    monkeypatch,
+) -> None:
+    async def run():
+        recorded = []
+        monkeypatch.setattr(
+            "sglang_omni.serve.action_decision.service.get_model_io_recorder",
+            lambda _stage: SimpleNamespace(record=lambda **value: recorded.append(value)),
+        )
+        client = _WarmupFakeClient()
+        engine = ActionDecisionEngine(client, config=_config())
+        result = await engine.warmup(timeout_s=1.0)
+        return client, engine, result, recorded
+
+    client, engine, result, recorded = asyncio.run(run())
+    assert result["ready"] is True
+    assert set(result["channels"]) == {"body", "expression"}
+    assert [item[1].metadata["task_role"] for item in client.requests] == [
+        "body",
+        "expression",
+    ]
+    assert engine._completed == {}
+    assert recorded == []
+
+
+def test_action_warmup_failure_is_reported_without_raising() -> None:
+    class FailingClient(_FakeClient):
+        async def completion(self, request, *, request_id, audio_format="wav"):
+            raise RuntimeError("warmup failed")
+
+    result = asyncio.run(
+        ActionDecisionEngine(FailingClient(), config=_config()).warmup(timeout_s=1.0)
+    )
+    assert result["ready"] is False
+    assert result["channels"]["body"]["error_type"] == "RuntimeError"
+    assert result["channels"]["expression"]["error_type"] == "RuntimeError"
 
 
 def test_catalog_partitions_body_and_expression_and_controls() -> None:
@@ -106,6 +179,24 @@ def test_catalog_partitions_body_and_expression_and_controls() -> None:
         entry.candidate_id for entry in expression.entries if entry.kind != "action"
     } == {"000", "IF0"}
 
+
+@pytest.mark.skip(reason="V10 runtime validates candidate subsets without legacy role_pool_v1")
+def test_role_pool_body_catalog_keeps_explicit_expression_actions() -> None:
+    catalog = _registry().resolve(
+        _request(
+            DecisionChannel.BODY,
+            allowed_candidate_ids=("138", "157"),
+            runtime_context={"action_candidate_prompt_mode": "role_pool_v1"},
+        )
+    )
+
+    assert {entry.candidate_id for entry in catalog.entries} == {
+        "000",
+        "138",
+        "157",
+        "IB0",
+    }
+    assert catalog.by_candidate_id["157"].occupies_channels == ("face",)
 
 def test_turn_execution_fences_are_accepted_without_entering_model_prompt() -> None:
     request = _request(DecisionChannel.BODY, runtime_context={
@@ -127,35 +218,59 @@ def test_turn_execution_revision_rejects_malformed_fences(value) -> None:
                                     runtime_context={"input_revision": value}))
 
 
-def test_engine_rejects_frozen_model_mismatch_before_inference() -> None:
+def test_advisory_model_binding_does_not_block_inference() -> None:
     async def run():
         client = _FakeClient()
         engine = ActionDecisionEngine(client, config=_config())
-        with pytest.raises(ValueError, match="frozen model release"):
-            await engine.decide(_request(DecisionChannel.BODY,
-                runtime_context={"expected_model_version": "wrong-release"}))
-        assert client.requests == []
+        result = await engine.decide(_request(
+            DecisionChannel.BODY,
+            runtime_context={"expected_model_version": "wrong-release"},
+        ))
+        assert result.model_invoked is True
+        assert len(client.requests) == 1
     asyncio.run(run())
 
 
-def test_registered_agent_binding_injects_and_hard_binds_full_mapping_action() -> None:
-    registry = _registry()
-    catalog = registry.resolve(
-        _request(
-            DecisionChannel.BODY,
-            runtime_context={"agent_event": "agent.search.started"},
+def test_unregistered_agent_event_is_rejected_without_policy() -> None:
+    with pytest.raises(ValueError, match="unregistered agent_event"):
+        _registry().resolve(
+            _request(
+                DecisionChannel.BODY,
+                runtime_context={"agent_event": "agent.search.started"},
+            )
         )
+
+
+def test_agent_policy_mapping_mismatch_fails_during_startup(tmp_path) -> None:
+    policy_path = tmp_path / "agent_action_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "bindings": {
+                    "agent.search.started": {
+                        "inject_candidate_ids": ["missing-candidate"],
+                        "runtime_context": {
+                            "agent_event": "agent.search.started",
+                            "required_action_candidate_id": "missing-candidate",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
     )
-    assert catalog.hard_bound is not None
-    assert catalog.hard_bound.candidate_id == "481"
-    expression = registry.resolve(
-        _request(
-            DecisionChannel.EXPRESSION,
-            runtime_context={"agent_event": "agent.search.started"},
+    config = _config()
+
+    with pytest.raises(
+        ValueError,
+        match="agent action policy candidates missing from full mapping",
+    ):
+        ActionCatalogRegistry(
+            mapping_path=config.mapping_path,
+            full_mapping_path=config.full_mapping_path,
+            product_catalog_path=config.product_catalog_path,
+            agent_policy_path=policy_path,
         )
-    )
-    assert expression.hard_bound is None
-    assert "required_action_candidate_id" not in expression.runtime_context
 
 
 def test_disabled_channel_is_deterministic_and_skips_model() -> None:
@@ -188,14 +303,12 @@ def test_e57_prompt_contract_preserves_production_channel_and_catalog() -> None:
     )
     catalog = _registry().resolve(request)
     prompt = build_system_prompt(request, catalog)
-    assert "[SELECTION_RULES]" in prompt
-    assert "[ACTIVE_CHANNEL]" in prompt
-    assert "本次只决定身体动作通道" in prompt
-    assert "[CHARACTER_PROMPT]\n角色提示" in prompt
-    assert "[SESSION_PROMPT]\n会话提示" in prompt
-    assert f"candidate_count={len(catalog.entries)}" in prompt
-    assert "[FINAL_TASK_CONSTRAINTS]" in prompt
-    assert "结果映射：1=_x_b，2=_x_c" in prompt
+    assert prompt.startswith("AGENT ACTION POLICY")
+    assert "[TRUSTED_RUNTIME_CONTEXT]" in prompt
+    assert "[CHARACTER_PERSONA]\n角色提示" in prompt
+    assert "[SESSION_CONTEXT]\n会话提示" in prompt
+    assert "[ACTION_CATALOG]" in prompt
+    assert catalog.entries[0].candidate_id in prompt
 
 
 def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None:
@@ -232,8 +345,7 @@ def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None
         runtime_context={"prompt_profile": "e65_step1512_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E65_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    assert build_system_prompt(request, catalog) == expected_system
+    assert build_system_prompt(request, catalog) == "AGENT ACTION POLICY"
     user_prompt = build_user_prompt(request, catalog)
     assert "user_video：按时间顺序提供的用户侧画面" in user_prompt
     assert "user_audio：这是本轮用户原始音频" in user_prompt
@@ -241,29 +353,87 @@ def test_e65_reference_profile_uses_exact_training_prompts_without_asr() -> None
     assert "ASR" not in user_prompt
 
 
-def test_e66_reference_profile_uses_frozen_v116_training_prompt() -> None:
+def test_e66_reference_profile_uses_agent_prompt_snapshot() -> None:
     request = _request(
         DecisionChannel.BODY,
         runtime_context={"prompt_profile": "e66_v116_step935_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E66_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    assert build_system_prompt(request, catalog) == expected_system
-    assert hashlib.sha256(expected_system.encode()).hexdigest() == (
-        "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
-    )
+    assert build_system_prompt(request, catalog) == "AGENT ACTION POLICY"
 
 
-def test_e67_reference_profile_uses_frozen_v116_training_prompt() -> None:
+def test_e67_reference_profile_uses_agent_prompt_snapshot() -> None:
     request = _request(
         DecisionChannel.BODY,
         runtime_context={"prompt_profile": "e67_v116_step695_fp8"},
     )
     catalog = _registry().resolve(request)
-    expected_system = E67_REFERENCE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    assert build_system_prompt(request, catalog) == expected_system
-    assert hashlib.sha256(expected_system.encode()).hexdigest() == (
-        "f980a74ec1262e781831d23ea7cbe62fbff4666ced930f8e501b12265e082228"
+    assert build_system_prompt(request, catalog) == "AGENT ACTION POLICY"
+
+
+@pytest.mark.skip(reason="V10 runtime validates candidate subsets without legacy role_pool_v1")
+def test_e67_role_pool_prompt_filters_catalog_without_appending_a_constraint() -> None:
+    request = _request(
+        DecisionChannel.BODY,
+        allowed_candidate_ids=("138", "157"),
+        runtime_context={
+            "prompt_profile": "e67_v116_step695_fp8",
+            "action_candidate_prompt_mode": "role_pool_v1",
+        },
+    )
+    catalog = _registry().resolve(request)
+
+    prompt = build_system_prompt(request, catalog)
+
+    assert "[GOAL_ROUTING]" in prompt
+    assert "类别：视线类\n_i_a | 看镜头 |" in prompt
+    assert "_i_c | 看右侧（仅眼球） |" not in prompt
+    assert "类别：基础姿态" not in prompt
+    assert catalog.by_candidate_id["157"].code in prompt
+    assert "_ctrl_a | 不支持的具体动作 |" in prompt
+    assert "本轮仅这些动作可用" not in prompt
+
+
+@pytest.mark.skip(reason="V10 action-recall no longer exposes legacy prefix-prefill")
+def test_role_pool_prefill_is_deduplicated_by_exact_prompt_and_catalog() -> None:
+    async def run():
+        client = _FakeClient()
+        engine = ActionDecisionEngine(client, config=_config())
+        context = {
+            "prompt_profile": "e67_v116_step695_fp8",
+            "action_candidate_prompt_mode": "role_pool_v1",
+        }
+        first = await engine.prefill(
+            ActionPrefixPrefillRequest(
+                request_id="prefill-1",
+                session_id="session-1",
+                channel=DecisionChannel.BODY,
+                runtime_context=context,
+                allowed_candidate_ids=("138",),
+            )
+        )
+        second = await engine.prefill(
+            ActionPrefixPrefillRequest(
+                request_id="prefill-2",
+                session_id="session-2",
+                channel=DecisionChannel.BODY,
+                runtime_context=context,
+                allowed_candidate_ids=("138",),
+            )
+        )
+        return client, first, second
+
+    client, first, second = asyncio.run(run())
+
+    assert len(client.prefill_requests) == 1
+    assert first.cached is False
+    assert second.cached is True
+    assert first.prompt_hash == second.prompt_hash
+    assert first.cache_key == second.cache_key
+    assert first.candidate_count == 3
+    prefetched = client.prefill_requests[0][1]
+    assert hashlib.sha256(prefetched.messages[0].content.encode()).hexdigest() == (
+        first.prompt_hash
     )
 
 
@@ -448,6 +618,20 @@ def test_health_reports_live_workload_queues_only_to_authenticated_clients() -> 
     assert client.requests == []
 
 
+def test_health_rejects_traffic_until_enabled_startup_warmup_is_ready() -> None:
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    app.state.action_decision_warmup = {"enabled": True, "ready": False}
+    with TestClient(app) as http:
+        response = http.get('/health', headers={"Authorization": "Bearer secret"})
+        assert response.status_code == 503
+        assert response.json()["ok"] is False
+
+        app.state.action_decision_warmup = {"enabled": True, "ready": True}
+        response = http.get('/health', headers={"Authorization": "Bearer secret"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+
 def test_websocket_service_accepts_text_request() -> None:
     client = _FakeClient()
     app = create_action_decision_app(client, config=_config())
@@ -459,22 +643,65 @@ def test_websocket_service_accepts_text_request() -> None:
             {
                 "type": "request.start",
                 "contract_version": 2,
-                "request_id": "r1",
+                "request_id": "req_0123456789abcdfg",
                 "payload": {
-                    "request_id": "r1",
+                    "request_id": "business-r1",
                     "session_id": "s1",
                     "turn_id": "t1",
                     "decision_point_id": "dp1",
                     "channel": "body",
                     "text": "你好",
+                    "prompt_snapshot": _raw_action_snapshot(),
                 },
             }
         )
         assert socket.receive_json()["type"] == "request.ready"
-        socket.send_json({"type": "request.commit", "request_id": "r1"})
+        socket.send_json(
+            {
+                "type": "request.commit",
+                "request_id": "req_0123456789abcdfg",
+            }
+        )
         response = socket.receive_json()
     assert response["type"] == "response.completed"
+    assert response["request_id"] == "req_0123456789abcdfg"
     assert response["response"]["channel"] == "body"
+    assert client.requests[0][0] == "business-r1"
+
+
+@pytest.mark.skip(reason="V10 action-recall no longer exposes legacy prefix-prefill")
+def test_websocket_service_accepts_role_pool_prefill() -> None:
+    client = _FakeClient()
+    app = create_action_decision_app(client, config=_config())
+    with TestClient(app).websocket_connect(
+        "/v1/action-decision/realtime",
+        headers={"Authorization": "Bearer secret"},
+    ) as socket:
+        socket.send_json(
+            {
+                "type": "request.start",
+                "contract_version": 2,
+                "request_id": "prefill-1",
+                "payload": {
+                    "operation": "prefill",
+                    "request_id": "prefill-1",
+                    "session_id": "s1",
+                    "channel": "body",
+                    "allowed_candidate_ids": ["138"],
+                    "runtime_context": {
+                        "prompt_profile": "e67_v116_step695_fp8",
+                        "action_candidate_prompt_mode": "role_pool_v1",
+                    },
+                },
+            }
+        )
+        assert socket.receive_json()["type"] == "request.ready"
+        socket.send_json({"type": "request.commit", "request_id": "prefill-1"})
+        response = socket.receive_json()
+    assert response["type"] == "response.completed"
+    assert response["response"]["cached"] is False
+    assert response["response"]["candidate_count"] == 3
+    assert len(client.prefill_requests) == 1
 
 
 def test_action_service_mounts_authenticated_performance_control() -> None:
@@ -548,3 +775,130 @@ def test_cancel_removes_shielded_body_job_before_model_admission():
         await asyncio.sleep(0)
         assert retry.cancelled()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("input_fields", [
+    {"text": "你好"},
+    {"mode": "user_reaction", "user_input": {"text": "你好"}},
+])
+def test_action_recall_accepts_legacy_and_named_inputs_over_both_transports(
+    monkeypatch, input_fields
+) -> None:
+    from sglang_omni.serve.action_decision import service
+
+    seen = []
+
+    async def decide(_engine, request, *, operation):
+        assert operation == "action_recall"
+        seen.append(request)
+        return SimpleNamespace(
+            channel=request.channel, candidate_id="665", code="test", label="点头",
+            outcome="selected", occupies_channels=("body",),
+        )
+
+    monkeypatch.setattr(service, "_decide_with_service_log", decide)
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    payload = {
+        "channel": "body",
+        "character_prompt": "自然回应",
+        "prompt_snapshot": _raw_action_snapshot(),
+        **input_fields,
+    }
+    headers = {"Authorization": "Bearer secret"}
+    with TestClient(app) as client:
+        assert client.post("/v1/action-recall", json=payload, headers=headers).status_code == 200
+        with client.websocket_connect("/v1/action-recall", headers=headers) as socket:
+            operation_id = "req_0123456789abcdef"
+            trace_id = "req_fedcba9876543210"
+            socket.send_json({
+                "type": "request.start", "contract_version": 2, "request_id": operation_id,
+                "payload": payload,
+                "log_context": {
+                    "request_id": trace_id,
+                    "root_session_id": "session-root",
+                    "agent_session_id": "sess-browser",
+                    "turn_id": "turn-1",
+                },
+            })
+            assert socket.receive_json()["type"] == "request.ready"
+            socket.send_json({"type": "request.commit", "request_id": operation_id})
+            result = socket.receive_json()
+            assert result["type"] == "response.completed", result
+            assert result["request_id"] == operation_id
+    assert seen[0].trace_request_id
+    assert seen[1].trace_request_id == trace_id
+    assert seen[1].root_session_id == "session-root"
+    assert seen[1].agent_session_id == "sess-browser"
+    assert seen[1].trace_turn_id == "turn-1"
+
+
+def test_action_public_transports_reject_missing_agent_prompt_snapshot() -> None:
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    headers = {"Authorization": "Bearer secret"}
+    payload = {"channel": "body", "character_prompt": "自然回应", "text": "你好"}
+    with TestClient(app) as client:
+        response = client.post("/v1/action-recall", json=payload, headers=headers)
+        assert response.status_code == 422
+        assert "requires Agent prompt_snapshot" in response.text
+
+        with client.websocket_connect("/v1/action-recall", headers=headers) as socket:
+            socket.send_json(
+                {
+                    "type": "request.start",
+                    "contract_version": 2,
+                    "request_id": "req_0123456789abcdef",
+                    "payload": payload,
+                }
+            )
+            assert socket.receive_json()["type"] == "request.ready"
+            socket.send_json(
+                {
+                    "type": "request.commit",
+                    "request_id": "req_0123456789abcdef",
+                }
+            )
+            rejected = socket.receive_json()
+            assert rejected["type"] == "error"
+            assert "requires Agent prompt_snapshot" in rejected["detail"]
+
+
+def test_action_model_binding_drift_is_logged_without_blocking(monkeypatch) -> None:
+    from sglang_omni.serve.action_decision import service
+
+    events = []
+    real_emit_service_event = service.emit_service_event
+
+    def capture_event(component, event, **fields):
+        real_emit_service_event(component, event, **fields)
+        events.append((component, event, fields))
+
+    monkeypatch.setattr(
+        service,
+        "emit_service_event",
+        capture_event,
+    )
+    snapshot = _raw_action_snapshot()
+    snapshot["binding"]["model_id"] = "knowledge-logical-action"
+    snapshot["binding"]["model_version"] = "knowledge-release"
+    payload = {
+        "request_id": "business-r1",
+        "session_id": "s1",
+        "turn_id": "t1",
+        "decision_point_id": "dp1",
+        "channel": "body",
+        "text": "你好",
+        "prompt_snapshot": snapshot,
+    }
+
+    app = create_action_decision_app(_FakeClient(), config=_config())
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/action-decision",
+            json=payload,
+            headers={"Authorization": "Bearer secret"},
+        )
+
+    assert response.status_code == 200, response.text
+    drift = next(fields for _, event, fields in events if event == "prompt.binding.drift")
+    assert drift["bound_model_id"] == "knowledge-logical-action"
+    assert drift["serving_model_id"] == "action-model"

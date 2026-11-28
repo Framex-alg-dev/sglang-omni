@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import logging
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -17,7 +19,7 @@ from typing import Any
 
 from sglang_omni.client.types import GenerateRequest
 
-from .contracts import ObservationEvent, TimelineSessionStart
+from .contracts import TimelineSessionStart
 from .window import EventDetectionWindow
 
 
@@ -29,6 +31,8 @@ _DEFAULT_MAX_BYTES = 8 * 1024 * 1024 * 1024
 _DEFAULT_QUEUE_SIZE = 256
 _MEDIA_METADATA_KEYS = frozenset({"images", "videos", "audios"})
 _WriteItem = tuple[str, tuple[Any, ...], dict[str, Any]] | None
+_SPOOL_SIZES: dict[Path, tuple[float, int]] = {}
+_SPOOL_SIZE_LOCK = threading.Lock()
 
 
 class TimelineArtifactRecorder:
@@ -42,7 +46,11 @@ class TimelineArtifactRecorder:
         model_version: str,
         prompt_version: str,
         max_bytes: int = _DEFAULT_MAX_BYTES,
+        mode: str = "events",
     ) -> None:
+        if mode not in {"events", "all"}:
+            raise ValueError("timeline artifact mode must be events or all")
+        self._mode = mode
         if max_bytes <= 0:
             raise ValueError("timeline artifact byte limit must be positive")
         self._lock = threading.Lock()
@@ -69,7 +77,7 @@ class TimelineArtifactRecorder:
         )
         self._writer.start()
         logger.info(
-            "timeline event-only artifact recording configured session_id=%s "
+            "timeline artifact recording configured session_id=%s "
             "root=%s max_bytes=%s",
             start.session_id,
             self._session_dir,
@@ -95,6 +103,7 @@ class TimelineArtifactRecorder:
             model_version=model_version,
             prompt_version=prompt_version,
             max_bytes=max_bytes,
+            mode=os.environ.get("SGLANG_OMNI_TIMELINE_ARTIFACT_MODE", "events"),
         )
 
     @property
@@ -104,6 +113,38 @@ class TimelineArtifactRecorder:
     @property
     def session_dir(self) -> Path | None:
         return self._session_dir
+
+    @property
+    def record_all(self) -> bool:
+        return self.enabled and self._mode == "all"
+
+    def record_attempt_input(
+        self, *, stream_epoch: int, window: EventDetectionWindow,
+        attempt: int, request: GenerateRequest, video_mp4: bytes | None,
+        image_jpegs: tuple[bytes, ...],
+    ) -> None:
+        if self.record_all:
+            self._enqueue(
+                "_write_model_input",
+                self._call_dir(stream_epoch, window, attempt),
+                stream_epoch, window, request, video_mp4, image_jpegs, None,
+            )
+
+    def record_attempt_result(
+        self, *, stream_epoch: int, window: EventDetectionWindow,
+        attempt: int, result: dict[str, Any],
+    ) -> None:
+        if self.record_all:
+            self._enqueue(
+                "_write_model_result", self._call_dir(stream_epoch, window, attempt), result,
+            )
+
+    def _call_dir(self, stream_epoch: int, window: EventDetectionWindow, attempt: int) -> Path:
+        assert self._session_dir is not None
+        return self._session_dir / (
+            f"stream-{stream_epoch:04d}__end-{window.end_ms:012d}__"
+            f"attempt-{attempt:02d}"
+        )
 
     def record_window_event(self, event: dict[str, Any]) -> None:
         # Window diagnostics remain in the service log.  Persisting every
@@ -176,8 +217,28 @@ class TimelineArtifactRecorder:
         image_jpegs: tuple[bytes, ...],
         audio_wav: bytes | None,
     ) -> None:
+        self._ensure_session_dir()
         input_dir = call_dir / "input"
         with self._lock:
+            if audio_wav is None and request.metadata.get("audios"):
+                audio_wav = base64.b64decode(
+                    request.metadata["audios"][0].split(",", 1)[1], validate=True,
+                )
+            reserve_bytes = (
+                len(video_mp4 or b"") + len(audio_wav or b"")
+                + sum(len(image) for image in image_jpegs)
+                + sum(len(frame.payload) for frame in (*window.history_frames, *window.current_frames))
+                + len(json.dumps(request.to_dict()).encode("utf-8")) + 100_000
+            )
+            assert self._root is not None
+            with _SPOOL_SIZE_LOCK:
+                checked_at, reserved = _SPOOL_SIZES.get(self._root, (0.0, 0))
+                if time.monotonic() - checked_at >= 60:
+                    reserved = _tree_size(self._root)
+                    checked_at = time.monotonic()
+                if reserved + reserve_bytes > self._max_bytes:
+                    raise OSError("timeline artifact spool byte limit reached")
+                _SPOOL_SIZES[self._root] = (checked_at, reserved + reserve_bytes)
             input_dir.mkdir(parents=True, exist_ok=False)
             media: dict[str, list[dict[str, Any]]] = {
                 "videos": [],
@@ -232,6 +293,8 @@ class TimelineArtifactRecorder:
         result: dict[str, Any],
     ) -> None:
         with self._lock:
+            if not (call_dir / "request.json").is_file():
+                raise OSError("timeline artifact input is incomplete")
             _atomic_json(
                 call_dir / "result.json",
                 {
@@ -239,6 +302,17 @@ class TimelineArtifactRecorder:
                     "recorded_at": _now(),
                     **result,
                 },
+            )
+            files = [
+                {"path": str(path.relative_to(call_dir)),
+                 "bytes": path.stat().st_size,
+                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                for path in sorted(call_dir.rglob("*"))
+                if path.is_file() and path.name != "ready.json"
+            ]
+            _atomic_json(
+                call_dir / "ready.json",
+                {"schema_version": "timeline-artifact-bundle.v1", "files": files},
             )
 
     def close(self, *, timeout_seconds: float = 5.0) -> None:
@@ -317,7 +391,7 @@ class TimelineArtifactRecorder:
                 "model_version": self._model_version,
                 "prompt_version": self._prompt_version,
                 "retention_max_bytes": self._max_bytes,
-                "recording_policy": "event_outputs_only",
+                "recording_policy": self._mode,
             },
         )
         self._prune_old_sessions()
@@ -328,6 +402,8 @@ class TimelineArtifactRecorder:
         )
 
     def _prune_old_sessions(self) -> None:
+        if os.environ.get("SGLANG_OMNI_TIMELINE_COS_BUCKET"):
+            return
         assert self._root is not None
         assert self._session_dir is not None
         sessions = [
@@ -344,10 +420,6 @@ class TimelineArtifactRecorder:
             _remove_tree(item)
             total -= size
             logger.info("pruned timeline artifact session path=%s bytes=%s", item, size)
-
-
-def observation_records(events: tuple[ObservationEvent, ...]) -> list[dict[str, Any]]:
-    return [asdict(event) for event in events]
 
 
 def _request_record(

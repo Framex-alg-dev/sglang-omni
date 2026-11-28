@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .prompt import EVENT_IDS
+from framex_event_policy.windows import TIMELINE_CONTRACT_VERSION
+from sglang_omni.serve.agent_prompt_snapshot import TimelinePromptSnapshot
+from sglang_omni.utils.framex_service_logs import valid_correlation_id
 
-
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = TIMELINE_CONTRACT_VERSION
 
 
 def _required(name: str, value: str) -> str:
@@ -34,12 +35,24 @@ class TimelineSessionStart:
     observer_epoch: int = 0
     next_sequence: int = 1
     contract_version: int = CONTRACT_VERSION
+    prompt_snapshot: TimelinePromptSnapshot | None = None
+    # Log-correlation fields are explicit in the v3 wire contract.
+    root_session_id: str | None = None
+    agent_session_id: str | None = None
 
     def __post_init__(self) -> None:
         _required("session_id", self.session_id)
         _required("audio_format", self.audio_format)
         _required("video_format", self.video_format)
         _required("model_id", self.model_id)
+        if self.root_session_id is not None:
+            _required("root_session_id", self.root_session_id)
+            if not valid_correlation_id(self.root_session_id):
+                raise ValueError("root_session_id is not a valid correlation ID")
+        if self.agent_session_id is not None:
+            _required("agent_session_id", self.agent_session_id)
+            if not valid_correlation_id(self.agent_session_id):
+                raise ValueError("agent_session_id is not a valid correlation ID")
         if min(self.identity_epoch, self.observer_epoch, self.stream_epoch) < 0:
             raise ValueError("timeline epochs must be non-negative")
         if self.next_sequence <= 0:
@@ -90,48 +103,3 @@ class TimelineDiscontinuity:
             raise ValueError("new stream epoch must advance")
         if self.observer_epoch < 0:
             raise ValueError("timeline observer_epoch must be non-negative")
-
-
-@dataclass(frozen=True)
-class ObservationEvent:
-    observation_id: str
-    session_id: str
-    identity_epoch: int
-    stream_epoch: int
-    event_type: str
-    summary: str
-    evidence_start_ms: int
-    evidence_end_ms: int
-    model_id: str
-    model_version: str
-    observer_epoch: int = 0
-    evidence_mode: str = "audio_video"
-    audio_status: str = "complete"
-    contract_version: int = CONTRACT_VERSION
-
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("observation_id", self.observation_id),
-            ("session_id", self.session_id),
-            ("event_type", self.event_type),
-            ("summary", self.summary),
-            ("model_id", self.model_id),
-            ("model_version", self.model_version),
-        ):
-            _required(name, value)
-        if self.evidence_start_ms < 0 or self.evidence_end_ms <= self.evidence_start_ms:
-            raise ValueError("observation evidence range is invalid")
-        if self.observer_epoch < 0:
-            raise ValueError("timeline observer_epoch must be non-negative")
-        if self.event_type not in EVENT_IDS:
-            raise ValueError("observation event_type is outside the timeline catalog")
-        if self.evidence_mode not in {"audio_video", "video_only"}:
-            raise ValueError("observation evidence_mode is invalid")
-        if self.audio_status not in {"complete", "missing", "gapped", "behind"}:
-            raise ValueError("observation audio_status is invalid")
-        if (self.evidence_mode == "audio_video") != (
-            self.audio_status == "complete"
-        ):
-            raise ValueError("observation evidence mode and audio status disagree")
-        if self.contract_version != CONTRACT_VERSION:
-            raise ValueError("unsupported timeline contract version")

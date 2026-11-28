@@ -8,6 +8,8 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from sglang_omni.utils.framex_service_logs import current_service_log_context
+
 
 @dataclass
 class SpeechAPIError(Exception):
@@ -32,14 +34,16 @@ def openai_error_payload(
 ) -> dict[str, Any]:
     """Build an OpenAI-style error envelope."""
 
-    return {
-        "error": {
-            "message": message,
-            "type": error_type,
-            "param": param,
-            "code": code,
-        }
+    error = {
+        "message": message,
+        "type": error_type,
+        "param": param,
+        "code": code,
     }
+    request_id = current_service_log_context().request_id
+    if request_id is not None:
+        error["request_id"] = request_id
+    return {"error": error}
 
 
 def openai_error_response(

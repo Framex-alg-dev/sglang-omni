@@ -18,7 +18,7 @@
 /data/xingmt/model_repo/action_prediction_model/assets/e67_v116
 ```
 
-使用其中的 `action_pair_token_map_current.json`、`action_pair_token_map_full.json`、`action_catalog.json`、`agent_action_policy.json`。模型目录为 `/data/xingmt/action_omni_output/fp8_overlay_e67_v116_step695`，目录版本 `dmd-action1000-reviewed-116`。四份文件的摘要、在线绑定及 tokenizer 对完整映射的校验见 Knowledge `prompt-baselines/e67-assets-revalidation.json`。
+使用其中的 `action_pair_token_map_current.json`、`action_pair_token_map_full.json`、`action_catalog.json`。模型目录为 `/data/xingmt/action_omni_output/fp8_overlay_e67_v116_step695`，目录版本 `dmd-action1000-reviewed-116`。三份文件的摘要、在线绑定及 tokenizer 对完整映射的校验见 Knowledge `prompt-baselines/e67-assets-revalidation.json`。Agent 事件动作策略不是模型资产；未显式配置策略路径时，不加载额外业务绑定。
 
 测试原先默认上一级 `assets`，导致三个跨模块测试找不到素材。`tests/unit_test/serve/test_action_decision_service.py` 的共享测试配置现与部署路径一致，仍支持显式 `ACTION_ARTIFACT_ROOT` 覆盖。没有复制／修改正式素材、生产代码、启动配置或 Prompt 发布选择。测试配置修复不需要重启模型服务。
 

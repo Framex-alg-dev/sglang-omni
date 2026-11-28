@@ -149,11 +149,11 @@ def install_timeline_prompt_debug(app, *, client, profile, bundle, model_id, mod
                 trace=[];adapter=DebugClient(client,payload.operation,trace)
                 frozen=replace(profile,system_prompt=texts['system_prompt'])
                 model=SglangClientTimelineDetectionModel(adapter,start,model_version=model_version,direct_profile=frozen)
-                observations=();error=None
+                window_result=None;error=None
                 try:
                     async with asyncio.timeout(75):
                         await model._prewarm_direct_e50_prefix()
-                        observations=await model._detect(_WindowWork(0,0,source_window))
+                        window_result=await model._detect(_WindowWork(0,0,source_window))
                 except Captured:pass
                 except (ValueError,RuntimeError,TimeoutError) as exc:error=type(exc).__name__
                 finally:await model.close()
@@ -162,7 +162,10 @@ def install_timeline_prompt_debug(app, *, client, profile, bundle, model_id, mod
                     codes=list(parse_direct_e50_output(trace[-1]['output'],allowed_event_ids=frozen.allowed_event_ids))
                 result['variants'][name]={'requests':trace,'prefills':adapter.prefills,'error':error,
                     'detected_events':[{'code':c,'title':PARTIAL30_EVENT_SUMMARIES[c]} for c in codes],
-                    'emitted_events':[asdict(v) for v in observations],
+                    'emitted_events':(
+                        [asdict(v) for v in window_result.events]
+                        if window_result is not None else []
+                    ),
                     'window':{'end_ms':source_window.end_ms,'history_frames':len(source_window.history_frames),
                               'current_frames':len(source_window.current_frames),'evidence_mode':source_window.evidence_mode}}
         return result

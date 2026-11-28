@@ -8,6 +8,11 @@ import uvicorn
 
 from .app import InferenceGatewayConfig, UpstreamStage, create_inference_gateway_app
 from .speech_synthesis import GatewaySpeechConfig
+from sglang_omni.utils.framex_service_logs import (
+    LOG_SPEC_VERSION,
+    configure_service_logging,
+    emit_service_event,
+)
 
 
 def _bearer(name: str, *, fallback: str | tuple[str, ...] | None = None) -> str:
@@ -34,6 +39,14 @@ def _boolean(name: str, default: bool) -> bool:
 
 
 def main() -> None:
+    configure_service_logging("omni-reply-worker")
+    emit_service_event(
+        "omni-reply-worker",
+        "service.starting",
+        logger_name=__name__,
+        role="inference-gateway",
+        log_spec_version=LOG_SPEC_VERSION,
+    )
     speech_url = os.environ.get(
         "SGLANG_OMNI_GATEWAY_SPEECH_URL",
         "http://127.0.0.1:50001/v1/tts/stream",
@@ -138,11 +151,25 @@ def main() -> None:
         ),
     )
     app = create_inference_gateway_app(config)
+    emit_service_event(
+        "omni-reply-worker",
+        "service.ready",
+        logger_name=__name__,
+        role="inference-gateway",
+        log_spec_version=LOG_SPEC_VERSION,
+    )
     uvicorn.run(
         app,
         host=os.environ.get("SGLANG_OMNI_GATEWAY_HOST", "127.0.0.1"),
         port=int(os.environ.get("SGLANG_OMNI_GATEWAY_PORT", "18003")),
         log_level=os.environ.get("SGLANG_OMNI_GATEWAY_LOG_LEVEL", "info"),
+        log_config=None,
+    )
+    emit_service_event(
+        "omni-reply-worker",
+        "service.stopped",
+        logger_name=__name__,
+        role="inference-gateway",
     )
 
 

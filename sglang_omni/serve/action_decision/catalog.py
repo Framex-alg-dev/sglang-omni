@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .contracts import ActionDecisionRequest, DecisionChannel
+from .speech_window import DECISION_MODES, PERSONA_WINDOW_PROFILE, PERSONA_AUDIO_PROFILE, PERSONA_PROFILES, SpeechWindow
+from .speech_audio import SPEECH_WINDOW_AUDIO_ROLES, validate_audio_request
 
 
 _BODY_NO_ACTION = "IB0"
@@ -29,6 +31,8 @@ class ActionEntry:
     token_ids: tuple[int, int]
     kind: str
     occupies_channels: tuple[str, ...] = ()
+    motion_definition: str = ""
+    speech_definition: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,12 +63,12 @@ class ActionCatalogRegistry:
         mapping_path: str | Path,
         full_mapping_path: str | Path,
         product_catalog_path: str | Path,
-        agent_policy_path: str | Path,
+        agent_policy_path: str | Path | None = None,
     ) -> None:
         current = _object(mapping_path)
         full = _object(full_mapping_path)
         product = _object(product_catalog_path)
-        policy = _object(agent_policy_path)
+        policy = _object(agent_policy_path) if agent_policy_path else {}
         self.catalog_version = str(product["action_catalog_version"])
         self.catalog_hash = str(product["action_catalog_hash"])
         self.mapping_version = str(current["mapping_version"])
@@ -96,7 +100,53 @@ class ActionCatalogRegistry:
         self._validate_artifacts()
 
     def resolve(self, request: ActionDecisionRequest) -> ResolvedCatalog:
-        context = _normalize_context(request.runtime_context)
+        profile = request.runtime_context.get("prompt_profile")
+        if request.requested_action is not None:
+            from .requested_action import parse_requested_action
+            parse_requested_action(request.requested_action)
+            if profile != PERSONA_AUDIO_PROFILE:
+                raise ValueError("requested_action requires persona-audio-window-v2")
+        if any(item.evidence_role in SPEECH_WINDOW_AUDIO_ROLES for item in request.media) and profile != PERSONA_AUDIO_PROFILE:
+            raise ValueError("avatar audio requires persona-audio-window-v2")
+        if profile in PERSONA_PROFILES:
+            if not isinstance(request.character_prompt, str) or not request.character_prompt.strip():
+                raise ValueError(f"{profile} requires a nonempty character_prompt")
+        if profile == PERSONA_AUDIO_PROFILE:
+            validate_audio_request(request)
+        if profile == PERSONA_WINDOW_PROFILE:
+            if request.runtime_context.get("decision_mode") == "speech_window" and request.channel is not DecisionChannel.BODY:
+                raise ValueError("speech windows currently select the body channel only")
+            if any(item.kind == "video" for item in request.media):
+                raise ValueError("persona-window-v1 expects preprocessed user images, not a video blob")
+            if sum(item.kind == "image" for item in request.media) > 5 or sum(item.kind == "audio" for item in request.media) > 1:
+                raise ValueError("persona-window-v1 permits at most five user frames and one raw audio")
+            if any(item.evidence_role != {"audio": "user_audio", "image": "user_camera"}.get(item.kind) for item in request.media):
+                raise ValueError("persona-window-v1 only accepts clearly identified user media")
+            if request.runtime_context.get("decision_mode") == "user_request" and not (
+                (request.text or "").strip() or any(item.kind == "audio" for item in request.media)
+            ):
+                raise ValueError("user_request requires original user text or audio")
+        context = _normalize_context(request.runtime_context, text_focus=request.avatar_current_text is not None)
+        if profile == PERSONA_AUDIO_PROFILE and request.channel is DecisionChannel.BODY:
+            if "last_dispatched_action" not in request.runtime_context:
+                raise ValueError("body audio decisions require last_dispatched_action (null if unknown)")
+            previous = request.runtime_context["last_dispatched_action"]
+            if previous is None:
+                context["last_dispatched_action"] = {"status": "unknown"}
+            else:
+                if not isinstance(previous, dict) or set(previous) != {"candidate_id", "status"}:
+                    raise ValueError("last_dispatched_action requires candidate_id and status")
+                cid = previous["candidate_id"]
+                status = previous["status"]
+                if not isinstance(cid, str) or self._product_channel.get(cid) is not DecisionChannel.BODY:
+                    raise ValueError("last_dispatched_action must identify a registered body action")
+                if not isinstance(status, str) or status not in {"sent", "running", "completed", "failed", "cancelled"}:
+                    raise ValueError("last_dispatched_action has invalid status")
+                entry = self._entry(cid)
+                context["last_dispatched_action"] = {
+                    "candidate_id": cid, "code": entry.code, "label": entry.label,
+                    "motion_definition": entry.motion_definition, "status": status,
+                }
         if request.reply_prefix:
             context.setdefault("reply_prefix", request.reply_prefix)
         agent_event = context.get("agent_event")
@@ -140,6 +190,13 @@ class ActionCatalogRegistry:
             if request.channel is DecisionChannel.BODY
             else (_EXPRESSION_KEEP, _UNSUPPORTED)
         )
+        if profile == PERSONA_AUDIO_PROFILE:
+            # The product requires a real body action on every recall, while
+            # expression recall may explicitly keep the current expression.
+            controls = ((_UNSUPPORTED,) if request.channel is DecisionChannel.BODY
+                        else (_EXPRESSION_KEEP, _UNSUPPORTED))
+            if request.channel_enabled and not request.prohibited and not entries:
+                raise ValueError(f"{request.channel.value} action selection requires at least one allowed real action")
         entries.extend(self._entry(candidate_id) for candidate_id in controls)
 
         required = context.get("required_action_candidate_id")
@@ -219,10 +276,12 @@ class ActionCatalogRegistry:
                 or raw.get("short_definition")
                 or ""
             ),
-            code=str(raw["output_text"]),
+            code=str(product.get("output_code", raw["output_text"])),
             token_ids=tuple(int(item) for item in raw["token_ids"]),
             kind=str(raw.get("entry_kind", "action")),
             occupies_channels=("face",) if candidate_id in _FACE_OCCUPYING_BODY_IDS else (),
+            motion_definition=str(product.get("short_definition") or raw.get("short_definition") or ""),
+            speech_definition=str(product.get("proactive_expression") or ""),
         )
 
     def _channel_for_mapping(self, candidate_id: str) -> DecisionChannel:
@@ -239,10 +298,59 @@ class ActionCatalogRegistry:
         missing = set(self._product_by_id) - set(self._full_mapping_by_id)
         if missing:
             raise ValueError(f"product candidates missing from full mapping: {sorted(missing)}")
+        for candidate_id, product in self._product_by_id.items():
+            if "output_code" not in product:
+                continue  # Older catalog exports remain readable.
+            code = product["output_code"]
+            full = self._full_mapping_by_id[candidate_id]
+            current = self._mapping_by_id.get(candidate_id)
+            if (not isinstance(code, str) or not code
+                    or code != full["output_text"]
+                    or (current is not None and code != current["output_text"])):
+                raise ValueError(f"catalog output_code differs from action mapping: {candidate_id}")
         for control in (_BODY_NO_ACTION, _EXPRESSION_KEEP, _UNSUPPORTED):
             entry = self._entry(control)
             if len(entry.token_ids) != 2:
                 raise ValueError(f"control {control} is not a two-token output")
+        self._validate_agent_bindings()
+
+    def _validate_agent_bindings(self) -> None:
+        """Reject policy/mapping mixtures before the service becomes healthy."""
+        for agent_event, binding in self._agent_bindings.items():
+            if not isinstance(agent_event, str) or not agent_event:
+                raise ValueError("agent action policy event names must be nonempty strings")
+            if not isinstance(binding, dict):
+                raise ValueError(f"agent action policy binding must be an object: {agent_event}")
+
+            injected_raw = binding.get("inject_candidate_ids", [])
+            if not isinstance(injected_raw, list):
+                raise ValueError(
+                    f"agent action policy inject_candidate_ids must be an array: {agent_event}"
+                )
+            injected = {str(candidate_id) for candidate_id in injected_raw}
+            missing = injected - set(self._full_mapping_by_id)
+            if missing:
+                raise ValueError(
+                    "agent action policy candidates missing from full mapping: "
+                    f"{agent_event}: {sorted(missing)}"
+                )
+
+            runtime_context = binding.get("runtime_context", {})
+            if not isinstance(runtime_context, dict):
+                raise ValueError(
+                    f"agent action policy runtime_context must be an object: {agent_event}"
+                )
+            registered_event = runtime_context.get("agent_event")
+            if registered_event is not None and registered_event != agent_event:
+                raise ValueError(
+                    f"agent action policy runtime_context event mismatch: {agent_event}"
+                )
+            required = runtime_context.get("required_action_candidate_id")
+            if required is not None and str(required) not in injected:
+                raise ValueError(
+                    "agent action policy required candidate must be injected: "
+                    f"{agent_event}: {required}"
+                )
 
 
 def _object(path: str | Path) -> dict[str, Any]:
@@ -268,14 +376,17 @@ def _ids(value: Any) -> set[str]:
     return {str(item) for item in value}
 
 
-def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
+def _normalize_context(value: Mapping[str, Any] | None, *, text_focus: bool = False) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
         raise ValueError("runtime_context must be an object")
     # These fields fence execution and idempotency, not model semantics. The
     # engine validates the release fields before resolving this catalog.
-    fences = {"expected_model_version", "expected_prompt_sha256", "identity_epoch", "input_revision"}
+    fences = {"expected_model_version", "expected_prompt_sha256", "identity_epoch", "input_revision",
+              "response_id", "window_index", "audio_start_ms", "input_source"}
+    if value.get("prompt_profile") == PERSONA_AUDIO_PROFILE:
+        fences |= {"persona_revision", "response_id", "output_epoch"}
     allowed = {
         "turn_origin", "trigger", "reply_status", "reply_prefix", "body_intent",
         "body_task", "visual_route", "scene_context", "scene_reply_guidance",
@@ -284,15 +395,35 @@ def _normalize_context(value: Mapping[str, Any] | None) -> dict[str, Any]:
         "entity_state", "script_state", "agent_event", "agent_task", "agent_phase",
         "tool_name", "tool_status", "display_state", "required_action_candidate_id",
         "required_action_semantics", "expression_priority", "prompt_profile",
+        "decision_mode", "speech_window",
     }
+    if value.get("prompt_profile") == PERSONA_AUDIO_PROFILE:
+        allowed.add("last_dispatched_action")
     unknown = sorted(set(value) - allowed - fences)
     if unknown:
         raise ValueError("unsupported runtime_context fields: " + ", ".join(unknown))
-    for key in ("identity_epoch", "input_revision"):
+    speech_window = None
+    if "decision_mode" in value or "speech_window" in value or value.get("prompt_profile") in PERSONA_PROFILES:
+        mode = value.get("decision_mode")
+        if mode not in DECISION_MODES or value.get("prompt_profile") not in PERSONA_PROFILES:
+            raise ValueError("window decisions require a versioned persona profile and valid mode")
+        if mode == "speech_window" and not text_focus:
+            speech_window = SpeechWindow.parse(value.get("speech_window"),
+                                               require_text=value.get("prompt_profile") != PERSONA_AUDIO_PROFILE)
+        elif "speech_window" in value:
+            raise ValueError("user_request must not contain a speech_window")
+    for key in ("identity_epoch", "input_revision", "window_index", "audio_start_ms"):
         if key in value and (type(value[key]) is not int or value[key] < 0):
             raise ValueError(f"runtime_context {key} must be a nonnegative integer")
-    return {str(key): item for key, item in value.items()
-            if key not in fences and item not in (None, "", [])}
+    if "input_source" in value and value["input_source"] not in {"user_reaction", "assistant_segment"}:
+        raise ValueError("runtime_context input_source is invalid")
+    if "response_id" in value and (not isinstance(value["response_id"],str) or len(value["response_id"])>256):
+        raise ValueError("runtime_context response_id is invalid")
+    result = {str(key): item for key, item in value.items()
+              if key not in fences and item not in (None, "", [])}
+    if speech_window is not None:
+        result["speech_window"] = speech_window.model_context()
+    return result
 
 
 def _validate_entries(entries: Iterable[ActionEntry]) -> None:

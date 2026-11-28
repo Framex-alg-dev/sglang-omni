@@ -30,6 +30,7 @@ env \
     SGLANG_OMNI_INTERNAL_MODEL_API=1 \
     SGLANG_OMNI_ACTION_WARMUP=0 \
     SGLANG_OMNI_GLOBAL_ACTION_PREWARM_BUDGET_S=0.001 \
+    SGLANG_OMNI_LOG_FULL_CHAT_INPUTS=1 \
     "$python_bin" -m sglang_omni.cli serve \
         --config "$project_root/deploy/config_reply_gpu.yaml" \
         --host 127.0.0.1 \

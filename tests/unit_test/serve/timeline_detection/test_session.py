@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from framex_event_policy.windows import DetectionWindow, WindowEvent
 
 from sglang_omni.serve.timeline_detection.contracts import (
     MediaKind,
-    ObservationEvent,
     TimelineDiscontinuity,
     TimelineMediaChunk,
     TimelineSessionStart,
@@ -110,22 +110,21 @@ async def test_reconnected_session_resumes_at_declared_next_sequence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_observations_that_cite_unsent_media() -> None:
+async def test_rejects_windows_that_cite_unsent_media() -> None:
     model = _Model()
-    model.observations = (
-        ObservationEvent(
-            observation_id="observation-1",
+    model.observations = DetectionWindow(
             session_id="session-1",
             identity_epoch=3,
             observer_epoch=4,
             stream_epoch=1,
-            event_type="E11",
-            summary="视线移开",
+            window_sequence=1,
             evidence_start_ms=20,
             evidence_end_ms=80,
             model_id=model.model_id,
             model_version=model.model_version,
-        ),
+            evidence_mode="audio_video",
+            audio_status="complete",
+            events=(WindowEvent(event_type="E11", summary="视线移开"),),
     )
     session = TimelineDetectionSession(_start(), model)
     await session.append(_chunk(1))
@@ -134,29 +133,28 @@ async def test_rejects_observations_that_cite_unsent_media() -> None:
 
 
 @pytest.mark.asyncio
-async def test_accepts_observation_from_the_current_media_chunk() -> None:
+async def test_accepts_window_from_the_current_media_chunk() -> None:
     model = _Model()
-    model.observations = (
-        ObservationEvent(
-            observation_id="observation-current",
+    model.observations = DetectionWindow(
             session_id="session-1",
             identity_epoch=3,
             observer_epoch=4,
             stream_epoch=1,
-            event_type="E6",
-            summary="起身",
+            window_sequence=1,
             evidence_start_ms=0,
             evidence_end_ms=40,
             model_id=model.model_id,
             model_version=model.model_version,
-        ),
+            evidence_mode="audio_video",
+            audio_status="complete",
+            events=(WindowEvent(event_type="E6", summary="起身"),),
     )
     session = TimelineDetectionSession(_start(), model)
 
     await session.append(_chunk(1))
-    observations = await session.next_observations()
+    window = await session.next_observations()
 
-    assert observations == model.observations
+    assert window == model.observations
     await session.close()
 
 

@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 from sglang_omni.serve.streaming_request import StreamedMedia
+from sglang_omni.serve.agent_prompt_snapshot import ActionPromptSnapshot
 
 
 class DecisionChannel(str, Enum):
@@ -33,6 +34,22 @@ class ActionDecisionRequest:
     prohibited: bool = False
     turn_origin: str = "user"
     media: tuple[StreamedMedia, ...] = ()
+    # Service-owned adapter flag, not accepted from the legacy wire protocol.
+    # Locally derived clip offsets must never look like executor timing evidence.
+    simple_audio: bool = False
+    # Service-owned text evidence; never parsed from the legacy wire contract.
+    avatar_current_text: str | None = None
+    avatar_history_text: str | None = None
+    # Explicit next-action request, never an extra catalog definition.
+    requested_action: dict[str, str] | None = None
+    # Agent-owned immutable rules. The service only renders request/catalog data.
+    prompt_snapshot: ActionPromptSnapshot | None = None
+    # The existing request_id remains the inference operation/cancellation key.
+    # These fields are logging-only and therefore excluded from idempotency.
+    trace_request_id: str | None = None
+    root_session_id: str | None = None
+    agent_session_id: str | None = None
+    trace_turn_id: str | None = None
 
 
 @dataclass(frozen=True)

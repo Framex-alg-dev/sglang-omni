@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import base64
+import csv
+import hashlib
+import io
 import json
 from pathlib import Path
 
+from framex_event_policy.windows import DetectionWindow
 from sglang_omni.serve.task_classification.service import _request_from_json
 from sglang_omni.serve.inference_gateway.app import _speculative_speech_hash
-from sglang_omni.serve.timeline_detection.contracts import ObservationEvent
 from sglang_omni.serve.timeline_detection.service import (
     _chunk_from_json,
-    _event_to_json,
     _start_from_json,
 )
 
@@ -23,6 +25,41 @@ FIXTURE = (
 
 def _fixture() -> dict:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def _timeline_snapshot(model_id: str) -> dict:
+    events = [{"code": f"E{index}", "name": f"event-{index}"} for index in range(96)]
+    registry = json.dumps({"events": events}, ensure_ascii=False, separators=(",", ":"))
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=(
+        "new_code", "event_name", "source_D97_code", "legacy_alias", "definition",
+    ), lineterminator="\n")
+    writer.writeheader()
+    writer.writerows({
+        "new_code": event["code"], "event_name": event["name"],
+        "source_D97_code": "", "legacy_alias": "", "definition": event["name"],
+    } for event in events)
+    texts = {
+        "system_prompt": "AGENT EVENT POLICY",
+        "event_registry_json": registry,
+        "event_codebook_csv": output.getvalue(),
+    }
+    return {
+        "consumer": "d_video_call.timeline.detection",
+        "release_id": "timeline-contract-test",
+        "bundle_sha256": "b" * 64,
+        "binding": {
+            "assembly_contract": "d-timeline-detection-v1",
+            "output_protocol": "event1115-code-v1",
+            "model_id": model_id,
+            "model_version": "fixture-weights",
+        },
+        **texts,
+        "item_sha256": {
+            key: hashlib.sha256(value.encode()).hexdigest()
+            for key, value in texts.items()
+        },
+    }
 
 
 def test_sg_accepts_classification_fixture() -> None:
@@ -44,18 +81,18 @@ def test_sg_accepts_classification_fixture() -> None:
     )
 
 
-def test_sg_accepts_timeline_fixture_and_emits_same_observation() -> None:
+def test_sg_accepts_timeline_v3_fixture_and_emits_same_window() -> None:
     timeline = _fixture()["timeline_detection"]
-    start = _start_from_json(timeline["session_start"])
+    start_wire = dict(timeline["session_start"])
+    start_wire["prompt_snapshot"] = _timeline_snapshot(start_wire["model_id"])
+    start = _start_from_json(start_wire)
     payload = base64.b64decode(timeline["media_payload_base64"], validate=True)
     chunk = _chunk_from_json(timeline["media_header"], payload)
-    event_values = dict(timeline["observation"])
-    event_values.pop("type")
-    event = ObservationEvent(**event_values)
+    window = DetectionWindow.from_wire(timeline["window_result"])
 
     assert start.observer_epoch == 4
     assert chunk.payload == b"jpeg-frame"
-    assert _event_to_json(event) == timeline["observation"]
+    assert window.to_wire() == timeline["window_result"]
 
 
 def test_sg_accepts_speculative_speech_generation_fence_fixture() -> None:

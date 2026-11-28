@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from sglang_omni.utils.framex_service_logs import current_service_log_context
 
 from sglang_omni.serve.inference_gateway import app as gateway_module
 from sglang_omni.serve.inference_gateway import __main__ as gateway_main
@@ -48,6 +49,7 @@ class _Upstream:
             return
         message = json.loads(value)
         if message["type"] == "request.start":
+            self.trace_context = current_service_log_context()
             self.request_payload = message.get("payload")
             self.request_id = message["request_id"]
             await self.events.put(
@@ -62,6 +64,27 @@ class _Upstream:
         elif message["type"] == "input.media":
             self.media_header = message
         elif message["type"] == "request.commit":
+            if (
+                isinstance(self.request_payload, dict)
+                and self.request_payload.get("emit_model_input")
+            ):
+                await self.events.put(
+                    json.dumps(
+                        {
+                            "type": "response.model_input",
+                            "request_id": message["request_id"],
+                            "model_input": {
+                                "request_id": message["request_id"],
+                                "request": {
+                                    "messages": [
+                                        {"role": "user", "content": "hello"}
+                                    ]
+                                },
+                                "media": [],
+                            },
+                        }
+                    )
+                )
             if isinstance(self.request_payload, dict) and self.request_payload.get("stream"):
                 await self.events.put(
                     json.dumps(
@@ -129,6 +152,22 @@ def test_bearer_uses_first_configured_fallback(monkeypatch) -> None:
             "SGLANG_OMNI_INTERNAL_MODEL_TOKEN",
         ),
     ) == "Bearer action-token"
+
+
+def test_gateway_main_preserves_framex_logging_handlers(monkeypatch) -> None:
+    observed = {}
+    monkeypatch.setattr(gateway_main, "configure_service_logging", lambda *_args: None)
+    monkeypatch.setattr(gateway_main, "emit_service_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gateway_main, "create_inference_gateway_app", lambda _config: object())
+    monkeypatch.setattr(
+        gateway_main.uvicorn,
+        "run",
+        lambda _app, **kwargs: observed.update(kwargs),
+    )
+
+    gateway_main.main()
+
+    assert observed["log_config"] is None
 
 
 def test_reply_speech_envelope_accepts_marker_without_newline() -> None:
@@ -280,7 +319,13 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
 
     with client.websocket_connect("/v1/inference-session") as socket:
         socket.send_json(
-            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
+            {
+                "type": "session.open",
+                "contract_version": 4,
+                "session_id": "s1",
+                "root_session_id": "root-1",
+                "agent_session_id": "agent-1",
+            }
         )
         assert socket.receive_json()["type"] == "session.ready"
         socket.send_json(
@@ -310,15 +355,24 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
             "duplicate": False,
         }
         for request_id, stage in (("r1", "classifier"), ("r2", "brain")):
-            socket.send_json(
-                {
-                    "type": "stage.request",
-                    "request_id": request_id,
-                    "stage": stage,
-                    "payload": {},
-                    "media_refs": ["frame-1"],
-                }
-            )
+            log_context = {
+                "request_id": f"trace-{request_id}",
+                "root_session_id": "root-1",
+                "turn_id": "turn-1",
+                "agent_session_id": "agent-1",
+            }
+            request = {
+                "type": "stage.request",
+                "request_id": request_id,
+                "stage": stage,
+                "payload": {},
+                "media_refs": ["frame-1"],
+            }
+            if stage == "classifier":
+                request["log_context"] = log_context
+            else:
+                request["payload"]["log_context"] = log_context
+            socket.send_json(request)
             assert socket.receive_json()["type"] == "stage.accepted"
             completed = socket.receive_json()
             assert completed["type"] == "stage.completed"
@@ -334,6 +388,17 @@ def test_session_registers_media_once_and_routes_multiple_stages(monkeypatch) ->
             if isinstance(item, str) and json.loads(item)["type"] == "input.media"
         )
         assert request_start["contract_version"] == 2
+        assert upstream.trace_context.request_id == f"trace-{request_start['request_id']}"
+        assert upstream.trace_context.root_session_id == "root-1"
+        assert upstream.trace_context.agent_session_id == "agent-1"
+        assert upstream.trace_context.turn_id == "turn-1"
+        if request_start["request_id"] == "r2":
+            assert "log_context" not in request_start["payload"]
+        else:
+            assert request_start["payload"]["log_context"] == {
+                "request_id": "trace-r1", "root_session_id": "root-1",
+                "turn_id": "turn-1", "agent_session_id": "agent-1",
+            }
         assert media_header["evidence_role"] == "user_camera"
 
 
@@ -357,15 +422,20 @@ def test_action_stage_injects_its_channel(monkeypatch) -> None:
                 "type": "stage.request",
                 "request_id": "body-1",
                 "stage": "body",
-                "payload": {"turn_id": "t1"},
+                "payload": {"turn_id": "t1", "log_context": {"request_id": "trace-body-1"}},
                 "media_refs": [],
             }
         )
         assert socket.receive_json()["type"] == "stage.accepted"
         assert socket.receive_json()["type"] == "stage.completed"
 
+    from sglang_omni.serve.action_decision.service import _adopt_stream_log_request_id
+
     request_start = json.loads(upstreams[0].sent[0])
-    assert request_start["payload"]["channel"] == "body"
+    payload = request_start["payload"]
+    assert payload["channel"] == "body"
+    _adopt_stream_log_request_id(payload, request_start["request_id"], preserve_trace_id=True)
+    assert payload["log_context"]["request_id"] == upstreams[0].trace_context.request_id == "trace-body-1"
 
 
 def test_reply_stage_overwrites_cache_owner_with_gateway_session(monkeypatch) -> None:
@@ -400,6 +470,45 @@ def test_reply_stage_overwrites_cache_owner_with_gateway_session(monkeypatch) ->
 
     request_start = json.loads(upstreams[0].sent[0])
     assert request_start["payload"]["session_instance_id"] == "s1"
+
+
+def test_reply_stage_forwards_exact_model_input_event(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gateway_module.websockets,
+        "connect",
+        lambda *_args, **_kwargs: _Upstream(),
+    )
+    client = TestClient(create_inference_gateway_app(_config()))
+    with client.websocket_connect("/v1/inference-session") as socket:
+        socket.send_json(
+            {"type": "session.open", "contract_version": 4, "session_id": "s1"}
+        )
+        socket.receive_json()
+        socket.send_json(
+            {
+                "type": "stage.request",
+                "request_id": "reply-input-1",
+                "stage": "reply",
+                "payload": {"emit_model_input": True},
+                "media_refs": [],
+            }
+        )
+        assert socket.receive_json()["type"] == "stage.accepted"
+        model_input = socket.receive_json()
+        assert socket.receive_json()["type"] == "stage.completed"
+
+    assert model_input == {
+        "type": "stage.model_input",
+        "request_id": "reply-input-1",
+        "stage": "reply",
+        "model_input": {
+            "request_id": "reply-input-1",
+            "request": {
+                "messages": [{"role": "user", "content": "hello"}]
+            },
+            "media": [],
+        },
+    }
 
 
 def test_reply_reserves_speculation_id_until_stage_finishes(monkeypatch) -> None:
@@ -535,7 +644,7 @@ def test_speech_request_uses_one_whole_text_synthesis(monkeypatch) -> None:
             instances.append(self)
 
         async def synthesize(
-            self, *, text, voice, instruction, audio_sink
+            self, *, text, voice, instruction, audio_sink, **_log_context
         ):
             self.calls.append((text, voice, instruction))
             await audio_sink(b"\x01\x00" * 2)
@@ -614,7 +723,9 @@ def test_reply_speculation_buffers_until_matching_commit(monkeypatch) -> None:
         def __init__(self, _config):
             pass
 
-        async def synthesize(self, *, text, voice, instruction, audio_sink):
+        async def synthesize(
+            self, *, text, voice, instruction, audio_sink, **_log_context
+        ):
             assert (text, voice, instruction) == ("你好", "voice-1", "自然地说")
             await audio_sink(b"\x01\x00")
             await audio_sink(b"\x02\x00")
@@ -700,7 +811,9 @@ def test_adaptive_plain_speculation_uses_one_whole_text_request_for_short_reply(
         def __init__(self, _config):
             pass
 
-        async def synthesize(self, *, text, voice, instruction, audio_sink):
+        async def synthesize(
+            self, *, text, voice, instruction, audio_sink, **_log_context
+        ):
             speech_calls.append((text, voice, instruction))
             await audio_sink(b"\x01\x00")
             return SimpleNamespace(
@@ -1071,3 +1184,62 @@ def test_streaming_speculation_session_budget_fails_closed(monkeypatch) -> None:
     assert error["type"] == "speech.error"
     assert error["code"] == "tts_failed"
     assert error["retryable"] is True
+
+
+def test_upstream_errors_are_failed_dependencies_without_success(monkeypatch):
+    class ErrorUpstream(_Upstream):
+        async def send(self, value):
+            if isinstance(value, str) and json.loads(value)["type"] == "request.commit":
+                await self.events.put(json.dumps({"type": "error", "code": failure_code,
+                    "detail": "controlled rejection"}))
+                return
+            await super().send(value)
+    for failure_code, expected_status in (("invalid_request", 422), ("overloaded", 429), ("timeout", 504)):
+        emitted = []
+        monkeypatch.setattr(gateway_module.websockets, "connect", lambda *a, **kw: ErrorUpstream())
+        monkeypatch.setattr(gateway_module, "emit_service_event", lambda *a, **kw: emitted.append((a, kw)))
+        with TestClient(create_inference_gateway_app(_config())).websocket_connect("/v1/inference-session") as socket:
+            socket.send_json({"type": "session.open", "contract_version": 4, "session_id": "error-test"})
+            assert socket.receive_json()["type"] == "session.ready"
+            socket.send_json({"type": "stage.request", "request_id": "rejected", "stage": "brain",
+                "payload": {}, "media_refs": [], "log_context": {"request_id": "trace-error"}})
+            assert socket.receive_json()["type"] == "stage.accepted"
+            terminal = socket.receive_json()
+            assert terminal["type"] == "stage.error"
+            assert terminal["code"] == failure_code
+            assert terminal["retryable"] == (failure_code != "invalid_request")
+        calls = [kw for args, kw in emitted if len(args) > 1 and args[1] == "dependency.call"]
+        assert len(calls) == 1
+        assert calls[0]["status"] == expected_status
+        assert calls[0]["peer"] == "omni_task_brain"
+
+
+def test_invalid_stage_log_context_has_terminal_and_leaves_media_evictable():
+    client = TestClient(create_inference_gateway_app(_config(max_media_items=1)))
+    with client.websocket_connect("/v1/inference-session") as socket:
+        socket.send_json({"type": "session.open", "contract_version": 4, "session_id": "s1"})
+        socket.receive_json()
+
+        def put(media_id):
+            raw = media_id.encode()
+            socket.send_json({
+                "type": "media.put", "media_id": media_id, "kind": "image",
+                "start_ms": 0, "end_ms": 100, "encoding": "image/jpeg",
+                "checksum": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "payload_bytes": len(raw), "evidence_role": "user_camera",
+            })
+            socket.send_bytes(raw)
+
+        put("frame-1")
+        assert socket.receive_json()["type"] == "media.ack"
+        socket.send_json({
+            "type": "stage.request", "request_id": "r1", "stage": "body",
+            "payload": {"log_context": []}, "media_refs": ["frame-1"],
+        })
+        error = socket.receive_json()
+        assert (error["type"], error["request_id"], error["code"]) == (
+            "stage.error", "r1", "invalid_request",
+        )
+        put("frame-2")
+        assert socket.receive_json() == {"type": "media.evicted", "media_id": "frame-1"}
+        assert socket.receive_json()["type"] == "media.ack"

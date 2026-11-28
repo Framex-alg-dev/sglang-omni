@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from .catalog import EVENT_IDS, OCCURRENCE_EVENT_IDS, P_TO_EVENT
-from .prompt import ALIAS_TO_P
+from .catalog import ALIAS_TO_P, EVENT_IDS, OCCURRENCE_EVENT_IDS, P_TO_EVENT
 
 
 class ModelOutputError(ValueError):

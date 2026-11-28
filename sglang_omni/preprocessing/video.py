@@ -324,8 +324,11 @@ def load_video_path(
     if total_pixels is not None:
         ele["total_pixels"] = int(total_pixels)
     backend = qwen_vision.get_video_reader_backend()
+    keep_timeline_frames = os.environ.get("SGLANG_OMNI_TIMELINE_MODEL_PROTOCOL") == "direct-1115-v1"
     try:
-        if backend == "torchvision" and not callable(
+        if keep_timeline_frames:
+            video, sample_fps = _read_video_pyav(ele, keep_all_frames=True)
+        elif backend == "torchvision" and not callable(
             getattr(torchvision_io, "read_video", None)
         ):
             # torchvision 0.24+ can be installed without the legacy video I/O
@@ -336,7 +339,7 @@ def load_video_path(
         else:
             video, sample_fps = qwen_vision.VIDEO_READER_BACKENDS[backend](ele)
     except Exception as backend_exc:
-        if backend == "torchvision":
+        if keep_timeline_frames or backend == "torchvision":
             raise VideoDecodeError(
                 f"Failed to decode video path={path}; video reader failed with "
                 f"{type(backend_exc).__name__}: {backend_exc}"
@@ -363,11 +366,7 @@ def load_video_path(
     )
     max_pixels_supposed = ele.get("max_pixels", max_pixels)
     max_pixels = min(max_pixels_supposed, max_pixels)
-    # Opt-in only for the dedicated Partial30 service. Other model services
-    # retain qwen-vl-utils' default patch grid.
-    image_factor = int(
-        os.environ.get("PARTIAL30_VIDEO_PATCH_FACTOR", qwen_vision.IMAGE_FACTOR)
-    )
+    image_factor = int(os.environ.get("PARTIAL30_VIDEO_PATCH_FACTOR", qwen_vision.IMAGE_FACTOR))
     if "resized_height" in ele and "resized_width" in ele:
         resized_height, resized_width = qwen_vision.smart_resize(
             ele["resized_height"],
@@ -391,7 +390,9 @@ def load_video_path(
     return video, sample_fps
 
 
-def _read_video_pyav(ele: dict[str, Any]) -> tuple[torch.Tensor, float]:
+def _read_video_pyav(
+    ele: dict[str, Any], *, keep_all_frames: bool = False
+) -> tuple[torch.Tensor, float]:
     """Decode through PyAV with qwen-vl-utils-compatible frame sampling."""
 
     path = str(ele["video"])
@@ -408,6 +409,10 @@ def _read_video_pyav(ele: dict[str, Any]) -> tuple[torch.Tensor, float]:
         raise ValueError("PyAV video stream contains no frames")
 
     total_frames = len(decoded)
+    if keep_all_frames:
+        if not 2 <= total_frames <= 20 or abs(video_fps - 2.0) > 0.01:
+            raise ValueError("1115_v1 expects an already sampled 2 FPS window of 2–20 frames")
+        return torch.stack(decoded).permute(0, 3, 1, 2), video_fps
     start_frame, end_frame, selected_range = qwen_vision.calculate_video_frame_range(
         ele,
         total_frames,

@@ -19,7 +19,7 @@ def test_old_editor_and_session_routes_are_absent_while_shared_routes_remain():
  assert '/v1/realtime' not in paths
  assert '/v1/chat/completions/realtime' in paths and '/v1/performance-control' in paths
  assert '/v1/audio/speech' in paths
- assert not (Path(__file__).resolve().parents[4]/'sglang_omni/serve/realtime/__init__.py').exists()
+ assert not (Path(__file__).resolve().parents[3]/'sglang_omni/serve/realtime/__init__.py').exists()
 
 
 def test_current_host_reply_language_hint_remains_supported_without_profile_injection():

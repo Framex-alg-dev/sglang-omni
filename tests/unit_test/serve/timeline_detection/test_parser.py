@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
 from sglang_omni.serve.timeline_detection.parser import (
     ModelOutputError,
     parse_event_output,
 )
-from sglang_omni.serve.timeline_detection.prompt import (
+from sglang_omni.serve.timeline_detection.catalog import (
     ALIAS_TO_P,
     EVENT_IDS,
-    SYSTEM_PROMPT,
 )
 
 
@@ -20,7 +17,6 @@ def test_catalog_contains_50_e_events_and_keeps_e27_retired() -> None:
     assert EVENT_IDS[:3] == ("E0", "E1", "E2")
     assert "E27" not in EVENT_IDS
     assert EVENT_IDS[-1] == "E50"
-    assert "转身并背对" in SYSTEM_PROMPT
 
 
 def test_maps_v25_single_token_aliases_to_unique_e_codes() -> None:
@@ -33,13 +29,6 @@ def test_v25_thumbs_up_and_ok_are_both_mapped_to_current_ok_event() -> None:
     assert parse_event_output("O") == ["E14"]
     assert parse_event_output("P") == ["E14"]
     assert parse_event_output("P13,P14") == ["E14"]
-
-
-def test_model_prompt_is_byte_exact_v25_frozen_profile() -> None:
-    assert len(SYSTEM_PROMPT) == 8544
-    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == (
-        "9b14e51306c60b4d15d8be71da2f22f8d23af60457edee86909573e06f704745"
-    )
 
 
 def test_accepts_transitional_p_and_future_e_outputs() -> None:

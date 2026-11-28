@@ -31,6 +31,16 @@ from sglang_omni.serve.streaming_request import (
     receive_streamed_request,
     run_until_websocket_disconnect,
 )
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
+from sglang_omni.serve.request_log_context import (
+    model_request_log,
+    payload_request_log_context,
+    websocket_request_log,
+)
+from sglang_omni.utils.framex_service_logs import (
+    emit_service_event,
+    new_request_id,
+)
 
 
 PERFORMANCE_CONTROL_TOKEN_ENV = "SGLANG_OMNI_PERFORMANCE_CONTROL_TOKEN"
@@ -92,6 +102,7 @@ class PerformanceControlRequest(BaseModel):
     action_profile: dict[str, object] = Field(default_factory=dict)
     sample_rate: int = Field(default=16_000, ge=8_000, le=48_000)
     micro_batch_size: int = Field(default=64, ge=1, le=256)
+    log_context: dict[str, object] | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_turn(self) -> "PerformanceControlRequest":
@@ -216,6 +227,7 @@ def register_performance_control(
     app: FastAPI,
     *,
     token: str | None = None,
+    service: str = "omni-reply-worker",
 ) -> None:
     """Mount a private endpoint backed by the native PerformancePipeline."""
 
@@ -226,7 +238,17 @@ def register_performance_control(
     ).strip()
 
     from sglang_omni.serve.performance_prompt_debug import install_performance_debug
-    install_performance_debug(app, token=configured_token, response_factory=_performance_response)
+    install_performance_debug(
+        app,
+        token=configured_token,
+        response_factory=lambda target, request, **kwargs: _performance_response(
+            target,
+            request,
+            service=service,
+            **kwargs,
+        ),
+    )
+    install_framex_http_logging(app, service=service)
 
     @app.post(
         "/v1/performance-control",
@@ -246,10 +268,11 @@ def register_performance_control(
         if not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="unauthorized")
 
-        return await _performance_response(app, request)
+        return await _performance_response(app, request, service=service)
 
     @app.websocket("/v1/performance-control/realtime")
     async def performance_control_realtime(websocket: WebSocket) -> None:
+        public_request_id = new_request_id()
         try:
             if not configured_token:
                 await websocket.accept()
@@ -269,6 +292,7 @@ def register_performance_control(
             )
             if streamed is None:
                 return
+            public_request_id = streamed.request_id
             payload = dict(streamed.payload)
             audios = [
                 media_data_uri(item)
@@ -288,23 +312,51 @@ def register_performance_control(
                 if item.kind in {"image", "video"}
             ]
             request = PerformanceControlRequest.model_validate(payload)
-            response = await run_until_websocket_disconnect(
-                websocket,
-                _performance_response(app, request),
-                abort=lambda: app.state.client.abort(request.request_id),
+            context = payload_request_log_context(
+                {"log_context": request.log_context},
+                fallback_request_id=public_request_id,
+                fallback_root_session_id=request.session_id,
+                fallback_turn_id=request.turn_id,
             )
-            await websocket.send_json(
-                {
-                    "type": "response.completed",
-                    "request_id": streamed.request_id,
-                    "response": response.model_dump(),
-                }
-            )
+            async with websocket_request_log(
+                service,
+                "performance_control_realtime",
+                context,
+                operation_id=request.request_id,
+                logger_name=__name__,
+            ):
+                response = await run_until_websocket_disconnect(
+                    websocket,
+                    _performance_response(app, request, service=service),
+                    abort=lambda: app.state.client.abort(request.request_id),
+                )
+                await websocket.send_json(
+                    {
+                        "type": "response.completed",
+                        "request_id": streamed.request_id,
+                        "response": response.model_dump(),
+                    }
+                )
         except WebSocketDisconnect:
             return
         except ValueError as exc:
+            emit_service_event(
+                service,
+                "ws.request.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=public_request_id,
+                operation="performance_control",
+                status=400,
+                error_type=type(exc).__name__,
+            )
             await websocket.send_json(
-                {"type": "error", "code": "invalid_request", "detail": str(exc)}
+                {
+                    "type": "error",
+                    "request_id": public_request_id,
+                    "code": "invalid_request",
+                    "detail": str(exc),
+                }
             )
             await websocket.close(code=4400)
 
@@ -312,43 +364,59 @@ def register_performance_control(
 async def _performance_response(
     app: FastAPI,
     request: PerformanceControlRequest,
-    *, prompt_snapshot: dict[str, str] | None = None,
+    *,
+    service: str = "omni-reply-worker",
+    prompt_snapshot: dict[str, str] | None = None,
 ) -> PerformanceControlResponse:
-    pipeline = _StatelessPerformancePipeline(
-        client=app.state.client,
-        request=request,
+    context = payload_request_log_context(
+        {"log_context": request.log_context},
+        fallback_request_id=request.request_id,
+        fallback_root_session_id=request.session_id,
+        fallback_turn_id=request.turn_id,
+        fallback_agent_session_id=request.session_id,
     )
-    runtime = getattr(app.state, 'performance_prompt_runtime', None)
-    if prompt_snapshot is not None:
-        pipeline._prompt_snapshot = dict(prompt_snapshot)
-    elif runtime is not None:
-        pipeline._prompt_snapshot = runtime.rules
-    degraded = False
-    try:
-        decision = await pipeline.decide(request)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # Match the Session Realtime fail-soft policy: expression becomes
-        # a no-op and speech uses the neutral language-specific instruction.
-        logger.exception(
-            "performance control failed; using staging neutral fallback",
-            extra={"request_id": request.request_id},
+    async with model_request_log(
+        service,
+        "performance_control",
+        context,
+        operation_id=request.request_id,
+        logger_name=__name__,
+    ):
+        pipeline = _StatelessPerformancePipeline(
+            client=app.state.client,
+            request=request,
         )
-        decision = pipeline._default_performance_decision()
-        degraded = True
+        runtime = getattr(app.state, 'performance_prompt_runtime', None)
+        if prompt_snapshot is not None:
+            pipeline._prompt_snapshot = dict(prompt_snapshot)
+        elif runtime is not None:
+            pipeline._prompt_snapshot = runtime.rules
+        degraded = False
+        try:
+            decision = await pipeline.decide(request)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Match the Session Realtime fail-soft policy: expression becomes
+            # a no-op and speech uses the neutral language-specific instruction.
+            logger.exception(
+                "performance control failed; using staging neutral fallback",
+                extra={"request_id": request.request_id},
+            )
+            decision = pipeline._default_performance_decision()
+            degraded = True
 
-    expression_id = (
-        str(decision.expression.get("expression_id"))
-        if decision.expression is not None
-        else None
-    )
-    return PerformanceControlResponse(
-        request_id=request.request_id,
-        request_scope=decision.request_scope,
-        expression_id=expression_id,
-        expression_unsupported=decision.expression_unsupported,
-        tts_instruction=decision.tts_instruction,
-        degraded=degraded,
-        elapsed_ms=decision.elapsed_ms,
-    )
+        expression_id = (
+            str(decision.expression.get("expression_id"))
+            if decision.expression is not None
+            else None
+        )
+        return PerformanceControlResponse(
+            request_id=request.request_id,
+            request_scope=decision.request_scope,
+            expression_id=expression_id,
+            expression_unsupported=decision.expression_unsupported,
+            tts_instruction=decision.tts_instruction,
+            degraded=degraded,
+            elapsed_ms=decision.elapsed_ms,
+        )

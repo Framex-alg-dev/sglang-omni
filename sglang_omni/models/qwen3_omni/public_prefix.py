@@ -10,22 +10,19 @@ from sglang_omni.models.qwen3_omni.global_action_catalog import load_runtime_act
 # Public prompts owned by services outside the action catalog are approved by
 # exact content digest. A prompt edit fails closed until its new digest is
 # reviewed here, preventing caller-provided system text from entering the
-# cross-session KV namespace. This digest is the turn-router v5 fixed-candidate
-# scoring prompt assembled by task_classification.client_model.
+# cross-session KV namespace.
 _PUBLISHED_EXTERNAL_PROMPT_SHA256 = frozenset(
     {
         # Partial30 checkpoint-1750 frozen training system prompt, stripped.
         "21a42acede3d203d0839936f0f113a519f427175d9129f12fb738f30392c512b",
         # Exact training bytes, including the final newline.
         "dae551e6bb93ab2d007f402bcc6157873e746c149aa4d1d46f8241e2198b3e17",
-        # Turn-router v5 fixed-candidate scoring prompt.
-        "ee2921ee7b1be5518c0ff8dd545d76e1b966c3e32d2c65787e7a54b8ec9da545",
         # Timeline detection V25 frozen 49-event system prompt. Timeline
         # requests may share only this exact system-message KV prefix; all
         # window text, image/audio evidence, and generated tokens stay private.
         "9b14e51306c60b4d15d8be71da2f22f8d23af60457edee86909573e06f704745",
-        # Timeline detection E50 direct checkpoint-1500 system prompt. This is
-        # the exact stripped content deployed by gpu4-timeline.env; the video,
+        # Timeline detection E50 direct checkpoint-1500 system prompt. Agent
+        # supplies these exact reviewed bytes in its immutable snapshot; video,
         # audio, dynamic H+C window text and generated tokens remain private.
         "ccd76772db751450205dae0f82beea877f0bec5f4c0d1d98bf03ef1feef90a44",
     }

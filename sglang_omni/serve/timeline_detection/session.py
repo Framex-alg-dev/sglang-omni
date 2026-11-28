@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from framex_event_policy.windows import DetectionWindow
+
+from sglang_omni.serve.request_log_context import RequestLogContext
+
 from .contracts import (
-    ObservationEvent,
     TimelineDiscontinuity,
     TimelineMediaChunk,
     TimelineSessionStart,
@@ -20,7 +23,7 @@ class TimelineDetectionModel(Protocol):
 
     async def append(self, chunk: TimelineMediaChunk) -> None: ...
 
-    async def next_observations(self) -> tuple[ObservationEvent, ...]: ...
+    async def next_observations(self) -> DetectionWindow: ...
 
     async def discontinuity(self, event: TimelineDiscontinuity) -> None: ...
 
@@ -57,14 +60,17 @@ class TimelineDetectionSession:
         self._last_sequence = chunk.sequence
         self._max_media_end_ms = accepted_media_end_ms
 
-    async def next_observations(self) -> tuple[ObservationEvent, ...]:
-        observations = await self._model.next_observations()
-        for observation in observations:
-            self._validate_observation(
-                observation,
-                accepted_media_end_ms=self._max_media_end_ms,
-            )
-        return observations
+    async def next_observations(self) -> DetectionWindow:
+        window = await self._model.next_observations()
+        if not isinstance(window, DetectionWindow):
+            raise ValueError("timeline v3 model must return a detection window")
+        self._validate_window(window)
+        return window
+
+    @property
+    def output_log_context(self) -> RequestLogContext | None:
+        """Only the output consumer advances this identity, alongside dequeue."""
+        return getattr(self._model, "output_log_context", None)
 
     async def discontinuity(self, event: TimelineDiscontinuity) -> None:
         await self.start()
@@ -100,19 +106,15 @@ class TimelineDetectionSession:
         if chunk.sequence != self._last_sequence + 1:
             raise ValueError("timeline chunks must be contiguous")
 
-    def _validate_observation(
-        self,
-        event: ObservationEvent,
-        *,
-        accepted_media_end_ms: int,
-    ) -> None:
-        if event.session_id != self._start.session_id:
-            raise ValueError("observation belongs to another session")
-        if event.identity_epoch != self._start.identity_epoch:
-            raise ValueError("observation has a stale identity epoch")
-        if event.observer_epoch != self._start.observer_epoch:
-            raise ValueError("observation has a stale observer epoch")
-        if event.stream_epoch != self._stream_epoch:
-            raise ValueError("observation has a stale stream epoch")
-        if event.evidence_end_ms > accepted_media_end_ms:
-            raise ValueError("observation cites media that the service has not received")
+    def _validate_window(self, window: DetectionWindow) -> None:
+        if (
+            window.session_id != self._start.session_id
+            or window.identity_epoch != self._start.identity_epoch
+            or window.observer_epoch != self._start.observer_epoch
+            or window.stream_epoch != self._stream_epoch
+        ):
+            raise ValueError("raw detection window has a stale session or epoch")
+        if window.model_id != self._model.model_id or window.model_version != self._model.model_version:
+            raise ValueError("raw detection window has a different model")
+        if window.evidence_end_ms > self._max_media_end_ms:
+            raise ValueError("raw detection window cites media that the service has not received")

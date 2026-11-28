@@ -101,6 +101,8 @@ class GatewaySpeechSynthesizer:
         voice: str,
         instruction: str,
         audio_sink: AudioSink,
+        request_id: str | None = None,
+        root_session_id: str | None = None,
     ) -> GatewaySpeechResult:
         if not text.strip() or not voice.strip():
             raise ValueError("gateway speech text and voice are required")
@@ -116,6 +118,11 @@ class GatewaySpeechSynthesizer:
         emitted_bytes = 0
         chunk_count = 0
         provider_response_id: str | None = None
+        headers: dict[str, str] = {}
+        if request_id:
+            headers["X-Request-ID"] = request_id
+        if root_session_id:
+            headers["X-Root-Session-ID"] = root_session_id
 
         async def emit(frame: bytes) -> None:
             nonlocal emitted_bytes, chunk_count
@@ -128,6 +135,7 @@ class GatewaySpeechSynthesizer:
                 "POST",
                 self._config.endpoint,
                 json=payload,
+                headers=headers,
             ) as response:
                 provider_response_id = response.headers.get("x-request-id") or None
                 if response.status_code != 200:

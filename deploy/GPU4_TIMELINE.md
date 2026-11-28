@@ -13,7 +13,7 @@ describes the legacy default profile.
 | --- | --- | --- |
 | timeline observer | `WS /v1/timeline` | video-driven sliding-window inference every 3 seconds |
 
-Timeline contract v2 treats video as the window clock. A complete synchronized
+Timeline contract v3 treats video as the window clock. A complete synchronized
 audio span is attached when available; after a 350 ms grace period, missing,
 gapped, or lagging audio produces a pure-image request instead of blocking the
 window. The service never synthesizes silence for missing audio.

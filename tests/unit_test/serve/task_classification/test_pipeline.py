@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
+from sglang_omni.serve.agent_prompt_snapshot import decode_router_prompt_snapshot
 from sglang_omni.serve.task_classification.contracts import (
+    CONTRACT_VERSION,
     BrainRoute,
     MediaDirective,
     OutputDirective,
@@ -18,7 +22,7 @@ from sglang_omni.serve.task_classification.pipeline import (
 
 class _Model:
     model_id = "turn-router"
-    model_version = "v0.6"
+    model_version = "v1.0"
 
     def __init__(self, output: str) -> None:
         self.output = output
@@ -26,6 +30,30 @@ class _Model:
     async def classify(self, request: TaskClassificationRequest) -> str:
         del request
         return self.output
+
+
+def _prompt_snapshot():
+    rules = {
+        "system_prompt": "Agent Router",
+        "mcp_scope": "MCP scope",
+        "multimodal_scope": "multimodal scope",
+    }
+    return decode_router_prompt_snapshot({
+        "consumer": "sglang_omni.router.v1_0",
+        "release_id": "router-release-v1",
+        "bundle_sha256": "a" * 64,
+        "binding": {
+            "assembly_contract": "turn-router-v1.0",
+            "output_protocol": "turn-router-code-v1.0",
+            "model_id": "turn-router",
+            "model_version": "v1.0",
+        },
+        **rules,
+        "item_sha256": {
+            key: hashlib.sha256(value.encode()).hexdigest()
+            for key, value in rules.items()
+        },
+    })
 
 
 def _request(
@@ -44,6 +72,8 @@ def _request(
         media=(),
         router_profile=router_profile,
         has_active_agent=has_active_agent,
+        contract_version=CONTRACT_VERSION,
+        prompt_snapshot=_prompt_snapshot(),
     )
 
 
@@ -70,6 +100,7 @@ async def test_maps_the_four_codes_to_capability_requirements(
     assert result.task_directive is TaskDirective.KEEP
     assert result.media_directive is MediaDirective.NONE
     assert result.request_cue is None
+    assert result.contract_version == CONTRACT_VERSION
 
 
 @pytest.mark.asyncio
@@ -79,46 +110,13 @@ async def test_rejects_everything_except_one_exact_code(raw: str) -> None:
         await TaskClassificationPipeline(_Model(raw)).classify(_request())
 
 
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("raw", "needs_multimodal"),
-    [("4", False), ("5", True)],
-)
-async def test_v11_accepts_active_task_relation_codes(
-    raw: str, needs_multimodal: bool
-) -> None:
-    result = await TaskClassificationPipeline(_Model(raw)).classify(
-        _request(router_profile="v1.1")
-    )
-    assert result.route_code == int(raw)
-    assert result.needs_mcp is True
-    assert result.needs_multimodal is needs_multimodal
-    assert result.route_token is RouteToken.DELEGATE
-
-
-@pytest.mark.asyncio
-async def test_v12_accepts_continue_only_with_active_task() -> None:
-    result = await TaskClassificationPipeline(_Model("4")).classify(
-        _request(router_profile="v1.2", has_active_agent=True)
-    )
-    assert result.route_code == 4
-
-
-@pytest.mark.asyncio
-async def test_v12_rejects_continue_without_active_task() -> None:
-    with pytest.raises(InvalidRouteOutput, match="requires an active MCP task"):
-        await TaskClassificationPipeline(_Model("4")).classify(
-            _request(router_profile="v1.2")
-        )
-
-
-@pytest.mark.asyncio
-async def test_v10_rejects_v11_relation_codes() -> None:
+async def test_rejects_retired_relation_codes() -> None:
     with pytest.raises(InvalidRouteOutput, match="exactly one of 0, 1, 2, 3"):
         await TaskClassificationPipeline(_Model("4")).classify(
             _request(router_profile="v1.0")
         )
+
 
 @pytest.mark.asyncio
 async def test_legacy_locale_is_derived_outside_model_authority() -> None:

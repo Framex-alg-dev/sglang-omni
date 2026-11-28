@@ -30,7 +30,7 @@ import logging
 import os
 import socket
 import time
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -56,12 +56,48 @@ from sglang_omni.utils.gpu_memory import (
     get_gpu_device_info,
 )
 from sglang_omni.utils.structured_logs import emit_structured_log
+from sglang_omni.utils.framex_service_logs import (
+    LOG_SPEC_VERSION,
+    configure_service_logging,
+    emit_service_event,
+    shutdown_service_logging,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_ACTION_WARMUP_AUDIO_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "audio_encoder_warmup.wav"
 )
+
+
+def _register_framex_logging_lifecycle(
+    app: Any, *, service: str, role: str
+) -> None:
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def framex_lifespan(lifespan_app: Any):
+        configure_service_logging(service)
+        emit_service_event(
+            service,
+            "service.started",
+            logger_name=__name__,
+            role=role,
+            log_spec_version=LOG_SPEC_VERSION,
+        )
+        try:
+            async with original_lifespan(lifespan_app):
+                yield
+        finally:
+            emit_service_event(
+                service,
+                "service.stopped",
+                logger_name=__name__,
+                role=role,
+            )
+            shutdown_service_logging(service)
+
+    app.router.lifespan_context = framex_lifespan
 
 
 def _load_production_action_catalog_support():
@@ -459,6 +495,13 @@ async def _run_server(
             release.manifest_version,
             release.artifact_count,
         )
+    framex_service = {
+        "openai": "omni-reply-worker",
+        "task-classification": "omni-reply-worker",
+        "decision-services": "omni-reply-worker",
+        "timeline-detection": "omni-event-worker",
+        "action-decision": "omni-action-worker",
+    }.get(service_role)
     # Validate the server-authoritative catalog before allocating model/GPU
     # resources. The import and load stay out of the development-only path.
     if service_role == "openai":
@@ -642,24 +685,13 @@ async def _run_server(
                 "SGLANG_OMNI_TIMELINE_MODEL_VERSION",
                 os.environ.get("SGLANG_OMNI_MODEL_VERSION", ""),
             ).strip()
-            from sglang_omni.serve.prompt_runtime import load_runtime_bundle
-            from sglang_omni.serve.timeline_detection.direct_e50 import DirectE50Profile
             from sglang_omni.serve.timeline_prompt_debug import install_timeline_prompt_debug
-            timeline_bundle = await load_runtime_bundle('partial30', expected={
-                'model_id': model_name or pipeline_config.name, 'model_version': model_version,
-                'catalog_version': None, 'mapping_version': None,
-            })
-            # One immutable profile for every session, including prefix prefill.
-            timeline_profile = DirectE50Profile.from_environment(
-                system_prompt_override=timeline_bundle.rules['system_prompt'] if timeline_bundle else None,
-                prompt_version_override=timeline_bundle.release_id if timeline_bundle else None,
-            )
             app = create_timeline_detection_app(
                 lambda start: SglangClientTimelineDetectionModel(
                     client,
                     start,
                     model_version=model_version,
-                    direct_profile=timeline_profile,
+                    serving_model_id=model_name or pipeline_config.name,
                     inference_interval_ms=int(
                         os.environ.get(
                             "SGLANG_OMNI_TIMELINE_INFERENCE_INTERVAL_MS", "3000"
@@ -677,8 +709,8 @@ async def _run_server(
                 ),
                 token=token,
             )
-            install_timeline_prompt_debug(app, client=client, profile=timeline_profile,
-                bundle=timeline_bundle, model_id=model_name or pipeline_config.name,
+            install_timeline_prompt_debug(app, client=client, profile=None,
+                bundle=None, model_id=model_name or pipeline_config.name,
                 model_version=model_version, token=token)
         elif service_role == "action-decision":
             from sglang_omni.serve.action_decision.service import (
@@ -712,8 +744,8 @@ async def _run_server(
                 ),
                 agent_policy_path=os.environ.get(
                     "SGLANG_OMNI_AGENT_ACTION_POLICY_PATH",
-                    os.path.join(artifact_root, "agent_action_policy.json"),
-                ),
+                    "",
+                ).strip() or None,
                 max_body_bytes=int(
                     os.environ.get(
                         "SGLANG_OMNI_ACTION_DECISION_MAX_BODY_BYTES",
@@ -742,6 +774,28 @@ async def _run_server(
                 app.state.action_decision_engine.registry.verify_tokenizer(
                     pipeline_config.model_path
                 )
+            warmup_enabled = os.environ.get(
+                "SGLANG_OMNI_ACTION_WARMUP", "1"
+            ).strip().lower() not in {"0", "false", "off", "no"}
+            if warmup_enabled:
+                action_warmup = await app.state.action_decision_engine.warmup(
+                    timeout_s=float(
+                        os.environ.get(
+                            "SGLANG_OMNI_ACTION_WARMUP_TIMEOUT_S", "30"
+                        )
+                    )
+                )
+                logger.info("[ACTION_WARMUP] readiness=%s", action_warmup)
+            else:
+                action_warmup = {
+                    "enabled": False,
+                    "ready": False,
+                    "reason": "disabled",
+                }
+                logger.info(
+                    "[ACTION_WARMUP] disabled by SGLANG_OMNI_ACTION_WARMUP"
+                )
+            app.state.action_decision_warmup = action_warmup
         elif service_role == "openai":
             warmup_enabled = os.environ.get(
                 "SGLANG_OMNI_ACTION_WARMUP", "1"
@@ -812,6 +866,10 @@ async def _run_server(
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
         profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)
         _mount_profiler_routes(app, profiler_ctl, profiler_dir)
+        if framex_service is not None:
+            _register_framex_logging_lifecycle(
+                app, service=framex_service, role=service_role
+            )
 
         config = uvicorn.Config(
             app,

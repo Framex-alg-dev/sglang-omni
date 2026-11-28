@@ -104,11 +104,15 @@ markers = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sglang_omni*"]
+include = ["sglang_omni*", "framex_event_policy*"]
 
 # Non-Python data files that must ship with the wheel.
 [tool.setuptools.package-data]
-"sglang_omni" = ["assets/*.wav", "assets/*.json", "assets/*.html"]
-"sglang_omni.serve.action_decision" = ["e57a_system_prompt.txt"]
+"sglang_omni" = [
+    "assets/*.wav",
+    "assets/*.json",
+    "assets/*.html",
+    "assets/**/*.json",
+]
 "sglang_omni.models.fishaudio_s2_pro" = ["fish_speech/configs/*.yaml"]
 "sglang_omni.models.higgs_tts" = ["configs/*.json"]

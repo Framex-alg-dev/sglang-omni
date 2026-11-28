@@ -6,7 +6,6 @@ import asyncio
 import hmac
 import logging
 import time
-from contextlib import asynccontextmanager
 from typing import Any
 
 import msgpack
@@ -16,20 +15,30 @@ from starlette.background import BackgroundTask
 from starlette.websockets import WebSocketDisconnect
 
 from sglang_omni.profiler.decision_timing import emit_decision_timing
+from sglang_omni.serve.agent_prompt_snapshot import decode_router_prompt_snapshot
+from sglang_omni.serve.http_request_logs import install_framex_http_logging
+from sglang_omni.serve.request_log_context import (
+    RequestLogContext,
+    model_request_log,
+    payload_request_log_context,
+    websocket_request_log,
+)
 from sglang_omni.serve.streaming_request import (
     receive_streamed_request,
     run_until_websocket_disconnect,
 )
+from sglang_omni.utils.framex_service_logs import emit_service_event, new_request_id
+from sglang_omni.utils.model_trace_logs import emit_model_trace
 
 from .contracts import (
     CONTRACT_VERSION,
     DEFAULT_ROUTER_PROFILE,
+    SUPPORTED_CONTRACT_VERSIONS,
     SUPPORTED_ROUTER_PROFILES,
     ClassificationMediaRef,
     TaskClassificationRequest,
 )
 from .pipeline import InvalidRouteOutput, TaskClassificationPipeline
-
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +54,11 @@ def create_task_classification_app(
     if max_body_bytes <= 0:
         raise ValueError("max_body_bytes must be positive")
 
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        from sglang_omni.serve.prompt_runtime import install_router_runtime
-        # Configuration disabled preserves other/legacy model adapters.
-        import os
-        if os.environ.get('KNOWLEDGE_PROMPT_ENABLED','false').lower() == 'true':
-            await install_router_runtime(pipeline)
-        try:
-            await pipeline.prewarm()
-        except Exception:
-            # Warmup is an optimization. Keep the service available and let the
-            # first live request populate the cache if the model was not ready.
-            logger.warning("turn-router prefix prewarm failed", exc_info=True)
-        yield
-
     app = FastAPI(
         title="sglang-omni-turn-router",
-        version="6",
-        lifespan=lifespan,
+        version="7",
     )
+    install_framex_http_logging(app, service="omni-reply-worker")
 
     def authenticate(request: Request) -> None:
         if not hmac.compare_digest(
@@ -73,7 +67,10 @@ def create_task_classification_app(
             raise HTTPException(status_code=404, detail="not found")
 
     from sglang_omni.serve.prompt_debug import install_router_debug
-    install_router_debug(app, pipeline=pipeline, authenticate=authenticate, invoke=_classify_payload)
+
+    install_router_debug(
+        app, pipeline=pipeline, authenticate=authenticate, invoke=_classify_payload
+    )
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
@@ -83,6 +80,7 @@ def create_task_classification_app(
                 "ok": True,
                 "contract": f"turn-router.v{CONTRACT_VERSION}",
                 "contract_version": CONTRACT_VERSION,
+                "supported_contract_versions": list(SUPPORTED_CONTRACT_VERSIONS),
                 "router_profiles": list(SUPPORTED_ROUTER_PROFILES),
                 "default_router_profile": DEFAULT_ROUTER_PROFILE,
             }
@@ -93,10 +91,12 @@ def create_task_classification_app(
         authenticate(request)
         body = await _read_envelope(request, max_body_bytes=max_body_bytes)
         try:
+            context = _classification_log_context(body)
             payload = await _classify_payload(
                 pipeline,
                 body,
                 transport="http",
+                context=context,
             )
             return JSONResponse(
                 payload,
@@ -104,6 +104,7 @@ def create_task_classification_app(
                     _emit_response_sent,
                     payload,
                     "http",
+                    context,
                 ),
             )
         except InvalidRouteOutput as exc:
@@ -113,6 +114,8 @@ def create_task_classification_app(
 
     @app.websocket("/v1/task-classification/realtime")
     async def classify_realtime(websocket: WebSocket) -> None:
+        request_id = new_request_id()
+        context = None
         try:
             streamed = await receive_streamed_request(
                 websocket,
@@ -122,6 +125,7 @@ def create_task_classification_app(
             )
             if streamed is None:
                 return
+            request_id = streamed.request_id
             body = dict(streamed.payload)
             body["media"] = [
                 {
@@ -136,23 +140,60 @@ def create_task_classification_app(
                 }
                 for item in streamed.media
             ]
-            result = await run_until_websocket_disconnect(
-                websocket,
-                _classify_payload(pipeline, body, transport="websocket"),
+            context = _classification_log_context(
+                body, fallback_request_id=request_id
             )
-            await websocket.send_json(
-                {
-                    "type": "response.completed",
-                    "request_id": streamed.request_id,
-                    "response": result,
-                }
-            )
-            _emit_response_sent(result, "websocket")
+            async with websocket_request_log(
+                "omni-reply-worker",
+                "task_classification_realtime",
+                context,
+                operation_id=request_id,
+                logger_name=__name__,
+            ):
+                result = await run_until_websocket_disconnect(
+                    websocket,
+                    _classify_payload(
+                        pipeline,
+                        body,
+                        transport="websocket",
+                        context=context,
+                    ),
+                )
+                await websocket.send_json(
+                    {
+                        "type": "response.completed",
+                        "request_id": streamed.request_id,
+                        "response": result,
+                    }
+                )
+                _emit_response_sent(result, "websocket", context)
         except WebSocketDisconnect:
             return
         except (InvalidRouteOutput, ValueError) as exc:
+            emit_service_event(
+                "omni-reply-worker",
+                "ws.request.failed",
+                level=logging.WARNING,
+                logger_name=__name__,
+                request_id=request_id,
+                root_session_id=(
+                    context.root_session_id if context is not None else None
+                ),
+                turn_id=context.turn_id if context is not None else None,
+                agent_session_id=(
+                    context.agent_session_id if context is not None else None
+                ),
+                operation="task_classification",
+                status=400,
+                error_type=type(exc).__name__,
+            )
             await websocket.send_json(
-                {"type": "error", "code": "invalid_request", "detail": str(exc)}
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "code": "invalid_request",
+                    "detail": str(exc),
+                }
             )
             await websocket.close(code=4400)
 
@@ -164,10 +205,74 @@ async def _classify_payload(
     body: dict[str, Any],
     *,
     transport: str = "internal",
+    context: RequestLogContext | None = None,
+) -> dict[str, Any]:
+    context = context or _classification_log_context(body)
+    async with model_request_log(
+        "omni-reply-worker",
+        "task_classification",
+        context,
+        operation_id=(
+            body.get("request_id")
+            if isinstance(body.get("request_id"), str)
+            else context.request_id
+        ),
+        logger_name=__name__,
+    ):
+        return await _classify_payload_with_context(
+            pipeline,
+            body,
+            transport=transport,
+            context=context,
+        )
+
+
+def _classification_log_context(
+    body: dict[str, Any], *, fallback_request_id: str | None = None
+) -> RequestLogContext:
+    body_request_id = body.get("request_id")
+    if isinstance(body_request_id, str):
+        fallback_request_id = body_request_id
+    elif fallback_request_id is None:
+        fallback_request_id = ""
+    fallback_session_id = body.get("session_id")
+    if not isinstance(fallback_session_id, str):
+        fallback_session_id = None
+    fallback_turn_id = body.get("turn_id")
+    if not isinstance(fallback_turn_id, str):
+        fallback_turn_id = None
+    return payload_request_log_context(
+        body,
+        fallback_request_id=fallback_request_id,
+        fallback_root_session_id=fallback_session_id,
+        fallback_turn_id=fallback_turn_id,
+        fallback_agent_session_id=fallback_session_id,
+    )
+
+
+async def _classify_payload_with_context(
+    pipeline: TaskClassificationPipeline,
+    body: dict[str, Any],
+    *,
+    transport: str,
+    context: RequestLogContext,
 ) -> dict[str, Any]:
     classification_request = _request_from_json(body)
     metadata = _timing_metadata(classification_request)
     started = time.perf_counter()
+    emit_model_trace(
+        "reply",
+        "agent.request.received",
+        component="turn_router",
+        request_id=context.request_id,
+        sequence=1,
+        root_session_id=context.root_session_id or classification_request.session_id,
+        agent_session_id=context.agent_session_id or classification_request.session_id,
+        session_id=classification_request.session_id,
+        turn_id=context.turn_id or classification_request.turn_id,
+        transport=transport,
+        agent_request=body,
+    )
     emit_decision_timing(
         "decision_request_received",
         request_id=classification_request.request_id,
@@ -240,6 +345,7 @@ async def _classify_payload(
         "model": result.model_id,
         "model_version": result.model_version,
     }
+    server_total_ms = (time.perf_counter() - started) * 1000.0
     emit_decision_timing(
         "decision_response_completed",
         request_id=classification_request.request_id,
@@ -248,10 +354,24 @@ async def _classify_payload(
         status="success",
         transport=transport,
         route_code=result.route_code,
-        server_total_ms=round(
-            (time.perf_counter() - started) * 1000.0,
-            3,
-        ),
+        server_total_ms=round(server_total_ms, 3),
+    )
+    emit_model_trace(
+        "reply",
+        "router.resolved",
+        component="turn_router",
+        request_id=context.request_id,
+        sequence=5,
+        root_session_id=context.root_session_id or classification_request.session_id,
+        agent_session_id=context.agent_session_id or classification_request.session_id,
+        session_id=classification_request.session_id,
+        turn_id=context.turn_id or classification_request.turn_id,
+        route_code=result.route_code,
+        route=result.route.value,
+        route_token=result.route_token.value,
+        needs_mcp=result.needs_mcp,
+        needs_multimodal=result.needs_multimodal,
+        server_total_ms=round(server_total_ms, 3),
     )
     return response
 
@@ -274,7 +394,11 @@ def _timing_metadata(request: TaskClassificationRequest) -> dict[str, Any]:
     }
 
 
-def _emit_response_sent(response: dict[str, Any], transport: str) -> None:
+def _emit_response_sent(
+    response: dict[str, Any],
+    transport: str,
+    context: RequestLogContext,
+) -> None:
     request_id = response.get("request_id")
     if not isinstance(request_id, str) or not request_id:
         return
@@ -300,6 +424,19 @@ def _emit_response_sent(response: dict[str, Any], transport: str) -> None:
         transport=transport,
         response_chunk_count=1,
     )
+    emit_model_trace(
+        "reply",
+        "agent.response.sent",
+        component="turn_router",
+        request_id=context.request_id,
+        sequence=6,
+        root_session_id=context.root_session_id or response.get("session_id"),
+        agent_session_id=context.agent_session_id or response.get("session_id"),
+        session_id=response.get("session_id"),
+        turn_id=context.turn_id or response.get("turn_id"),
+        transport=transport,
+        agent_response=response,
+    )
 
 
 def create_decision_services_app(
@@ -309,34 +446,26 @@ def create_decision_services_app(
 ) -> FastAPI:
     """Expose both task contracts while classifier and Brain share one runtime."""
 
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        # Starlette does not run mounted sub-application lifespans. Enter the
-        # classifier lifespan explicitly so its immutable route prefix is warm
-        # before the combined decision service accepts traffic.
-        async with classifier_app.router.lifespan_context(classifier_app):
-            yield
-
     app = FastAPI(
         title="sglang-omni-decision-services",
-        version="1",
-        lifespan=lifespan,
+        version="7",
     )
+    install_framex_http_logging(app, service="omni-reply-worker")
     app.mount("/classifier", classifier_app)
     app.mount("/brain", brain_app)
     return app
 
 
-async def _read_envelope(
-    request: Request, *, max_body_bytes: int
-) -> dict[str, Any]:
+async def _read_envelope(request: Request, *, max_body_bytes: int) -> dict[str, Any]:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
             if int(content_length) > max_body_bytes:
                 raise HTTPException(status_code=413, detail="request body too large")
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="invalid content-length") from exc
+            raise HTTPException(
+                status_code=400, detail="invalid content-length"
+            ) from exc
     body = await request.body()
     if len(body) > max_body_bytes:
         raise HTTPException(status_code=413, detail="request body too large")
@@ -368,8 +497,8 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
     }
     optional_fields = {
         "router_profile",
-        "active_task_goal",
-        "active_task_status",
+        "prompt_snapshot",
+        "log_context",
     }
     if not required_fields.issubset(raw) or not set(raw).issubset(
         required_fields | optional_fields
@@ -397,12 +526,15 @@ def _request_from_json(raw: dict[str, Any]) -> TaskClassificationRequest:
         has_active_agent=_boolean(raw, "has_active_agent"),
         pending_confirmation=_boolean(raw, "pending_confirmation"),
         follow_up_required=_boolean(raw, "follow_up_required"),
-        active_task_goal=_optional_string(raw, "active_task_goal"),
-        active_task_status=_optional_string(raw, "active_task_status"),
         router_profile=(
             _string(raw, "router_profile")
             if "router_profile" in raw
             else DEFAULT_ROUTER_PROFILE
+        ),
+        prompt_snapshot=(
+            decode_router_prompt_snapshot(raw["prompt_snapshot"])
+            if "prompt_snapshot" in raw
+            else None
         ),
         contract_version=_integer(raw, "contract_version"),
     )

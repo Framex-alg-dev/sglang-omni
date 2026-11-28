@@ -24,9 +24,11 @@ class _AudioStream(httpx.AsyncByteStream):
 @pytest.mark.asyncio
 async def test_mixed_language_final_reply_is_one_upstream_request() -> None:
     requests: list[dict[str, object]] = []
+    request_headers: list[httpx.Headers] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
+        request_headers.append(request.headers)
         return httpx.Response(
             200,
             headers={
@@ -56,6 +58,8 @@ async def test_mixed_language_final_reply_is_one_upstream_request() -> None:
             voice="spk-1",
             instruction="自然地说",
             audio_sink=collect,
+            request_id="req_0123456789abcdfg",
+            root_session_id="root-1",
         )
     finally:
         await client.aclose()
@@ -68,6 +72,8 @@ async def test_mixed_language_final_reply_is_one_upstream_request() -> None:
             "instruct": "自然地说",
         }
     ]
+    assert request_headers[0]["X-Request-ID"] == "req_0123456789abcdfg"
+    assert request_headers[0]["X-Root-Session-ID"] == "root-1"
     assert [len(frame) for frame in frames] == [12_000, 12_000]
     assert b"".join(frames) == b"a" * 5_000 + b"b" * 9_000 + b"c" * 10_000
     assert result.audio_bytes == 24_000
